@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%236b6a64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%233c6fb0' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%233c6fb0'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%233c6fb0'/%3E%3C/svg%3E">
+<title>Crux · All projects</title>
+<style>
+/*{{CSS}}*/
+.brand{display:flex;align-items:center;gap:8px;color:var(--text)}
+.brand .mark{width:28px;height:28px;flex:none}
+.brand b{font-size:17px}
+.stats{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 16px}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.chip.proj{background:var(--surface);color:var(--text)}
+.list{display:grid;gap:10px}
+.item{display:grid;gap:4px;text-decoration:none;color:inherit}
+.item:hover{border-color:var(--muted)}
+.num{font-family:var(--mono);color:var(--muted);font-size:13px}
+.conf{display:grid;gap:8px}
+.conf-row{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:14px}
+.conf-row a{text-decoration:none}
+.val{font-weight:600}
+.projects{display:flex;flex-wrap:wrap;gap:8px}
+.projects a{text-decoration:none}
+.empty{padding:24px;text-align:center;color:var(--muted)}
+.icon.warn{color:var(--bad)}
+</style>
+</head>
+<body>
+<main>
+<div class="brand"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></div>
+<h1 style="margin-top:14px">All projects</h1>
+<p class="muted" id="meta" style="font-size:13px"></p>
+<div class="stats" id="stats"></div>
+<input id="q" type="search" placeholder="Search titles, projects, reasons" aria-label="Search decisions">
+<div id="out"></div>
+</main>
+<script id="data" type="application/json">/*{{DATA}}*/</script>
+<script>
+const R = JSON.parse(document.getElementById('data').textContent);
+const D = R.decisions;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pad = n => String(n).padStart(4,'0');
+const warn = '<svg class="icon warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></svg>';
+const clock = '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>';
+const projects = [...new Set(D.map(d => d.project))].sort();
+const pending = D.filter(d => d.status==='open' || d.status==='found');
+const stale = pending.filter(d => d.stale);
+document.getElementById('meta').textContent = `Updated ${R.built} · ${projects.length} project${projects.length===1?'':'s'} in ${R.roots.join(', ')}`;
+document.getElementById('stats').innerHTML = [
+  pending.length && `<span class="chip open">${pending.length} waiting for a call</span>`,
+  stale.length && `<span class="chip found">${stale.length} waiting over ${R.staleDays} days</span>`,
+  R.conflicts.length && `<span class="chip bad">${R.conflicts.length} conflict${R.conflicts.length===1?'':'s'}</span>`,
+  `<span class="chip decided">${D.filter(d=>d.status==='decided').length} decided</span>`
+].filter(Boolean).join('');
+
+function card(d){
+  const line = d.status==='decided' && d.chosenName ? `<div style="font-size:14px"><b style="color:var(--chosen)">${esc(d.chosen)}: ${esc(d.chosenName)}</b>${d.reason?` <span class="muted">· ${esc(d.reason)}</span>`:''}</div>`
+    : `<div class="muted" style="font-size:14px">${d.optionCount} options waiting${d.ageDays>0?` · ${d.ageDays} day${d.ageDays===1?'':'s'}`:''}</div>`;
+  return `<a class="card item" href="${esc(d.url)}">
+    <div class="row"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span>${d.status==='found'?'<span class="chip found">needs review</span>':''}${d.stale?`<span class="chip found">${clock}over ${R.staleDays} days</span>`:''}${d.deep?'<span class="chip open">deep</span>':''}</div>
+    <b>${esc(d.title)}</b>${line}</a>`;
+}
+function render(){
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const hit = d => !q || [d.title,d.project,d.reason,d.chosenName].join(' ').toLowerCase().includes(q);
+  let h = '';
+  if (R.conflicts.length){
+    h += `<h2>Conflicts across projects</h2><div class="card conf">${R.conflicts.map(c => `<div><div class="row" style="gap:6px">${warn}<b>${esc(c.key)}</b></div><div class="conf-row" style="margin-top:4px">${c.entries.map(e => `<a href="${esc(e.url)}"><span class="chip proj">${esc(e.project)} ${pad(e.id)}</span></a><span class="val">${esc(e.value)}</span>`).join('<span class="muted">vs</span>')}</div></div>`).join('')}</div>`;
+  }
+  const wait = pending.filter(hit).sort((a,b) => (b.stale-a.stale) || (b.ageDays-a.ageDays));
+  if (wait.length) h += `<h2>Needs your call</h2><div class="list">${wait.map(card).join('')}</div>`;
+  const done = D.filter(d => d.status==='decided' && hit(d)).sort((a,b) => String(b.decided_on||b.date).localeCompare(String(a.decided_on||a.date))).slice(0, 20);
+  if (done.length) h += `<h2>Recently decided</h2><div class="list">${done.map(card).join('')}</div>`;
+  if (projects.length) h += `<h2>Projects</h2><div class="projects">${projects.map(p => { const x = D.find(d => d.project===p); const n = pending.filter(d => d.project===p).length; return `<a href="${esc(x.projectIndex)}"><span class="chip proj">${esc(p)}${n?` · ${n} waiting`:''}</span></a>`; }).join('')}</div>`;
+  document.getElementById('out').innerHTML = h || `<div class="empty">${D.length ? 'No matches' : 'No decisions in any project yet'}</div>`;
+}
+document.getElementById('q').addEventListener('input', render);
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%236b6a64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%233c6fb0' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%233c6fb0'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%233c6fb0'/%3E%3C/svg%3E">
+<title>Crux</title>
+<style>
+/*{{CSS}}*/
+.brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text)}
+.brand .mark{width:28px;height:28px;flex:none}
+.brand b{font-size:17px;letter-spacing:.2px}
+
+.list{display:grid;gap:10px}
+.item{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;text-decoration:none;color:inherit}
+.item:hover{border-color:var(--muted)}
+.num{font-family:var(--mono);color:var(--muted);font-size:13px;padding-top:2px}
+.item.dim{opacity:.55}
+.pick{font-size:14px}
+.pick b{color:var(--chosen)}
+.empty{padding:30px;text-align:center;color:var(--muted)}
+.stats{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 18px}
+</style>
+</head>
+<body>
+<main>
+<div class="brand"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></div>
+<h1 style="margin-top:14px">Decisions</h1>
+<div class="stats" id="stats"></div>
+<input id="q" type="search" placeholder="Search titles, options, reasons" aria-label="Search decisions">
+<div id="out"></div>
+</main>
+<script id="data" type="application/json">/*{{DATA}}*/</script>
+<script>
+const ALL = JSON.parse(document.getElementById('data').textContent);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pad = n => String(n).padStart(4,'0');
+const count = s => ALL.filter(d => d.status === s).length;
+document.getElementById('stats').innerHTML = [['open','Open'],['found','Needs review'],['decided','Decided'],['superseded','Superseded']]
+  .filter(([s]) => count(s)).map(([s,l]) => `<span class="chip ${s}">${count(s)} ${l.toLowerCase()}</span>`).join('');
+function card(d){
+  const o = (d.options||[]).find(x => x.key === d.chosen);
+  const pick = d.status==='decided' && o ? `<div class="pick"><b>${esc(d.chosen)}: ${esc(o.name)}</b>${d.reason?` <span class="muted">· ${esc(d.reason)}</span>`:''}</div>`
+    : d.status==='superseded' ? `<div class="pick muted">Replaced by ${pad(d.superseded_by)}</div>`
+    : `<div class="pick muted">${(d.options||[]).length} options waiting</div>`;
+  return `<a class="card item${['superseded','rejected'].includes(d.status)?' dim':''}" href="${esc(d._file)}">
+    <span class="num">${pad(d.id)}</span>
+    <div style="min-width:0;display:grid;gap:4px">
+      <div class="row"><b style="flex:1;min-width:0">${esc(d.title)}</b><span class="chip ${esc(d.status)}">${esc(d.status==='found'?'needs review':d.status)}</span></div>
+      ${pick}
+      <div class="row">${(d.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}<span class="muted" style="font-size:12px">${esc(d.decided_on||d.date)}</span></div>
+    </div></a>`;
+}
+function render(){
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const hit = d => !q || JSON.stringify([d.title,d.context,d.reason,(d.options||[]).map(o=>o.name+' '+o.summary)]).toLowerCase().includes(q);
+  const groups = [['Needs your call', d => d.status==='open' || d.status==='found'], ['Decided', d => d.status==='decided'], ['History', d => d.status==='superseded' || d.status==='rejected']];
+  let h = '';
+  for (const [name, f] of groups){
+    const list = ALL.filter(d => f(d) && hit(d)).sort((a,b) => b.id - a.id);
+    if (list.length) h += `<h2>${name}</h2><div class="list">${list.map(card).join('')}</div>`;
+  }
+  document.getElementById('out').innerHTML = h || `<div class="empty">${ALL.length ? 'No matches' : 'No decisions yet'}</div>`;
+}
+document.getElementById('q').addEventListener('input', render);
+render();
+</script>
+</body>
+</html>
