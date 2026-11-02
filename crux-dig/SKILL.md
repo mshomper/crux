@@ -59,7 +59,7 @@ Give a short message in this order:
 1. Open items from the repo's own log, if any (these need a call first).
 2. Strained findings, each with its strain in one line. These are the candidates for new decisions.
 3. The rest, as number and title only. Ask them to reply in one message, for example "confirm 3, 5, 6; reject 4; edit 7: it was for licensing reasons". Then:
-- Confirmed: `status` to `decided`, `chosen` to `A`, `decided_on` to today, `reason` from their words if given. Fill `settles` as described in the crux skill (section 4), reusing keys from `~/crux/conventions.md`.
+- Confirmed: `status` to `decided`, `chosen` to `A`, `decided_on` to today, `reason` from their words if given. Fill `settles` as described in the crux skill (section 4), reusing keys from `~/crux/conventions.md`. Findings about units, frames, grid layout, material laws, numerical methods, precision, file formats and tooling almost always settle something.
 - Rejected: `status` to `rejected`.
 - Edited: apply their correction, then confirm.
 - Anything they want to change going forward, including a strained finding they want to act on, becomes a new open decision through /crux with `depends_on` pointing at the finding.
