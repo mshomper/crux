@@ -73,7 +73,7 @@ Then run the build script from this skill's folder:
 node <this skill's folder>/scripts/build.mjs .decisions
 ```
 
-It writes `NNNN-slug.html` (the page), `NNNN-slug.md` (the readable record) and `index.html`. Tell the human the page path in one line, plus a one-line summary of each option. Then stop and wait.
+It writes `NNNN-slug.html` (the page), `NNNN-slug.md` (the readable record) and `index.html`. If the repo you are working in is a worktree (its path contains `.claude/worktrees/`, or `git rev-parse --git-common-dir` points outside it), say so in one line with the full path of `.decisions/`, and note that the records reach the main copy when the branch is merged. Offer to merge when the work is done. Tell the human the page path in one line, plus a one-line summary of each option. Then stop and wait.
 
 ### Deep additions (only when `deep` was given)
 

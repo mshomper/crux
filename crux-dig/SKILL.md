@@ -47,6 +47,8 @@ Write one JSON file per finding in `.decisions/` using the crux skill's schema, 
 - `log_refs`: entries in the repo's own decision log that cover this finding, as `{ "file": "docs/DECISIONS.md", "entry": "2026-10-05" }`. If the log already records the decision fully, keep the finding short and let the link carry the detail.
 - `open_item`: true when the repo's own log marks this choice as awaiting review. Confirming the finding closes it.
 
+If you are working in a worktree (its path contains `.claude/worktrees/`, or `git rev-parse --git-common-dir` points outside it), tell the human in your summary, with the full path of `.decisions/`, that the findings reach the main copy when the branch is merged, and offer to merge after they review.
+
 Then run the crux skill's build script:
 
 ```

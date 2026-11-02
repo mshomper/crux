@@ -114,6 +114,7 @@ function sub(){
   document.getElementById('sub').innerHTML = `<span>Updated ${esc(R.built)} \u00b7 ${projects.length} project${projects.length===1?'':'s'} in ${esc(R.roots.join(', '))}</span>` +
     (R.conflicts.length ? `<span><span class="dot" style="background:var(--bad)"></span>${R.conflicts.length} conflict${R.conflicts.length===1?'':'s'}</span>` : '') +
     counts.map(([s,n]) => `<span><span class="dot" style="background:${s.c}"></span>${n} ${esc(s.name.toLowerCase())}</span>`).join('') +
+    (live.some(d => d.branch) ? `<span><span class="dot" style="background:var(--accent)"></span>${live.filter(d => d.branch).length} in unmerged branches</span>` : '') +
     (stale ? `<span><span class="dot" style="background:var(--warn)"></span>${stale} waiting over ${R.staleDays} days</span>` : '');
 }
 
@@ -142,7 +143,7 @@ function card(d){
   else if (d.status==='decided' && d.chosenName) line = `<div class="line ok">${esc(d.chosen)}: ${esc(d.chosenName)}${d.reason?` <span class="muted">\u00b7 ${esc(d.reason)}</span>`:''}</div>`;
   else if (d.status==='parked') { const rv = d.revisit||{}; line = `<div class="line">Back ${rv.date?esc(rv.date):''}${rv.date&&rv.trigger?' or ':''}${rv.trigger?esc(rv.trigger):''}</div>`; }
   else if (d.recommendedName) line = `<div class="line">${d.status==='found'?'In the code':'Leaning'}: ${esc(d.recommendedName)}</div>`;
-  return `<a class="dcard" href="${esc(d.url)}"><div class="row" style="gap:6px"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span>${d.open_item?'<span class="chip bad">open item</span>':''}${d.revisitDue?'<span class="chip found">revisit due</span>':''}${d.stale?`<span class="chip found">over ${R.staleDays} days</span>`:''}${d.deep?'<span class="chip open">deep</span>':''}</div><div class="t">${esc(d.title)}</div>${line}<div class="chips">${(d.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div></a>`;
+  return `<a class="dcard" href="${esc(d.url)}"><div class="row" style="gap:6px"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span>${d.branch?`<span class="chip open" title="Not merged into the main copy yet">${I.split}in branch ${esc(d.branch)}</span>`:''}${d.open_item?'<span class="chip bad">open item</span>':''}${d.revisitDue?'<span class="chip found">revisit due</span>':''}${d.stale?`<span class="chip found">over ${R.staleDays} days</span>`:''}${d.deep?'<span class="chip open">deep</span>':''}</div><div class="t">${esc(d.title)}</div>${line}<div class="chips">${(d.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div></a>`;
 }
 
 function lanes(list){

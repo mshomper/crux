@@ -38,7 +38,18 @@ export function rollup({ quiet = false } = {}) {
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       if (!e.isDirectory() || ignored(join(dir, e.name), e.name)) continue;
-      if (e.name === '.decisions') { found.push(join(dir, e.name)); continue; }
+      if (e.name === '.decisions') { found.push({ dir: join(dir, e.name), project: basename(dir), branch: null }); continue; }
+      if (e.name === '.claude') {
+        // Claude Code worktrees: <repo>/.claude/worktrees/<name>/.decisions
+        const wt = join(dir, '.claude', 'worktrees');
+        let wts = [];
+        try { wts = readdirSync(wt, { withFileTypes: true }).filter(w => w.isDirectory()); } catch {}
+        for (const w of wts) {
+          const dd = join(wt, w.name, '.decisions');
+          if (existsSync(dd)) found.push({ dir: dd, project: basename(dir), branch: w.name });
+        }
+        continue;
+      }
       if (depth < 3 && !skip.has(e.name) && !e.name.startsWith('.')) walk(join(dir, e.name), depth + 1);
     }
   };
@@ -46,8 +57,7 @@ export function rollup({ quiet = false } = {}) {
 
   const today = new Date();
   const all = [];
-  for (const d of found) {
-    const project = basename(dirname(d));
+  for (const { dir: d, project, branch } of found) {
     for (const f of readdirSync(d).filter(f => f.endsWith('.json'))) {
       try {
         const x = JSON.parse(readFileSync(join(d, f), 'utf8'));
@@ -55,7 +65,7 @@ export function rollup({ quiet = false } = {}) {
         const page = join(d, f.replace(/\.json$/, '.html'));
         const ageDays = x.date ? Math.floor((today - new Date(x.date)) / 864e5) : 0;
         all.push({
-          project, id: x.id, title: x.title, status: x.status, date: x.date, decided_on: x.decided_on,
+          project, branch, slug: x.slug || f.replace(/\.json$/, ''), id: x.id, title: x.title, status: x.status, date: x.date, decided_on: x.decided_on,
           lenses: x.lenses || [], deep: !!x.deep, reason: x.reason,
           chosen: x.chosen, chosenName: (x.options || []).find(o => o.key === x.chosen)?.name || null,
           optionCount: (x.options || []).length,
@@ -70,6 +80,10 @@ export function rollup({ quiet = false } = {}) {
       } catch { /* skip unreadable file */ }
     }
   }
+
+  // A decision in a worktree is hidden once the main copy has the same record.
+  const mainKeys = new Set(all.filter(d => !d.branch).map(d => `${d.project}|${d.id}|${d.slug}`));
+  for (let i = all.length - 1; i >= 0; i--) if (all[i].branch && mainKeys.has(`${all[i].project}|${all[i].id}|${all[i].slug}`)) all.splice(i, 1);
 
   // Conventions and conflicts: same key settled with different values by active decisions.
   const norm = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -101,7 +115,9 @@ export function rollup({ quiet = false } = {}) {
   const todayIso = today.toISOString().slice(0, 10);
   for (const d of all) if (d.status === 'parked' && d.revisit?.date && d.revisit.date <= todayIso) d.status = 'open', d.revisitDue = true;
   const pending = all.filter(d => d.status === 'open' || d.status === 'found').length;
-  if (!quiet || conflicts.length) console.log(`Roll-up: ${found.length} project(s), ${pending} waiting for a call, ${conflicts.length} conflict(s) -> ${join(home, 'index.html')}`);
+  const branches = [...new Set(all.filter(d => d.branch).map(d => `${d.project} (${d.branch})`))];
+  if (!quiet || conflicts.length) console.log(`Roll-up: ${new Set(all.map(d => d.project)).size} project(s), ${pending} waiting for a call, ${conflicts.length} conflict(s) -> ${join(home, 'index.html')}`);
+  if (branches.length) console.log(`Not merged yet, shown as in a working branch: ${branches.join(', ')}`);
   for (const c of conflicts) console.log(`- Conflict on "${c.key}": ${c.entries.map(e => `${e.project} says "${e.value}"`).join(' vs ')}`);
 }
 
