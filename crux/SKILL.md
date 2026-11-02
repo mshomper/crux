@@ -13,9 +13,10 @@ Arguments: **$ARGUMENTS**
 ## 0. Before anything
 
 1. Read every `.decisions/*.md` file in the repo root, if the folder exists. These are past decisions. They are short; read them all.
-2. Read `~/crux/conventions.md` if it exists (the home folder's `crux` folder). It lists what has been settled across all the human's projects, such as units, precision or file formats.
-3. Note any active decision, in this repo or in the conventions list, that your new options would contradict. A conflict is shown to the human, never silently overridden.
-4. If `.decisions/` does not exist, create it on the first record. Then check the repo's `CLAUDE.md` for the decisions line (see section 6). If missing, ask once whether to add it.
+2. If the repo keeps its own decision log (`DECISIONS.md`, `docs/adr/` and the like), read it too. It is part of the record: respect what it settles, link its entries with `log_refs` rather than restating them, and raise any entry it marks as open or for review when it bears on the current work.
+3. Read `~/crux/conventions.md` if it exists (the home folder's `crux` folder). It lists what has been settled across all the human's projects, such as units, precision or file formats.
+4. Note any active decision, in this repo, its own log, or the conventions list, that your new options would contradict. A conflict is shown to the human, never silently overridden.
+5. If `.decisions/` does not exist, create it on the first record. Then check the repo's `CLAUDE.md` for the decisions line (see section 6). If missing, ask once whether to add it.
 
 ## 1. Pick the mode
 
@@ -184,6 +185,8 @@ Deep mode adds these fields (leave them out otherwise):
   }
 }
 ```
+
+Findings from `/crux-dig` also carry `deliberate` (`yes`, `likely`, `unclear`), `holding_up` (`fine` or `strained`), `strain` (one sentence), `ruled_out` (list of `{ "option", "by" }`), `log_refs` (list of `{ "file", "entry" }`) and `open_item` (true or false). Any decision may carry `log_refs`.
 
 `status` is one of `open`, `decided`, `superseded`, `found` (drafted by /crux-dig and waiting for review), or `rejected`.
 

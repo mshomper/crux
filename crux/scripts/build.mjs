@@ -51,6 +51,11 @@ function markdown(d) {
   L.push(`- Date: ${d.date}${d.decided_on ? `, decided ${d.decided_on}` : ''}`);
   if (d.lenses?.length) L.push(`- Lenses: ${d.lenses.join(', ')}`);
   if (d.depends_on?.length) L.push(`- Builds on: ${d.depends_on.map(pad).join(', ')}`);
+  if (d.deliberate) L.push(`- Deliberate: ${d.deliberate}`);
+  if (d.holding_up) L.push(`- Holding up: ${d.holding_up}${d.strain ? `. ${d.strain}` : ''}`);
+  if (d.open_item) L.push(`- Open item in the repo's own log`);
+  if (d.log_refs?.length) L.push(`- In the repo's log: ${d.log_refs.map(r => `${r.file} ${r.entry || ''}`.trim()).join('; ')}`);
+  if (d.settles?.length) L.push(`- Settles: ${d.settles.map(x => `${x.key} = ${x.value}`).join('; ')}`);
   L.push('');
   if (d.status === 'decided' && chosen) {
     L.push(`## Decision`, '', `**${d.chosen}: ${chosen.name}.** ${chosen.summary || ''}`);
@@ -68,6 +73,7 @@ function markdown(d) {
     for (const e of o.estimates || []) L.push(`- Estimate, ${e.what}: ${e.value}${e.basis ? ` (basis: ${e.basis})` : ''}`);
     L.push('');
   }
+  if (d.ruled_out?.length) { L.push(`## Ruled out`, ''); for (const r of d.ruled_out) L.push(`- ${r.option} (${r.by})`); L.push(''); }
   if (d.evidence?.length) {
     L.push(`## Evidence`, '');
     for (const e of d.evidence) L.push(`- ${e.claim} [${(e.options || []).join(', ')}] ${e.judgment || !e.url ? "(Claude's judgment)" : `([${e.source || e.url}](${e.url}))`}`);
