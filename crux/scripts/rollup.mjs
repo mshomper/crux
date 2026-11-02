@@ -60,6 +60,8 @@ export function rollup({ quiet = false } = {}) {
           chosen: x.chosen, chosenName: (x.options || []).find(o => o.key === x.chosen)?.name || null,
           optionCount: (x.options || []).length,
           revisit: x.revisit || null,
+          deliberate: x.deliberate || null, holding_up: x.holding_up || null, strain: x.strain || null, open_item: !!x.open_item,
+          recommendedName: (x.options || []).find(o => o.key === x.recommended)?.name || null,
           stale: (x.status === 'open' || x.status === 'found') && ageDays > STALE_DAYS, ageDays,
           settles: x.status === 'decided' ? (x.settles || []) : [],
           url: pathToFileURL(page).href,

@@ -7,75 +7,160 @@
 <title>Crux · All projects</title>
 <style>
 /*{{CSS}}*/
-.brand{display:flex;align-items:center;gap:8px;color:var(--text)}
-.brand .mark{width:28px;height:28px;flex:none}
-.brand b{font-size:17px}
-.stats{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 16px}
-.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
-.chip.proj{background:var(--surface);color:var(--text)}
-.list{display:grid;gap:10px}
-.item{display:grid;gap:4px;text-decoration:none;color:inherit}
-.item:hover{border-color:var(--muted)}
-.num{font-family:var(--mono);color:var(--muted);font-size:13px}
-.conf{display:grid;gap:8px}
-.conf-row{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:14px}
+.top{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px;color:var(--text);font-weight:600;font-size:16px}
+.brand .mark{width:24px;height:24px}
+.brand .repo{color:var(--muted);font-weight:400}
+.search{position:relative;flex:0 1 280px;min-width:180px}
+.search .icon{position:absolute;left:10px;top:9px;color:var(--faint)}
+.search input{padding-left:32px}
+.sub{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding:9px 0 4px;font-size:12.5px;color:var(--muted)}
+.sub .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px}
+.glance{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;margin-top:10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-width:0}
+.ptitle{font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:10px;display:flex;gap:7px;align-items:center}
+.bar{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--lane);gap:2px}
+.bar span{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:12.5px;color:var(--muted)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px}
+.tile{display:grid;place-items:center;aspect-ratio:1.35;border-radius:8px;background:var(--surface);border:1px solid var(--line);text-decoration:none;color:var(--text);font-family:var(--mono);font-size:12.5px;position:relative;border-top:3px solid var(--c)}
+.tile:hover{background:var(--surface2)}
+.tile small{position:absolute;bottom:4px;left:0;right:0;text-align:center;font-family:var(--font);font-size:10.5px;color:var(--faint);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:0 4px}
+.areas{display:grid;gap:8px}
+.area{display:grid;grid-template-columns:110px 1fr auto;gap:10px;align-items:center;font-size:13px}
+.area .pips{display:flex;flex-wrap:wrap;gap:3px}
+.area .pips a{width:16px;height:16px;border-radius:4px;background:var(--c);opacity:.85;display:block}
+.area .pips a:hover{opacity:1;outline:1px solid var(--text)}
+.area .n{color:var(--faint);font-size:12px}
+.lanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px;align-items:start}
+.lane{background:var(--lane);border:1px solid var(--line);border-radius:var(--radius);padding:10px;border-top:3px solid var(--c);min-width:0}
+.lhead{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13.5px;padding:2px 2px 10px}
+.lhead .icon{color:var(--c)}
+.lhead .count{color:var(--faint);font-weight:400}
+.lhint{font-size:12px;color:var(--faint);padding:0 2px 8px;margin-top:-6px}
+.cards{display:grid;gap:8px}
+.dcard{display:grid;gap:5px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 11px;text-decoration:none;color:var(--text)}
+.dcard:hover{background:var(--surface2);border-color:var(--line2)}
+.dcard .t{font-weight:500;font-size:13.5px;line-height:1.35}
+.dcard .num{font-family:var(--mono);color:var(--faint);font-size:11.5px}
+.dcard .line{font-size:12.5px;color:var(--muted);line-height:1.4}
+.dcard .line.warn{color:var(--warn)}
+.dcard .line.ok{color:var(--good)}
+.dcard .chips{display:flex;flex-wrap:wrap;gap:4px}
+.dcard .chip{font-size:11px;padding:0 7px}
+.map svg{width:100%;height:auto;display:block}
+.map a text{fill:var(--text)}
+.map a:hover rect{stroke:var(--text)}
+.empty{padding:30px;text-align:center;color:var(--faint)}
+
+.conf{display:grid;gap:10px}
+.conf-row{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:13.5px}
 .conf-row a{text-decoration:none}
 .val{font-weight:600}
-.projects{display:flex;flex-wrap:wrap;gap:8px}
-.projects a{text-decoration:none}
-.empty{padding:24px;text-align:center;color:var(--muted)}
-.icon.warn{color:var(--bad)}
+.proj{background:var(--surface2);color:var(--text);border-color:var(--line2)}
+.ptiles{display:grid;gap:10px}
+.ptiles .pname{font-size:12.5px;color:var(--muted);margin-bottom:5px;display:flex;justify-content:space-between;gap:8px}
+.ptiles .pname a{color:var(--muted);text-decoration:none}
+.ptiles .pname a:hover{color:var(--text)}
+.tile .pj{display:none}
 </style>
 </head>
 <body>
 <main>
-<div class="brand"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></div>
-<h1 style="margin-top:14px">All projects</h1>
-<p class="muted" id="meta" style="font-size:13px"></p>
-<div class="stats" id="stats"></div>
-<input id="q" type="search" placeholder="Search titles, projects, reasons" aria-label="Search decisions">
+<div class="top">
+  <div class="brand"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg>Crux <span class="repo">· All projects</span></div>
+  <label class="search"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="q" type="search" placeholder="Search decisions and projects" aria-label="Search decisions"></label>
+</div>
+<div class="sub" id="sub"></div>
 <div id="out"></div>
 </main>
 <script id="data" type="application/json">/*{{DATA}}*/</script>
 <script>
 const R = JSON.parse(document.getElementById('data').textContent);
-const D = R.decisions;
+const ALL = R.decisions;
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pad = n => String(n).padStart(4,'0');
-const warn = '<svg class="icon warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></svg>';
-const clock = '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>';
-const projects = [...new Set(D.map(d => d.project))].sort();
-const pending = D.filter(d => d.status==='open' || d.status==='found');
-const stale = pending.filter(d => d.stale);
-document.getElementById('meta').textContent = `Updated ${R.built} · ${projects.length} project${projects.length===1?'':'s'} in ${R.roots.join(', ')}`;
-document.getElementById('stats').innerHTML = [
-  pending.length && `<span class="chip open">${pending.length} waiting for a call</span>`,
-  stale.length && `<span class="chip found">${stale.length} waiting over ${R.staleDays} days</span>`,
-  R.conflicts.length && `<span class="chip bad">${R.conflicts.length} conflict${R.conflicts.length===1?'':'s'}</span>`,
-  `<span class="chip decided">${D.filter(d=>d.status==='decided').length} decided</span>`
-].filter(Boolean).join('');
+const ic = d => `<svg class="icon" viewBox="0 0 24 24">${d}</svg>`;
+const I = {
+  flag: ic('<path d="M6 21V4M6 4h11l-2 4 2 4H6"/>'),
+  alert: ic('<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/>'),
+  eye: ic('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>'),
+  split: ic('<path d="M12 21v-7M12 14L6 6M12 14l6-8M6 6V3M18 6V3"/>'),
+  check: ic('<circle cx="12" cy="12" r="8.5"/><path d="M8.3 12.2l2.6 2.6 4.9-5.2"/>'),
+  archive: ic('<rect x="3.5" y="4.5" width="17" height="4" rx="1"/><path d="M5 8.5V19a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8.5M10 12.5h4"/>'),
+  grid: ic('<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>'),
+  layers: ic('<path d="M12 4l8.5 4.5L12 13 3.5 8.5z"/><path d="M3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5"/>'),
+  tree: ic('<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="12" r="2.2"/><path d="M8.2 6.6C13 8 13 11 15.8 11.6M8.2 17.4C13 16 13 13 15.8 12.4"/>'),
+  clock: ic('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  bars: ic('<path d="M4 20h16M7 20v-7M12 20V6M17 20v-10"/>')
+};
+const STATES = [
+  { k:'openitem', name:'Open item', hint:'Flagged for review in a repo\u2019s own log', c:'var(--bad)', icon:I.flag, test:d => d.open_item && (d.status==='found'||d.status==='open') },
+  { k:'strained', name:'Strained', hint:'Deliberate, but now causing cost or risk', c:'var(--warn)', icon:I.alert, test:d => d.holding_up==='strained' && (d.status==='found'||d.status==='open'||d.status==='decided') },
+  { k:'open', name:'Needs your call', hint:'Open decisions, oldest first', c:'var(--accent)', icon:I.split, test:d => d.status==='open' },
+  { k:'review', name:'Needs review', hint:'Found in code, waiting to be confirmed', c:'#b49cff', icon:I.eye, test:d => d.status==='found' },
+  { k:'parked', name:'Parked', hint:'Set aside until a date or a trigger', c:'#7f8aa3', icon:I.clock, test:d => d.status==='parked' },
+  { k:'decided', name:'Recently decided', hint:'Latest twenty across projects', c:'var(--good)', icon:I.check, test:d => d.status==='decided' }
+];
+ALL.forEach(d => d._s = STATES.find(s => s.test(d)) || null);
+const live = ALL.filter(d => d._s);
+const projects = [...new Set(ALL.map(d => d.project))].sort((a,b)=>a.localeCompare(b));
+const shortName = d => String(d.chosenName || d.recommendedName || d.title).split(/[;,:(]/)[0];
+
+function sub(){
+  const counts = STATES.map(s => [s, live.filter(d => d._s===s).length]).filter(([,n]) => n);
+  const stale = live.filter(d => d.stale).length;
+  document.getElementById('sub').innerHTML = `<span>Updated ${esc(R.built)} \u00b7 ${projects.length} project${projects.length===1?'':'s'} in ${esc(R.roots.join(', '))}</span>` +
+    (R.conflicts.length ? `<span><span class="dot" style="background:var(--bad)"></span>${R.conflicts.length} conflict${R.conflicts.length===1?'':'s'}</span>` : '') +
+    counts.map(([s,n]) => `<span><span class="dot" style="background:${s.c}"></span>${n} ${esc(s.name.toLowerCase())}</span>`).join('') +
+    (stale ? `<span><span class="dot" style="background:var(--warn)"></span>${stale} waiting over ${R.staleDays} days</span>` : '');
+}
+
+function conflicts(){
+  if (!R.conflicts.length) return '';
+  return `<h2 class="row" style="gap:7px">${I.alert}Conflicts across projects</h2><div class="panel conf">${R.conflicts.map(c => `<div><b>${esc(c.key)}</b><div class="conf-row" style="margin-top:6px">${c.entries.map(e => `<a href="${esc(e.url)}"><span class="chip proj">${esc(e.project)} ${pad(e.id)}</span></a><span class="val">${esc(e.value)}</span>`).join('<span class="muted">vs</span>')}</div></div>`).join('')}</div>`;
+}
+
+function glance(list){
+  const total = list.length || 1;
+  const counts = STATES.map(s => [s, list.filter(d => d._s===s).length]).filter(([,n]) => n);
+  const bar = `<div class="bar">${counts.map(([s,n]) => `<span style="width:${n/total*100}%;background:${s.c}" title="${n} ${esc(s.name)}"></span>`).join('')}</div>
+    <div class="legend">${counts.map(([s,n]) => `<span><i style="background:${s.c}"></i>${n} ${esc(s.name.toLowerCase())}</span>`).join('')}</div>`;
+  const ps = projects.filter(p => list.some(d => d.project===p));
+  const tiles = `<div class="ptiles" style="margin-top:14px">${ps.map(p => { const ds = list.filter(d => d.project===p).sort((a,b)=>a.id-b.id); const first = ALL.find(d => d.project===p); return `<div><div class="pname"><a href="${esc(first.projectIndex)}">${esc(p)}</a><span>${ds.length}</span></div><div class="tiles">${ds.map(d => `<a class="tile" style="--c:${d._s.c}" href="${esc(d.url)}" title="${esc(p)} ${pad(d.id)} ${esc(d.title)} \u00b7 ${esc(d._s.name)}">${String(d.id).padStart(2,'0')}<small>${esc(shortName(d))}</small></a>`).join('')}</div></div>`; }).join('')}</div>`;
+  const rows = `<div class="areas">${ps.map(p => { const ds = list.filter(d => d.project===p).sort((a,b)=>STATES.indexOf(a._s)-STATES.indexOf(b._s)); const first = ALL.find(d => d.project===p); return `<div class="area"><a href="${esc(first.projectIndex)}" style="color:var(--text);text-decoration:none">${esc(p)}</a><span class="pips">${ds.map(d => `<a style="--c:${d._s.c}" href="${esc(d.url)}" title="${pad(d.id)} ${esc(d.title)}"></a>`).join('')}</span><span class="n">${ds.length}</span></div>`; }).join('')}</div>`;
+  return `<div class="glance">
+    <div class="panel"><div class="ptitle">${I.bars}Where things stand</div>${bar}${tiles}</div>
+    <div class="panel"><div class="ptitle">${I.layers}By project</div>${rows}</div>
+  </div>`;
+}
 
 function card(d){
-  const line = d.status==='decided' && d.chosenName ? `<div style="font-size:14px"><b style="color:var(--chosen)">${esc(d.chosen)}: ${esc(d.chosenName)}</b>${d.reason?` <span class="muted">· ${esc(d.reason)}</span>`:''}</div>`
-    : `<div class="muted" style="font-size:14px">${d.optionCount} options waiting${d.ageDays>0?` · ${d.ageDays} day${d.ageDays===1?'':'s'}`:''}</div>`;
-  return `<a class="card item" href="${esc(d.url)}">
-    <div class="row"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span>${d.status==='found'?'<span class="chip found">needs review</span>':''}${d.revisitDue?'<span class="chip found">revisit due</span>':''}${d.stale?`<span class="chip found">${clock}over ${R.staleDays} days</span>`:''}${d.deep?'<span class="chip open">deep</span>':''}</div>
-    <b>${esc(d.title)}</b>${line}</a>`;
+  let line = '';
+  if (d.holding_up==='strained' && d.strain) line = `<div class="line warn">${esc(d.strain)}</div>`;
+  else if (d.status==='decided' && d.chosenName) line = `<div class="line ok">${esc(d.chosen)}: ${esc(d.chosenName)}${d.reason?` <span class="muted">\u00b7 ${esc(d.reason)}</span>`:''}</div>`;
+  else if (d.status==='parked') { const rv = d.revisit||{}; line = `<div class="line">Back ${rv.date?esc(rv.date):''}${rv.date&&rv.trigger?' or ':''}${rv.trigger?esc(rv.trigger):''}</div>`; }
+  else if (d.recommendedName) line = `<div class="line">${d.status==='found'?'In the code':'Leaning'}: ${esc(d.recommendedName)}</div>`;
+  return `<a class="dcard" href="${esc(d.url)}"><div class="row" style="gap:6px"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span>${d.open_item?'<span class="chip bad">open item</span>':''}${d.revisitDue?'<span class="chip found">revisit due</span>':''}${d.stale?`<span class="chip found">over ${R.staleDays} days</span>`:''}${d.deep?'<span class="chip open">deep</span>':''}</div><div class="t">${esc(d.title)}</div>${line}<div class="chips">${(d.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div></a>`;
 }
+
+function lanes(list){
+  const ls = STATES.map(s => {
+    let ds = list.filter(d => d._s===s);
+    ds = s.k==='decided' ? ds.sort((a,b)=>String(b.decided_on||b.date).localeCompare(String(a.decided_on||a.date))).slice(0,20) : ds.sort((a,b)=>(b.ageDays-a.ageDays) || a.project.localeCompare(b.project) || a.id-b.id);
+    return [s, ds];
+  }).filter(([,ds]) => ds.length);
+  return `<div class="lanes">${ls.map(([s,ds]) => `<section class="lane" style="--c:${s.c}"><div class="lhead">${s.icon}${esc(s.name)} <span class="count">${ds.length}</span></div><div class="lhint">${esc(s.hint)}</div><div class="cards">${ds.map(card).join('')}</div></section>`).join('')}</div>`;
+}
+
 function render(){
   const q = document.getElementById('q').value.trim().toLowerCase();
-  const hit = d => !q || [d.title,d.project,d.reason,d.chosenName].join(' ').toLowerCase().includes(q);
-  let h = '';
-  if (R.conflicts.length){
-    h += `<h2>Conflicts across projects</h2><div class="card conf">${R.conflicts.map(c => `<div><div class="row" style="gap:6px">${warn}<b>${esc(c.key)}</b></div><div class="conf-row" style="margin-top:4px">${c.entries.map(e => `<a href="${esc(e.url)}"><span class="chip proj">${esc(e.project)} ${pad(e.id)}</span></a><span class="val">${esc(e.value)}</span>`).join('<span class="muted">vs</span>')}</div></div>`).join('')}</div>`;
-  }
-  const wait = pending.filter(hit).sort((a,b) => (b.stale-a.stale) || (b.ageDays-a.ageDays));
-  if (wait.length) h += `<h2>Needs your call</h2><div class="list">${wait.map(card).join('')}</div>`;
-  const done = D.filter(d => d.status==='decided' && hit(d)).sort((a,b) => String(b.decided_on||b.date).localeCompare(String(a.decided_on||a.date))).slice(0, 20);
-  if (done.length) h += `<h2>Recently decided</h2><div class="list">${done.map(card).join('')}</div>`;
-  if (projects.length) h += `<h2>Projects</h2><div class="projects">${projects.map(p => { const x = D.find(d => d.project===p); const n = pending.filter(d => d.project===p).length; return `<a href="${esc(x.projectIndex)}"><span class="chip proj">${esc(p)}${n?` · ${n} waiting`:''}</span></a>`; }).join('')}</div>`;
-  document.getElementById('out').innerHTML = h || `<div class="empty">${D.length ? 'No matches' : 'No decisions in any project yet'}</div>`;
+  const list = live.filter(d => !q || [d.title,d.project,d.reason,d.strain,d.chosenName,d.recommendedName,(d.lenses||[]).join(' ')].join(' ').toLowerCase().includes(q));
+  if (!ALL.length){ document.getElementById('out').innerHTML = '<div class="empty">No decisions in any project yet</div>'; return; }
+  document.getElementById('out').innerHTML = conflicts() + (list.length ? glance(list) + `<h2 class="row" style="gap:7px">${I.grid}Board</h2>` + lanes(list) : '<div class="empty">No matches</div>');
 }
+sub();
 document.getElementById('q').addEventListener('input', render);
 render();
 </script>
