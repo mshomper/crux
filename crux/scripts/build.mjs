@@ -51,6 +51,7 @@ function markdown(d) {
   L.push(`- Date: ${d.date}${d.decided_on ? `, decided ${d.decided_on}` : ''}`);
   if (d.lenses?.length) L.push(`- Lenses: ${d.lenses.join(', ')}`);
   if (d.depends_on?.length) L.push(`- Builds on: ${d.depends_on.map(pad).join(', ')}`);
+  if (d.status === 'parked' && d.revisit) L.push(`- Revisit: ${[d.revisit.date && `on ${d.revisit.date}`, d.revisit.trigger && d.revisit.trigger].filter(Boolean).join(', or ')}`);
   if (d.deliberate) L.push(`- Deliberate: ${d.deliberate}`);
   if (d.holding_up) L.push(`- Holding up: ${d.holding_up}${d.strain ? `. ${d.strain}` : ''}`);
   if (d.open_item) L.push(`- Open item in the repo's own log`);

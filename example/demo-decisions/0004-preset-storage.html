@@ -3,32 +3,33 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%236b6a64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%233c6fb0' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%233c6fb0'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%233c6fb0'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%23a2aab7' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%238ea8ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%238ea8ff'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%238ea8ff'/%3E%3C/svg%3E">
 <title>Decision</title>
 <style>
-:root{--bg:#f7f6f2;--surface:#ffffff;--surface2:#f1efe8;--text:#22211e;--muted:#6b6a64;--line:#dedcd3;--accent:#3c6fb0;--accent-bg:#e6eef8;--good:#2f7a4a;--good-bg:#e5f2ea;--warn:#a2620f;--warn-bg:#f8eedc;--bad:#a83a32;--bad-bg:#f8e6e4;--chosen:#2f7a4a;--radius:10px;--font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,"SF Mono",Consolas,monospace}
-@media (prefers-color-scheme:dark){:root{--bg:#1b1b19;--surface:#242422;--surface2:#2d2d2a;--text:#ecebe6;--muted:#a3a29b;--line:#3a3a36;--accent:#7fa9e0;--accent-bg:#22324a;--good:#78c495;--good-bg:#1f3428;--warn:#e0a85a;--warn-bg:#3a2d18;--bad:#e5877f;--bad-bg:#3d2220;--chosen:#78c495}}
+:root{--bg:#0b0d11;--panel:#10141a;--lane:#12161c;--surface:#191e26;--surface2:#1e242d;--raised:#1b2029;--line:rgba(255,255,255,.075);--line2:rgba(255,255,255,.12);--text:#e7eaf0;--muted:#a2aab7;--faint:#6c7584;--accent:#8ea8ff;--accent-ink:#0d1530;--accent-bg:rgba(142,168,255,.14);--good:#5fd3ae;--good-bg:rgba(95,211,174,.13);--warn:#f3b955;--warn-bg:rgba(243,185,85,.13);--bad:#f2727a;--bad-bg:rgba(242,114,122,.13);--chosen:#5fd3ae;--hist:#8792ad;--radius:10px;--font:"Segoe UI Variable Text","Segoe UI",Inter,system-ui,-apple-system,sans-serif;--mono:"Cascadia Mono",Consolas,ui-monospace,monospace;--good-fill:#5fd3ae;color-scheme:dark}
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 var(--font);overflow-wrap:anywhere}
-main{max-width:1180px;margin:0 auto;padding:20px 16px 48px}
-h1{font-size:22px;font-weight:600;margin:4px 0 8px;line-height:1.3}
-h2{font-size:16px;font-weight:600;margin:28px 0 10px}
-h3{font-size:15px;font-weight:600;margin:0}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--font);overflow-wrap:anywhere;-webkit-font-smoothing:antialiased}
+main{max-width:1240px;margin:0 auto;padding:18px 18px 48px}
+h1{font-size:21px;font-weight:600;margin:4px 0 8px;line-height:1.3}
+h2{font-size:14px;font-weight:600;margin:26px 0 10px;color:var(--text);letter-spacing:.1px}
+h3{font-size:14.5px;font-weight:600;margin:0}
 p{margin:0 0 10px}
 a{color:var(--accent)}
 .muted{color:var(--muted)}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:2px 9px;border-radius:999px;background:var(--surface2);color:var(--muted);border:1px solid var(--line);white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:1px 8px;border-radius:999px;background:transparent;color:var(--muted);border:1px solid var(--line2);white-space:nowrap}
 .chip.open{background:var(--accent-bg);color:var(--accent);border-color:transparent}
 .chip.decided{background:var(--good-bg);color:var(--good);border-color:transparent}
 .chip.found{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
 .chip.superseded,.chip.rejected{text-decoration:line-through}
-.icon{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;min-width:0}
-.btn{font:inherit;font-size:14px;display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text);cursor:pointer}
-.btn:hover{border-color:var(--muted)}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--surface)}
-input,textarea{font:inherit;width:100%;max-width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
+.icon{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-width:0}
+.btn{font:inherit;font-size:13.5px;display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:7px;border:1px solid var(--line2);background:transparent;color:var(--text);cursor:pointer}
+.btn:hover{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.18)}
+.btn.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink);font-weight:600}
+input,textarea{font:inherit;width:100%;max-width:100%;padding:8px 11px;border-radius:7px;border:1px solid var(--line2);background:var(--panel);color:var(--text)}
+input::placeholder,textarea::placeholder{color:var(--faint)}
 svg{max-width:100%}
 
 .brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text)}
@@ -82,12 +83,19 @@ svg{max-width:100%}
 .code{font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--surface2);padding:1px 6px;border-radius:5px}
 .brief{display:grid;gap:14px}
 .brief ol{margin:0;padding-left:20px;display:grid;gap:4px}
+.reads{display:grid;gap:8px;margin:4px 0 12px}
+.read{display:flex;gap:8px;align-items:flex-start;padding:9px 12px;border-radius:8px;background:var(--surface);border:1px solid var(--line);font-size:14px}
+.read .icon{margin-top:2px}
+.ok-read .icon{color:var(--good)}
+.warn-read{border-color:var(--warn)}.warn-read .icon{color:var(--warn)}
+.bad-read{border-color:var(--bad)}.bad-read .icon{color:var(--bad)}
+.ruled{margin-top:12px}
 .deep-chip{background:var(--accent-bg);color:var(--accent);border-color:transparent}
 </style>
 </head>
 <body>
 <main id="app"></main>
-<script id="data" type="application/json">{"id":4,"slug":"preset-storage","title":"Where should study presets be saved?","date":"2026-11-01","mode":"full","deep":true,"lenses":["data-model","ui"],"status":"decided","context":"Users want to save and share a full study setup.","depends_on":[1],"conflicts":[],"options":[{"key":"A","name":"In the page link","summary":"Encode the preset in the URL.","pros":["Share by link"],"cons":["Long links for large setups"],"assumptions":["Setups stay under a few kilobytes"],"risks":["Some chat apps truncate long links"]},{"key":"B","name":"Downloadable preset file","summary":"Save a small JSON file the user can load back in.","pros":["No size limit","Works offline"],"cons":["One more file to manage"],"assumptions":["Users are fine dragging a file in"],"risks":["Old files breaking after format changes"],"estimates":[{"what":"Effort","value":"two days","basis":"save, load and a version field"}]}],"criteria":[],"recommended":"B","recommendation":"Setups with imported geometry outgrow links quickly.","confidence":"strong","evidence":[{"claim":"Imported meshes make setups far larger than a link can hold.","options":["A","B"],"judgment":true}],"chosen":"B","reason":"Files match how I already hand off studies.","decided_on":"2026-11-01","superseded_by":null,"challenge":null,"brief":{"files":[{"path":"src/presets/save.js","change":"new: write the current study to a versioned JSON file"},{"path":"src/presets/load.js","change":"new: read a preset, migrate older versions, apply to the study"},{"path":"src/ui/toolbar.js","change":"add save and load buttons with drawn icons"}],"steps":["Define the preset format with a version field and units stated on every length","Write save, then load with a migration hook","Add the toolbar buttons","Round-trip test on three existing studies"],"done_when":["Saving then loading reproduces the study exactly","A file from an older version loads with a clear message if anything changed"],"validation":["Round-trip comparison of every setting on three studies"],"avoid":["Storing geometry in the preset; reference the file instead","Adding a settings toggle for this"]},"_file":"0004-preset-storage.html","_links":{"1":"0001-gpu-compute-path.html","2":"0002-units.html","3":"0003-contact-model.html","4":"0004-preset-storage.html"}}</script>
+<script id="data" type="application/json">{"id":4,"slug":"preset-storage","title":"Where should study presets be saved?","date":"2026-11-01","mode":"full","deep":true,"lenses":["data-model","ui"],"status":"decided","context":"Users want to save and share a full study setup.","depends_on":[1],"conflicts":[],"options":[{"key":"A","name":"In the page link","summary":"Encode the preset in the URL.","pros":["Share by link"],"cons":["Long links for large setups"],"assumptions":["Setups stay under a few kilobytes"],"risks":["Some chat apps truncate long links"]},{"key":"B","name":"Downloadable preset file","summary":"Save a small JSON file the user can load back in.","pros":["No size limit","Works offline"],"cons":["One more file to manage"],"assumptions":["Users are fine dragging a file in"],"risks":["Old files breaking after format changes"],"estimates":[{"what":"Effort","value":"two days","basis":"save, load and a version field"}]}],"criteria":[],"recommended":"B","recommendation":"Setups with imported geometry outgrow links quickly.","confidence":"strong","evidence":[{"claim":"Imported meshes make setups far larger than a link can hold.","options":["A","B"],"judgment":true}],"chosen":"B","reason":"Files match how I already hand off studies.","decided_on":"2026-11-01","superseded_by":null,"challenge":null,"brief":{"files":[{"path":"src/presets/save.js","change":"new: write the current study to a versioned JSON file"},{"path":"src/presets/load.js","change":"new: read a preset, migrate older versions, apply to the study"},{"path":"src/ui/toolbar.js","change":"add save and load buttons with drawn icons"}],"steps":["Define the preset format with a version field and units stated on every length","Write save, then load with a migration hook","Add the toolbar buttons","Round-trip test on three existing studies"],"done_when":["Saving then loading reproduces the study exactly","A file from an older version loads with a clear message if anything changed"],"validation":["Round-trip comparison of every setting on three studies"],"avoid":["Storing geometry in the preset; reference the file instead","Adding a settings toggle for this"]},"_file":"0004-preset-storage.html","_links":{"1":"0001-gpu-compute-path.html","2":"0002-units.html","3":"0003-contact-model.html","4":"0004-preset-storage.html","5":"0005-run-archive.html"}}</script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
 const I = {
@@ -102,6 +110,7 @@ const I = {
   dot:'<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/></svg>',
   book:'<svg class="icon" viewBox="0 0 24 24"><path d="M5 4h9a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4z"/><path d="M5 16a4 4 0 0 1 4-4h9"/></svg>',
   brain:'<svg class="icon" viewBox="0 0 24 24"><path d="M12 5a3 3 0 0 0-6 1 3 3 0 0 0-1 5 3 3 0 0 0 2 5 3 3 0 0 0 5 2z"/><path d="M12 5a3 3 0 0 1 6 1 3 3 0 0 1 1 5 3 3 0 0 1-2 5 3 3 0 0 1-5 2"/></svg>',
+  edit:'<svg class="icon" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
   clock:'<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>'
 };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -121,6 +130,19 @@ h += `<div class="row" style="margin-top:14px"><span class="muted">${pad(D.id)}<
 h += `<h1>${esc(D.title)}</h1><p>${esc(D.context)}</p>`;
 if ((D.depends_on||[]).length) h += `<p class="muted row" style="gap:6px">${I.link}Builds on ${refLinks(D.depends_on)}</p>`;
 if ((D.conflicts||[]).length) h += `<div class="callout bad"><b>Conflicts with active decision ${refLinks(D.conflicts)}.</b> Picking against it means superseding that decision.</div>`;
+if (D.deliberate || D.holding_up || D.open_item){
+  const dl = {yes:'Deliberate', likely:'Likely deliberate', unclear:'Unclear, may be accidental'}[D.deliberate] || '';
+  h += `<div class="reads">
+    ${D.open_item?`<div class="read bad-read">${I.alert}<div><b>Open item in the repo's own log.</b> Confirming this finding closes it.</div></div>`:''}
+    ${dl?`<div class="read">${I.check}<div><b>${esc(dl)}</b></div></div>`:''}
+    ${D.holding_up?`<div class="read ${D.holding_up==='strained'?'warn-read':'ok-read'}">${D.holding_up==='strained'?I.alert:I.check}<div><b>${D.holding_up==='strained'?'Strained':'Holding up'}</b>${D.strain?`<div>${esc(D.strain)}</div>`:''}</div></div>`:''}
+  </div>`;
+}
+if (D.status === 'parked'){
+  const rv = D.revisit || {}; const due = rv.date && rv.date <= new Date().toISOString().slice(0,10);
+  h += `<div class="read ${due?'warn-read':''}" style="margin:4px 0 12px">${I.clock}<div><b>${due?'Parked, revisit is due':'Parked'}</b><div>${rv.date?`Come back on ${esc(rv.date)}`:''}${rv.date&&rv.trigger?', or ':''}${rv.trigger?`Come back ${esc(rv.trigger)}`:''}</div></div></div>`;
+}
+if ((D.log_refs||[]).length) h += `<p class="muted row" style="gap:6px">${I.book}Also in the repo's log: ${D.log_refs.map(r=>`<span class="code">${esc(r.file)}</span> ${esc(r.entry||'')}`).join(', ')}</p>`;
 if (D.status === 'superseded' && D.superseded_by) h += `<div class="callout bad">Replaced by decision ${refLinks([D.superseded_by])}.</div>`;
 
 h += `<h2>Options</h2><div class="options">`;
@@ -128,7 +150,7 @@ for (const o of opts){
   const rec = o.key === D.recommended, ch = decided && o.key === D.chosen;
   h += `<article class="card opt${rec?' is-rec':''}${ch?' is-chosen':''}${decided&&!ch?' is-dim':''}" id="opt-${esc(o.key)}">
     <div class="row"><span class="letter">${esc(o.key)}</span><h3 style="flex:1;min-width:0">${esc(o.name)}</h3></div>
-    ${(rec||ch||o.source==='human')?`<div class="row">${rec?`<span class="badge rec">${I.star}Recommended</span>`:''}${ch?`<span class="badge ch">${I.check}Chosen</span>`:''}${o.source==='human'?'<span class="chip">Your option</span>':''}</div>`:''}
+    ${(rec||ch||o.source==='human')?`<div class="row">${rec?`<span class="badge rec">${I.star}${(D.status==='found'||D.deliberate)?'In the code now':'Recommended'}</span>`:''}${ch?`<span class="badge ch">${I.check}Chosen</span>`:''}${o.source==='human'?'<span class="chip">Your option</span>':''}</div>`:''}
     ${o.sketch?`<div class="sketch">${o.sketch}</div>`:''}
     <p style="margin:0">${esc(o.summary)}</p>
     <ul class="pc">${(o.pros||[]).map(p=>`<li class="pro">${I.plus}<span>${esc(p)}</span></li>`).join('')}${(o.cons||[]).map(c=>`<li class="con">${I.minus}<span>${esc(c)}</span></li>`).join('')}</ul>
@@ -139,6 +161,7 @@ for (const o of opts){
   </article>`;
 }
 h += `</div>`;
+if ((D.ruled_out||[]).length) h += `<div class="ruled"><div class="sub">Ruled out</div><ul class="mini">${D.ruled_out.map(r=>`<li>${I.minus}<span>${esc(r.option)} <span class="muted">· ${esc(r.by)}</span></span></li>`).join('')}</ul></div>`;
 
 if ((D.criteria||[]).length){
   h += `<h2>How they compare</h2><div class="card crit">`;
@@ -160,7 +183,8 @@ if ((D.evidence||[]).length){
 
 if (D.recommended){
   const ro = opts.find(o=>o.key===D.recommended);
-  h += `<h2>Claude's recommendation</h2><div class="callout"><b>${esc(D.recommended)}${ro?': '+esc(ro.name):''}</b> <span class="muted">· ${esc(conf[D.confidence]||D.confidence||'')}</span><p style="margin:6px 0 0">${esc(D.recommendation)}</p>${D.change_mind?`<p style="margin:8px 0 0"><span class="muted">What would change this:</span> ${esc(D.change_mind)}</p>`:''}</div>`;
+  const isFinding = D.status === 'found' || D.deliberate;
+  h += `<h2>${isFinding?'Evidence in the code':"Claude's recommendation"}</h2><div class="callout"><b>${esc(D.recommended)}${ro?': '+esc(ro.name):''}</b>${!isFinding && D.confidence?` <span class="muted">· ${esc(conf[D.confidence]||D.confidence)}</span>`:''}<p style="margin:6px 0 0">${esc(D.recommendation)}</p>${D.change_mind?`<p style="margin:8px 0 0"><span class="muted">What would change this:</span> ${esc(D.change_mind)}</p>`:''}</div>`;
 }
 
 if (D.challenge) h += `<h2>The case against the pick</h2><div class="callout bad"><p style="margin:0">${esc(D.challenge)}</p></div>`;
@@ -176,10 +200,27 @@ if (decided){
       ${list('Steps', B.steps, true)}${list('Done when', B.done_when)}${list('Validation', B.validation)}${list('Avoid', B.avoid)}
     </div>`;
   }
-} else if (D.status === 'open' || D.status === 'found'){
-  h += `<h2>${D.status==='found'?'Confirm this finding':'Make the call'}</h2><div class="card">
+} else if (D.status === 'rejected'){
+  h += `<h2>Dropped</h2><div class="callout bad">${D.reason?`<p style="margin:0">${esc(D.reason)}</p>`:'<p style="margin:0" class="muted">No reason given.</p>'}</div>`;
+} else if (D.status === 'found'){
+  h += `<h2>Review this finding</h2><div class="card">
+    <div class="pick-opts" role="group" aria-label="Review">
+      <button class="btn" data-act="confirm" aria-pressed="false">${I.check}Confirm</button>
+      <button class="btn" data-act="reject" aria-pressed="false">${I.minus}Reject</button>
+      <button class="btn" data-act="edit" aria-pressed="false">${I.edit}Edit</button>
+    </div>
+    <label class="note" for="why" id="whyLabel">Note (optional)</label>
+    <textarea id="why" rows="2" placeholder="Anything to add, such as why it was done this way"></textarea>
+    <div class="err" id="err"></div>
+    <div class="row" style="margin-top:4px"><button class="btn primary" id="copyReview">${I.copy}Copy for Claude</button></div>
+    <div class="toast" id="toast"></div>
+    <p class="note" style="margin:6px 0 0">Paste the copied line into Claude, or reply there with several at once, such as "confirm 3, 5; reject 4".</p>
+  </div>`;
+} else if (D.status === 'open'){
+  h += `<h2>Make the call</h2><div class="card">
     <div class="pick-opts" role="group" aria-label="Options">${opts.map(o=>`<button class="btn" data-k="${esc(o.key)}" aria-pressed="false">${esc(o.key)}: ${esc(o.name)}</button>`).join('')}</div>
-    <label class="note" for="why">Your reason (optional)</label>
+    <div class="pick-opts" role="group" aria-label="Or set it aside" style="margin-top:-4px"><span class="note" style="align-self:center">Or</span><button class="btn" data-k="park" aria-pressed="false">${I.clock}Park it</button><button class="btn" data-k="drop" aria-pressed="false">${I.minus}Drop it</button></div>
+    <label class="note" for="why" id="pickLabel">Your reason (optional)</label>
     <textarea id="why" rows="2" placeholder="Why this one, in a sentence"></textarea>
     <div class="err" id="err"></div>
     <div class="row" style="margin-top:4px"><button class="btn primary" id="copy">${I.copy}Copy pick for Claude</button></div>
@@ -193,13 +234,34 @@ let pick = null;
 document.querySelectorAll('.pick-opts .btn').forEach(b => b.addEventListener('click', () => {
   pick = b.dataset.k;
   document.querySelectorAll('.pick-opts .btn').forEach(x => x.setAttribute('aria-pressed', x === b));
+  const pl = document.getElementById('pickLabel');
+  if (pl) pl.textContent = pick === 'park' ? 'When to come back: a date or a trigger (required)' : pick === 'drop' ? 'Why not (optional)' : 'Your reason (optional)';
   document.getElementById('err').textContent = '';
 }));
 const copyBtn = document.getElementById('copy');
 if (copyBtn) copyBtn.addEventListener('click', async () => {
   if (!pick){ document.getElementById('err').textContent = 'Choose an option first'; return; }
   const why = document.getElementById('why').value.trim();
-  const line = `Decision ${pad(D.id)}: pick ${pick}.` + (why ? ` Reason: ${why}` : '');
+  if (pick === 'park' && !why){ document.getElementById('err').textContent = 'Say when to come back to it'; return; }
+  const line = pick === 'park' ? `Decision ${pad(D.id)}: park, revisit ${why}`
+    : pick === 'drop' ? `Decision ${pad(D.id)}: drop.` + (why ? ` Reason: ${why}` : '')
+    : `Decision ${pad(D.id)}: pick ${pick}.` + (why ? ` Reason: ${why}` : '');
+  try { await navigator.clipboard.writeText(line); document.getElementById('toast').textContent = 'Copied. Paste it into Claude.'; }
+  catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
+});
+let act = null;
+document.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+  act = b.dataset.act;
+  document.querySelectorAll('[data-act]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  document.getElementById('whyLabel').textContent = act === 'edit' ? 'What should change (required)' : 'Note (optional)';
+  document.getElementById('err').textContent = '';
+}));
+const rev = document.getElementById('copyReview');
+if (rev) rev.addEventListener('click', async () => {
+  const why = document.getElementById('why').value.trim();
+  if (!act){ document.getElementById('err').textContent = 'Choose confirm, reject or edit first'; return; }
+  if (act === 'edit' && !why){ document.getElementById('err').textContent = 'Say what should change'; return; }
+  const line = `Decision ${pad(D.id)}: ${act}` + (why ? `: ${why}` : '.');
   try { await navigator.clipboard.writeText(line); document.getElementById('toast').textContent = 'Copied. Paste it into Claude.'; }
   catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
 });

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%236b6a64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%233c6fb0' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%233c6fb0'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%233c6fb0'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%23a2aab7' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%238ea8ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%238ea8ff'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%238ea8ff'/%3E%3C/svg%3E">
 <title>Crux · All projects</title>
 <style>
 /*{{CSS}}*/
@@ -59,7 +59,7 @@ function card(d){
   const line = d.status==='decided' && d.chosenName ? `<div style="font-size:14px"><b style="color:var(--chosen)">${esc(d.chosen)}: ${esc(d.chosenName)}</b>${d.reason?` <span class="muted">· ${esc(d.reason)}</span>`:''}</div>`
     : `<div class="muted" style="font-size:14px">${d.optionCount} options waiting${d.ageDays>0?` · ${d.ageDays} day${d.ageDays===1?'':'s'}`:''}</div>`;
   return `<a class="card item" href="${esc(d.url)}">
-    <div class="row"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span>${d.status==='found'?'<span class="chip found">needs review</span>':''}${d.stale?`<span class="chip found">${clock}over ${R.staleDays} days</span>`:''}${d.deep?'<span class="chip open">deep</span>':''}</div>
+    <div class="row"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span>${d.status==='found'?'<span class="chip found">needs review</span>':''}${d.revisitDue?'<span class="chip found">revisit due</span>':''}${d.stale?`<span class="chip found">${clock}over ${R.staleDays} days</span>`:''}${d.deep?'<span class="chip open">deep</span>':''}</div>
     <b>${esc(d.title)}</b>${line}</a>`;
 }
 function render(){

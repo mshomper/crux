@@ -59,6 +59,7 @@ export function rollup({ quiet = false } = {}) {
           lenses: x.lenses || [], deep: !!x.deep, reason: x.reason,
           chosen: x.chosen, chosenName: (x.options || []).find(o => o.key === x.chosen)?.name || null,
           optionCount: (x.options || []).length,
+          revisit: x.revisit || null,
           stale: (x.status === 'open' || x.status === 'found') && ageDays > STALE_DAYS, ageDays,
           settles: x.status === 'decided' ? (x.settles || []) : [],
           url: pathToFileURL(page).href,
@@ -95,6 +96,8 @@ export function rollup({ quiet = false } = {}) {
   for (const c of conventions) md.push(`- **${c.key}**: ${c.entries.map(e => `"${e.value}" (${e.project} ${String(e.id).padStart(4, '0')})`).join(', ')}`);
   writeFileSync(join(home, 'conventions.md'), md.join('\n') + '\n');
 
+  const todayIso = today.toISOString().slice(0, 10);
+  for (const d of all) if (d.status === 'parked' && d.revisit?.date && d.revisit.date <= todayIso) d.status = 'open', d.revisitDue = true;
   const pending = all.filter(d => d.status === 'open' || d.status === 'found').length;
   if (!quiet || conflicts.length) console.log(`Roll-up: ${found.length} project(s), ${pending} waiting for a call, ${conflicts.length} conflict(s) -> ${join(home, 'index.html')}`);
   for (const c of conflicts) console.log(`- Conflict on "${c.key}": ${c.entries.map(e => `${e.project} says "${e.value}"`).join(' vs ')}`);

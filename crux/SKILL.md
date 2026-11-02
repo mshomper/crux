@@ -1,7 +1,7 @@
 ---
 name: crux
 description: Surface the decisions hiding inside a task, show options visually, wait for the human's pick, and record it in .decisions/. Use when the user types /crux, asks to think through options before building, or when you are about to make an architecture-level choice on your own (new dependency, data model change, solver or physics model change, a change spanning several modules, or a research or product direction). Not for routine fixes.
-argument-hint: "[quick|full] [deep] what's on your mind | challenge <number> | all"
+argument-hint: "[quick|full] [deep] what's on your mind | challenge <number> | park <number> | drop <number> | clear | all"
 ---
 
 # Crux
@@ -16,11 +16,12 @@ Arguments: **$ARGUMENTS**
 2. If the repo keeps its own decision log (`DECISIONS.md`, `docs/adr/` and the like), read it too. It is part of the record: respect what it settles, link its entries with `log_refs` rather than restating them, and raise any entry it marks as open or for review when it bears on the current work.
 3. Read `~/crux/conventions.md` if it exists (the home folder's `crux` folder). It lists what has been settled across all the human's projects, such as units, precision or file formats.
 4. Note any active decision, in this repo, its own log, or the conventions list, that your new options would contradict. A conflict is shown to the human, never silently overridden.
-5. If `.decisions/` does not exist, create it on the first record. Then check the repo's `CLAUDE.md` for the decisions line (see section 6). If missing, ask once whether to add it.
+5. Check parked decisions. Any whose `revisit.date` has passed: set `status` back to `open`, keep the `revisit` note, and tell the human in one line. Any whose `revisit.trigger` matches the work at hand: mention it in one line and ask whether to reopen it. Do not reopen trigger-based ones yourself.
+6. If `.decisions/` does not exist, create it on the first record. Then check the repo's `CLAUDE.md` for the decisions line (see section 6). If missing, ask once whether to add it.
 
 ## 1. Pick the mode
 
-- First word `quick` → quick mode. First word `full` → full mode. First word `challenge` → challenge mode (section 5). First word `all` → cross-project summary (section 5).
+- First word `quick` → quick mode. First word `full` → full mode. First word `challenge` → challenge mode (section 5). First word `all` → cross-project summary (section 5). First word `park`, `drop` or `clear` → section 4b.
 - The word `deep` among the first two words adds depth (section 3, "Deep additions") on top of either mode. `quick deep` means one decision, researched, on a page rather than in chat. `full deep` means every decision is researched. `deep` alone means full deep. Say in one line that deep mode takes longer and uses more.
 - No mode word: use **quick** if the question is contained (one module, easy to reverse). Use **full** if it is hard to reverse, touches several modules, or sets direction for later work. Say which you chose in one line.
 - When you invoked this yourself mid-task (the human did not type /crux), always use quick mode and keep it to one decision.
@@ -100,6 +101,17 @@ The human replies in chat ("B", "B because ...", or "none, do X instead"), or us
 4. **Deep mode only:** write the `brief` for the chosen option. It is the briefing for whichever session builds it, so write it for a reader with no memory of this conversation: `files` (paths to create or change, with one line each on what changes), `steps` (in order), `done_when` (checks that prove it works), `validation` (tests, or for physics work the comparison against data and the acceptable error), and `avoid` (traps, and anything that would contradict an active decision). Ground it in the code you read and the evidence gathered.
 5. Run the build script again. Then move to the next decision, using what was just chosen.
 6. When all decisions are made, give a one-paragraph summary of the choices and ask whether to start building. When building a decision that has a `brief`, follow it.
+
+## 4b. Park, drop and clear
+
+The human can also reply to a decision with "park", "drop", "reject" or "edit", in chat or with the page's copy button (for example `Decision 0007: park until 2027-01-15` or `Decision 0007: park when the hosted backend starts`).
+
+- **Park** an open decision (`/crux park 0007 until <date>` or `when <trigger>`): set `status` to `parked` and `revisit` to `{ "date": "YYYY-MM-DD" }` or `{ "trigger": "plain words" }`. Ask for one if neither was given. Parked decisions are not waiting for a call and never count as stale. Section 0 reopens them.
+- **Drop** an open decision (`/crux drop 0007`, "we're not doing this"): set `status` to `rejected`, with `reason` from their words. Kept as history; never proposed again.
+- **Reject** a found decision: same as drop. Kept so Crux Dig never drafts it again.
+- **Clear** (`/crux clear`, optionally followed by numbers): removes drafts nobody has acted on, meaning `found` records and `open` ones without a `chosen` pick. List exactly which files will go, wait for a yes, then delete each one's `.json`, `.html` and `.md` and rebuild. Never delete `decided`, `rejected`, `superseded` or `parked` records, even if asked to clear everything; offer to supersede or drop them instead. Numbers are not reused.
+
+Rebuild after any of these.
 
 ## 5. Challenge mode and cross-project summary
 
@@ -188,7 +200,9 @@ Deep mode adds these fields (leave them out otherwise):
 
 Findings from `/crux-dig` also carry `deliberate` (`yes`, `likely`, `unclear`), `holding_up` (`fine` or `strained`), `strain` (one sentence), `ruled_out` (list of `{ "option", "by" }`), `log_refs` (list of `{ "file", "entry" }`) and `open_item` (true or false). Any decision may carry `log_refs`.
 
-`status` is one of `open`, `decided`, `superseded`, `found` (drafted by /crux-dig and waiting for review), or `rejected`.
+`status` is one of `open`, `decided`, `superseded`, `found` (drafted by /crux-dig and waiting for review), `parked` (set aside, with `revisit`), or `rejected` (dropped or rejected; kept as history).
+
+`revisit` (parked only): `{ "date": "2027-01-15" }` or `{ "trigger": "when the hosted backend starts" }`, or both.
 
 ## Rules
 

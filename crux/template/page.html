@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%236b6a64' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%233c6fb0' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%233c6fb0'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%233c6fb0'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%23a2aab7' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M24 44V27M24 27L10 12M24 27V9'/%3E%3Ccircle cx='10' cy='10' r='3'/%3E%3Ccircle cx='24' cy='6' r='3'/%3E%3C/g%3E%3Cpath d='M24 27L38 12' stroke='%238ea8ff' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='10' r='5' fill='%238ea8ff'/%3E%3Ccircle cx='24' cy='27' r='3.5' fill='%238ea8ff'/%3E%3C/svg%3E">
 <title>Decision</title>
 <style>
 /*{{CSS}}*/
@@ -113,6 +113,10 @@ if (D.deliberate || D.holding_up || D.open_item){
     ${D.holding_up?`<div class="read ${D.holding_up==='strained'?'warn-read':'ok-read'}">${D.holding_up==='strained'?I.alert:I.check}<div><b>${D.holding_up==='strained'?'Strained':'Holding up'}</b>${D.strain?`<div>${esc(D.strain)}</div>`:''}</div></div>`:''}
   </div>`;
 }
+if (D.status === 'parked'){
+  const rv = D.revisit || {}; const due = rv.date && rv.date <= new Date().toISOString().slice(0,10);
+  h += `<div class="read ${due?'warn-read':''}" style="margin:4px 0 12px">${I.clock}<div><b>${due?'Parked, revisit is due':'Parked'}</b><div>${rv.date?`Come back on ${esc(rv.date)}`:''}${rv.date&&rv.trigger?', or ':''}${rv.trigger?`Come back ${esc(rv.trigger)}`:''}</div></div></div>`;
+}
 if ((D.log_refs||[]).length) h += `<p class="muted row" style="gap:6px">${I.book}Also in the repo's log: ${D.log_refs.map(r=>`<span class="code">${esc(r.file)}</span> ${esc(r.entry||'')}`).join(', ')}</p>`;
 if (D.status === 'superseded' && D.superseded_by) h += `<div class="callout bad">Replaced by decision ${refLinks([D.superseded_by])}.</div>`;
 
@@ -171,6 +175,8 @@ if (decided){
       ${list('Steps', B.steps, true)}${list('Done when', B.done_when)}${list('Validation', B.validation)}${list('Avoid', B.avoid)}
     </div>`;
   }
+} else if (D.status === 'rejected'){
+  h += `<h2>Dropped</h2><div class="callout bad">${D.reason?`<p style="margin:0">${esc(D.reason)}</p>`:'<p style="margin:0" class="muted">No reason given.</p>'}</div>`;
 } else if (D.status === 'found'){
   h += `<h2>Review this finding</h2><div class="card">
     <div class="pick-opts" role="group" aria-label="Review">
@@ -188,7 +194,8 @@ if (decided){
 } else if (D.status === 'open'){
   h += `<h2>Make the call</h2><div class="card">
     <div class="pick-opts" role="group" aria-label="Options">${opts.map(o=>`<button class="btn" data-k="${esc(o.key)}" aria-pressed="false">${esc(o.key)}: ${esc(o.name)}</button>`).join('')}</div>
-    <label class="note" for="why">Your reason (optional)</label>
+    <div class="pick-opts" role="group" aria-label="Or set it aside" style="margin-top:-4px"><span class="note" style="align-self:center">Or</span><button class="btn" data-k="park" aria-pressed="false">${I.clock}Park it</button><button class="btn" data-k="drop" aria-pressed="false">${I.minus}Drop it</button></div>
+    <label class="note" for="why" id="pickLabel">Your reason (optional)</label>
     <textarea id="why" rows="2" placeholder="Why this one, in a sentence"></textarea>
     <div class="err" id="err"></div>
     <div class="row" style="margin-top:4px"><button class="btn primary" id="copy">${I.copy}Copy pick for Claude</button></div>
@@ -202,13 +209,18 @@ let pick = null;
 document.querySelectorAll('.pick-opts .btn').forEach(b => b.addEventListener('click', () => {
   pick = b.dataset.k;
   document.querySelectorAll('.pick-opts .btn').forEach(x => x.setAttribute('aria-pressed', x === b));
+  const pl = document.getElementById('pickLabel');
+  if (pl) pl.textContent = pick === 'park' ? 'When to come back: a date or a trigger (required)' : pick === 'drop' ? 'Why not (optional)' : 'Your reason (optional)';
   document.getElementById('err').textContent = '';
 }));
 const copyBtn = document.getElementById('copy');
 if (copyBtn) copyBtn.addEventListener('click', async () => {
   if (!pick){ document.getElementById('err').textContent = 'Choose an option first'; return; }
   const why = document.getElementById('why').value.trim();
-  const line = `Decision ${pad(D.id)}: pick ${pick}.` + (why ? ` Reason: ${why}` : '');
+  if (pick === 'park' && !why){ document.getElementById('err').textContent = 'Say when to come back to it'; return; }
+  const line = pick === 'park' ? `Decision ${pad(D.id)}: park, revisit ${why}`
+    : pick === 'drop' ? `Decision ${pad(D.id)}: drop.` + (why ? ` Reason: ${why}` : '')
+    : `Decision ${pad(D.id)}: pick ${pick}.` + (why ? ` Reason: ${why}` : '');
   try { await navigator.clipboard.writeText(line); document.getElementById('toast').textContent = 'Copied. Paste it into Claude.'; }
   catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
 });

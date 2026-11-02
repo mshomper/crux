@@ -12,7 +12,11 @@ Arguments: **$ARGUMENTS** (a folder or area to focus on; empty means the whole r
 
 ## 1. Survey
 
-1. Read existing `.decisions/*.md` so nothing is drafted twice.
+1. Read existing `.decisions/*.md` first. Re-running is safe and never duplicates:
+   - `found` records nobody has reviewed yet are **refreshed in place**: keep the number and file name, re-check the evidence against the current code, and add any fields this version of the skill expects that are missing (such as `deliberate`, `holding_up`, `ruled_out`, `log_refs`). If the code no longer supports a finding, say so and suggest rejecting it.
+   - `decided`, `parked` and `superseded` records are left alone. Mention one only if the code has since moved away from it.
+   - `rejected` records are never drafted again.
+   - New findings get the next free numbers.
 2. Look for a decision log the repo already keeps: files such as `DECISIONS.md`, `docs/DECISIONS.md`, `ADR*`, `docs/adr/`, `docs/decisions/`, or a decisions section in `SPEC*` or `CLAUDE.md`. If one exists, it stays the main record. Read it, link to its entries from your findings instead of restating them (see `log_refs` below), and note every entry it marks as open, pending, or for review.
 3. Map the repo: entry points, folders, dependencies, build setup, file formats, and the largest or most-edited files.
 4. For a large repo, split the scan into small parallel subagents, one per area (for example: architecture and dependencies, data structures and file formats, solver or physics code, UI). Give each a short brief and ask for findings only, not file dumps. Keep working on the survey while they run.
@@ -26,7 +30,7 @@ Keep findings that are hard to reverse or that later work depends on. Use the ch
 - Numerical method, material model, boundary conditions, convergence settings.
 - UI layout pattern and state handling.
 
-Skip style choices, naming, and anything trivially reversible. Aim for 5 to 15 findings, ranked by how hard they are to reverse.
+Skip style choices, naming, and anything trivially reversible. Aim for 5 to 15 findings, ranked by how hard they are to reverse. When refreshing, report what changed: refreshed, new, and suggested for rejection.
 
 ## 3. Draft each finding
 

@@ -45,7 +45,7 @@ A junction is a folder shortcut that programs treat as the real folder. Deleting
 
 ## Check it works
 
-1. Start a new Claude Code session in any repo. Skills load when a session starts.
+1. Start a new Claude Code session in any repo. If a session was already open when you installed, type `/reload-plugins` in it instead.
 2. Type `/crux` and it should appear in the command list, along with `/crux-dig`.
 3. Try `/crux quick` with a small question. When you pick, Claude writes the record and builds `.decisions\index.html` in that repo.
 4. The first time, Claude will offer to add one line to the repo's `CLAUDE.md`. Say yes so future sessions read the records before planning.

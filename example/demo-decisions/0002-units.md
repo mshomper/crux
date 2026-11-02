@@ -3,6 +3,8 @@
 - Status: found
 - Date: 2026-11-02
 - Lenses: data-model
+- Deliberate: likely
+- Holding up: strained. Saved files carry no unit field, so a file shared with another tool can be misread.
 
 ## Context
 
