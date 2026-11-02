@@ -64,6 +64,37 @@
 .ptiles .pname a{color:var(--muted);text-decoration:none}
 .ptiles .pname a:hover{color:var(--text)}
 .tile .pj{display:none}
+
+.pgroups{display:grid;gap:4px;margin-top:14px}
+.pgroup{border-radius:8px}
+.pgroup.open{background:rgba(255,255,255,.02);padding-bottom:8px}
+.prow{all:unset;box-sizing:border-box;cursor:pointer;display:grid;grid-template-columns:auto minmax(0,1fr) minmax(60px,38%) auto;gap:10px;align-items:center;width:100%;padding:7px 8px;border-radius:8px}
+.prow:hover{background:var(--surface)}
+.prow:focus-visible{outline:2px solid var(--accent)}
+.prow .chev{color:var(--faint);transition:transform .12s}
+.pgroup.open .chev{transform:rotate(90deg)}
+.pn{font-weight:500;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc{color:var(--faint);font-size:12px}
+.mbar{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px;background:var(--lane)}
+.mbar span{display:block;height:100%}
+.pcounts{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--muted);padding:0 8px 0 34px}
+.pgroup:not(.open) .pcounts{display:none}
+.pcounts .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
+.pcounts a{color:var(--accent);text-decoration:none;margin-left:auto}
+.pgroup .tiles{padding:8px 8px 0 34px}
+.next{display:grid;gap:6px}
+.nrow{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--line);text-decoration:none;color:var(--text)}
+.nrow:hover{background:var(--surface2)}
+.ndot{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:none}
+.nmain{display:grid;gap:3px;min-width:0}
+.nt{font-size:13.5px;font-weight:500;line-height:1.35}
+.nm{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;color:var(--muted)}
+.nm .chip{font-size:11px;padding:0 7px}
+.more{all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:center;gap:6px;width:100%;margin-top:8px;padding:7px 10px;border-radius:8px;font-size:12.5px;color:var(--muted);border:1px dashed var(--line2)}
+.more:hover{color:var(--text);border-color:var(--muted)}
+.more .chev{transform:rotate(90deg)}
+.more.less .chev{transform:rotate(-90deg)}
+.dcard .line{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 </style>
 </head>
 <body>
@@ -120,46 +151,92 @@ function sub(){
 
 function conflicts(){
   if (!R.conflicts.length) return '';
-  return `<h2 class="row" style="gap:7px">${I.alert}Conflicts across projects</h2><div class="panel conf">${R.conflicts.map(c => `<div><b>${esc(c.key)}</b><div class="conf-row" style="margin-top:6px">${c.entries.map(e => `<a href="${esc(e.url)}"><span class="chip proj">${esc(e.project)} ${pad(e.id)}</span></a><span class="val">${esc(e.value)}</span>`).join('<span class="muted">vs</span>')}</div></div>`).join('')}</div>`;
+  return `<h2 class="row" style="gap:7px">${I.alert}Conflicts across projects</h2><div class="panel conf">${R.conflicts.map(c => `<div><b>${esc(c.key)}</b><div class="conf" style="margin-top:6px;gap:6px">${Object.entries(c.entries.reduce((g,e) => { const k = e.value.trim().toLowerCase(); (g[k] = g[k] || []).push(e); return g; }, {})).map(([,es]) => `<div class="conf-row"><span class="val">${esc(es[0].value)}</span>${es.map(e => `<a href="${esc(e.url)}"><span class="chip proj">${esc(e.project)} ${pad(e.id)}</span></a>`).join('')}</div>`).join('')}</div></div>`).join('')}</div>`;
 }
 
-function glance(list){
+const store = {
+  get(k){ try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+};
+const CHEV = '<svg class="icon chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+let openProjects = store.get('crux.all.openProjects');
+let openLanes = new Set(store.get('crux.all.openLanes') || []);
+function defaultOpen(){
+  if (projects.length <= 2) return new Set(projects);
+  return new Set(projects.filter(p => live.some(d => d.project===p && (d._s.k==='openitem' || d._s.k==='strained'))));
+}
+openProjects = openProjects ? new Set(openProjects) : defaultOpen();
+
+function miniBar(ds){
+  const total = ds.length || 1;
+  return `<span class="mbar">${STATES.map(s => [s, ds.filter(d => d._s===s).length]).filter(([,n]) => n).map(([s,n]) => `<span style="width:${n/total*100}%;background:${s.c}"></span>`).join('')}</span>`;
+}
+function countsText(ds){
+  return STATES.map(s => [s, ds.filter(d => d._s===s).length]).filter(([,n]) => n).map(([s,n]) => `<span><span class="dot" style="background:${s.c}"></span>${n} ${esc(s.name.toLowerCase())}</span>`).join('');
+}
+
+function glance(list, searching){
   const total = list.length || 1;
   const counts = STATES.map(s => [s, list.filter(d => d._s===s).length]).filter(([,n]) => n);
   const bar = `<div class="bar">${counts.map(([s,n]) => `<span style="width:${n/total*100}%;background:${s.c}" title="${n} ${esc(s.name)}"></span>`).join('')}</div>
     <div class="legend">${counts.map(([s,n]) => `<span><i style="background:${s.c}"></i>${n} ${esc(s.name.toLowerCase())}</span>`).join('')}</div>`;
   const ps = projects.filter(p => list.some(d => d.project===p));
-  const tiles = `<div class="ptiles" style="margin-top:14px">${ps.map(p => { const ds = list.filter(d => d.project===p).sort((a,b)=>a.id-b.id); const first = ALL.find(d => d.project===p); return `<div><div class="pname"><a href="${esc(first.projectIndex)}">${esc(p)}</a><span>${ds.length}</span></div><div class="tiles">${ds.map(d => `<a class="tile" style="--c:${d._s.c}" href="${esc(d.url)}" title="${esc(p)} ${pad(d.id)} ${esc(d.title)} \u00b7 ${esc(d._s.name)}">${String(d.id).padStart(2,'0')}<small>${esc(shortName(d))}</small></a>`).join('')}</div></div>`; }).join('')}</div>`;
-  const rows = `<div class="areas">${ps.map(p => { const ds = list.filter(d => d.project===p).sort((a,b)=>STATES.indexOf(a._s)-STATES.indexOf(b._s)); const first = ALL.find(d => d.project===p); return `<div class="area"><a href="${esc(first.projectIndex)}" style="color:var(--text);text-decoration:none">${esc(p)}</a><span class="pips">${ds.map(d => `<a style="--c:${d._s.c}" href="${esc(d.url)}" title="${pad(d.id)} ${esc(d.title)}"></a>`).join('')}</span><span class="n">${ds.length}</span></div>`; }).join('')}</div>`;
+  const groups = `<div class="pgroups">${ps.map(p => {
+    const ds = list.filter(d => d.project===p).sort((a,b)=>a.id-b.id);
+    const first = ALL.find(d => d.project===p);
+    const isOpen = searching || openProjects.has(p);
+    return `<div class="pgroup${isOpen?' open':''}">
+      <button class="prow" data-proj="${esc(p)}" aria-expanded="${isOpen}">${CHEV}<span class="pn">${esc(p)}</span>${miniBar(ds)}<span class="pc">${ds.length}</span></button>
+      <div class="pcounts">${countsText(ds)}<a href="${esc(first.projectIndex)}">Open board</a></div>
+      ${isOpen ? `<div class="tiles">${ds.map(d => `<a class="tile" style="--c:${d._s.c}" href="${esc(d.url)}" title="${esc(p)} ${pad(d.id)} ${esc(d.title)} · ${esc(d._s.name)}">${String(d.id).padStart(2,'0')}<small>${esc(shortName(d))}</small></a>`).join('')}</div>` : ''}
+    </div>`; }).join('')}</div>`;
+  const rank = d => ({openitem:0, open: d.revisitDue ? 1 : 2, strained:3, review:4}[d._s.k] ?? 9);
+  const next = list.filter(d => rank(d) < 9).sort((a,b) => rank(a)-rank(b) || b.ageDays-a.ageDays || a.project.localeCompare(b.project) || a.id-b.id).slice(0,5);
+  const nextHtml = next.length ? `<div class="next">${next.map(d => `<a class="nrow" href="${esc(d.url)}"><span class="ndot" style="background:${d._s.c}"></span><span class="nmain"><span class="nt">${esc(d.title)}</span><span class="nm"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span><span>${esc(d._s.name)}${d.ageDays>0?` · ${d.ageDays} day${d.ageDays===1?'':'s'}`:''}</span></span></span></a>`).join('')}</div>` : '<div class="muted">Nothing needs you right now.</div>';
   return `<div class="glance">
-    <div class="panel"><div class="ptitle">${I.bars}Where things stand</div>${bar}${tiles}</div>
-    <div class="panel"><div class="ptitle">${I.layers}By project</div>${rows}</div>
+    <div class="panel"><div class="ptitle">${I.bars}Where things stand</div>${bar}${groups}</div>
+    <div class="panel"><div class="ptitle">${I.flag}Next up</div>${nextHtml}</div>
   </div>`;
 }
 
 function card(d){
   let line = '';
   if (d.holding_up==='strained' && d.strain) line = `<div class="line warn">${esc(d.strain)}</div>`;
-  else if (d.status==='decided' && d.chosenName) line = `<div class="line ok">${esc(d.chosen)}: ${esc(d.chosenName)}${d.reason?` <span class="muted">\u00b7 ${esc(d.reason)}</span>`:''}</div>`;
+  else if (d.status==='decided' && d.chosenName) line = `<div class="line ok">${esc(d.chosen)}: ${esc(d.chosenName)}${d.reason?` <span class="muted">· ${esc(d.reason)}</span>`:''}</div>`;
   else if (d.status==='parked') { const rv = d.revisit||{}; line = `<div class="line">Back ${rv.date?esc(rv.date):''}${rv.date&&rv.trigger?' or ':''}${rv.trigger?esc(rv.trigger):''}</div>`; }
   else if (d.recommendedName) line = `<div class="line">${d.status==='found'?'In the code':'Leaning'}: ${esc(d.recommendedName)}</div>`;
   return `<a class="dcard" href="${esc(d.url)}"><div class="row" style="gap:6px"><span class="chip proj">${esc(d.project)}</span><span class="num">${pad(d.id)}</span>${d.branch?`<span class="chip open" title="Not merged into the main copy yet">${I.split}in branch ${esc(d.branch)}</span>`:''}${d.open_item?'<span class="chip bad">open item</span>':''}${d.revisitDue?'<span class="chip found">revisit due</span>':''}${d.stale?`<span class="chip found">over ${R.staleDays} days</span>`:''}${d.deep?'<span class="chip open">deep</span>':''}</div><div class="t">${esc(d.title)}</div>${line}<div class="chips">${(d.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div></a>`;
 }
 
-function lanes(list){
+const CAP = { decided: 3 };
+function lanes(list, searching){
   const ls = STATES.map(s => {
     let ds = list.filter(d => d._s===s);
     ds = s.k==='decided' ? ds.sort((a,b)=>String(b.decided_on||b.date).localeCompare(String(a.decided_on||a.date))).slice(0,20) : ds.sort((a,b)=>(b.ageDays-a.ageDays) || a.project.localeCompare(b.project) || a.id-b.id);
     return [s, ds];
   }).filter(([,ds]) => ds.length);
-  return `<div class="lanes">${ls.map(([s,ds]) => `<section class="lane" style="--c:${s.c}"><div class="lhead">${s.icon}${esc(s.name)} <span class="count">${ds.length}</span></div><div class="lhint">${esc(s.hint)}</div><div class="cards">${ds.map(card).join('')}</div></section>`).join('')}</div>`;
+  return `<div class="lanes">${ls.map(([s,ds]) => {
+    const cap = CAP[s.k] || 5;
+    const all = searching || openLanes.has(s.k);
+    const shown = all ? ds : ds.slice(0, cap);
+    const more = ds.length - shown.length;
+    return `<section class="lane" style="--c:${s.c}"><div class="lhead">${s.icon}${esc(s.name)} <span class="count">${ds.length}</span></div><div class="lhint">${esc(s.hint)}</div><div class="cards">${shown.map(card).join('')}</div>${more>0?`<button class="more" data-lane="${s.k}">${CHEV}Show ${more} more</button>`: (!searching && ds.length > cap ? `<button class="more less" data-lane="${s.k}">${CHEV}Show fewer</button>` : '')}</section>`;
+  }).join('')}</div>`;
 }
+
+document.getElementById('out').addEventListener('click', e => {
+  const pb = e.target.closest('[data-proj]');
+  if (pb){ const p = pb.dataset.proj; openProjects.has(p) ? openProjects.delete(p) : openProjects.add(p); store.set('crux.all.openProjects', [...openProjects]); render(); return; }
+  const lb = e.target.closest('[data-lane]');
+  if (lb){ const k = lb.dataset.lane; openLanes.has(k) ? openLanes.delete(k) : openLanes.add(k); store.set('crux.all.openLanes', [...openLanes]); render(); }
+});
 
 function render(){
   const q = document.getElementById('q').value.trim().toLowerCase();
   const list = live.filter(d => !q || [d.title,d.project,d.reason,d.strain,d.chosenName,d.recommendedName,(d.lenses||[]).join(' ')].join(' ').toLowerCase().includes(q));
   if (!ALL.length){ document.getElementById('out').innerHTML = '<div class="empty">No decisions in any project yet</div>'; return; }
-  document.getElementById('out').innerHTML = conflicts() + (list.length ? glance(list) + `<h2 class="row" style="gap:7px">${I.grid}Board</h2>` + lanes(list) : '<div class="empty">No matches</div>');
+  const searching = !!q;
+  document.getElementById('out').innerHTML = conflicts() + (list.length ? glance(list, searching) + `<h2 class="row" style="gap:7px">${I.grid}Board</h2>` + lanes(list, searching) : '<div class="empty">No matches</div>');
 }
 sub();
 document.getElementById('q').addEventListener('input', render);

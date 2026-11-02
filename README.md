@@ -79,7 +79,7 @@ Each repo gets `.decisions/index.html`, an offline page in the same style as the
 
 - **Where things stand**: a status bar and one tile per decision, coloured by state, each opening its page.
 - **By area**: one row per lens, so you can see where strain clusters.
-- **Board**: lanes for open items from the repo's own log, strained, needs your call, needs review, parked, decided and history. Empty lanes are hidden.
+- **Board**: lanes for open items from the repo's own log, strained, needs your call, needs review, parked, decided and history. Empty lanes are hidden, and each lane shows its first five cards (three for decided and history) with "Show more" at the bottom, so the page stays short however many decisions pile up.
 - **What builds on what**: a map of the links between decisions, foundations on the left.
 
 <p align="center"><img src="assets/build-brief.png" alt="A decided Crux page showing the chosen option and a build brief with files, steps, done-when checks, validation and things to avoid" width="760"></p>
@@ -90,6 +90,8 @@ Every time a decision changes, Crux refreshes one page covering every repo you h
 
 <p align="center"><img src="assets/all-projects.png" alt="The Crux all-projects page: a conflict on length unit between two projects, decisions waiting for a call with one flagged as stale, and recently decided ones" width="760"></p>
 
+- **Projects collapse** to one summary row each, with a coloured bar of their states; click to see their tiles. Projects with open items or strained decisions start expanded, and your choices are remembered.
+- **Next up** lists the five things most worth your attention across every project: open items first, then the oldest calls.
 - **Waiting for a call** across all projects, oldest first, with anything over two weeks flagged and parked decisions that are due back.
 - **Conflicts**: when two projects settle the same question differently (millimetres in one, metres in another), it shows at the top.
 - **Conventions** each project has settled, so a new tool doesn't quietly contradict an old one.

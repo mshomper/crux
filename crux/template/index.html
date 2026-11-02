@@ -53,6 +53,12 @@
 .map a text{fill:var(--text)}
 .map a:hover rect{stroke:var(--text)}
 .empty{padding:30px;text-align:center;color:var(--faint)}
+
+.more{all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:center;gap:6px;width:100%;margin-top:8px;padding:7px 10px;border-radius:8px;font-size:12.5px;color:var(--muted);border:1px dashed var(--line2)}
+.more:hover{color:var(--text);border-color:var(--muted)}
+.more .chev{transform:rotate(90deg)}
+.more.less .chev{transform:rotate(-90deg)}
+.dcard .line{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 </style>
 </head>
 <body>
@@ -135,10 +141,28 @@ function card(d){
   return `<a class="dcard" href="${esc(d._file)}"><div class="row" style="gap:6px"><span class="num">${pad(d.id)}</span>${d.open_item?`<span class="chip bad">open item</span>`:''}${d.status==='parked'&&due(d)?'<span class="chip found">revisit due</span>':''}${d.deep?'<span class="chip open">deep</span>':''}</div><div class="t">${esc(d.title)}</div>${line}<div class="chips">${(d.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}</div></a>`;
 }
 
-function lanes(list){
+const store = {
+  get(k){ try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+};
+const CHEV = '<svg class="icon chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
+const laneKey = 'crux.repo.' + (repoName || 'repo') + '.openLanes';
+let openLanes = new Set(store.get(laneKey) || []);
+const CAP = { decided: 3, history: 3 };
+function lanes(list, searching){
   const ls = STATES.map(s => [s, list.filter(d => d._s===s).sort((a,b)=>b.id-a.id)]).filter(([,ds]) => ds.length);
-  return `<div class="lanes">${ls.map(([s,ds]) => `<section class="lane" style="--c:${s.c}"><div class="lhead">${s.icon}${esc(s.name)} <span class="count">${ds.length}</span></div><div class="lhint">${esc(s.hint)}</div><div class="cards">${ds.map(card).join('')}</div></section>`).join('')}</div>`;
+  return `<div class="lanes">${ls.map(([s,ds]) => {
+    const cap = CAP[s.k] || 5;
+    const all = searching || openLanes.has(s.k);
+    const shown = all ? ds : ds.slice(0, cap);
+    const more = ds.length - shown.length;
+    return `<section class="lane" style="--c:${s.c}"><div class="lhead">${s.icon}${esc(s.name)} <span class="count">${ds.length}</span></div><div class="lhint">${esc(s.hint)}</div><div class="cards">${shown.map(card).join('')}</div>${more>0?`<button class="more" data-lane="${s.k}">${CHEV}Show ${more} more</button>`:(!searching && ds.length > cap ? `<button class="more less" data-lane="${s.k}">${CHEV}Show fewer</button>` : '')}</section>`;
+  }).join('')}</div>`;
 }
+document.getElementById('out').addEventListener('click', e => {
+  const lb = e.target.closest('[data-lane]');
+  if (lb){ const k = lb.dataset.lane; openLanes.has(k) ? openLanes.delete(k) : openLanes.add(k); store.set(laneKey, [...openLanes]); render(); }
+});
 
 function depMap(all){
   let list = all;
@@ -189,7 +213,7 @@ function render(){
   const q = document.getElementById('q').value.trim().toLowerCase();
   const list = ALL.filter(d => !q || JSON.stringify([d.title,d.context,d.reason,d.strain,(d.lenses||[]),(d.options||[]).map(o=>o.name+' '+o.summary)]).toLowerCase().includes(q));
   if (!list.length){ document.getElementById('out').innerHTML = `<div class="empty">${ALL.length ? 'No matches' : 'No decisions yet'}</div>`; return; }
-  document.getElementById('out').innerHTML = glance(list) + `<h2 class="row" style="gap:7px">${I.grid}Board</h2>` + lanes(list) + depMap(list);
+  document.getElementById('out').innerHTML = glance(list) + `<h2 class="row" style="gap:7px">${I.grid}Board</h2>` + lanes(list, !!q) + depMap(list);
 }
 sub();
 document.getElementById('q').addEventListener('input', render);
