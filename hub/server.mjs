@@ -11,6 +11,7 @@ import { parseQuickPicks } from './lib/quick.mjs';
 import { checkRequest, extraHosts } from './lib/access.mjs';
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
+import { HubSettings } from './lib/settings.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -28,7 +29,9 @@ if (existsSync(cfg)) {
 if (!projects.length) projects = (hubCfg.projects || []).map(p => resolve(p));
 if (!projects.length) projects = [process.cwd()];
 
-const hub = new Hub({ projects, retireAt, defaults: hubCfg.defaults });
+// Hub settings (decision 21: routePermissions, permissionTimeoutSec) start from hub.json and are saved in ~/.crux-hub.
+const settings = new HubSettings({ initial: hubCfg });
+const hub = new Hub({ projects, retireAt, defaults: hubCfg.defaults, settings });
 
 // Phone notifications (decision 19): a card that needs you becomes a push to every subscribed phone.
 const push = new Push();
@@ -71,7 +74,13 @@ async function body(req) {
 }
 
 const routes = {
-  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS }),
+  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all() }),
+  // The off switch for decision 21: false sends every permission request to you.
+  // Per repo (decision 34): { project, permissionMode: 'auto' | 'standard' }.
+  'POST /api/settings': ({ routePermissions, project, permissionMode }) => {
+    if (project && permissionMode) hub.setPermissionMode(hub.project(project), permissionMode);
+    return { settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(), permissionMode: project ? hub.permissionMode(hub.project(project)) : undefined };
+  },
 
   'POST /api/send': ({ project, thread, text }) => {
     const p = hub.project(project);

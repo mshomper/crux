@@ -80,6 +80,14 @@ export function cruxTools(hub, project, agent) {
         { name: z.string(), reason: z.string().max(200).describe('One plain line, e.g. "phone access merged".') },
         async ({ name, reason }) => out(hub.retireFinished(project, name, agent.name, reason))),
 
+      tool('answer_permission', t('Answer a worker\'s permission request that the hub sent you ([Permission request <id>]). allow or deny within the board\'s permission rules; escalate sends it to {{who}} as a card. Always give a one-line reason: it is logged in your thread for {{who}} to audit, and a denied worker sees it.'),
+        {
+          request_id: z.string().describe('The id from the request message.'),
+          answer: z.enum(['allow', 'deny', 'escalate']),
+          reason: z.string().min(1).max(300).describe('One plain line, e.g. "runs the project tests (R002: test commands)".')
+        },
+        async ({ request_id, answer, reason }) => out(hub.answerPermission(project, agent, request_id.trim(), answer, reason))),
+
       tool('message_agent','Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },
         async ({ to, text: msg }) => { hub.orchestratorToWorker(project, agent, to, msg); return out(`Sent to ${to}.`); }),
@@ -114,6 +122,6 @@ export function cruxTools(hub, project, agent) {
 export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
-  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'retire_worker');
+  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'retire_worker', 'answer_permission');
   return names.map(n => `mcp__crux__${n}`);
 }

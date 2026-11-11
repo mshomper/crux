@@ -45,7 +45,10 @@ export class CommandPolicy {
     if (SIMPLE.has(h)) return true;
     if (h === 'find') return !rest.some(w => /^-(delete|exec|execdir|ok|okdir|fprint|fls)/.test(w));
     if (h === 'sed') return rest.includes('-n') && !rest.some(w => /^-i|^--in-place/.test(w));
+    // node --test and npm test count as read-only by Matt's rule (R003): they run the project's own tests.
+    if (h === 'node' && rest[0] === '--test') return rest.slice(1).every(w => !/^--(require|import|loader|experimental-loader|eval|env-file)/.test(w) && w !== '-e' && w !== '-r');
     if (h === 'node') return rest.length > 0 && rest.every((w, i) => ['-v', '--version', '--check', '-c'].includes(w) || (i > 0 && !w.startsWith('-')));
+    if (h === 'npm' && ['test', 't'].includes(rest[0])) return rest.slice(1).every((w, i, a) => /^--(prefix|silent|quiet)$|^-s$/.test(w) || a[i - 1] === '--prefix');
     if (h === 'npm') return ['--version', '-v', 'ls', 'list', 'config'].includes(rest[0]) && !(rest[0] === 'config' && rest[1] !== 'get' && rest[1] !== 'list');
     if (h === 'git') {
       let args = rest;
@@ -61,19 +64,50 @@ export class CommandPolicy {
     return false;
   }
 
-  // Rules Claude Code suggests with a prompt, made permanent (saved to the project's .claude/settings.local.json),
-  // or null when the command is too risky to allow forever or the rule would be too broad.
+  // The "Always allow" rule for a card, saved to the project's .claude/settings.local.json, or null when the
+  // command is too risky to allow forever or the rule would be too broad. A command becomes a prefix pattern
+  // ("npm test*"), not the literal command, which would never match again. Other tools keep Claude Code's suggestion.
   static alwaysRules(tool, input, suggestions) {
     const cmd = String(input?.command || '');
     if (RISKY.test(cmd)) return null;
+    if (/^(Bash|PowerShell)$/.test(tool)) {
+      const prefix = CommandPolicy.prefix(cmd);
+      return prefix && !RISKY.test(prefix) ? [{ type: 'addRules', behavior: 'allow', destination: 'localSettings', rules: [{ toolName: tool, ruleContent: `${prefix}*` }] }] : null;
+    }
     const keep = (suggestions || []).filter(s => s.type === 'addRules' && s.behavior === 'allow' && s.rules?.length
       && s.rules.every(r => r.ruleContent ? !RISKY.test(r.ruleContent) && !/^\s*\*?\s*$/.test(r.ruleContent.replace(/:\*$/, '')) : !/^(Bash|PowerShell)$/.test(r.toolName)));
     if (!keep.length) return null;
     return keep.map(s => ({ ...s, destination: 'localSettings' }));
   }
 
+  // The words that name what a command does: the program, plus its subcommand for tools that have them
+  // ("git commit", "npm run", "node --test", "node scripts/check.mjs"). Null for chains, substitutions, variables,
+  // and bare interpreters or shells, where any prefix would allow far more than the one command.
+  static prefix(cmd) {
+    const c = String(cmd || '').trim();
+    if (!c || /&&|\|\||[;|`\n<>]|\$|(^|\s)&/.test(c)) return null;
+    const words = c.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+    if (/^\w+=/.test(words[0]) || /["']/.test(words[0])) return null;
+    const head = words[0].toLowerCase();
+    if (/^(bash|sh|zsh|cmd|powershell|pwsh|python3?|py|env|sudo|xargs|eval|exec|source|\.|iex|invoke-expression|start-process)$/.test(head)) return null;
+    const second = words[1] || '';
+    // Only subcommands whose every form is safe: "git branch*" would also allow "git branch -D", so it is left out.
+    const SAFE_SUB = {
+      git: /^(status|diff|log|show|add|ls-files|blame|rev-parse|describe|shortlog|grep|switch)$/,
+      npm: /^(test|t|run|start|ls|list)$/, pnpm: /^(test|run|ls)$/, yarn: /^(test|run)$/,
+      cargo: /^(build|test|check|fmt|clippy)$/, go: /^(build|test|vet|fmt)$/, dotnet: /^(build|test)$/,
+      node: /^(--test|[\w./\\-]+\.(m?js|cjs))$/
+    };
+    if (SAFE_SUB[head]) {
+      if (!SAFE_SUB[head].test(second)) return null;
+      if (head === 'npm' && second === 'run') return words[2] && /^[\w:.-]+$/.test(words[2]) ? `npm run ${words[2]}` : null;
+      return `${words[0]} ${second}`;
+    }
+    return /^(ls|dir|pwd|cat|head|tail|wc|echo|which|where|stat|tree|grep|rg|sort|uniq|cut|diff|mkdir|touch|get-childitem|get-content|test-path|select-string)$/.test(head) ? words[0] : null;
+  }
+
   // One plain line per rule, for the card.
   static describe(rules) {
-    return (rules || []).flatMap(s => s.rules.map(r => r.ruleContent ? `${r.toolName}: ${r.ruleContent.replace(/:\*$/, ' …')}` : `${r.toolName} (any use)`));
+    return (rules || []).flatMap(s => s.rules.map(r => r.ruleContent ? `${r.toolName}: ${r.ruleContent.replace(/:?\*$/, ' …')}` : `${r.toolName} (any use)`));
   }
 }

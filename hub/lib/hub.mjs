@@ -1,5 +1,6 @@
 // The hub: projects, their agents, and the routing between you, the orchestrator role and workers.
 import { basename, resolve, join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
@@ -7,6 +8,8 @@ import { Board } from './board.mjs';
 import { Agent } from './agent.mjs';
 import { Memory } from './memory.mjs';
 import { CommandPolicy } from './permissions.mjs';
+import { classify, rulesEntry, touchesSecrets } from './permission-rules.mjs';
+import { HubSettings } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
@@ -30,9 +33,11 @@ const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 6
 export class Hub {
   // defaults: { orchestrator: { type, model, effort }, worker: {...} } from ~/crux/hub.json (decision 20).
   // agentHome: the folder whose .claude/agents holds the all-projects types (your home folder).
-  constructor({ projects, retireAt = 60, memory = new Memory(), defaults = {}, agentHome = homedir() }) {
+  // settings: HubSettings (routePermissions, permissionTimeoutSec), from ~/.crux-hub/settings.json.
+  constructor({ projects, retireAt = 60, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings() }) {
     this.retireAt = retireAt;
     this.memory = memory;
+    this.settings = settings;
     this.defaults = defaults || {};
     this.agentHome = agentHome;
     this.listeners = new Set();
@@ -307,15 +312,15 @@ export class Hub {
   }
 
   // ---------- approvals (tool permission prompts become cards) ----------
-  // Settled without a card: reading Crux's own files (not your private notes), the orchestrator writing decision
-  // records and running the Crux build. Refused without a card: the orchestrator editing anything else.
+  // Settled without a card or the orchestrator (R003): reading, searching and read-only commands, for any path,
+  // except secrets and your private notes; the orchestrator writing decision records and running the Crux build.
+  // Refused without a card: the orchestrator editing anything else.
   autoAnswer(p, agent, toolName, input) {
     const norm = s => String(s || '').replace(/\\/g, '/').toLowerCase();
     const file = norm(input.file_path || input.path || input.notebook_path);
-    const home = norm(homedir());
-    const cruxDirs = [`${home}/.claude/skills/`, `${home}/crux/`];
     const privateNotes = norm(join(this.memory.profileDir, 'private.md'));
-    if (['Read', 'Glob', 'Grep'].includes(toolName) && file && file !== privateNotes && cruxDirs.some(d => file.startsWith(d))) return { behavior: 'allow', updatedInput: input };
+    const readsPrivate = (file && file === privateNotes) || /private\.md/i.test(String(input.command || input.pattern || ''));
+    if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input)) return { behavior: 'allow', updatedInput: input };
     const decisions = norm(join(p.dir, '.decisions')) + '/';
     if (['Write', 'Edit', 'MultiEdit'].includes(toolName) && agent.role === 'orchestrator') {
       return file.startsWith(decisions)
@@ -327,34 +332,147 @@ export class Hub {
       return { behavior: 'allow', updatedInput: input };
     }
     // Commands that only read (listing, git status and diff, versions) run without a card.
-    if (/^(Bash|PowerShell)$/.test(toolName) && CommandPolicy.readOnly(toolName, cmd)) return { behavior: 'allow', updatedInput: input };
+    if (/^(Bash|PowerShell)$/.test(toolName) && CommandPolicy.readOnly(toolName, cmd) && !readsPrivate && !touchesSecrets(toolName, input)) return { behavior: 'allow', updatedInput: input };
     return null;
   }
 
+  // Decision 21 A: a worker's request goes to the orchestrator first, unless the hub's own matcher finds a hard stop
+  // in the permission rules (or cannot read it), routing is off, there is no rules entry, or no orchestrator is
+  // running. Then it is a card for you, as before. If the orchestrator escalates or does not answer in time, too.
   requestApproval(p, agent, toolName, input, { signal, title, description, suggestions } = {}) {
     const auto = this.autoAnswer(p, agent, toolName, input);
     if (auto) return Promise.resolve(auto);
+    const route = this.routeFor(p, agent, toolName, input);
+    if (route.allow) return Promise.resolve({ behavior: 'allow', updatedInput: input });   // auto mode, contained (decision 34)
     return new Promise(resolvePromise => {
       const id = randomUUID();
       const always = CommandPolicy.alwaysRules(toolName, input, suggestions);
       const finish = (result, how) => {
-        if (!this.approvals.has(id)) return;
+        const a = this.approvals.get(id);
+        if (!a) return;
+        clearTimeout(a.timer);
         this.approvals.delete(id);
         p.log.append('approval_result', { thread: agent.thread, approval: id, how });
         resolvePromise(result);
       };
-      this.approvals.set(id, { p, agent, toolName, input, finish, always });
-      p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input) });
+      const entry = { p, agent, toolName, input, finish, always, routedTo: route.to, escalated: false };
+      this.approvals.set(id, entry);
+      p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input), routedTo: route.to, stops: route.stops, rules: route.rules });
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
+      if (route.to) {
+        entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), this.settings.get('permissionTimeoutSec') * 1000);
+        entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
+        try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure)); }
+        catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
+      }
     });
   }
 
+  // Where a request goes: { allow } in auto mode for contained work; else { to: orchestrator name | null,
+  // stops: [why it comes to you], rules: entry id | null }. Hard stops always come to you.
+  // Auto mode (decision 34, R004): only requests the hub cannot classify go to the orchestrator.
+  // Standard mode (decision 21): everything that is not a hard stop goes to the orchestrator.
+  routeFor(p, agent, toolName, input) {
+    const rules = rulesEntry(p.board);
+    const { route, reasons, unsure } = classify({ tool: toolName, input, projectDir: p.dir });
+    if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
+    if (route === 'allow' && this.permissionMode(p) === 'auto') return { allow: true };
+    if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
+    if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
+    const orch = p.orchestrator();
+    if (!orch || !orch.live || orch.retiring || ['error', 'retired'].includes(orch.state)) return { to: null, stops: [], rules: rules.entryId };
+    return { to: orch.name, stops: [], rules: rules.entryId, unsure };
+  }
+
+  // Per repo: "auto" or "standard". A change made from the hub (logged in the project's events) wins over the
+  // repo's committed .crux-hub.json ({ "permissions": "auto" }); with neither, standard.
+  permissionMode(p) {
+    const ev = p.log.events.findLast(e => e.type === 'project_settings' && 'permissionMode' in e);
+    if (ev) return ev.permissionMode === 'auto' ? 'auto' : 'standard';
+    try { return JSON.parse(readFileSync(join(p.dir, '.crux-hub.json'), 'utf8')).permissions === 'auto' ? 'auto' : 'standard'; } catch { return 'standard'; }
+  }
+
+  setPermissionMode(p, mode, by = 'you') {
+    mode = mode === 'auto' ? 'auto' : 'standard';
+    if (mode === this.permissionMode(p)) return mode;
+    p.log.append('project_settings', { permissionMode: mode, by, thread: 'orchestrator' });
+    this.notice(p, 'orchestrator', mode === 'auto'
+      ? `${by === 'you' ? 'You' : by} turned auto mode on: contained work is allowed at once; only unclear requests go to the orchestrator, and hard stops to you.`
+      : `${by === 'you' ? 'You' : by} turned auto mode off: requests that are not hard stops go to the orchestrator first.`);
+    return mode;
+  }
+
+  timeoutLabel() { const s = this.settings.get('permissionTimeoutSec'); return s % 60 ? `${s} seconds` : `${s / 60} minute${s === 60 ? '' : 's'}`; }
+
+  // What the orchestrator gets: the request id, the worker and its goal, the tool and its full input, and the rules.
+  // The rules text is in its instructions; it is repeated here only when the board's rules changed since it started.
+  permissionMessage(p, orch, id, worker, toolName, input, rulesId, unsure = []) {
+    const rules = rulesEntry(p.board);
+    const changed = rules && orch.rulesSeen !== `${rules.entryId}@${rules.ts}`;
+    const shown = toolName === 'Bash' || toolName === 'PowerShell' ? `Command:\n${input.command}${input.description ? `\nIts description: ${input.description}` : ''}` : `Input:\n${JSON.stringify(input, null, 1)}`;
+    return [
+      `[Permission request ${id}]`,
+      `Worker: ${worker.name}`,
+      `Worker's goal: ${worker.goal || String(worker.task || '').split('\n')[0].slice(0, 200) || '(none given)'}`,
+      `Tool: ${toolName}`,
+      shown,
+      unsure?.length ? `The hub found no hard stop, but could not classify it: ${unsure.join('; ')}.` : 'The hub found no hard stop in it.',
+      `Decide under ${rulesId}: call answer_permission with request_id "${id}", answer allow, deny or escalate, and a one-line reason. Do it now, with no other text; after ${this.timeoutLabel()} it goes to {{who}}.`,
+      changed ? `\nThe rules changed since you started. Current rules (${rules.entryId}):\n${rules.body}` : ''
+    ].join('\n');
+  }
+
+  // The orchestrator's answer. Logged in its thread as one line, for you to audit.
+  answerPermission(p, orch, id, answer, reason = '') {
+    const a = this.approvals.get(id);
+    if (!a || a.p !== p) return 'That request is no longer waiting (answered by {{who}}, timed out, or cancelled).';
+    if (!a.routedTo || a.escalated) return 'That request is already with {{who}}.';
+    reason = String(reason || '').trim();
+    if (!reason) return 'Give a one-line reason, then answer again.';
+    if (answer === 'escalate') { this.escalate(id, reason, orch.name); return 'Sent to {{who}}.'; }
+    this.logAnswer(a, id, answer === 'allow' ? 'allow' : 'deny', reason, orch.name);
+    a.finish(answer === 'allow'
+      ? { behavior: 'allow', updatedInput: a.input }
+      : { behavior: 'deny', message: `The orchestrator (${orch.name}) declined: ${reason}` },
+      answer === 'allow' ? `allowed by ${orch.name}` : `denied by ${orch.name}`);
+    return answer === 'allow' ? 'Allowed.' : 'Denied; the worker sees your reason.';
+  }
+
+  logAnswer(a, id, answer, reason, by) {
+    const i = a.input || {};
+    a.p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: a.agent.name, workerThread: a.agent.thread, tool: a.toolName, command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400), answer, reason, by });
+  }
+
+  // The card comes to you: escalated by the orchestrator, timed out, or routing switched off. It buzzes your phone.
+  escalate(id, reason, by) {
+    const a = this.approvals.get(id);
+    if (!a || !a.routedTo || a.escalated) return;
+    clearTimeout(a.timer);
+    a.escalated = true;
+    this.logAnswer(a, id, by === 'hub' ? 'timeout' : 'escalate', reason, by);
+    a.p.log.append('approval_escalated', { thread: a.agent.thread, approval: id, agent: a.agent.name, tool: a.toolName, reason, by });
+  }
+
+  // The off switch: everything comes to you. Requests already with the orchestrator come to you at once.
+  setRouting(on, by = 'you') {
+    const was = this.settings.get('routePermissions');
+    this.settings.set({ routePermissions: !!on });
+    if (was === !!on) return this.settings.all();
+    for (const [id, a] of this.approvals) if (!on && a.routedTo && !a.escalated) this.escalate(id, 'Routing to the orchestrator was switched off', by);
+    for (const p of this.projects.values()) {
+      this.notice(p, 'orchestrator', on ? 'The orchestrator answers workers\' permission requests again, within the board\'s rules; hard stops still come to you.' : 'Every permission request now comes to you; the orchestrator no longer answers them.');
+    }
+    return this.settings.all();
+  }
+
   // "Always" saves Claude Code's own suggested rule to the project's .claude/settings.local.json, where you can review or remove it.
+  // You can answer a request that is still with the orchestrator; that overrides it, and the line in its thread says so.
   answerApproval(id, allow, note, always = false) {
     const a = this.approvals.get(id);
     if (!a) throw new Error('That approval is no longer waiting (the agent may have restarted).');
     if (always && !a.always) throw new Error('This one can only be allowed once.');
     if (always) this.notice(a.p, a.agent.thread, `Saved to this project's Claude Code settings (.claude/settings.local.json): always allow ${CommandPolicy.describe(a.always).join('; ')}`);
+    if (a.routedTo && !a.escalated) this.logAnswer(a, id, allow ? 'allow' : 'deny', note || 'Answered before the orchestrator did', 'you');
     a.finish(allow
       ? { behavior: 'allow', updatedInput: a.input, ...(always ? { updatedPermissions: a.always } : {}) }
       : { behavior: 'deny', message: note || this.memory.personalize('{{Who}} declined this.') },
@@ -421,7 +539,7 @@ export class Hub {
       const open = p.board.decisions().filter(d => ['open', 'found'].includes(d.status));
       lines.push('Decisions waiting on {{who}}:', ...(open.length ? open.map(d => `- D${String(d.id).padStart(4, '0')} ${d.title}${d.recommended ? ` (recommended ${d.recommended})` : ''}`) : ['- none']));
       const cards = [...this.approvals.values()].filter(a => a.p === p);
-      if (cards.length) lines.push('Permission cards waiting:', ...cards.map(a => `- ${a.agent.name} wants ${a.toolName}`));
+      if (cards.length) lines.push('Permission cards waiting:', ...cards.map(a => `- ${a.agent.name} wants ${a.toolName}${a.routedTo && !a.escalated ? ` (with ${a.routedTo})` : ''}`));
       const lessons = this.pendingLessons(p);
       if (lessons.length) lines.push('Profile lessons waiting for {{who}}:', ...lessons.map(e => `- ${e.text}`));
     }
@@ -496,6 +614,7 @@ export class Hub {
     agent.capture?.res('(Retired before answering.)');
     agent.capture = null;
     agent.retiring = false;
+    for (const [id, a] of this.approvals) if (a.routedTo === agent.name) this.escalate(id, `${agent.name} retired before answering`, 'hub');
     agent.close();
     agent.setState('retired');
     p.log.append('agent_retired', { agent: agent.name, thread: agent.thread });
@@ -511,7 +630,9 @@ export class Hub {
       events: p.log.events,
       board: p.board.snapshot(),
       pack: this.memory.packName(p.name),
-      pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id)
+      pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id),
+      permissionRules: rulesEntry(p.board)?.entryId || null,
+      permissionMode: this.permissionMode(p)
     }));
   }
 }
