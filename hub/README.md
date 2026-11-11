@@ -41,6 +41,25 @@ Notifications arrive when a permission request waits for Allow, a decision is re
 
 The notification keys and the list of subscribed phones are kept in `~/.crux-hub/` (outside every repo). Tap the bell again to turn notifications off on a device. If the PC sleeps, the hub cannot be reached and no notifications go out.
 
+## Agent types, models and effort
+
+Each agent shows its model as a colour (Opus violet, Sonnet cyan, Haiku pink, Fable copper) on its icon, its thread header and its live-map station, and its effort as five pips (hollow when it uses the default). Click the chip in a thread's header to change model, effort or type. Model and effort switch at once on a running agent; a new type takes effect when the agent is next free, and it keeps its conversation.
+
+Agent types are Claude Code's own agent files, so the same types work in plain Claude Code: `~/.claude/agents/*.md` for every project, `<project>/.claude/agents/*.md` for one project (that one wins on a name clash).
+
+```markdown
+---
+name: reviewer
+description: Reads a whole change before you click-test it, and reports bugs in plain words
+model: sonnet          # opus, sonnet, haiku, fable, inherit, or a full model id
+effort: medium         # the hub's addition: low, medium, high, xhigh, max
+tools: Read, Grep, Glob, Bash   # limits which built-in tools it has; permission cards still apply
+---
+Standing instructions, added to the agent's start-up prompt.
+```
+
+The orchestrator sees the list and picks a type for each worker, or follows yours ("put a reviewer on it"). Defaults per role can go in `~/crux/hub.json`: `{ "defaults": { "worker": { "model": "sonnet", "effort": "medium" }, "orchestrator": { "effort": "high" } } }`. Unset means Claude Code's own default.
+
 ## Usage and billing
 
 Agents run through the Claude Agent SDK on this machine's Claude Code login, so they draw from your Claude plan's limits, the same pool as your own Claude Code sessions. Several agents at once use those limits faster. An `ANTHROPIC_API_KEY` in your environment is ignored unless you set `CRUX_HUB_USE_API_KEY=1`.
@@ -70,6 +89,6 @@ flowchart LR
     B -. index at start-up .-> W
 ```
 
-Agents get these board tools: `board_index`, `board_read`, `post_entry`, `post_summary`; the orchestrator also gets `list_agents`, `message_agent` and `start_worker`. Tool calls that need permission (shell commands, for example) become Allow / Deny cards. Workers can edit files in the project; the orchestrator cannot.
+Agents get these board tools: `board_index`, `board_read`, `post_entry`, `post_summary`; the orchestrator also gets `list_agents`, `list_agent_types`, `message_agent`, `start_worker` (with optional type, model and effort) and `retire_worker`. Tool calls that need permission (shell commands, for example) become Allow / Deny cards. Workers can edit files in the project; the orchestrator cannot.
 
 The design choices behind all of this are recorded in [`../.decisions/`](../.decisions/index.html).

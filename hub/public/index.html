@@ -63,11 +63,17 @@
   </aside>
 </div>
 
+<div id="mmenu" class="mmenu" role="dialog" aria-label="Model and effort" hidden></div>
+
 <dialog id="agent-dialog" class="dialog">
   <form method="dialog" id="agent-form">
     <h2>New agent</h2>
     <label>Name <input name="name" required pattern="[A-Za-z0-9-]+" placeholder="solver-port"></label>
-    <label>Task <textarea name="task" rows="5" required placeholder="What should it work on?"></textarea></label>
+    <label>Type <select name="type" id="agent-type"></select></label>
+    <p class="type-desc faint" id="agent-type-desc"></p>
+    <div class="field"><span class="flabel">Model</span><div id="agent-model"></div></div>
+    <div class="field"><span class="flabel">Effort</span><div id="agent-effort"></div></div>
+    <label>Task <textarea name="task" rows="4" required placeholder="What should it work on?"></textarea></label>
     <div class="row end">
       <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
       <button class="btn primary" value="ok">Start</button>

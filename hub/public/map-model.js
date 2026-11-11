@@ -55,6 +55,7 @@ export class MapModel {
       handoff: a.retiring || null, predecessor: a.predecessor || null,
       ctx: a.contextPct, needs: a.role === 'worker' && needs.has(a.thread), goal: a.role === 'orchestrator' ? 'Answering its successor before it retires' : goalOf(a),
       activity: this.activityOf(a.name),
+      model: a.model || a.modelSeen || null, effort: a.effort || null, type: a.type || null,   // decision 20
       traffic: (traffic.get(a.thread) || 0) / maxTraffic
     }));
     return { list, hidden: all.length - list.length };

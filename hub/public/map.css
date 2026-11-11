@@ -75,6 +75,15 @@
 .hs.working .hs-body,.hs.starting .hs-body{box-shadow:inset 0 0 0 1px var(--hud-ice),inset 0 0 calc(var(--r) * .9) rgba(111,227,255,.3),0 0 26px rgba(111,227,255,.35)}
 .hs.working .hs-body::after,.hs.starting .hs-body::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px dashed rgba(111,227,255,.55);animation:hud-spin 6s linear infinite}
 @keyframes hud-spin{to{transform:rotate(360deg)}}
+/* a worker's model hue (decision 20): body, glow and icon; red (needs you) and the handoff gold below still win */
+.hs.mh{color:color-mix(in srgb,var(--mh) 80%,#fff)}
+.hs.mh .hs-body{background:radial-gradient(circle at 50% 30%,color-mix(in srgb,var(--mh) 30%,transparent),rgba(8,12,22,.94) 68%);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mh) 70%,transparent),inset 0 0 calc(var(--r) * .6) color-mix(in srgb,var(--mh) 22%,transparent),0 0 18px color-mix(in srgb,var(--mh) 22%,transparent)}
+.hs.mh .hud-i{filter:drop-shadow(0 0 3px color-mix(in srgb,var(--mh) 70%,transparent))}
+.hs.mh.asleep{color:color-mix(in srgb,var(--mh) 45%,#8b97a8)}
+.hs.mh.asleep .hs-body{background:radial-gradient(circle at 50% 30%,color-mix(in srgb,var(--mh) 12%,transparent),rgba(10,14,20,.94) 68%);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mh) 38%,transparent),0 0 10px rgba(0,0,0,.3)}
+.hs.mh.working .hs-body,.hs.mh.starting .hs-body{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mh) 85%,#fff),inset 0 0 calc(var(--r) * .9) color-mix(in srgb,var(--mh) 32%,transparent),0 0 26px color-mix(in srgb,var(--mh) 38%,transparent)}
+.hs.mh.working .hs-body::after,.hs.mh.starting .hs-body::after{border-color:color-mix(in srgb,var(--mh) 60%,transparent)}
 .hs.you{color:#f4f7ff}
 .hs.you .hs-body{background:radial-gradient(circle at 50% 30%,rgba(255,255,255,.22),rgba(12,16,24,.94) 68%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.55),0 0 18px rgba(255,255,255,.12)}
 .hs.board{color:var(--hud-violet)}

@@ -9,6 +9,7 @@ import { Memory } from './memory.mjs';
 import { CommandPolicy } from './permissions.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE } from './prompts.mjs';
+import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
 
 export class Project {
   constructor(dir) {
@@ -27,9 +28,13 @@ export class Project {
 const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 60 * 1000;
 
 export class Hub {
-  constructor({ projects, retireAt = 60, memory = new Memory() }) {
+  // defaults: { orchestrator: { type, model, effort }, worker: {...} } from ~/crux/hub.json (decision 20).
+  // agentHome: the folder whose .claude/agents holds the all-projects types (your home folder).
+  constructor({ projects, retireAt = 60, memory = new Memory(), defaults = {}, agentHome = homedir() }) {
     this.retireAt = retireAt;
     this.memory = memory;
+    this.defaults = defaults || {};
+    this.agentHome = agentHome;
     this.listeners = new Set();
     this.approvals = new Map();
     this.projects = new Map();
@@ -91,10 +96,16 @@ export class Hub {
   restore(p) {
     for (const ev of p.log.events) {
       if (ev.type === 'agent_created') {
-        p.agents.set(ev.agent, new Agent(this, p, { name: ev.agent, role: ev.role, task: ev.task, goal: ev.goal, generation: ev.generation, predecessor: ev.predecessor, handoffEntry: ev.handoffEntry }));
+        p.agents.set(ev.agent, new Agent(this, p, { name: ev.agent, role: ev.role, task: ev.task, goal: ev.goal, generation: ev.generation, predecessor: ev.predecessor, handoffEntry: ev.handoffEntry, type: ev.agentType || null, model: ev.model || null, effort: ev.effort || null }));
         if (ev.role === 'orchestrator') p.generation = Math.max(p.generation, ev.generation);
       } else if (ev.type === 'agent_session' && p.agents.has(ev.agent)) {
-        p.agents.get(ev.agent).sessionId = ev.sessionId;
+        const a = p.agents.get(ev.agent);
+        a.sessionId = ev.sessionId;
+        if (ev.model) a.modelSeen = ev.model;
+      } else if (ev.type === 'agent_settings' && p.agents.has(ev.agent)) {
+        const a = p.agents.get(ev.agent);
+        for (const k of ['model', 'effort']) if (k in ev) a[k] = ev[k] || null;
+        if ('agentType' in ev) a.type = ev.agentType || null;
       } else if (ev.type === 'agent_retired' && p.agents.has(ev.agent)) {
         p.agents.get(ev.agent).state = 'retired';
       }
@@ -106,15 +117,87 @@ export class Hub {
   notice(p, thread, text) { p.log.append('notice', { thread, text }); }
 
   // ---------- agents ----------
-  createAgent(p, { name, role, task = '', goal = '', predecessor = null, handoffEntry = null }) {
+  createAgent(p, { name, role, task = '', goal = '', predecessor = null, handoffEntry = null, settings = {} }) {
+    const s = this.resolveSettings(p, role, settings);   // checked before anything is written
     const generation = role === 'orchestrator' ? ++p.generation : 0;
     if (role === 'orchestrator') name = `orchestrator-${generation}`;
     let unique = name, n = 2;
     while (p.agents.has(unique)) unique = `${name}-${n++}`;
-    const a = new Agent(this, p, { name: unique, role, task, goal, generation, predecessor, handoffEntry });
+    const a = new Agent(this, p, { name: unique, role, task, goal, generation, predecessor, handoffEntry, ...s });
     p.agents.set(unique, a);
-    p.log.append('agent_created', { agent: unique, role, task, goal, generation, predecessor, handoffEntry, thread: a.thread });
+    p.log.append('agent_created', { agent: unique, role, task, goal, generation, predecessor, handoffEntry, thread: a.thread, agentType: s.type, model: s.model, effort: s.effort });
     return a;
+  }
+
+  // ---------- agent types, models and effort (decision 20) ----------
+  agentTypes(p) { return new AgentTypes({ home: this.agentHome, projectDir: p.dir }); }
+
+  // What an agent starts with. Explicit picks win; then its type's; then the role's defaults from hub.json;
+  // anything left unset is Claude Code's own default. Throws on an unknown type or effort.
+  // A type named only by hub.json, or inherited from a predecessor, is dropped quietly if its file is gone.
+  resolveSettings(p, role, { type, model, effort, inherited = false } = {}) {
+    const dflt = this.defaults[role] || {};
+    const typeName = type === undefined ? dflt.type : type;
+    const t = typeName ? this.agentTypes(p).get(typeName) : null;
+    if (typeName && !t && type !== undefined && !inherited) {
+      const names = this.agentTypes(p).list().map(x => x.name);
+      throw new Error(`No agent type "${typeName}". ${names.length ? `Types: ${names.join(', ')}.` : 'No types are set up yet.'}`);
+    }
+    if (effort && !effortLevel(effort)) throw new Error(`Effort must be one of ${EFFORTS.join(', ')}.`);
+    const pickModel = model !== undefined && model !== '' ? modelId(model) : undefined;
+    const pickEffort = effort !== undefined && effort !== '' ? effortLevel(effort) : undefined;
+    return {
+      type: t?.name || null,
+      model: pickModel !== undefined ? pickModel : t?.model || modelId(dflt.model) || null,
+      effort: pickEffort !== undefined ? pickEffort : t?.effort || effortLevel(dflt.effort) || null
+    };
+  }
+
+  // One line for people: "reviewer · Sonnet 5.5 · effort medium".
+  describeSettings(a) {
+    return [a.type, a.model || a.modelSeen ? modelLabel(a.model || a.modelSeen) : 'default model', a.effort ? `effort ${a.effort}` : 'default effort'].filter(Boolean).join(' · ');
+  }
+
+  // Change a running or resting agent. The model switches at once when the agent is live; effort too, through
+  // Claude Code's live settings. A type change (new tools and instructions) needs a fresh start: at once if the
+  // agent is resting, else as soon as it goes idle. It resumes the same conversation on its next message.
+  async setAgentSettings(p, name, changes = {}, by = 'you') {
+    const a = p.agents.get(name);
+    if (!a) throw new Error(`No agent called ${name}`);
+    if (a.state === 'retired') throw new Error(`${name} has retired.`);
+    const next = {};
+    if ('type' in changes && (changes.type || null) !== a.type) {
+      const t = changes.type ? this.agentTypes(p).get(changes.type) : null;
+      if (changes.type && !t) throw new Error(`No agent type "${changes.type}".`);
+      next.type = t?.name || null;
+      // A new type brings its model and effort, unless those were picked in the same change.
+      if (t && !('model' in changes) && t.model) next.model = t.model;
+      if (t && !('effort' in changes) && t.effort) next.effort = t.effort;
+    }
+    if ('model' in changes) next.model = modelId(changes.model);
+    if ('effort' in changes) {
+      if (changes.effort && !effortLevel(changes.effort)) throw new Error(`Effort must be one of ${EFFORTS.join(', ')}.`);
+      next.effort = effortLevel(changes.effort);
+    }
+    for (const k of Object.keys(next)) if (next[k] === a[k]) delete next[k];
+    if (!Object.keys(next).length) return { changed: false, settings: this.describeSettings(a) };
+
+    Object.assign(a, next);
+    const ev = { agent: a.name, thread: a.thread, by };
+    if ('type' in next) ev.agentType = next.type;
+    if ('model' in next) ev.model = next.model;
+    if ('effort' in next) ev.effort = next.effort;
+    p.log.append('agent_settings', ev);
+
+    let when = 'from its next start';
+    if (a.live) {
+      const live = 'type' in next ? false : await a.applyLive({ model: next.model, effort: next.effort });
+      if (live) when = 'now';
+      else if (a.state === 'idle' && !a.retiring && !a.capture) { a.close(); when = 'from its next message'; }
+      else { a.restartWhenIdle = true; when = 'once it finishes what it is doing'; }
+    }
+    this.notice(p, a.thread, `${by === 'you' ? 'You' : by} set ${a.name} to ${this.describeSettings(a)}; it applies ${when}.`);
+    return { changed: true, settings: this.describeSettings(a), when };
   }
 
   ensureOrchestrator(p) {
@@ -125,10 +208,11 @@ export class Hub {
     return a;
   }
 
-  startWorker(p, name, task, by = 'you', goal = '') {
+  startWorker(p, name, task, by = 'you', goal = '', settings = {}) {
     if (!goal) goal = String(task).split('\n')[0].slice(0, 90);
-    const w = this.createAgent(p, { name, role: 'worker', task, goal });
-    p.log.append('message', { thread: w.thread, from: by, text: task });
+    const w = this.createAgent(p, { name, role: 'worker', task, goal, settings });
+    // The brief carries what the worker was started as, so the thread shows it from the first message.
+    p.log.append('message', { thread: w.thread, from: by, text: task, agentType: w.type, model: w.model, effort: w.effort });
     w.send(task);
     return w;
   }
@@ -299,6 +383,10 @@ export class Hub {
       const old = p.agents.get(agent.predecessor);
       if (old?.retiring) this.finishRetire(p, old);
     }
+    if (agent.restartWhenIdle) {   // settings that need a fresh start (decision 20); it resumes on its next message
+      agent.restartWhenIdle = false;
+      agent.close();
+    }
     if (agent.contextPct != null && agent.contextPct >= this.retireAt) {
       this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role === 'orchestrator' ? 'the role' : 'its task'} on.`);
       this.retire(p, agent);
@@ -363,9 +451,11 @@ export class Hub {
     if (!old.leftHandoff) this.writeHandoff(p, old, { in_flight: ['(The agent did not write its part of the handoff.)'] });
     old.retiring = 'overlap';
     const entryId = old.leftHandoff;
+    // The successor keeps its predecessor's type, model and effort.
+    const settings = { type: old.type, model: old.model, effort: old.effort, inherited: true };
     const succ = old.role === 'orchestrator'
-      ? this.createAgent(p, { role: 'orchestrator', predecessor: old.name, handoffEntry: entryId })
-      : this.createAgent(p, { name: old.name.replace(/-\d+$/, ''), role: 'worker', task: old.task, goal: old.goal, predecessor: old.name, handoffEntry: entryId });
+      ? this.createAgent(p, { role: 'orchestrator', predecessor: old.name, handoffEntry: entryId, settings })
+      : this.createAgent(p, { name: old.name.replace(/-\d+$/, ''), role: 'worker', task: old.task, goal: old.goal, predecessor: old.name, handoffEntry: entryId, settings });
     this.notice(p, old.thread, `${old.name} left handoff ${entryId}; ${succ.name} takes over${old.role === 'worker' ? ` in its own thread` : ''}.`);
     if (old.role === 'worker') this.notice(p, succ.thread, `${succ.name} continues the work of ${old.name}, from handoff ${entryId}.`);
     succ.send(SUCCESSOR_MESSAGE(old.role, old.name, entryId));
@@ -416,7 +506,8 @@ export class Hub {
   state() {
     return [...this.projects.values()].map(p => ({
       name: p.name, dir: p.dir,
-      agents: [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor })),
+      agents: [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor, type: a.type, model: a.model, effort: a.effort, modelSeen: a.modelSeen, restartPending: a.restartWhenIdle })),
+      types: this.agentTypes(p).list().map(({ name, description, model, effort, tools, source }) => ({ name, description, model, effort, tools, source })),
       events: p.log.events,
       board: p.board.snapshot(),
       pack: this.memory.packName(p.name),

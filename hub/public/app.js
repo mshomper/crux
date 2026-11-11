@@ -1,6 +1,8 @@
 // Crux hub interface: plain ES module, no build step.
 import { LiveMap } from './map.js';
 import { initPhone } from './phone.js';
+import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
+const EFFORT_SHORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'x-high', max: 'max' };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = n => String(n).padStart(4, '0');
@@ -33,8 +35,9 @@ async function api(path, body) {
 }
 
 async function load() {
-  const { projects, retireAt } = await api('/api/state');
+  const { projects, retireAt, models } = await api('/api/state');
   map.retireAt = retireAt;
+  S.models = models || [];
   S.projects = projects;
   S.pending = new Set(projects.flatMap(p => p.pendingApprovals));
   if (!proj()) return render();
@@ -56,7 +59,7 @@ function connect() {
       if (ev.type === 'approval') S.pending.add(ev.approval);
       if (ev.type === 'approval_result') S.pending.delete(ev.approval);
       // Agents write decision records straight to .decisions/; a summary is the signal to re-read the board.
-      if (['agent_created', 'agent_session', 'agent_retired', 'pick', 'entry', 'summary'].includes(ev.type)) refreshSoon();
+      if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'summary'].includes(ev.type)) refreshSoon();
       if (ev.type === 'message' && ev.from !== 'you') delete S.activity[key(p.name, ev.thread)];
     } else if (ev.type === 'agent_state') {
       const a = p.agents.find(a => a.name === ev.agent);
@@ -183,9 +186,12 @@ function lastLine(p, t) {
 }
 function unread(p, t) { return threadEvents(p, t).length > (S.seen[key(p.name, t)] || 0); }
 
-function threadButton({ id, name, ava, avaClass = '', last, right }) {
+// An agent's icon carries a ring in its model's hue (decision 20); no ring until its model is known.
+function threadButton({ id, name, ava, avaClass = '', last, right, agent = null }) {
+  const hue = agent ? hueOf(modelOf(agent)) : null;
+  const ring = hue ? ` ring" style="--mh:${hue}" title="${esc(describe(agent))}` : '';
   return `<button class="thread ${S.thread === id ? 'on' : ''}" data-thread="${esc(id)}">
-    <span class="ava ${avaClass}">${icon(ava)}</span>
+    <span class="ava ${avaClass}${ring}">${icon(ava)}</span>
     <span class="name">${esc(name)}</span>${right}
     <span class="last">${esc(last)}</span></button>`;
 }
@@ -199,9 +205,9 @@ function renderThreads() {
   const active = workers.filter(a => a.state !== 'retired'), retired = workers.filter(a => a.state === 'retired');
   const dot = (a, t) => `<span class="dot ${S.thread !== t && unread(p, t) ? 'unread' : a?.state || ''}"></span>`;
   let html = threadButton({ id: 'needs', name: 'Needs you', ava: 'inbox', avaClass: needs ? 'needs' : '', last: needs ? `${needs} waiting for your call` : 'Nothing waiting', right: needs ? `<span class="badge">${needs}</span>` : '' });
-  html += threadButton({ id: 'orchestrator', name: orch ? `Orchestrator · ${orch.name.replace('orchestrator-', '#')}` : 'Orchestrator', ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator') });
-  if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread) })).join('');
-  if (retired.length) html += `<div class="side-label">Retired</div>` + retired.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread), right: '' })).join('');
+  html += threadButton({ id: 'orchestrator', name: orch ? `Orchestrator · ${orch.name.replace('orchestrator-', '#')}` : 'Orchestrator', ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator'), agent: orch });
+  if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread), agent: a })).join('');
+  if (retired.length) html += `<div class="side-label">Retired</div>` + retired.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', avaClass: 'gone', last: lastLine(p, a.thread), right: '', agent: a })).join('');
   $('#threads').innerHTML = html;
 }
 
@@ -276,8 +282,10 @@ function messageEl(p, ev) {
   const you = ev.from === 'you';
   const relay = !you && S.thread !== 'orchestrator' && /^orchestrator-/.test(ev.from);
   const body = you ? `<p>${esc(ev.text).replace(/\n/g, '<br>')}</p>` : md(ev.text);
+  // A brief that started a worker says what it was started as.
+  const runs = 'model' in ev || 'effort' in ev ? modelChip({ type: ev.agentType, model: ev.model, effort: ev.effort, modelSeen: S.thread !== 'orchestrator' && p.agents.find(a => a.thread === ev.thread)?.modelSeen }, { mini: true }) : '';
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
-    <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}</span>
+    <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}</span>
     <div class="bubble">${fold(ev.id, body, isTall(ev.text, relay ? 240 : 900))}</div></div>`;
 }
 
@@ -287,6 +295,73 @@ function goalOf(a) {
   const first = String(a?.task || '').split(/\n|(?<=\.)\s/)[0];
   return first.length > 90 ? first.slice(0, 88) + '…' : first;
 }
+
+// ---------- model and effort (decision 20) ----------
+// "Opus 5.5 · high" and five pips in the model's hue. A button opens the menu; in a brief it is just a label.
+function modelChip(a, { button = false, mini = false } = {}) {
+  const id = modelOf(a), hue = hueOf(id);
+  const eff = a.effort ? EFFORT_SHORT[a.effort] : 'default';
+  const open = S.mmenu === a.name;
+  const [fam, ...ver] = modelLabel(id).split(' ');   // the version and the effort word drop out at phone width
+  const inner = `${a.type ? `<span class="mtype">${esc(a.type)}</span>` : ''}<span class="mname">${esc(fam)}${ver.length ? `<span class="mver"> ${esc(ver.join(' '))}</span>` : ''}</span><span class="msep">·</span><span class="meff">${esc(eff)}</span>${pips(a.effort)}`;
+  const cls = `mchip ${mini ? 'mini' : ''} ${hue ? '' : 'nohue'} ${a.restartPending ? 'pending' : ''}`;
+  const style = hue ? ` style="--mh:${hue}"` : '';
+  const tip = `${describe(a)}${a.restartPending ? '. The change applies once it finishes what it is doing' : ''}`;
+  return button
+    ? `<button class="${cls}"${style} data-mchip="${esc(a.name)}" aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}. Change model or effort">${inner}${icon('chevron')}</button>`
+    : `<span class="${cls}"${style} title="${esc(tip)}">${inner}</span>`;
+}
+
+// Radio rows, shared by the chip's menu and the new-agent form. value '' is Claude Code's default.
+function modelPicker(name, value) {
+  const opts = [{ id: '', label: 'Default' }, ...S.models];
+  if (value && !opts.some(m => m.id === value)) opts.push({ id: value, label: modelLabel(value) });
+  return `<div class="seg mseg" role="radiogroup" aria-label="Model">${opts.map(m => {
+    const hue = m.id ? hueOf(m.id) : null;
+    return `<label class="segopt ${hue ? '' : 'nohue'}" ${hue ? `style="--mh:${hue}"` : ''} title="${m.id ? esc(m.label) : 'Claude Code’s own default model'}">
+      <input type="radio" name="${name}" value="${esc(m.id)}" ${value === m.id ? 'checked' : ''}><span><i class="mdot"></i>${esc(m.id ? m.label.split(' ')[0] : 'Default')}</span></label>`;
+  }).join('')}</div>`;
+}
+function effortPicker(name, value, hue) {
+  const opts = ['', ...EFFORTS];
+  return `<div class="seg eseg ${hue ? '' : 'nohue'}" role="radiogroup" aria-label="Effort" ${hue ? `style="--mh:${hue}"` : ''}>${opts.map(e => `
+    <label class="segopt" title="${e ? `Effort: ${EFFORT_SHORT[e]}` : 'Claude Code’s own default effort'}">
+      <input type="radio" name="${name}" value="${e}" ${value === e ? 'checked' : ''}><span>${pips(e || null)}<em>${e ? EFFORT_SHORT[e] : 'default'}</em></span></label>`).join('')}</div>`;
+}
+function typeOptions(p, value) {
+  const types = p?.types || [];
+  return `<option value="">${types.length ? 'None' : 'None set up yet'}</option>` + types.map(t =>
+    `<option value="${esc(t.name)}" ${t.name === value ? 'selected' : ''}>${esc(t.name)}${t.model || t.effort ? ` · ${esc([t.model && modelLabel(t.model), t.effort && EFFORT_SHORT[t.effort]].filter(Boolean).join(', '))}` : ''}</option>`).join('');
+}
+const TYPE_TIP = 'Agent types are Claude Code agent files: ~/.claude/agents for every project, or this project’s .claude/agents';
+
+// The chip's menu: change model, effort or type in place. Every change applies at once; Escape or a click outside closes it.
+function renderModelMenu() {
+  const el = $('#mmenu'), p = proj();
+  const a = S.mmenu && p?.agents.find(x => x.name === S.mmenu && x.state !== 'retired');
+  if (!a) { el.hidden = true; el.dataset.html = ''; S.mmenu = null; return; }
+  const hue = hueOf(modelOf(a));
+  const live = a.live || ['working', 'starting', 'idle'].includes(a.state);
+  const html = `<div class="mm-head"><b>${esc(a.role === 'orchestrator' ? 'Orchestrator' : a.name)}</b><span class="faint">${esc(describe(a))}</span>
+      <button class="mm-x" data-mm-close aria-label="Close">${icon('x')}</button></div>
+    <div class="mm-row"><span class="flabel">Model</span>${modelPicker('mm-model', a.model || '')}</div>
+    <div class="mm-row"><span class="flabel">Effort</span>${effortPicker('mm-effort', a.effort || '', hue)}</div>
+    <label class="mm-row" title="${esc(TYPE_TIP)}"><span class="flabel">Type</span><select name="mm-type">${typeOptions(p, a.type)}</select></label>
+    <p class="mm-note faint">${live ? 'Model and effort switch right away. A new type restarts it when it is free; it keeps the conversation.' : 'Applies when it next starts.'}</p>`;
+  if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
+  el.hidden = false;
+  placeModelMenu();
+}
+function placeModelMenu() {
+  const el = $('#mmenu'), chip = document.querySelector(`[data-mchip="${CSS.escape(S.mmenu || '')}"]`);
+  if (el.hidden || !chip) return;
+  const r = chip.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
+  const left = Math.max(8, Math.min(r.left, innerWidth - w - 8));
+  const below = r.bottom + 6 + h <= innerHeight - 8;
+  el.style.left = left + 'px';
+  el.style.top = (below ? r.bottom + 6 : Math.max(8, r.top - 6 - h)) + 'px';
+}
+function closeModelMenu() { if (!S.mmenu) return; const n = S.mmenu; S.mmenu = null; renderHead(); renderModelMenu(); document.querySelector(`[data-mchip="${CSS.escape(n)}"]`)?.focus(); }
 
 // ---------- render: main ----------
 function renderFeed() {
@@ -337,12 +412,12 @@ function renderHead() {
   if (p && t === 'orchestrator') {
     const o = orchestrator(p);
     title = 'Orchestrator';
-    sub = o ? `<span class="chip ${esc(o.state)}">${esc(o.name)} · ${esc(o.state)}</span>${o.contextPct != null ? `<span>${o.contextPct}% context</span>` : ''}` : '<span>No one holds the role yet</span>';
+    sub = o ? `<span class="chip ${esc(o.state)}">${esc(o.name)} · ${esc(o.state)}</span>${modelChip(o, { button: true })}${o.contextPct != null ? `<span>${o.contextPct}% context</span>` : ''}` : '<span>No one holds the role yet</span>';
   } else if (p && t !== 'needs') {
     const a = p.agents.find(a => a.thread === t);
     title = t;
     const full = S.open.has('task:' + t);
-    sub = a ? `<span class="chip ${esc(a.state)}">${esc(a.state)}</span>${a.contextPct != null ? `<span>${a.contextPct}% context</span>` : ''}${a.task ? `<button class="task-line ${full ? 'open' : ''}" data-expand="task:${esc(t)}" title="${full ? 'Show less' : 'Show the full task'}">${esc(full ? a.task : goalOf(a))}</button>` : ''}` : '';
+    sub = a ? `<span class="chip ${esc(a.state)}">${esc(a.state)}</span>${modelChip(a, { button: a.state !== 'retired' })}${a.contextPct != null ? `<span>${a.contextPct}% context</span>` : ''}${a.task ? `<button class="task-line ${full ? 'open' : ''}" data-expand="task:${esc(t)}" title="${full ? 'Show less' : 'Show the full task'}">${esc(full ? a.task : goalOf(a))}</button>` : ''}` : '';
   } else if (p) {
     sub = `<span>${esc(p.name)}</span>`;
   }
@@ -386,7 +461,7 @@ function renderBoard() {
 }
 
 function render() {
-  renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard();
+  renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard(); renderModelMenu();
   map.update(proj(), S.pending);
   $('#app').classList.toggle('with-board', !$('#board').hidden);
   $('#open-board').classList.toggle('on', !$('#board').hidden);
@@ -396,7 +471,7 @@ function render() {
 async function act(fn) { try { await fn(); } catch (e) { alert(e.message); } }
 
 function selectThread(t) {
-  S.thread = t; S.justSwitched = true; store.set('thread', t);
+  S.thread = t; S.justSwitched = true; S.mmenu = null; store.set('thread', t);
   $('#app').classList.remove('show-side');
   render();
   phone.viewChanged();
@@ -425,9 +500,28 @@ function openCard(project, card) {
 }
 const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: S.thread }), openCard });
 
-// The project menu closes on a click anywhere else, or Escape.
-document.addEventListener('pointerdown', e => { if (S.projMenu && !e.target.closest('.proj-switch')) { S.projMenu = false; renderProjects(); } });
-addEventListener('keydown', e => { if (e.key === 'Escape' && S.projMenu) { S.projMenu = false; renderProjects(); $('[data-proj-toggle]')?.focus(); } });
+// The project menu and the model menu close on a click anywhere else, or Escape.
+document.addEventListener('pointerdown', e => {
+  if (S.projMenu && !e.target.closest('.proj-switch')) { S.projMenu = false; renderProjects(); }
+  if (S.mmenu && !e.target.closest('#mmenu, [data-mchip]')) closeModelMenu();
+});
+addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (S.mmenu) return closeModelMenu();
+  if (S.projMenu) { S.projMenu = false; renderProjects(); $('[data-proj-toggle]')?.focus(); }
+});
+addEventListener('resize', () => placeModelMenu());
+$('#feed').addEventListener('scroll', () => placeModelMenu(), { passive: true });
+
+// A change in the model menu applies at once.
+$('#mmenu').addEventListener('change', e => {
+  const field = { 'mm-model': 'model', 'mm-effort': 'effort', 'mm-type': 'type' }[e.target.name];
+  if (!field || !S.mmenu) return;
+  const agent = S.mmenu;
+  act(async () => { await api('/api/agent-settings', { project: proj().name, agent, [field]: e.target.value }); await load(); });
+});
+$('#hud').addEventListener('click', () => closeModelMenu(), true);   // the map opening over it
+$('#mmenu').addEventListener('click', e => { if (e.target.closest('[data-mm-close]')) closeModelMenu(); });
 
 document.addEventListener('click', e => {
   const ex = e.target.closest('[data-expand]');
@@ -436,6 +530,8 @@ document.addEventListener('click', e => {
     S.open.has(id) ? S.open.delete(id) : S.open.add(id);
     return render();
   }
+  const mc = e.target.closest('[data-mchip]');
+  if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; renderHead(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
   const t = e.target.closest('[data-thread]'); if (t) return selectThread(t.dataset.thread);
   if (e.target.closest('[data-proj-toggle]')) { S.projMenu = !S.projMenu; return renderProjects(); }
   const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return selectThread('needs'); }
@@ -486,11 +582,34 @@ $('#retire').addEventListener('click', () => {
     : `Hand ${t}'s task to a fresh agent? It writes a handoff first, and the new one can ask it questions before it retires.`))
     act(() => api('/api/retire', { project: proj().name, agent: orch ? undefined : t }));
 });
-$('#new-agent').addEventListener('click', () => $('#agent-dialog').showModal());
+// New agent: a type fills in its model and effort; either can then be changed.
+function fillAgentPickers(model = '', effort = '') {
+  $('#agent-model').innerHTML = modelPicker('model', model);
+  $('#agent-effort').innerHTML = effortPicker('effort', effort, hueOf(model));
+}
+$('#new-agent').addEventListener('click', () => {
+  $('#agent-type').innerHTML = typeOptions(proj(), '');
+  $('#agent-type').closest('label').title = TYPE_TIP;
+  $('#agent-type-desc').textContent = '';
+  fillAgentPickers();
+  $('#agent-dialog').showModal();
+});
+$('#agent-type').addEventListener('change', e => {
+  const t = (proj()?.types || []).find(x => x.name === e.target.value);
+  $('#agent-type-desc').textContent = t?.description || '';
+  fillAgentPickers(t?.model || '', t?.effort || '');
+});
+$('#agent-model').addEventListener('change', e => {
+  const eff = $('#agent-effort input:checked')?.value || '';
+  $('#agent-effort').innerHTML = effortPicker('effort', eff, hueOf(e.target.value));
+});
 $('#agent-form').addEventListener('submit', e => {
   if (e.submitter?.value !== 'ok') return;
   const f = new FormData(e.target);
-  act(async () => { const r = await api('/api/worker', { project: proj().name, name: f.get('name'), task: f.get('task') }); await load(); selectThread(r.name); });
+  act(async () => {
+    const r = await api('/api/worker', { project: proj().name, name: f.get('name'), task: f.get('task'), type: f.get('type') || '', model: f.get('model') || '', effort: f.get('effort') || '' });
+    await load(); selectThread(r.name);
+  });
   e.target.reset();
 });
 

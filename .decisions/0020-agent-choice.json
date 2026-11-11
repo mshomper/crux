@@ -1,0 +1,132 @@
+{
+  "id": 20,
+  "slug": "agent-choice",
+  "title": "How do you choose each agent's model, effort and kind?",
+  "date": "2026-11-11",
+  "mode": "full",
+  "lenses": [
+    "architecture",
+    "ui"
+  ],
+  "status": "decided",
+  "context": "Every hub agent today runs Claude Code's default (Opus 5.5) at default effort, orchestrator and workers alike. The Agent SDK the hub uses can set a model and an effort level per agent, switch a running agent's model, and run named agent types that carry their own model, tool limits and standing instructions. The question is how you make those choices, and how much the orchestrator may make on its own. Whichever option: every agent shows its model and effort in colour, on its thread, in the sidebar and on the live map. Each model has its own hue (Opus violet, Sonnet cyan, Haiku pink, Fable copper, chosen to stay clear of the hub's red, amber, green and blue status colours), and effort is a row of five pips in that hue, more of them lit the higher the effort.",
+  "depends_on": [
+    7,
+    10
+  ],
+  "conflicts": [],
+  "options": [
+    {
+      "source": "claude",
+      "key": "A",
+      "name": "Pick per agent",
+      "summary": "A model and effort picker when you start an agent, defaults per role (orchestrator, worker) in the hub's settings, and a switch on each thread to change a running agent's model. The orchestrator can set model and effort when it starts a worker, and you can tell it which in plain words.",
+      "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='30' width='130' height='120' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='85' y='87' font-size='12' text-anchor='middle' fill='currentColor'>New agent</text><text x='85' y='101' font-size='12' text-anchor='middle' fill='currentColor'>model, effort</text><rect x='170' y='30' width='130' height='55' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='235' y='54.5' font-size='12' text-anchor='middle' fill='currentColor'>Defaults</text><text x='235' y='68.5' font-size='12' text-anchor='middle' fill='currentColor'>per role</text><rect x='170' y='95' width='130' height='55' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='235' y='119.5' font-size='12' text-anchor='middle' fill='currentColor'>Switch</text><text x='235' y='133.5' font-size='12' text-anchor='middle' fill='currentColor'>on a thread</text></svg>",
+      "pros": [
+        "Direct and easy to understand",
+        "Everything you asked for is choosable",
+        "Small to build"
+      ],
+      "cons": [
+        "Each choice is made from scratch every time",
+        "No shared idea of \"a reviewer\" or \"a quick fixer\" to reuse"
+      ],
+      "effort": "Small"
+    },
+    {
+      "source": "claude",
+      "key": "B",
+      "name": "Agent types, plus per-agent picks",
+      "summary": "Everything in A, plus named agent types: \"reviewer\", \"quick fix\", \"researcher\" and so on, each with its model, effort, tool limits and standing instructions. They are written in Claude Code's own agent file format, so the same types work in plain Claude Code too, and live in your home folder (all projects) or a project (that project only). The orchestrator sees the list and picks a type for each subtask, or you name one (\"put a reviewer on it\").",
+      "sketch": "<svg viewBox='0 0 320 180'><rect x='15' y='25' width='95' height='40' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='62.5' y='49' font-size='12' text-anchor='middle' fill='currentColor'>Reviewer</text><rect x='15' y='75' width='95' height='40' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='62.5' y='99' font-size='12' text-anchor='middle' fill='currentColor'>Quick fix</text><rect x='15' y='125' width='95' height='40' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='62.5' y='149' font-size='12' text-anchor='middle' fill='currentColor'>Researcher</text><rect x='200' y='60' width='105' height='70' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='252.5' y='92' font-size='12' text-anchor='middle' fill='currentColor'>Orchestrator</text><text x='252.5' y='106' font-size='12' text-anchor='middle' fill='currentColor'>picks a type</text><line x1='112' y1='45' x2='198' y2='80' stroke='currentColor' stroke-dasharray='4 3'/><polygon points='198,80 191.0,80.4 193.3,74.8' fill='currentColor'/><line x1='112' y1='95' x2='198' y2='95' stroke='currentColor' stroke-dasharray='4 3'/><polygon points='198,95 191.7,98.0 191.7,92.0' fill='currentColor'/><line x1='112' y1='145' x2='198' y2='110' stroke='currentColor' stroke-dasharray='4 3'/><polygon points='198,110 193.3,115.2 191.0,109.6' fill='currentColor'/></svg>",
+      "pros": [
+        "Good choices are made once and reused",
+        "The orchestrator can match the kind of agent to the subtask",
+        "Shared with plain Claude Code sessions",
+        "Per-agent picks still override anything"
+      ],
+      "cons": [
+        "A few type files to write and keep",
+        "More for the orchestrator to weigh"
+      ],
+      "effort": "Medium"
+    },
+    {
+      "source": "claude",
+      "key": "C",
+      "name": "The orchestrator decides from your rules",
+      "summary": "No pickers. Your core profile gets rules (\"tricky or shared-system work: Opus at high effort; mechanical edits: a lighter model\") and the orchestrator chooses for each worker. You override by saying so in chat.",
+      "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='60' width='110' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='75' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Your rules</text><text x='75' y='101' font-size='12' text-anchor='middle' fill='currentColor'>(profile)</text><rect x='190' y='60' width='110' height='60' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='245' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Orchestrator</text><text x='245' y='101' font-size='12' text-anchor='middle' fill='currentColor'>chooses</text><line x1='132' y1='90' x2='188' y2='90' stroke='currentColor'/><polygon points='188,90 181.7,93.0 181.7,87.0' fill='currentColor'/></svg>",
+      "pros": [
+        "Nothing extra to click",
+        "Choices follow your stated preferences"
+      ],
+      "cons": [
+        "Choices happen out of sight unless shown",
+        "Harder to pin a specific model when you want one"
+      ],
+      "effort": "Small"
+    }
+  ],
+  "criteria": [
+    {
+      "name": "You can choose anything",
+      "scores": {
+        "A": 3,
+        "B": 3,
+        "C": 1
+      }
+    },
+    {
+      "name": "Good choices get reused",
+      "scores": {
+        "A": 1,
+        "B": 3,
+        "C": 2
+      }
+    },
+    {
+      "name": "Orchestrator picks well on its own",
+      "scores": {
+        "A": 1,
+        "B": 3,
+        "C": 2
+      }
+    },
+    {
+      "name": "Works in plain Claude Code too",
+      "scores": {
+        "A": 1,
+        "B": 3,
+        "C": 2
+      },
+      "note": "B uses Claude Code's own agent files"
+    },
+    {
+      "name": "Effort",
+      "scores": {
+        "A": 3,
+        "B": 2,
+        "C": 3
+      }
+    }
+  ],
+  "recommended": "B",
+  "recommendation": "You asked for everything to be choosable, and A gives that. Types are what let the orchestrator \"spin up a reviewer\" sensibly without you spelling out a model every time, and keeping them in Claude Code's own format means your other sessions benefit too. Each agent's model and effort would also show on its thread and on the live map.",
+  "confidence": "lean",
+  "chosen": "B",
+  "reason": "Colours look good, go with your proposal.",
+  "decided_on": "2026-11-11",
+  "superseded_by": null,
+  "challenge": null,
+  "settles": [
+    {
+      "key": "agent model and effort display",
+      "value": "model as hue (Opus violet, Sonnet cyan, Haiku pink, Fable copper), effort as five pips in that hue; kept clear of red/amber/green/blue status colours"
+    },
+    {
+      "key": "agent types",
+      "value": "Claude Code agent files (.claude/agents/*.md, home or project) with model, effort, tools and standing instructions; per-agent picks override"
+    }
+  ]
+}

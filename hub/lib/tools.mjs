@@ -74,7 +74,7 @@ export function cruxTools(hub, project, agent) {
   if (agent.role === 'orchestrator') {
     tools.push(
       tool('list_agents', 'List the worker agents on this project and what each is doing.', {},
-        async () => out(project.workers().map(w => ({ name: w.name, state: w.state, goal: w.goal })))),
+        async () => out(project.workers().map(w => ({ name: w.name, state: w.state, goal: w.goal, runs_as: hub.describeSettings(w) })))),
 
       tool('retire_worker', 'Retire a worker whose job is finished and has nothing more coming: it stops and leaves the active list. No handoff, no successor. For a worker that should continue under a fresh agent, ask the human to use Hand off instead.',
         { name: z.string(), reason: z.string().max(200).describe('One plain line, e.g. "phone access merged".') },
@@ -84,18 +84,36 @@ export function cruxTools(hub, project, agent) {
         { to: z.string(), text: z.string() },
         async ({ to, text: msg }) => { hub.orchestratorToWorker(project, agent, to, msg); return out(`Sent to ${to}.`); }),
 
-      tool('start_worker', t('Start a new worker agent. Give it a short name (letters, digits, dashes), a one-line goal {{who}} sees, and the full task as its briefing.'),
-        { name: z.string().regex(/^[a-z0-9-]+$/i), goal: z.string().max(120).describe(t('One plain line for {{who}}, under 80 characters: what this worker is for.')), task: z.string() },
-        async ({ name, goal, task }) => { const w = hub.startWorker(project, name, task, agent.name, goal); return out(`Started ${w.name}.`); })
+      tool('list_agent_types', 'List the agent types you can start workers as: name, description, model, effort and tool limits.', {},
+        async () => {
+          const types = hub.agentTypes(project).list();
+          return out(types.length ? types.map(({ name, description, model, effort, tools, source }) => ({ name, description, model: model || 'default', effort: effort || 'default', tools: tools || 'all', from: source === 'project' ? 'this project' : 'all projects' })) : 'No agent types are set up yet.');
+        }),
+
+      tool('start_worker', t('Start a new worker agent. Give it a short name (letters, digits, dashes), a one-line goal {{who}} sees, and the full task as its briefing. Optionally an agent type, and a model and effort that override the type\'s.'),
+        {
+          name: z.string().regex(/^[a-z0-9-]+$/i),
+          goal: z.string().max(120).describe(t('One plain line for {{who}}, under 80 characters: what this worker is for.')),
+          task: z.string(),
+          type: z.string().optional().describe('An agent type from list_agent_types.'),
+          model: z.string().optional().describe('opus, sonnet, haiku, fable, or a full model id. Leave out for the type\'s or the default.'),
+          effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Leave out for the type\'s or the default.')
+        },
+        async ({ name, goal, task, type, model, effort }) => {
+          try {
+            const w = hub.startWorker(project, name, task, agent.name, goal, { type, model, effort });
+            return out(`Started ${w.name} (${hub.describeSettings(w)}).`);
+          } catch (e) { return out(`Not started: ${e.message}`); }
+        })
     );
   }
 
-  return createSdkMcpServer({ name: 'crux', version: '0.2.0', tools });
+  return createSdkMcpServer({ name: 'crux', version: '0.3.0', tools });
 }
 
 export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
-  if (agent.role === 'orchestrator') names.push('list_agents', 'message_agent', 'start_worker', 'retire_worker');
+  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'retire_worker');
   return names.map(n => `mcp__crux__${n}`);
 }
