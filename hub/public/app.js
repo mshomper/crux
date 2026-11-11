@@ -115,7 +115,24 @@ function lessonsCard(ls) {
     ${ls.length > 1 ? `<div class="row"><button class="btn primary" data-lesson="${ls.map(l => esc(l.lesson)).join(',')}" data-accept="1">${icon('check')}Add all ${ls.length}</button></div>` : ''}
   </article>`;
 }
+// Images in threads (decision 23): stored in the project's attachments, read from /att/.
+const attSrc = (p, id) => `/att/${encodeURIComponent(p.name)}/${encodeURIComponent(id)}`;
+const sizeOf = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+function shotActs(src, name) {
+  return `<span class="shot-acts"><button class="btn ghost icon-only" data-copy-img="${esc(src)}" aria-label="Copy image" title="Copy image">${icon('copy')}</button><a class="btn ghost icon-only" href="${esc(src)}" download="${esc(name)}" aria-label="Download image" title="Download image">${icon('download')}</a></span>`;
+}
+function shotsEl(p, list, caption = '') {
+  return `<div class="shots ${list.length === 1 ? 'single' : ''}">${list.map((a, i) => {
+    const src = attSrc(p, a.id);
+    return `<button class="shot" data-view="${esc(src)}" data-view-name="crux-${esc(a.id)}" data-view-cap="${esc(caption || `Image ${i + 1} of ${list.length} · ${sizeOf(a.size)}`)}" aria-label="Open image ${i + 1}" title="Open larger"><img src="${src}" alt="" loading="lazy"></button>`;
+  }).join('')}</div>`;
+}
 function visualEl(p, ev, compact) {
+  if (ev.attachment) {   // a screenshot in the attachments store: open larger, copy, download
+    const src = attSrc(p, ev.attachment.id), cap = ev.caption || 'Visual';
+    return `<figure class="visual ${compact ? 'compact' : ''}"><button class="shot vis-shot" data-view="${esc(src)}" data-view-name="crux-${esc(ev.attachment.id)}" data-view-cap="${esc(cap)}" title="Open larger"><img class="vis-img" src="${src}" alt="${esc(cap)}" loading="lazy"></button>
+      <figcaption><span>${esc(ev.caption || '')}</span>${shotActs(src, `crux-${ev.attachment.id}`)}</figcaption></figure>`;
+  }
   const src = `/media/${encodeURIComponent(p.name)}/${encodeURIComponent(ev.visual)}`;
   const view = ev.kind === 'page'
     ? `<iframe class="vis-page" src="${src}" sandbox="allow-scripts" title="${esc(ev.caption || 'Visual')}" loading="lazy"></iframe>`
@@ -310,9 +327,10 @@ function messageEl(p, ev) {
   const body = you ? `<p>${esc(ev.text).replace(/\n/g, '<br>')}</p>` : md(ev.text);
   // A brief that started a worker says what it was started as.
   const runs = 'model' in ev || 'effort' in ev ? modelChip({ type: ev.agentType, model: ev.model, effort: ev.effort, modelSeen: S.thread !== 'orchestrator' && p.agents.find(a => a.thread === ev.thread)?.modelSeen }, { mini: true }) : '';
+  const shots = ev.attachments?.length ? shotsEl(p, ev.attachments) : '';
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
     <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}</span>
-    <div class="bubble">${fold(ev.id, body, isTall(ev.text, relay ? 240 : 900))}</div></div>`;
+    ${shots}${ev.text || !shots ? `<div class="bubble">${fold(ev.id, body, isTall(ev.text, relay ? 240 : 900))}</div>` : ''}</div>`;
 }
 
 // What a worker is for, in one line: its goal, else the first line of its task.
@@ -469,6 +487,7 @@ function renderHead() {
   rp.setAttribute('aria-label', rp.title);
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
+  $('#attach').disabled = !!retired;
   $('#input').placeholder = retired ? 'This agent has retired.' : t === 'needs' || t === 'orchestrator'
     ? `Message the orchestrator. Short replies like "all" or "4A 7B" pick decisions.`
     : `Message ${t} directly.`;
@@ -551,7 +570,7 @@ addEventListener('keydown', e => {
   if (S.mmenu) return closeModelMenu();
   if (S.projMenu) { S.projMenu = false; renderProjects(); $('[data-proj-toggle]')?.focus(); }
 });
-addEventListener('resize', () => placeModelMenu());
+addEventListener('resize', () => { placeModelMenu(); autosize(); });
 $('#feed').addEventListener('scroll', () => placeModelMenu(), { passive: true });
 
 // A change in the model menu applies at once.
@@ -588,16 +607,124 @@ document.addEventListener('click', e => {
   const dn = e.target.closest('[data-deny]'); if (dn) return act(() => api('/api/approval', { id: dn.dataset.deny, allow: false }));
 });
 
+// ---------- images in the composer (decision 23) ----------
+// Paste, drop or pick; each shows as a thumbnail with a remove button. They upload when you send.
+const IMG_TYPES = { 'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/gif': 'GIF', 'image/webp': 'WebP' };
+const MAX_IMG = 10 * 1024 * 1024, MAX_IMGS = 6;
+const tray = [];   // { file, url }
+let errTimer;
+function attachError(msg) {
+  const el = $('#attach-error');
+  el.textContent = msg; el.hidden = !msg;
+  clearTimeout(errTimer);
+  if (msg) errTimer = setTimeout(() => { el.hidden = true; }, 7000);
+}
+function renderTray(busy = false) {
+  const el = $('#tray');
+  el.hidden = !tray.length;
+  el.innerHTML = tray.map((t, i) => `<div class="tthumb ${busy ? 'busy' : ''}"><img src="${t.url}" alt="${esc(t.file.name || 'Pasted image')}"><span class="tsize">${sizeOf(t.file.size)}</span>
+    ${busy ? '' : `<button type="button" class="tx" data-untray="${i}" aria-label="Remove image" title="Remove">${icon('x')}</button>`}</div>`).join('');
+}
+function addImages(files) {
+  const errs = [];
+  for (const f of files) {
+    const name = f.name && !/^image\.\w+$/.test(f.name) ? `"${f.name}"` : 'That image';
+    if (!IMG_TYPES[f.type]) { errs.push(`${name} is not a PNG, JPEG, GIF or WebP image.`); continue; }
+    if (f.size > MAX_IMG) { errs.push(`${name} is ${(f.size / 1048576).toFixed(1)} MB; images must be 10 MB or less.`); continue; }
+    if (tray.length >= MAX_IMGS) { errs.push(`Up to ${MAX_IMGS} images per message.`); break; }
+    tray.push({ file: f, url: URL.createObjectURL(f) });
+  }
+  attachError(errs.join(' '));
+  renderTray();
+}
+function clearTray() { for (const t of tray.splice(0)) URL.revokeObjectURL(t.url); renderTray(); }
+const asDataUrl = f => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => fail(new Error('Could not read the image.')); r.readAsDataURL(f); });
+
+$('#attach').addEventListener('click', () => $('#file-pick').click());
+$('#file-pick').addEventListener('change', e => { addImages([...e.target.files]); e.target.value = ''; });
+$('#tray').addEventListener('click', e => {
+  const x = e.target.closest('[data-untray]'); if (!x) return;
+  const [t] = tray.splice(Number(x.dataset.untray), 1);
+  if (t) URL.revokeObjectURL(t.url);
+  renderTray(); $('#input').focus();
+});
+$('#input').addEventListener('paste', e => {
+  if ($('#input').disabled) return;
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length) return;
+  if (!e.clipboardData.types.includes('text/plain')) e.preventDefault();   // a bare screenshot: no file name text
+  addImages(files);
+});
+// Drag and drop anywhere on the page.
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+addEventListener('dragenter', e => { if (!hasFiles(e) || $('#input').disabled) return; e.preventDefault(); dragDepth++; $('#drop-veil').hidden = false; });
+addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $('#drop-veil').hidden = true; } });
+addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $('#drop-veil').hidden = true;
+  if (!$('#input').disabled) { addImages([...e.dataTransfer.files]); $('#input').focus(); }
+});
+
+// ---------- the larger view: copy and download ----------
+const viewer = $('#viewer');
+function openViewer(src, name, cap) {
+  $('#viewer-img').src = src;
+  $('#viewer-img').alt = cap || '';
+  $('#viewer-cap').textContent = cap || '';
+  $('#viewer-save').href = src;
+  $('#viewer-save').download = name || 'image';
+  $('#viewer-copy').dataset.copyImg = src;
+  viewer.showModal();
+}
+$('#viewer-close').addEventListener('click', () => viewer.close());
+viewer.addEventListener('click', e => { if (e.target === viewer) viewer.close(); });   // a click on the backdrop
+viewer.addEventListener('close', () => { $('#viewer-img').removeAttribute('src'); });
+// The clipboard takes PNG everywhere, so other types are redrawn as PNG first. The ClipboardItem gets a promise
+// so Safari keeps the click as the gesture that allowed it.
+async function pngBlob(src) {
+  const blob = await (await fetch(src)).blob();
+  if (blob.type === 'image/png') return blob;
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+  c.getContext('2d').drawImage(bmp, 0, 0);
+  return new Promise((ok, fail) => c.toBlob(b => b ? ok(b) : fail(new Error('Could not copy the image.')), 'image/png'));
+}
+async function copyImage(btn) {
+  try {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('This browser cannot copy images; use download instead.');
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob(btn.dataset.copyImg) })]);
+    btn.classList.add('done'); btn.title = 'Copied';
+    setTimeout(() => { btn.classList.remove('done'); btn.title = 'Copy image'; }, 1600);
+  } catch (e) { alert(e.message || 'Could not copy the image.'); }
+}
+document.addEventListener('click', e => {
+  const cp = e.target.closest('[data-copy-img]'); if (cp) { e.preventDefault(); return copyImage(cp); }
+  const v = e.target.closest('[data-view]'); if (v) return openViewer(v.dataset.view, v.dataset.viewName, v.dataset.viewCap);
+});
+
 $('#composer').addEventListener('submit', e => {
   e.preventDefault();
   const text = $('#input').value.trim();
-  if (!text || !proj()) return;
+  if ((!text && !tray.length) || !proj() || S.sending) return;
   const thread = S.thread === 'needs' ? 'orchestrator' : S.thread;
-  $('#input').value = ''; autosize();
+  const project = proj().name;
+  const files = tray.map(t => t.file);
+  S.sending = true;
   act(async () => {
-    const r = await api('/api/send', { project: proj().name, thread, text });
-    if (r.picked) load();
-    else if (S.thread === 'needs') selectThread('orchestrator');
+    try {
+      const attachments = [];
+      if (files.length) {
+        renderTray(true);
+        for (const f of files) attachments.push((await api('/api/attach', { project, data: await asDataUrl(f), name: f.name })).id);
+      }
+      const r = await api('/api/send', { project, thread, text, ...(attachments.length ? { attachments } : {}) });
+      $('#input').value = ''; autosize(); clearTray(); attachError('');
+      if (r.picked) load();
+      else if (S.thread === 'needs') selectThread('orchestrator');
+    } catch (err) { renderTray(); throw err; }
+    finally { S.sending = false; }
   });
 });
 $('#input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); } });

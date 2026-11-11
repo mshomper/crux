@@ -6,7 +6,10 @@ import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
 import { Agent } from './agent.mjs';
-import { Memory } from './memory.mjs';
+import { Memory, VISUAL_TYPES } from './memory.mjs';
+import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets } from './permission-rules.mjs';
 import { HubSettings } from './settings.mjs';
@@ -20,6 +23,7 @@ export class Project {
     this.name = basename(this.dir);
     this.log = new EventLog(this.dir);
     this.board = new Board(this.dir, this.log);
+    this.attachments = new Attachments(this.dir);
     this.agents = new Map();
     this.generation = 0;
   }
@@ -72,8 +76,8 @@ export class Hub {
       const when = new Date(m.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       this.notice(p, m.thread, `The hub restarted before your message from ${when} reached its agent, so it was delivered again.`);
       try {
-        if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(m.text);
-        else p.agents.get(m.thread)?.send(m.text);
+        if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(m.text, m.attachments);
+        else p.agents.get(m.thread)?.send(m.text, m.attachments);
       } catch (e) { this.notice(p, m.thread, `Could not deliver it again: ${e.message}`); }
     }
   }
@@ -223,12 +227,14 @@ export class Hub {
   }
 
   // ---------- messages ----------
-  fromYou(p, thread, text) {
-    p.log.append('message', { thread, from: 'you', text });
-    if (thread === 'orchestrator') return this.ensureOrchestrator(p).send(text);
-    const a = p.agents.get(thread);
-    if (!a || a.state === 'retired') throw new Error(`No active agent ${thread}`);
-    a.send(text);
+  // ids: attachment ids the page uploaded first (decision 23). The event keeps only id, type and size.
+  fromYou(p, thread, text, ids = []) {
+    if (ids.length > MAX_PER_MESSAGE) throw new Error(`Up to ${MAX_PER_MESSAGE} images per message.`);
+    const attachments = ids.map(id => p.attachments.ref(id));
+    const a = thread === 'orchestrator' ? null : p.agents.get(thread);
+    if (thread !== 'orchestrator' && (!a || a.state === 'retired')) throw new Error(`No active agent ${thread}`);
+    p.log.append('message', { thread, from: 'you', text, ...(attachments.length ? { attachments } : {}) });
+    (a || this.ensureOrchestrator(p)).send(text, attachments);
   }
 
   agentSaid(p, agent, text) {
@@ -281,7 +287,16 @@ export class Hub {
     return pending.length;
   }
 
+  // PNG, JPEG, GIF and WebP screenshots go to the project's attachments store, like pasted images (decision 23);
+  // SVG and HTML pages stay in the media folder, where the server can sandbox them.
   postVisual(p, agent, path, caption) {
+    const ext = extname(String(path)).toLowerCase();
+    if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext) && existsSync(path) && statSync(path).isFile()) {
+      if (statSync(path).size > 8 * 1024 * 1024) throw new Error('Visuals must be under 8 MB');
+      const attachment = p.attachments.save(readFileSync(path), 'That visual');
+      return p.log.append('visual', { thread: agent.thread, from: agent.name, visual: attachment.id, kind: 'image', attachment, caption });
+    }
+    if (!VISUAL_TYPES[ext]) throw new Error(`Visuals must be one of ${Object.keys(VISUAL_TYPES).join(', ')}`);
     const { file, kind } = this.memory.storeVisual(p.name, path);
     return p.log.append('visual', { thread: agent.thread, from: agent.name, visual: file, kind, caption });
   }

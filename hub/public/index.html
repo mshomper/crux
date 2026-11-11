@@ -50,9 +50,16 @@
     <section id="feed" class="feed" aria-live="polite"></section>
     <div id="activity" class="activity"></div>
     <form id="composer" class="composer">
-      <textarea id="input" rows="1" placeholder="Message the orchestrator. Short replies like 'all' or '4A 7B' pick decisions."></textarea>
-      <button class="btn primary icon-only" id="send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
+      <div id="tray" class="tray" hidden></div>
+      <div id="attach-error" class="attach-error" role="alert" hidden></div>
+      <div class="compose-row">
+        <button type="button" class="btn ghost icon-only attach" id="attach" aria-label="Attach images" title="Attach images: PNG, JPEG, GIF or WebP, up to 10 MB each. You can also paste or drop them."><svg class="icon"><use href="#i-clip"/></svg></button>
+        <input type="file" id="file-pick" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+        <textarea id="input" rows="1" placeholder="Message the orchestrator. Short replies like 'all' or '4A 7B' pick decisions."></textarea>
+        <button class="btn primary icon-only" id="send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
+      </div>
     </form>
+    <div id="drop-veil" class="drop-veil" hidden><div><svg class="icon"><use href="#i-image"/></svg>Drop images to attach</div></div>
   </main>
 
   <aside class="board" id="board" hidden>
@@ -82,6 +89,16 @@
   </form>
 </dialog>
 
+<dialog id="viewer" class="viewer" aria-label="Image">
+  <div class="viewer-bar">
+    <span id="viewer-cap" class="viewer-cap"></span>
+    <button class="btn ghost icon-only" id="viewer-copy" aria-label="Copy image" title="Copy image"><svg class="icon"><use href="#i-copy"/></svg></button>
+    <a class="btn ghost icon-only" id="viewer-save" aria-label="Download image" title="Download image" download><svg class="icon"><use href="#i-download"/></svg></a>
+    <button class="btn ghost icon-only" id="viewer-close" aria-label="Close" title="Close"><svg class="icon"><use href="#i-x"/></svg></button>
+  </div>
+  <img id="viewer-img" alt="">
+</dialog>
+
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/></symbol>
@@ -100,6 +117,10 @@
     <symbol id="i-orch" viewBox="0 0 24 24"><circle cx="12" cy="6" r="2.5"/><circle cx="6" cy="17" r="2.5"/><circle cx="18" cy="17" r="2.5"/><path d="M11 8.2L7.2 14.8M13 8.2l3.8 6.6"/></symbol>
     <symbol id="i-agent" viewBox="0 0 24 24"><rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 4v3M9.5 12h.01M14.5 12h.01"/></symbol>
     <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.2-8.2a3.4 3.4 0 0 1 4.8 4.8l-8.1 8.1a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17.5l5-4.5 3.5 3 3-2.5 4.5 4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></symbol>
   </defs>
 </svg>

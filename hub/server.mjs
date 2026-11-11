@@ -8,7 +8,8 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
 import { parseQuickPicks } from './lib/quick.mjs';
-import { checkRequest, extraHosts } from './lib/access.mjs';
+import { checkRequest, checkAttachmentRead, extraHosts } from './lib/access.mjs';
+import { decodeDataUrl, MAX_BYTES } from './lib/attachments.mjs';
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings } from './lib/settings.mjs';
@@ -67,9 +68,16 @@ function serveFile(res, file) {
   if (!existsSync(file) || !statSync(file).isFile()) return send(res, 404, { error: 'Not found' });
   send(res, 200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream');
 }
-async function body(req) {
-  let s = '';
-  for await (const c of req) { s += c; if (s.length > 1e6) throw new Error('Too large'); }
+// Uploads carry an image as base64 text (about 4/3 of its size); everything else stays small.
+const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_BYTES * 4 / 3) + 64 * 1024 };
+async function body(req, limit = 1e6) {
+  const parts = []; let n = 0;
+  for await (const c of req) {
+    n += c.length;
+    if (n > limit) throw new Error(limit > 1e6 ? `Images must be ${MAX_BYTES / 1024 / 1024} MB or less.` : 'Too large');
+    parts.push(c);
+  }
+  const s = Buffer.concat(parts).toString('utf8');
   return s ? JSON.parse(s) : {};
 }
 
@@ -82,9 +90,17 @@ const routes = {
     return { settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(), permissionMode: project ? hub.permissionMode(hub.project(project)) : undefined };
   },
 
-  'POST /api/send': ({ project, thread, text }) => {
+  // One image from the composer, as a data URL. Stored by content hash; returns { id, type, size } (decision 23).
+  'POST /api/attach': ({ project, data, name }) => {
+    const { buf } = decodeDataUrl(data);
+    return hub.project(project).attachments.save(buf, name ? `"${String(name).slice(0, 80)}"` : undefined);
+  },
+
+  'POST /api/send': ({ project, thread, text, attachments }) => {
     const p = hub.project(project);
     text = String(text || '').trim();
+    const ids = Array.isArray(attachments) ? attachments.map(String) : [];
+    if (ids.length) { hub.fromYou(p, thread, text, ids); return { ok: true }; }   // images never count as decision picks
     if (!text) throw new Error('Empty message');
     if (/^\/(login|logout)\b/i.test(text)) {
       p.log.append('message', { thread, from: 'you', text });
@@ -138,7 +154,24 @@ createServer(async (req, res) => {
       return;
     }
     const route = routes[`${req.method} ${url.pathname}`];
-    if (route) return send(res, 200, await route(req.method === 'POST' ? await body(req) : Object.fromEntries(url.searchParams)));
+    if (route) return send(res, 200, await route(req.method === 'POST' ? await body(req, BODY_LIMIT[url.pathname]) : Object.fromEntries(url.searchParams)));
+
+    // Images in threads: /att/<project>/<hash>.<ext>, for the hub's own page only (decision 23).
+    const at = /^\/att\/([^/]+)\/([a-f0-9]{32}\.(?:png|jpg|gif|webp))$/.exec(url.pathname);
+    if (at) {
+      const no = checkAttachmentRead(req.headers, { extra: hosts });
+      if (no) return send(res, 403, { error: no });
+      const store = hub.project(decodeURIComponent(at[1])).attachments;
+      if (!store.has(at[2])) return send(res, 404, { error: 'Not found' });
+      res.writeHead(200, {
+        'content-type': TYPES['.' + (at[2].endsWith('.jpg') ? 'jpg' : at[2].split('.').pop())],
+        'cache-control': 'private, max-age=31536000, immutable',   // the name is the content's hash
+        'cross-origin-resource-policy': 'same-origin',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': "default-src 'none'; sandbox"
+      });
+      return res.end(store.read(at[2]));
+    }
 
     // Crux decision pages for each project: /p/<project>/<file>
     const m = /^\/p\/([^/]+)\/([\w.-]+\.html)$/.exec(url.pathname);

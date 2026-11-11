@@ -1,5 +1,6 @@
 // One Claude Code agent hosted through the Agent SDK (decision 0001).
 // Runs on the machine's Claude Code login, so usage comes from the user's plan.
+import { userContent } from './attachments.mjs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
@@ -67,11 +68,18 @@ export class Agent {
     this.hub.emit({ type: 'agent_state', project: this.project.name, thread: this.thread, agent: this.name, state, contextPct: this.contextPct });
   }
 
-  send(textMsg) {
+  send(textMsg, attachments = []) {
     if (this.state === 'retired' && !this.retiring) throw new Error(`${this.name} has retired`);
+    const message = this.userMessage(textMsg, attachments);   // built first: a missing image fails before start-up
     if (!this.q) this.start();
-    this.inbox.push({ type: 'user', message: { role: 'user', content: this.hub.memory.personalize(textMsg) }, parent_tool_use_id: null });
+    this.inbox.push(message);
     this.setState('working');
+  }
+
+  // The SDK user message (decision 23): images go in as image content blocks, so the agent sees them.
+  userMessage(textMsg, attachments = []) {
+    const text = this.hub.memory.personalize(textMsg || '');
+    return { type: 'user', message: { role: 'user', content: userContent(text, attachments, this.project.attachments) }, parent_tool_use_id: null };
   }
 
   // The query options for this agent's next start. Kept apart from start() so tests can check them.
