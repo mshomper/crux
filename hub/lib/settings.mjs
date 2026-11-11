@@ -14,21 +14,37 @@ export class HubSettings {
     let saved = {};
     if (this.file && existsSync(this.file)) { try { saved = JSON.parse(readFileSync(this.file, 'utf8')); } catch { } }
     this.values = { ...SETTING_DEFAULTS, ...pick(initial), ...pick(saved) };
+    // Per project, keyed by its folder: { permissionMode: 'auto' | 'standard' } (decision 34).
+    this.projects = saved.projects && typeof saved.projects === 'object' ? saved.projects : {};
   }
   get(k) { return this.values[k]; }
   all() { return { ...this.values }; }
   set(changes) {
     const c = pick(changes);
     Object.assign(this.values, c);
-    if (this.file) {
-      mkdirSync(join(this.file, '..'), { recursive: true });
-      let saved = {};
-      try { saved = JSON.parse(readFileSync(this.file, 'utf8')); } catch { }
-      writeFileSync(this.file, JSON.stringify({ ...saved, ...c }, null, 2));
-    }
+    this.save(c);
     return this.all();
   }
+  project(dir) { return this.projects[projectKey(dir)] || null; }
+  setProject(dir, changes) {
+    const k = projectKey(dir);
+    const mode = changes.permissionMode === 'auto' ? 'auto' : changes.permissionMode === 'standard' ? 'standard' : undefined;
+    if (!mode) return this.project(dir);
+    this.projects[k] = { ...(this.projects[k] || {}), permissionMode: mode };
+    this.save({ projects: this.projects });
+    return this.projects[k];
+  }
+  save(c) {
+    if (!this.file) return;
+    mkdirSync(join(this.file, '..'), { recursive: true });
+    let saved = {};
+    try { saved = JSON.parse(readFileSync(this.file, 'utf8')); } catch { }
+    writeFileSync(this.file, JSON.stringify({ ...saved, ...c }, null, 2));
+  }
 }
+
+// One key per project folder, however it was typed: forward slashes, lower case, no trailing slash.
+export const projectKey = dir => String(dir).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
 function pick(o = {}) {
   const out = {};

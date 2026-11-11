@@ -31,7 +31,6 @@ test('everyday project work may go to the orchestrator', () => {
     'node server.mjs --port 4748 ../proj', 'cd hub && npm start -- --port 4750',
     'git push -u origin feat/permission-routing', 'git push origin feat/x:feat/x', 'git -C hub push origin feat/x',
     'gh pr create --title "Routing" --body "See https://example.com/x"',
-    `rm -rf ${join(tmp, 'crux-test-1').replace(/\\/g, '/')}`,
     `git commit -m "$(cat <<'EOF'\nHub: permission routing\n\nCo-Authored-By: x\nEOF\n)"`
   ]) orch(c);
   orch('Get-ChildItem hub | Where-Object { $_.Length -gt 100 } | Select-Object Name', 'PowerShell');
@@ -136,9 +135,11 @@ test('deleting outside the project or a temp folder is a hard stop; inside is co
   for (const c of ['rm ../a.mjs', 'rm -rf ~/crux/x', `rm -rf "${home.replace(/\\/g, '/')}/x"`, 'del ..\\a.mjs', 'rm -rf .', 'rm -rf *']) human(c);
   human('Remove-Item ../hub/a.mjs', 'PowerShell');
   human('Get-ChildItem C:\\ | ForEach-Object { Remove-Item $_ }', 'PowerShell');
-  for (const c of ['rm hub/a.mjs', 'rm -rf hub/tmp', 'del hub\\a.mjs', 'find . -name "*.log" -delete', `rm -rf "${join(tmp, 'x')}"`, 'rm -rf .claude/worktrees/w1']) orch(c);
+  for (const c of ['rm hub/a.mjs', 'rm -rf hub/tmp', 'del hub\\a.mjs', 'find . -name "*.log" -delete', 'rm -rf .claude/worktrees/w1']) orch(c);
+  unsure(`rm -rf "${join(tmp, 'x')}"`);   // R005: a temp folder that is not the agent's own (see permission-temp.test.mjs)
   orch('Remove-Item hub/a.mjs', 'PowerShell');
-  for (const c of ['rm -rf $HOME/x', 'rm']) unsure(c);
+  human('rm -rf $HOME/x');   // $HOME is a known path: deleting in it is outside the project
+  for (const c of ['rm -rf $SOMEVAR/x', 'rm']) unsure(c);
 });
 
 test('stopping, restarting or changing the hub on 4747, or stopping processes, is a hard stop; reading it is fine', () => {
@@ -148,7 +149,7 @@ test('stopping, restarting or changing the hub on 4747, or stopping processes, i
     'taskkill /PID 1234 /F', 'kill 1234', 'CRUX_HUB_PORT=4747 node x.mjs'
   ]) human(c);
   for (const c of ['curl localhost:4747/api/state', 'curl -s http://localhost:4748/api/state', 'curl -s -o hub/tmp/s.json localhost:4748/api/state']) orch(c);
-  unsure('curl -X POST localhost:4748/api/send');
+  orch('curl -X POST localhost:4748/api/send');   // a test hub: contained
 });
 
 test('secrets, and unreadable shapes that name a hard-stop action, go to Matt', () => {

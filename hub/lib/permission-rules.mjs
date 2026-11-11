@@ -56,11 +56,25 @@ const DEP_FILES = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|
 const SECRET = /(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub)(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i;
 const KNOWN_TOOLS = new Set(['Task', 'Agent', 'TodoWrite', 'TaskStop', 'KillShell', 'KillBash', 'BashOutput', 'ToolSearch', 'Skill',
   'EnterPlanMode', 'ExitPlanMode', 'WebSearch', 'LS']);
-const OK_VARS = /^\$(_|psitem|null|true|false|\?|lastexitcode)(?![\w:])/i;
+// Path and system variables are not secrets: reading them is fine. Names that look secret are hard stops.
+const SYSTEM_VARS = /^(appdata|localappdata|temp|tmp|tmpdir|userprofile|home|homedrive|homepath|path|pwd|oldpwd|os|computername|hostname|username|user|programfiles|programfiles\(x86\)|programw6432|programdata|commonprogramfiles|windir|systemroot|systemdrive|public|onedrive|processor_architecture|number_of_processors|shell|term|lang)$/i;
+const SECRET_VAR = /token|key|secret|passw|pass\b|auth|cred|api|cookie|session/i;
+// Where the path variables point, so a write through them is judged like any other path.
+const VAR_PATHS = { appdata: ['AppData', 'Roaming'], localappdata: ['AppData', 'Local'], userprofile: [], home: [] };
 const TEMP_VARS = /\$\{?(env:temp|env:tmp|tmpdir|temp|tmp)\}?(?![\w:])|%(temp|tmp)%/gi;
 
-export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = homedir() }) {
+// agent: the asking agent's name; madeTemp: temp folders it created earlier (full paths). Both decide which temp
+// folders count as its own for deletes (R005). The result's tempMade lists temp folders this request would create.
+export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [] }) {
   const c = new Check(projectDir, tmp, home);
+  c.agent = String(agent || '').toLowerCase();
+  c.madeTemp = new Set([...madeTemp].map(norm));
+  c.tempMade = new Set();
+  const out = classifyWith(c, tool, input);
+  return { ...out, tempMade: [...c.tempMade] };
+}
+
+function classifyWith(c, tool, input) {
   const cmd = String(input.command || '');
   if (/^(Bash|PowerShell)$/.test(tool)) c.command(cmd, tool === 'PowerShell');
   else c.tool(tool, input);
@@ -103,6 +117,8 @@ class Check {
   // The full path a word names, from the folder it is used in. Understands ~, temp variables and Git Bash's /c/... form.
   abs(p, cwd) {
     let s = String(p).replace(TEMP_VARS, this.tmp.replace(/\\/g, '/'));
+    s = s.replace(/\$\{?(?:env:)?(appdata|localappdata|userprofile|home)\}?(?![\w:])|%(appdata|localappdata|userprofile|home)%/gi,
+      (m, a, b) => join(this.home, ...VAR_PATHS[(a || b).toLowerCase()]).replace(/\\/g, '/'));
     if (/^~(?=[\\/]|$)/.test(s)) s = this.home + s.slice(1);
     if (/^\/dev\/null$|^nul$/i.test(s)) return 'null';
     if (/^\/tmp(\/|$)/.test(s)) return s === '/tmp' ? this.tmp : join(this.tmp, s.slice(5));
@@ -116,6 +132,7 @@ class Check {
   path(p, cwd, { write = false } = {}) {
     const w = this.where(p, cwd);
     if (w === 'outside' && write) this.stop(`Writes outside the project folder: ${p}`);
+    if (w === 'tmp' && write) this.noteTemp(p, cwd);
     const n = norm(p);
     if (SECRET.test(n)) this.stop(`Touches secrets or credentials: ${p}`);
     if (write && w === 'inside') {
@@ -148,6 +165,16 @@ class Check {
 
   command(cmd, ps) {
     if (!cmd.trim()) return this.unsure('An empty command');
+    if (ps) {
+      // Variables the command sets itself ($s = ...) are its own, not the environment's.
+      this.localVars ||= new Set();
+      for (const m of cmd.matchAll(/\$(\w+)\s*=(?!=)/g)) this.localVars.add(m[1].toLowerCase());
+      // A shortcut opened only to read its target is a read; .Save() writes the shortcut file.
+      cmd = cmd.replace(/\(\s*New-Object\s+-ComObject\s+WScript\.Shell\s*\)\.CreateShortcut\(\s*(["'])(.*?)\1\s*\)/gi, (m, q, file) => {
+        if (/\.Save\(\s*\)/i.test(cmd)) this.path(file, this.projectDir, { write: true });
+        return "'SHORTCUT'";
+      });
+    }
     // Port 4747: reading the hub (a GET) is fine; stopping, restarting or changing it is a hard stop (see curl, KILL, hubPort).
     // A commit message passed through a quoted heredoc is plain text: $(cat <<'EOF' ... EOF)
     let s = cmd.replace(/\$\(\s*cat\s+<<-?\s*'(\w+)'[^\n]*\n[\s\S]*?\n\s*\1\s*\n?\s*\)/g, "'TEXT'");
@@ -165,6 +192,26 @@ class Check {
     if (/\$\(|<\(|>\(/.test(s.replace(/'[^']*'/g, ''))) this.unsure('Command substitution the hub cannot read');
     let cwd = this.projectDir;
     for (const part of splitParts(s, ps)) cwd = this.part(part, cwd, ps);
+  }
+
+  // The top folder under the system temp folder that a path sits in ("C:/.../Temp/lab-tidy/x.svg" -> ".../Temp/lab-tidy"),
+  // '' for the temp folder itself, null when the path is not in temp.
+  tempTop(p, cwd) {
+    const a = this.abs(p, cwd);
+    if (typeof a !== 'string' || ['null', 'tmp', 'outside'].includes(a) || !under(a, this.tmp)) return null;
+    const rel = norm(a).slice(norm(this.tmp).length).replace(/^\/+/, '');
+    return rel ? join(this.tmp, rel.split('/')[0]) : '';
+  }
+  // A write into a temp folder that does not exist yet: this agent is making it, so it may delete it later.
+  noteTemp(p, cwd) {
+    const top = this.tempTop(p, cwd);
+    if (top && !existsSync(top)) this.tempMade?.add(top);
+  }
+  // R005: an agent's own temp folder is one whose name carries the agent's name, or one it made this session.
+  ownTemp(top) {
+    if (!top) return false;
+    const name = basename(top).toLowerCase();
+    return (this.agent && name.includes(this.agent)) || this.madeTemp?.has(norm(top)) || this.tempMade?.has(top);
   }
 
   pathLike(v) { return /[\\/]|^~|^\.\.?$|^[a-z]:/i.test(v) && !/^[\w.-]+:[^\\/]/.test(v); }
@@ -186,8 +233,11 @@ class Check {
       if (!/^\$null$/i.test(target.text)) this.path(target.text, cwd, { write: !w.text.startsWith('<') });
     }
     words = keep;
-    while (words.length && /^\w+=/.test(words[0].text) && !words[0].quoted) {   // VAR=value cmd
+    // VAR=value cmd: judged by the command after it; the value is checked like any word (secrets, variables).
+    while (words.length && /^\w+=/.test(words[0].text) && words.length > 1) {
       if (/^\w*PORT\w*=4747$/i.test(words[0].text)) this.stop('Starts something on the hub\'s port 4747');
+      if (SECRET_VAR.test(words[0].text.split('=')[0]) && /\$/.test(words[0].text)) this.stop(`Passes what looks like a secret (${words[0].text})`);
+      this.word({ ...words[0], text: words[0].text.replace(/^\w+=/, '') }, cwd);
       words = words.slice(1);
     }
     while (words.length && /^(if|then|else|elif|fi|do|done|while|until|!|time)$/.test(words[0].text)) words = words.slice(1);
@@ -198,7 +248,9 @@ class Check {
     const args = words.slice(1).map(w => w.text);
     // Every word after the program: variables, addresses and secrets (paths are judged by what the program does).
     this.urlsHere = []; this.localUrls = [];
-    for (const w of words.slice(1)) this.word(w, cwd);
+    // The script after powershell -Command is read as PowerShell on its own (see run), so its words are not checked here.
+    const psAt = /^(powershell|pwsh)$/.test(head) ? args.findIndex(a => /^-(c|command)$/i.test(a)) : -1;
+    for (const w of (psAt >= 0 ? words.slice(1, psAt + 2 - 1) : words.slice(1))) this.word(w, cwd);
     if (SECRET.test(norm(first))) this.stop(`Touches secrets or credentials: ${first}`);
     // An address is a network call, except a PR's own text, GitHub for git, and this machine (localhost).
     const github = this.urlsHere.every(u => /^(https:\/\/|git@)github\.com[/:]/i.test(u));
@@ -216,6 +268,29 @@ class Check {
 
   run(head, args, words, cwd) {
     if (/^\$(_|psitem)\b/i.test(head) || /^-(and|or|not|eq|ne|gt|lt|ge|le|like|match)$/i.test(head)) return; // a PowerShell filter expression
+    // Using one of its own variables ($s.TargetPath, $s = ...): an expression, judged by its other words.
+    // A bare system variable as a statement just prints it ($env:ProgramFiles).
+    const sys = /^\$\{?(?:env:)?([\w()]+)\}?$/i.exec(head);
+    if (sys && SYSTEM_VARS.test(sys[1]) && !args.length) return;
+    // A variable followed by words is being run as a command ("& $x push"): that is opaque.
+    const own = /^\$(\w+)(.*)$/.exec(head);
+    if (own && this.localVars?.has(own[1].toLowerCase())) {
+      if (own[2] || !args.length || args[0].startsWith('=')) return;
+      return this.unsure(`Runs a command held in a variable (${words.map(w => w.text).join(' ')})`);
+    }
+    if (head === "'shortcut'" || head === 'shortcut') return;
+    // powershell -Command "...": read the PowerShell inside like any other command.
+    if (/^(powershell|pwsh)$/.test(head)) {
+      const i = args.findIndex(a => /^-(c|command)$/i.test(a));
+      if (i < 0 || !args[i + 1] || args.slice(0, i).some(a => !/^-(noprofile|nologo|noninteractive|executionpolicy|bypass|sta|mta)$/i.test(a) && !/^(bypass|remotesigned)$/i.test(a))) {
+        return this.unsure(`Runs commands the hub cannot read (${head})`);
+      }
+      const inner = args.slice(i + 1).join(' ').replace(/\\([$"`\\])/g, '$1');
+      const saved = { urls: this.urlsHere, local: this.localUrls };
+      this.command(inner, true);
+      this.urlsHere = saved.urls; this.localUrls = saved.local;
+      return;
+    }
     const positional = args.filter(a => !a.startsWith('-'));
     const outsideHere = this.where(cwd, cwd) === 'outside';
     // A request to this machine: reading (GET) is fine anywhere, the hub on 4747 included. Sending data to the
@@ -223,8 +298,8 @@ class Check {
     if (/^(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)$/.test(head) && !this.urlsHere.length && this.localUrls.length) {
       const sends = args.some(a => /^(-X|--request|-d|--data(-\w+)?|-F|--form|--json|-T|--upload-file|-Method|-Body|--post-data|--post-file)$/i.test(a) || /^-X(POST|PUT|PATCH|DELETE)$/i.test(a))
         && !args.some((a, i) => /^(-X|--request|-Method)$/i.test(args[i - 1] || '') && /^(GET|HEAD)$/i.test(a));
-      if (sends && this.localUrls.some(u => /:4747\b/.test(u))) return this.stop('Sends a change to the hub on port 4747');
-      if (sends) return this.unsure('Sends data to a program on this machine', true);
+      if (sends && this.localUrls.some(u => /:4747\b/.test(u) || !/:\d+/.test(u))) return this.stop('Sends a change to the hub on port 4747 (or to localhost with no port named)');
+      // Sending to a test hub (any other port on this machine) is contained.
       const out = args.findIndex(a => /^(-o|--output|-OutFile)$/i.test(a));
       if (out >= 0 && args[out + 1]) this.path(args[out + 1], cwd, { write: true });
       return;
@@ -233,7 +308,10 @@ class Check {
     // Programs that write: a target outside the project folder or a temp folder is a hard stop.
     const writes = WRITE_ALL.has(head) ? positional : WRITE_LAST.has(head) ? positional.slice(-1) : head === 'sed' && args.some(a => /^-i/.test(a)) ? positional.slice(-1) : null;
     if (writes) {
-      for (const t of writes) if (this.outside(t, cwd) || (outsideHere && !this.pathLike(t))) this.stop(`Writes outside the project folder (${head} ${t})`);
+      for (const t of writes) {
+        if (this.outside(t, cwd) || (outsideHere && !this.pathLike(t))) this.stop(`Writes outside the project folder (${head} ${t})`);
+        else if (this.where(t, cwd) === 'tmp') this.noteTemp(t, cwd);
+      }
       return;
     }
     if (KILL.has(head)) return this.stop(`Stops a process (${head}); the hub cannot tell it is not the hub on port 4747`);
@@ -245,18 +323,24 @@ class Check {
       const targets = args.filter(a => !a.startsWith('-'));
       if (!targets.length) return this.unsure(`${head} with nothing named`);
       // "... | ForEach-Object { Remove-Item $_ }" deletes whatever the pipeline lists: outside anywhere in it is a hard stop.
-      if (targets.some(t => /^\$/.test(t))) {
+      if (targets.some(t => /^\$(_|psitem)\b/i.test(t) || (/^\$(\w+)/.test(t) && this.localVars?.has(/^\$(\w+)/.exec(t)[1].toLowerCase())))) {
         return this.sawOutside ? this.stop(`Deletes what a pipeline lists, and the command names a path outside the project folder (${head} ${targets.join(' ')})`) : this.unsure(`Deletes what a pipeline lists (${head} ${targets.join(' ')})`, true);
       }
       if (targets.some(t => this.where(t, cwd) === 'outside')) this.stop(`Deletes files outside the project or a temp folder (${head} ${targets.join(' ')})`);
       else if (targets.some(t => ['.', './', '*'].includes(t) || this.where(t, cwd) === 'inside' && norm(resolve(cwd, t)) === norm(this.projectDir))) this.stop(`Deletes the whole project folder (${head} ${targets.join(' ')})`);
+      else if (targets.some(t => this.tempTop(t, cwd) === '')) this.stop(`Deletes the whole temp folder (${head} ${targets.join(' ')})`);
+      else {
+        // In temp: the agent's own folders are contained; anything else there is for the orchestrator.
+        const others = targets.filter(t => this.where(t, cwd) === 'tmp' && !this.ownTemp(this.tempTop(t, cwd)));
+        if (others.length) this.unsure(`Deletes a temp folder that is not this agent's own (${others.join(' ')})`, true);
+      }
       return;
     }
     if (head === 'find') {
       if (args.some(a => /^-(exec|execdir|ok|okdir)$/.test(a))) this.unsure('find runs other commands (-exec)');
       return;
     }
-    if (SAFE.has(head)) return;                        // reads, wherever it reads from
+    if (SAFE.has(head) || head === 'strings' || head === 'cygpath' || /^get-[a-z]+$/.test(head) || /^(format|select|sort|measure|where|group|convertto|convertfrom|out-string)-?/.test(head) && !/^out-file$/.test(head)) return;   // reads, wherever it reads from
     if (head === 'git') return this.git(args, cwd);
     if (head === 'gh') return this.gh(args);
     // Browsers in headless mode, for screenshots: the files they write must stay contained.
@@ -280,10 +364,15 @@ class Check {
   word(w, cwd) {
     const t = w.text;
     if (w.vars) {
-      const rest = t.replace(TEMP_VARS, '').replace(/\$(_|psitem|null|true|false|\?|lastexitcode)(?![\w:])/gi, '');
-      if (/\$env:/i.test(rest)) this.stop(`Reads an environment variable (${t})`);
-      else if (/[$%]\{?\w*(key|token|secret|passw|auth|cred)/i.test(rest)) this.stop(`Reads what looks like a secret (${t})`);
-      else if (/\$[\w{]|%\w+%/.test(rest)) this.unsure(`Uses a variable the hub cannot check (${t})`);
+      // Every variable named in the word: $X, ${X}, $env:X, %X%.
+      for (const m of t.matchAll(/\$\{?(env:)?([\w()]+)\}?|%(\w+)%/gi)) {
+        const name = (m[2] || m[3] || '').replace(/\(x86\)$/i, '(x86)');
+        if (/^(_|psitem|null|true|false|lastexitcode|\d)$/i.test(name) || this.localVars?.has(name.toLowerCase())) continue;
+        if (SECRET_VAR.test(name)) { this.stop(`Reads what looks like a secret (${m[0]})`); continue; }
+        if (SYSTEM_VARS.test(name)) continue;
+        this.unsure(`Uses a variable the hub cannot check (${m[0]})`);
+      }
+      if (/\$\?/.test(t)) { /* exit status: fine */ }
     }
     // Addresses: this machine (localhost) and local files are not the network.
     const url = /(?:^|=)((?:https?|ftp|wss?|file):\/\/\S+|(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/\S*)?)/i.exec(t)?.[1];
@@ -473,7 +562,8 @@ export function tokens(part) {
     }
     cur ||= { text: '', quoted: false, vars: false };
     if (c === "'" || c === '"') {
-      const j = part.indexOf(c, i + 1);
+      let j = part.indexOf(c, i + 1);
+      while (c === '"' && j > 0 && part[j - 1] === '\\') j = part.indexOf(c, j + 1);   // \" inside "..."
       const end = j < 0 ? part.length : j;
       const inner = part.slice(i + 1, end);
       if (c === '"' && /\$|%\w+%/.test(inner)) cur.vars = true;

@@ -60,7 +60,7 @@ function connect() {
       if (ev.type === 'approval') S.pending.add(ev.approval);
       if (ev.type === 'approval_result') S.pending.delete(ev.approval);
       // Agents write decision records straight to .decisions/; a summary is the signal to re-read the board.
-      if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'summary'].includes(ev.type)) refreshSoon();
+      if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'summary', 'project_settings'].includes(ev.type)) refreshSoon();
       if (ev.type === 'message' && ev.from !== 'you') delete S.activity[key(p.name, ev.thread)];
     } else if (ev.type === 'agent_state') {
       const a = p.agents.find(a => a.name === ev.agent);
@@ -196,9 +196,20 @@ function renderProjects() {
   const menu = multi && S.projMenu ? `<div class="proj-menu" role="listbox" aria-label="Projects">${S.projects.map(p => {
     const k = needsCount(p);
     return `<button role="option" aria-selected="${p === cur}" data-project="${esc(p.name)}" class="pitem ${p === cur ? 'on' : ''}" title="${esc(p.dir)}">
-      <span class="pname">${esc(p.name)}</span><span class="pcount ${k ? 'hot' : ''}">${k ? `${k} waiting` : 'All clear'}</span></button>`;
+      <span class="pname">${esc(p.name)}</span><span class="pmode">${modeWord(p)}</span><span class="pcount ${k ? 'hot' : ''}">${k ? `${k} waiting` : 'All clear'}</span></button>`;
   }).join('')}</div>` : '';
-  $('#projects').innerHTML = `<div class="proj-switch">${head}${menu}</div>`;
+  $('#projects').innerHTML = `<div class="proj-switch"><div class="proj-row">${head}${modeSwitch(cur)}</div>${menu}</div>`;
+}
+
+// Which permission rules apply here (decision 34): Auto lets contained work run and asks only about the rest;
+// Ask sends everything that is not a plain read through the orchestrator or to you.
+const modeWord = p => p.permissionMode === 'auto' ? 'Auto' : 'Ask';
+function modeSwitch(p) {
+  const auto = p.permissionMode === 'auto';
+  const tip = auto
+    ? `Auto: work that stays in ${p.name} or a temp folder runs without asking. Hard stops still come to you. Click to switch to Ask.`
+    : `Ask: anything beyond reading goes to the orchestrator or to you. Click to switch to Auto.`;
+  return `<button class="mode-switch ${auto ? 'auto' : ''}" role="switch" aria-checked="${auto}" data-mode-toggle title="${esc(tip)}" aria-label="${esc(tip)}"><i class="mode-knob"></i>${modeWord(p)}</button>`;
 }
 
 function lastLine(p, t) {
@@ -594,6 +605,10 @@ document.addEventListener('click', e => {
   if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; renderHead(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
   const t = e.target.closest('[data-thread]'); if (t) return selectThread(t.dataset.thread);
   if (e.target.closest('[data-proj-toggle]')) { S.projMenu = !S.projMenu; return renderProjects(); }
+  if (e.target.closest('[data-mode-toggle]')) {
+    const p = proj();
+    return act(async () => { await api('/api/settings', { project: p.name, permissionMode: p.permissionMode === 'auto' ? 'standard' : 'auto' }); await load(); });
+  }
   const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return selectThread('needs'); }
   const pick = e.target.closest('[data-pick]');
   if (pick && !pick.disabled) return act(() => api('/api/pick', { project: proj().name, picks: [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }] }).then(load));
