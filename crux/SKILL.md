@@ -1,12 +1,12 @@
 ---
 name: crux
-description: Surface the decisions hiding inside a task, show options visually, wait for the human's pick, and record it in .decisions/. Use when the user types /crux, asks to think through options before building, or when you are about to make an architecture-level choice on your own (new dependency, data model change, solver or physics model change, a change spanning several modules, or a research or product direction). Not for routine fixes.
+description: Surface the decisions hiding inside a task, show options visually, wait for the user's pick, and record it in .decisions/. Use when the user types /crux, asks to think through options before building, or when you are about to make an architecture-level choice on your own (new dependency, data model change, solver or physics model change, a change spanning several modules, or a research or product direction). Not for routine fixes.
 argument-hint: "[quick|full] [deep] what's on your mind | challenge <number> | park <number> | drop <number> | clear | all"
 ---
 
 # Crux
 
-You do the work around a decision. The human makes the call. You never build, edit code, or act on an option until the human has picked one.
+You do the work around a decision. The user makes the call. You never build, edit code, or act on an option until the user has picked one.
 
 Arguments: **$ARGUMENTS**
 
@@ -14,9 +14,10 @@ Arguments: **$ARGUMENTS**
 
 1. Read every `.decisions/*.md` file in the repo root, if the folder exists. These are past decisions. They are short; read them all.
 2. If the repo keeps its own decision log (`DECISIONS.md`, `docs/adr/` and the like), read it too. It is part of the record: respect what it settles, link its entries with `log_refs` rather than restating them, and raise any entry it marks as open or for review when it bears on the current work.
-3. Read `~/crux/conventions.md` if it exists (the home folder's `crux` folder). It lists what has been settled across all the human's projects, such as units, precision or file formats.
-4. Note any active decision, in this repo, its own log, or the conventions list, that your new options would contradict. A conflict is shown to the human, never silently overridden.
-5. Check parked decisions. Any whose `revisit.date` has passed: set `status` back to `open`, keep the `revisit` note, and tell the human in one line. Any whose `revisit.trigger` matches the work at hand: mention it in one line and ask whether to reopen it. Do not reopen trigger-based ones yourself.
+3. Read `~/crux/conventions.md` if it exists (the home folder's `crux` folder). It lists what has been settled across all the user's projects, such as units, precision or file formats.
+   Also read `~/crux/profile/core.md` if it exists: how the user wants work done and decisions shown. If `~/crux/profile/packs/_index.md` names a pack for this project, read that pack too. Never read `~/crux/profile/private.md` unless the decision needs it, and never copy anything from the profile into `.decisions/` or any other file in the repo.
+4. Note any active decision, in this repo, its own log, or the conventions list, that your new options would contradict. A conflict is shown to the user, never silently overridden.
+5. Check parked decisions. Any whose `revisit.date` has passed: set `status` back to `open`, keep the `revisit` note, and tell the user in one line. Any whose `revisit.trigger` matches the work at hand: mention it in one line and ask whether to reopen it. Do not reopen trigger-based ones yourself.
 6. If `.decisions/` does not exist, create it on the first record. Then check the repo's `CLAUDE.md` for the decisions line (see section 6). If missing, ask once whether to add it.
 
 ## 1. Pick the mode
@@ -24,7 +25,7 @@ Arguments: **$ARGUMENTS**
 - First word `quick` → quick mode. First word `full` → full mode. First word `challenge` → challenge mode (section 5). First word `all` → cross-project summary (section 5). First word `park`, `drop` or `clear` → section 4b.
 - The word `deep` among the first two words adds depth (section 3, "Deep additions") on top of either mode. `quick deep` means one decision, researched, on a page rather than in chat. `full deep` means every decision is researched. `deep` alone means full deep. Say in one line that deep mode takes longer and uses more.
 - No mode word: use **quick** if the question is contained (one module, easy to reverse). Use **full** if it is hard to reverse, touches several modules, or sets direction for later work. Say which you chose in one line.
-- When you invoked this yourself mid-task (the human did not type /crux), always use quick mode and keep it to one decision.
+- When you invoked this yourself mid-task (the user did not type /crux), always use quick mode and keep it to one decision.
 
 ## 2. Find the decisions
 
@@ -38,9 +39,9 @@ Arguments: **$ARGUMENTS**
    | `ui.md` | layout, controls, panels, interaction, visual presentation |
    | `research.md` | research questions, test plans, product direction, priorities, what to build next |
 
-2. Use each lens's checklist to find the decisions hiding in the request, including ones the human did not mention.
+2. Use each lens's checklist to find the decisions hiding in the request, including ones the user did not mention.
 3. Rank by: hard to reverse first, then what other decisions depend on, then impact.
-4. Quick mode: take the top **one** decision (at most two). Full mode: take the top **three to five**. Show the ranked list in one short message before building pages, so the human can drop or add one. In quick mode skip this step.
+4. Quick mode: take the top **one** decision (at most two). Full mode: take the top **three to five**. Show the ranked list in one short message before building pages, so the user can drop or add one. In quick mode skip this step.
 
 ## 3. Build each decision
 
@@ -73,7 +74,7 @@ Then run the build script from this skill's folder:
 node <this skill's folder>/scripts/build.mjs .decisions
 ```
 
-It writes `NNNN-slug.html` (the page), `NNNN-slug.md` (the readable record) and `index.html`. If the repo you are working in is a worktree (its path contains `.claude/worktrees/`, or `git rev-parse --git-common-dir` points outside it), say so in one line with the full path of `.decisions/`, and note that the records reach the main copy when the branch is merged. Offer to merge when the work is done. Tell the human the page path in one line, plus a one-line summary of each option. Then stop and wait.
+It writes `NNNN-slug.html` (the page), `NNNN-slug.md` (the readable record) and `index.html`. If the repo you are working in is a worktree (its path contains `.claude/worktrees/`, or `git rev-parse --git-common-dir` points outside it), say so in one line with the full path of `.decisions/`, and note that the records reach the main copy when the branch is merged. Offer to merge when the work is done. Tell the user the page path in one line, plus a one-line summary of each option. Then stop and wait.
 
 ### Deep additions (only when `deep` was given)
 
@@ -85,18 +86,18 @@ Before writing the JSON, research. Split it into small parallel subagents, one p
 Then add to the JSON (schema in section 7):
 
 - `evidence`: claims that matter to the decision. Each has the claim in your own words, which options it bears on, and its source title and link. A claim with no source is allowed only when marked `"judgment": true`, meaning it is your reasoning, not a finding.
-- Per option: `assumptions` (what has to be true for it to work), `risks` (how it goes wrong in practice), and `estimates` (run time, memory, effort or cost, each with a value and the basis for it, so the human can check the reasoning).
+- Per option: `assumptions` (what has to be true for it to work), `risks` (how it goes wrong in practice), and `estimates` (run time, memory, effort or cost, each with a value and the basis for it, so the user can check the reasoning).
 - `change_mind`: the result or fact that would flip your recommendation to another option.
 
 Keep each list to the three to five items that matter most. Depth means better-grounded content, not longer lists.
 
-The human replies in chat ("B", "B because ...", or "none, do X instead"), or uses the copy button on the page, which produces a line like `Decision 0007: pick B. Reason: ...`.
+The user replies in chat ("B", "B because ...", or "none, do X instead"), or uses the copy button on the page, which produces a line like `Decision 0007: pick B. Reason: ...`.
 
 ## 4. Record the pick
 
-1. Update the JSON: `status` to `decided`, `chosen` to the letter, `reason` to the human's reason in their words (leave empty if they gave none; never ask twice), `decided_on` to today.
-   Also fill `settles`: the conventions this pick fixes that other projects might also decide, as short key and value pairs (for example key "length unit", value "millimetres"). Reuse a key from `~/crux/conventions.md` whenever the question is the same, so the roll-up can compare them. Fill it whenever a related project of the human's might decide the same thing, even if this project is the only one using it today: units and coordinate frames, grid or array layout and indexing order, material laws and their constants, numerical method choices, precision, file formats, and build or tooling conventions. Include the specifics another project would need to match (for example a version or constants source, or an indexing formula). Leave it empty only when no other project could plausibly face the same question.
-2. If the human brings their own answer, add it as a new option (next letter, `"source": "human"`), with a sketch in full mode, and mark it chosen.
+1. Update the JSON: `status` to `decided`, `chosen` to the letter, `reason` to the user's reason in their words (leave empty if they gave none; never ask twice), `decided_on` to today.
+   Also fill `settles`: the conventions this pick fixes that other projects might also decide, as short key and value pairs (for example key "length unit", value "millimetres"). Reuse a key from `~/crux/conventions.md` whenever the question is the same, so the roll-up can compare them. Fill it whenever a related project of the user's might decide the same thing, even if this project is the only one using it today: units and coordinate frames, grid or array layout and indexing order, material laws and their constants, numerical method choices, precision, file formats, and build or tooling conventions. Include the specifics another project would need to match (for example a version or constants source, or an indexing formula). Leave it empty only when no other project could plausibly face the same question.
+2. If the user brings their own answer, add it as a new option (next letter, `"source": "human"`), with a sketch in full mode, and mark it chosen.
 3. If this replaces an older decision, set the older one's `status` to `superseded` and `superseded_by` to the new number.
 4. **Deep mode only:** write the `brief` for the chosen option. It is the briefing for whichever session builds it, so write it for a reader with no memory of this conversation: `files` (paths to create or change, with one line each on what changes), `steps` (in order), `done_when` (checks that prove it works), `validation` (tests, or for physics work the comparison against data and the acceptable error), and `avoid` (traps, and anything that would contradict an active decision). Ground it in the code you read and the evidence gathered.
 5. Run the build script again. Then move to the next decision, using what was just chosen.
@@ -104,7 +105,7 @@ The human replies in chat ("B", "B because ...", or "none, do X instead"), or us
 
 ## 4b. Park, drop and clear
 
-The human can also reply to a decision with "park", "drop", "reject" or "edit", in chat or with the page's copy button (for example `Decision 0007: park until 2027-01-15` or `Decision 0007: park when the hosted backend starts`).
+The user can also reply to a decision with "park", "drop", "reject" or "edit", in chat or with the page's copy button (for example `Decision 0007: park until 2027-01-15` or `Decision 0007: park when the hosted backend starts`).
 
 - **Park** an open decision (`/crux park 0007 until <date>` or `when <trigger>`): set `status` to `parked` and `revisit` to `{ "date": "YYYY-MM-DD" }` or `{ "trigger": "plain words" }`. Ask for one if neither was given. Parked decisions are not waiting for a call and never count as stale. Section 0 reopens them.
 - **Drop** an open decision (`/crux drop 0007`, "we're not doing this"): set `status` to `rejected`, with `reason` from their words. Kept as history; never proposed again.
@@ -119,7 +120,7 @@ Rebuild after any of these.
 
 `/crux all`: run `node <this skill's folder>/scripts/rollup.mjs`, then read `~/crux/conventions.md` and the script's output. Give a short summary: what is waiting for a call in each project (oldest first), any conflicts across projects, and the path to `~/crux/index.html`. Change nothing.
 
-The build script refreshes the roll-up automatically after every build. If it prints a conflict, tell the human in one line and offer to open a decision that settles it.
+The build script refreshes the roll-up automatically after every build. If it prints a conflict, tell the user in one line and offer to open a decision that settles it.
 
 ## 6. The CLAUDE.md line
 
@@ -206,7 +207,7 @@ Findings from `/crux-dig` also carry `deliberate` (`yes`, `likely`, `unclear`), 
 
 ## Rules
 
-- Never build, edit, or install anything as part of this skill except files in `.decisions/` and the CLAUDE.md line the human approved.
-- Never ask the human to justify a pick. Record a reason only when they give one.
-- Plain language in questions to the human: no variable names or symbols.
+- Never build, edit, or install anything as part of this skill except files in `.decisions/` and the CLAUDE.md line the user approved.
+- Never ask the user to justify a pick. Record a reason only when they give one.
+- Plain language in questions to the user: no variable names or symbols.
 - Keep chat messages short. The page carries the detail.

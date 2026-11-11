@@ -1,0 +1,103 @@
+{
+ "id": 7,
+ "slug": "orchestrator-authority",
+ "title": "What may the orchestrator decide on its own?",
+ "date": "2026-11-11",
+ "mode": "full",
+ "lenses": [
+  "research",
+  "architecture"
+ ],
+ "status": "decided",
+ "context": "Whichever agent holds the orchestrator role reads summaries, answers questions and sends agents back. The line between what it settles and what reaches you is the heart of the hub, and the place where Crux's rule (Claude does the work around the decision, you make the call) applies. The rule must live on the board so every successor follows it.",
+ "depends_on": [
+  9
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "source": "claude",
+   "key": "A",
+   "name": "Drafts, you approve",
+   "summary": "Every reply is drafted for your approval.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='120' y='8' width='80' height='34' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='160' y='29' font-size='12' text-anchor='middle' fill='currentColor'>You</text><line x1='160' y1='42' x2='160' y2='66' stroke='currentColor'/><polygon points='160,66 157.0,59.7 163.0,59.7' fill='currentColor'/><rect x='100' y='68' width='120' height='38' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='160' y='91' font-size='12' text-anchor='middle' fill='currentColor'>Drafts only</text><line x1='130' y1='106' x2='70' y2='130' stroke='currentColor'/><polygon points='70,130 74.7,124.8 77.0,130.5' fill='currentColor'/><line x1='190' y1='106' x2='250' y2='130' stroke='currentColor'/><polygon points='250,130 243.0,130.5 245.3,124.8' fill='currentColor'/><rect x='20' y='132' width='100' height='38' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='70' y='155' font-size='12' text-anchor='middle' fill='currentColor'>Agent 1</text><rect x='200' y='132' width='100' height='38' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='250' y='155' font-size='12' text-anchor='middle' fill='currentColor'>Agent 2</text></svg>",
+   "pros": [
+    "Nothing happens without you"
+   ],
+   "cons": [
+    "You are the bottleneck again"
+   ],
+   "effort": "Small"
+  },
+  {
+   "source": "claude",
+   "key": "B",
+   "name": "Crux line",
+   "summary": "It answers questions and sends fixes and next steps within the agreed requirements. Anything Crux would stop for (new dependency, data model, multi-module change, product direction, contradicting an active decision) comes to you as a decision card. Pushing, merging and deleting always come to you.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='120' y='8' width='80' height='34' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='160' y='29' font-size='12' text-anchor='middle' fill='currentColor'>You</text><line x1='160' y1='42' x2='160' y2='66' stroke='currentColor' stroke-dasharray='4 3'/><polygon points='160,66 157.0,59.7 163.0,59.7' fill='currentColor'/><rect x='100' y='68' width='120' height='38' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='160' y='91' font-size='12' text-anchor='middle' fill='currentColor'>Orchestrator</text><line x1='130' y1='106' x2='70' y2='130' stroke='currentColor'/><polygon points='70,130 74.7,124.8 77.0,130.5' fill='currentColor'/><line x1='190' y1='106' x2='250' y2='130' stroke='currentColor'/><polygon points='250,130 243.0,130.5 245.3,124.8' fill='currentColor'/><rect x='20' y='132' width='100' height='38' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='70' y='155' font-size='12' text-anchor='middle' fill='currentColor'>Agent 1</text><rect x='200' y='132' width='100' height='38' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='250' y='155' font-size='12' text-anchor='middle' fill='currentColor'>Agent 2</text><text x='255' y='30' font-size='11' text-anchor='middle' fill='currentColor'>decision cards</text></svg>",
+   "pros": [
+    "A rule Crux already states",
+    "Every escalation becomes a board entry"
+   ],
+   "cons": [
+    "It will sometimes misjudge what is architecture-level",
+    "Needs a digest so you can audit"
+   ],
+   "effort": "Small"
+  },
+  {
+   "source": "claude",
+   "key": "C",
+   "name": "Budgeted autonomy",
+   "summary": "Free within limits (rounds, cost, no push or merge), with a digest.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='120' y='8' width='80' height='34' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='160' y='29' font-size='12' text-anchor='middle' fill='currentColor'>You</text><line x1='160' y1='42' x2='160' y2='66' stroke='currentColor' stroke-dasharray='4 3'/><polygon points='160,66 157.0,59.7 163.0,59.7' fill='currentColor'/><rect x='100' y='68' width='120' height='38' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='160' y='91' font-size='12' text-anchor='middle' fill='currentColor'>Orchestrator</text><line x1='130' y1='106' x2='70' y2='130' stroke='currentColor'/><polygon points='70,130 74.7,124.8 77.0,130.5' fill='currentColor'/><line x1='190' y1='106' x2='250' y2='130' stroke='currentColor'/><polygon points='250,130 243.0,130.5 245.3,124.8' fill='currentColor'/><rect x='20' y='132' width='100' height='38' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='70' y='155' font-size='12' text-anchor='middle' fill='currentColor'>Agent 1</text><rect x='200' y='132' width='100' height='38' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='250' y='155' font-size='12' text-anchor='middle' fill='currentColor'>Agent 2</text><text x='260' y='30' font-size='11' text-anchor='middle' fill='currentColor'>digest later</text></svg>",
+   "pros": [
+    "Fastest"
+   ],
+   "cons": [
+    "Real decisions slip past"
+   ],
+   "effort": "Small"
+  }
+ ],
+ "criteria": [
+  {
+   "name": "You see the calls that matter",
+   "scores": {
+    "A": 3,
+    "B": 3,
+    "C": 1
+   }
+  },
+  {
+   "name": "Takes work off you",
+   "scores": {
+    "A": 1,
+    "B": 2,
+    "C": 3
+   }
+  },
+  {
+   "name": "Fits Crux's rule",
+   "scores": {
+    "A": 2,
+    "B": 3,
+    "C": 1
+   }
+  }
+ ],
+ "recommended": "B",
+ "recommendation": "Crux's rule applied to a new reader: routine answers flow, real decisions stop for you as cards, irreversible actions never leave your hands.",
+ "confidence": "strong",
+ "chosen": "B",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "orchestrator authority",
+   "value": "routine answers and fixes alone; architecture-level choices as decision cards; push, merge and delete always to the human"
+  }
+ ]
+}

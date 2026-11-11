@@ -1,0 +1,99 @@
+{
+ "id": 8,
+ "slug": "summary-format",
+ "title": "What does an agent post when it finishes a round of work?",
+ "date": "2026-11-11",
+ "mode": "full",
+ "lenses": [
+  "data-model"
+ ],
+ "status": "decided",
+ "context": "Agents work as usual, then post a summary to their thread. The orchestrator acts on it, the hub renders it, and it becomes part of the board's history.",
+ "depends_on": [
+  2,
+  7
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "source": "claude",
+   "key": "A",
+   "name": "Free text",
+   "summary": "The agent's normal closing message.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='40' y='30' width='240' height='120' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='160' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Closing message</text></svg>",
+   "pros": [
+    "Nothing to add"
+   ],
+   "cons": [
+    "Questions and decisions get buried"
+   ],
+   "effort": "None"
+  },
+  {
+   "source": "claude",
+   "key": "B",
+   "name": "Fixed sections in text",
+   "summary": "Done, changed, questions, decisions needed, blocked on, next step.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='40' y='20' width='240' height='26' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='160' y='37' font-size='12' text-anchor='middle' fill='currentColor'>Done</text><rect x='40' y='50' width='240' height='26' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='160' y='67' font-size='12' text-anchor='middle' fill='currentColor'>Questions</text><rect x='40' y='80' width='240' height='26' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='160' y='97' font-size='12' text-anchor='middle' fill='currentColor'>Decisions needed</text><rect x='40' y='110' width='240' height='26' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='160' y='127' font-size='12' text-anchor='middle' fill='currentColor'>Blocked on</text><rect x='40' y='140' width='240' height='26' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='160' y='157' font-size='12' text-anchor='middle' fill='currentColor'>Next step</text></svg>",
+   "pros": [
+    "Easy to scan",
+    "Plain text"
+   ],
+   "cons": [
+    "The hub must parse text to render cards"
+   ],
+   "effort": "Small"
+  },
+  {
+   "source": "claude",
+   "key": "C",
+   "name": "Structured summary event",
+   "summary": "The same sections posted as a structured event (questions, decisions with entry numbers, files changed), which the hub renders as a message with cards.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='30' width='130' height='120' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='85' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Summary event</text><line x1='150' y1='90' x2='168' y2='90' stroke='currentColor'/><polygon points='168,90 161.7,93.0 161.7,87.0' fill='currentColor'/><rect x='170' y='30' width='130' height='120' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='235' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Message</text><text x='235' y='101' font-size='12' text-anchor='middle' fill='currentColor'>with cards</text></svg>",
+   "pros": [
+    "Questions and decisions render as real cards with buttons",
+    "Fits the event log",
+    "Easy to search later"
+   ],
+   "cons": [
+    "Agents need a tool or schema to post it"
+   ],
+   "effort": "Small to medium"
+  }
+ ],
+ "criteria": [
+  {
+   "name": "Orchestrator reliability",
+   "scores": {
+    "A": 1,
+    "B": 2,
+    "C": 3
+   }
+  },
+  {
+   "name": "Renders well in the hub",
+   "scores": {
+    "A": 1,
+    "B": 2,
+    "C": 3
+   }
+  },
+  {
+   "name": "Effort",
+   "scores": {
+    "A": 3,
+    "B": 3,
+    "C": 2
+   }
+  }
+ ],
+ "recommended": "C",
+ "recommendation": "With your own interface and an event log, a structured summary is what turns questions and decisions into cards you can act on.",
+ "confidence": "lean",
+ "chosen": "C",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": []
+}
