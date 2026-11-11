@@ -35,8 +35,9 @@ async function api(path, body) {
 }
 
 async function load() {
-  const { projects, retireAt, models } = await api('/api/state');
+  const { projects, retireAt, models, settings } = await api('/api/state');
   map.retireAt = retireAt;
+  S.settings = settings || {};
   S.models = models || [];
   S.projects = projects;
   S.pending = new Set(projects.flatMap(p => p.pendingApprovals));
@@ -77,10 +78,16 @@ const key = (p, t) => `${p}::${t}`;
 
 // ---------- helpers ----------
 function openDecisions(p) { return p.board.decisions.filter(d => d.status === 'open' || d.status === 'found'); }
-function pendingApprovals(p) {
+// Permission requests still waiting. Those with the orchestrator (decision 21) wait on it, not on you, until it
+// escalates or runs out of time; you can still answer them, which overrides it.
+function waitingApprovals(p) {
   const done = new Set(p.events.filter(e => e.type === 'approval_result').map(e => e.approval));
   return p.events.filter(e => e.type === 'approval' && !done.has(e.approval) && S.pending.has(e.approval));
 }
+function escalation(p, id) { return p.events.findLast(e => e.type === 'approval_escalated' && e.approval === id); }
+function withOrchestrator(p) { return waitingApprovals(p).filter(e => e.routedTo && !escalation(p, e.approval)); }
+function pendingApprovals(p) { return waitingApprovals(p).filter(e => !e.routedTo || escalation(p, e.approval)); }
+function pendingForYou(p) { return new Set(p ? pendingApprovals(p).map(e => e.approval) : []); }
 // The latest summary in each thread that asked something, until someone other than the asker replies there.
 function openQuestions(p) {
   const out = [];
@@ -247,17 +254,36 @@ function approvalCard(ev) {
     const what = plain || ev.input?.description || ev.description || String(input).split('\n')[0];
     return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${esc(ev.agent)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
   }
+  // Why it is with you (decision 21): a hard stop the hub found, the orchestrator escalating, or no answer in time.
+  const esc8 = escalation(p, ev.approval);
+  const routeNote = esc8 ? `<p class="route-note">${icon('orch')}${esc8.by === 'hub' ? esc(esc8.reason) : `${esc(esc8.by)} sent it to you: ${esc(esc8.reason)}`}</p>`
+    : ev.stops?.length ? `<p class="route-note stop">${icon('shield')}Always yours${ev.rules ? ` under ${esc(ev.rules)}` : ''}: ${esc(ev.stops.join('; '))}</p>`
+    : ev.routedTo && live ? `<p class="route-note">${icon('orch')}With ${esc(ev.routedTo)} for now; answering it here overrides it.</p>` : '';
   const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
   const raw = `<pre>${esc(input)}</pre>`;
   return `<article class="card approval ${live ? '' : 'answered'}" data-card="approval:${esc(ev.approval)}" ${live ? '' : `data-expand="${esc(ev.approval)}"`}>
     <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}</h3></div>
     ${tags ? `<div class="tags">${tags}</div>` : ''}
+    ${routeNote}
     ${why ? `<p class="muted why">Why: ${esc(why)}</p>` : (!plain && ev.description ? `<p class="muted">${esc(ev.description)}</p>` : '')}
     ${plain ? `<div class="raw">${fold('cmd:' + ev.approval, raw, String(input).length > 120 || String(input).includes('\n'))}</div>` : raw}
     <div class="row">${live
       ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button>${ev.always ? `<button class="btn" data-approve="${ev.approval}" data-always title="Saved to this project's Claude Code settings, where you can remove it">${icon('check')}Always allow</button>` : ''}<button class="btn" data-deny="${ev.approval}">${icon('x')}Deny</button>${ev.always ? `<span class="faint always-rule">Always: ${esc(ev.always.join('; '))}</span>` : ''}`
       : `<span class="chip">${esc(result ? result.how : 'expired')}</span>`}</div>
   </article>`;
+}
+
+// One audit line per answer to a worker's permission request (decision 21): worker, tool, command, answer, reason.
+const ANSWER = { allow: ['allowed', 'good'], deny: ['denied', 'bad'], escalate: ['sent to you', 'warn'], timeout: ['no answer, sent to you', 'warn'] };
+function permLine(ev) {
+  const [word, tone] = ANSWER[ev.answer] || [ev.answer, ''];
+  const who = ev.by === 'you' ? 'You' : '';
+  const open = S.open.has('perm:' + ev.id);
+  return `<button class="perm-line ${tone} ${open ? 'open' : ''}" data-expand="perm:${esc(ev.id)}" title="${esc(`${ev.worker} · ${ev.tool}: ${ev.command}\n${ev.reason}`)}">
+    ${icon('shield')}<span class="pl-who">${esc(ev.worker)}</span><span class="pl-tool">${esc(ev.tool)}</span>
+    <code class="pl-cmd">${esc(ev.command)}</code>
+    <span class="pl-ans">${who ? `${who} ` : ''}${esc(word)}</span><span class="pl-why">${esc(ev.reason)}</span>
+    <span class="time">${timeOf(ev.ts)}</span></button>`;
 }
 
 function summaryCard(p, ev) {
@@ -376,7 +402,10 @@ function renderFeed() {
     let html = '';
     if (withRec.length > 1) html += `<div class="batch"><strong>${withRec.length} decisions have a recommendation.</strong><button class="btn primary" data-take-all>${icon('check')}Take all ${withRec.length}</button><span class="faint">or reply "all but 4A"</span></div>`;
     const ls = pendingLessons(p);
+    const routed = withOrchestrator(p);
     html += aps.map(approvalCard).join('') + qs.map(questionCard).join('') + (ls.length ? lessonsCard(ls) : '') + ds.map(d => decisionCard(p, d)).join('');
+    // Requests the orchestrator is answering: not yours to act on, shown so you can watch or step in.
+    if (routed.length) html += `<div class="side-label routed-label">With the orchestrator</div>` + routed.map(approvalCard).join('');
     feed.innerHTML = html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
     const evs = threadEvents(p, S.thread);
@@ -391,6 +420,8 @@ function renderFeed() {
         case 'visual': return `<div class="msg"><span class="who">${esc(ev.from)} · ${timeOf(ev.ts)}</span>${visualEl(p, ev)}</div>`;
         case 'lesson': return `<div class="notice">${esc(ev.from)} added a lesson to the ${esc(ev.pack)} pack: ${esc(ev.text)}</div>`;
         case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (in Needs you)</div>`;
+        case 'permission_answer': return permLine(ev);
+        case 'approval_escalated': return `<div class="notice">Permission request sent to you: ${esc(ev.reason)}</div>`;
         case 'handoff_qa': return '';
         default: return '';
       }
@@ -426,6 +457,16 @@ function renderHead() {
   const a = p?.agents.find(a => a.thread === t && a.state !== 'retired') || p?.agents.find(a => a.thread === t);
   $('#retire').hidden = !(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring));
   $('#retire-finished').hidden = !(p && t !== 'orchestrator' && t !== 'needs' && a && a.role === 'worker' && a.state !== 'retired' && !a.retiring);
+  // The off switch for decision 21, beside the orchestrator it applies to.
+  const rp = $('#route-perms'), on = S.settings?.routePermissions !== false;
+  rp.hidden = !(p && t === 'orchestrator');
+  rp.classList.toggle('on', on);
+  rp.setAttribute('aria-pressed', String(on));
+  const rules = p?.permissionRules;
+  rp.title = on
+    ? `The orchestrator answers workers' permission requests${rules ? ` under ${rules}` : ' (no rules on the board yet, so they all come to you)'}; hard stops still come to you. Click to answer every request yourself.`
+    : 'Every permission request comes to you. Click to let the orchestrator answer them within the board\'s rules.';
+  rp.setAttribute('aria-label', rp.title);
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#input').placeholder = retired ? 'This agent has retired.' : t === 'needs' || t === 'orchestrator'
@@ -462,7 +503,7 @@ function renderBoard() {
 
 function render() {
   renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard(); renderModelMenu();
-  map.update(proj(), S.pending);
+  map.update(proj(), pendingForYou(proj()));
   $('#app').classList.toggle('with-board', !$('#board').hidden);
   $('#open-board').classList.toggle('on', !$('#board').hidden);
 }
@@ -568,6 +609,11 @@ function autosize() {
 }
 $('#input').addEventListener('input', autosize);
 
+$('#route-perms').addEventListener('click', () => act(async () => {
+  const on = S.settings?.routePermissions !== false;
+  const { settings } = await api('/api/settings', { routePermissions: !on });
+  S.settings = settings; render();
+}));
 $('#open-board').addEventListener('click', () => { $('#board').hidden = !$('#board').hidden; render(); });
 $('#close-board').addEventListener('click', () => { $('#board').hidden = true; render(); });
 $('#back').addEventListener('click', () => $('#app').classList.add('show-side'));

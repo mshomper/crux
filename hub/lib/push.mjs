@@ -15,7 +15,8 @@ const LOOK_IDLE_MS = 2 * 60 * 1000;          // no clicks or keys for this long:
 // Which card, if any, an event puts in front of you. `decisionOpen(id)` says whether a decision still waits.
 export function cardsFor(ev, { decisionOpen = () => true } = {}) {
   const project = ev.project;
-  if (ev.type === 'approval') {
+  // A request with the orchestrator (decision 21) buzzes your phone only once it comes to you: escalated or timed out.
+  if ((ev.type === 'approval' && !ev.routedTo) || ev.type === 'approval_escalated') {
     return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${ev.agent} is waiting for Allow`, body: `${project} · wants to use ${ev.tool}` }]; // kept minimal on purpose: it can show on a locked phone
   }
   if (ev.type !== 'summary') return [];
