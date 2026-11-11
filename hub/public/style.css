@@ -133,6 +133,7 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .decision .foot .spacer{flex:1}
 .card.approval{border-left:3px solid var(--warn)}
 .card.question{border-left:3px solid var(--warn)}
+.always-rule{flex:1 1 100%;min-width:0;font-size:12px;overflow-wrap:anywhere}
 .card.lessons{border-left:3px solid var(--accent)}
 .lesson-list{list-style:none;margin:0 0 10px;padding:0;display:grid;gap:8px}
 .lesson-list li{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
