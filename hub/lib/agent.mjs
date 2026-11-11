@@ -1,9 +1,9 @@
 // One Claude Code agent hosted through the Agent SDK (decision 0001).
 // Runs on the machine's Claude Code login, so usage comes from the user's plan.
+import { userContent } from './attachments.mjs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
-import { userContent } from './attachments.mjs';
 
 class Inbox {
   constructor() { this.items = []; this.waiters = []; this.closed = false; }
