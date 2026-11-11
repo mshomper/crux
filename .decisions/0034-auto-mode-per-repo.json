@@ -1,0 +1,35 @@
+{
+  "id": 34,
+  "slug": "auto-mode-per-repo",
+  "title": "How much may agents do without asking, per repo?",
+  "date": "2026-11-11",
+  "mode": "quick",
+  "lenses": ["architecture"],
+  "status": "decided",
+  "context": "Under decision 21 every non-read request went to the orchestrator for judgment. The flood of approvals showed that is still too much friction. Matt wants agents to behave like Claude Code sessions in auto mode: broad authority for anything in their workflow inside their folder, set per repo. Amends decision 21 (the orchestrator now handles only what the hub can't classify) and works within decisions 7 and 22.",
+  "depends_on": [7, 21, 22],
+  "conflicts": [],
+  "options": [
+    {
+      "key": "A",
+      "name": "Auto mode per repo",
+      "summary": "A per-repo hub setting (auto, on for this repo). The hub allows at once anything whose effects stay inside the project folder, the agent's worktree or its own temp folder: edits, builds, tests, scripts, local git, feature-branch pushes and PRs, test hubs on other ports. Hard stops still go to Matt. The orchestrator is asked only about requests the hub can't classify, with the 2-minute fallback to Matt. Repos without the setting behave as in decision 21.",
+      "pros": ["Approvals nearly vanish", "Hard-to-undo actions still reach Matt", "Matt opts in per repo"],
+      "cons": ["Less review of ordinary commands", "Relies on the hard-stop matcher being conservative"],
+      "effort": "Small on top of decision 21's work",
+      "source": "human"
+    }
+  ],
+  "criteria": [],
+  "recommended": "A",
+  "recommendation": "Matt's own call.",
+  "confidence": "strong",
+  "chosen": "A",
+  "reason": "Act like Claude Code sessions under auto: broad authority for anything that touches their workflow inside their folder; fine to set it per repo.",
+  "decided_on": "2026-11-11",
+  "superseded_by": null,
+  "challenge": null,
+  "settles": [
+    { "key": "agent permission mode", "value": "per-repo auto mode: anything contained to the project folder, worktree or temp folder is allowed without asking; hard stops (merge, push to main, force push, branch deletion, history rewrite, installs, writes outside the project, network beyond GitHub, secrets, the live hub) go to the human" }
+  ]
+}

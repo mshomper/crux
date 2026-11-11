@@ -1,0 +1,73 @@
+{
+ "id": 32,
+ "slug": "phone-start-screen",
+ "title": "What does the hub show first when you open it on your phone?",
+ "date": "2026-11-11",
+ "mode": "quick",
+ "lenses": [
+  "ui"
+ ],
+ "status": "decided",
+ "context": "On a phone the hub opens on the thread list, so answering anything takes a tap into Needs you first, and moving between threads means going back to the list each time. Decision 12 set the desktop layout; the phone layout was never decided. Found in the ux-review round.",
+ "depends_on": [
+  12,
+  17,
+  19
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Needs you first, list behind Back",
+   "summary": "Open straight into Needs you when something waits (thread list when nothing does). Back still shows the list. Nothing else changes.",
+   "pros": [
+    "One tap less for the common case",
+    "Smallest change"
+   ],
+   "cons": [
+    "Moving between agents still goes through the list"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Bottom bar with four places",
+   "summary": "A bar at the bottom with Needs you, Orchestrator, Agents and Map, each with its count. Opens on Needs you when something waits. The map strip stays on top as decided.",
+   "pros": [
+    "Every place one thumb tap away",
+    "Counts always visible",
+    "Feels like a phone app from the home screen"
+   ],
+   "cons": [
+    "Takes about 56 px of height",
+    "A second way to navigate next to the strip"
+   ],
+   "effort": "Medium",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Leave the list first",
+   "summary": "Keep today's behaviour; notification taps already land on the card.",
+   "pros": [
+    "No work",
+    "Notifications cover the urgent case"
+   ],
+   "cons": [
+    "Opening the app yourself always costs an extra tap"
+   ],
+   "effort": "None",
+   "source": "claude"
+  }
+ ],
+ "recommended": "A",
+ "recommendation": "Most phone visits are to answer something; landing on Needs you fixes that at almost no cost. B is worth it only if you move between agents a lot on the phone.",
+ "confidence": "toss-up",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": []
+}
