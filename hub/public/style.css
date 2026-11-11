@@ -124,7 +124,8 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .qfoot .spacer{flex:1}
 .qfoot .btn.primary:disabled{opacity:.4}
 .msg.you .yq{display:block;margin:0 0 4px;padding:1px 0 1px 9px;border-left:2px solid var(--hud-dim);color:var(--muted);font-size:12.5px}
-@media (max-width:720px){.qquick{min-width:48px;padding:0 10px}.qbox,.qquick,.qx{min-height:40px;height:auto}.qx{height:40px;width:40px}}
+.qfoot{flex-wrap:nowrap}
+@media (max-width:720px){.qall .lbl{display:none}.qall{padding:7px}.qquick{min-width:48px;padding:0 10px}.qbox,.qquick,.qx{min-height:40px;height:auto}.qx{height:40px;width:40px}}
 
 .main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .main-head{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);min-height:58px}

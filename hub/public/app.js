@@ -223,7 +223,7 @@ function questionCard(ev) {
     ${ev.byPicks ? `<p class="faint q-done">${ev.byPicks === 1 ? 'One more question was' : `${ev.byPicks} more questions were`} answered by your picks.</p>` : ''}
     <div class="row qfoot"><button class="btn primary" data-send-answers="${esc(ev.id)}" ${filled ? '' : 'disabled'} title="Send every filled answer to ${esc(ev.from)} as one message">${icon('send')}<span class="qcount">${sendLabel(filled, ev.open.length)}</span></button>
       <button class="btn ghost" data-thread="${esc(ev.thread)}" title="Open ${esc(where)}">Open thread</button>
-      <span class="spacer"></span>${ev.open.length > 1 ? `<button class="btn ghost" data-dismiss="${esc(ev.id)}" title="Take the whole card out of Needs you. The agent is not told.">${icon('x')}Dismiss all</button>` : ''}</div>
+      <span class="spacer"></span>${ev.open.length > 1 ? `<button class="btn ghost qall" data-dismiss="${esc(ev.id)}" aria-label="Dismiss all" title="Dismiss all: take the whole card out of Needs you. The agent is not told.">${icon('x')}<span class="lbl">Dismiss all</span></button>` : ''}</div>
   </article>`;
 }
 const sendLabel = (n, of) => !n ? 'Send answers' : n === 1 && of === 1 ? 'Send answer' : `Send ${n} answer${n === 1 ? '' : 's'}`;
