@@ -76,6 +76,10 @@ Choosing a worker's type, model and effort:
 - Follow the core profile: tricky work, or work that touches shared systems, gets a stronger model and more effort;
   small mechanical edits can go lighter. Leave model and effort unset to use the type's (or the default).
 - Effort levels: low, medium, high, xhigh, max. Models: opus, sonnet, haiku, fable, or a full model id.
+- To change an agent that is already running (yourself included), use set_agent_settings(name, model?, effort?,
+  type?): the same as {{who}} clicking its model chip. Send only what changes; "default" (or type "none") resets.
+  Do it when {{who}} asks ("put w1 on Sonnet", "more effort on the reviewer"), or when a worker's subtask clearly
+  needs a stronger or lighter setting. The hub logs each change in that agent's thread and in yours.
 `;
 }
 

@@ -1,5 +1,6 @@
 // What the live map shows, worked out from the hub's project state and event stream.
 // No drawing here: stations, what needs you, the telemetry feed, and which pulses an event fires.
+import { openQuestions, pageStatus } from './questions.js';
 
 const MAX_FEED = 16;
 
@@ -74,19 +75,10 @@ export class MapModel {
     return p.events.filter(e => e.type === 'approval' && !done.has(e.approval) && this.pending.has(e.approval));
   }
 
-  // Same rule as the Needs you list: the latest summary that asked something, until someone else replies.
+  // Same rule as the Needs you list (questions.js).
   openQuestions() {
     const p = this.project;
-    if (!p) return [];
-    const out = [];
-    for (const t of new Set(p.events.map(e => e.thread).filter(Boolean))) {
-      const evs = p.events.filter(e => e.thread === t);
-      const i = evs.findLastIndex(e => e.type === 'summary' && e.questions?.length);
-      if (i < 0) continue;
-      if (evs.slice(i + 1).some(e => e.type === 'message' && e.from !== evs[i].from)) continue;
-      out.push(evs[i]);
-    }
-    return out;
+    return p ? openQuestions(p.events, { decisionStatus: pageStatus(p) }) : [];
   }
 
   openDecisions() { return (this.project?.board?.decisions || []).filter(d => d.status === 'open' || d.status === 'found'); }

@@ -9,6 +9,7 @@ import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
 import { AgentTypes, parseAgentFile, parseFrontmatter, modelId, modelLabel } from '../lib/agent-types.mjs';
+import { cruxToolNames, settingsChanges } from '../lib/tools.mjs';
 
 const sent = [];
 Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'working'; };
@@ -172,6 +173,53 @@ test('the start-up event records the model Claude Code reports, and survives a r
   assert.equal(ev.type, 'agent_session', 'the event keeps its own type');
   assert.deepEqual([ev.model, ev.agentType, ev.effort], ['claude-sonnet-5-5', 'reviewer', 'medium']);
   assert.equal(make().project('proj').agents.get('rev').modelSeen, 'claude-sonnet-5-5');
+});
+
+test('set_agent_settings: the orchestrator makes the same change as the chip, logged in both threads', async () => {
+  const { hub, p } = setup({ homeTypes: { 'reviewer.md': REVIEWER } });
+  const o = hub.ensureOrchestrator(p);
+  const w = hub.startWorker(p, 'w', 'task');
+  assert.ok(cruxToolNames(o).includes('mcp__crux__set_agent_settings'), 'in the orchestrator\'s tool list');
+  assert.ok(!cruxToolNames(w).includes('mcp__crux__set_agent_settings'), 'not a worker\'s');
+  assert.match(o.options().systemPrompt.append, /set_agent_settings\(name, model\?, effort\?,\s+type\?\)/, 'and in its prompt');
+
+  const calls = [];
+  w.q = { setModel: async m => calls.push(['model', m]), applyFlagSettings: async s => calls.push(['flags', s]) };
+  w.state = 'working';
+  const r = await hub.setAgentSettings(p, 'w', settingsChanges({ model: 'sonnet', effort: 'high' }), o.name);
+  assert.equal(r.when, 'now');
+  assert.deepEqual(calls, [['model', 'claude-sonnet-5-5'], ['flags', { effortLevel: 'high' }]], 'a live switch, as from the chip');
+  const ev = p.log.ofType('agent_settings').at(-1);
+  assert.deepEqual([ev.by, ev.model, ev.effort], ['orchestrator-1', 'claude-sonnet-5-5', 'high']);
+  const lines = p.log.ofType('notice').filter(n => /orchestrator-1 set w to Sonnet 5\.5 · effort high; it applies now/.test(n.text));
+  assert.deepEqual(lines.map(n => n.thread).sort(), ['orchestrator', 'w'], 'logged in the worker\'s thread and the orchestrator\'s');
+
+  await hub.setAgentSettings(p, 'w', settingsChanges({ type: 'reviewer' }), o.name);
+  assert.equal(w.restartWhenIdle, true, 'a type waits until it is free');
+  await hub.setAgentSettings(p, 'w', settingsChanges({ type: 'none', model: 'default', effort: 'default' }), o.name);
+  assert.deepEqual([w.type, w.model, w.effort], [null, null, null], '"default" and "none" reset');
+
+  // Changing itself by its thread name; your own chip changes are logged once, in the agent's thread.
+  await hub.setAgentSettings(p, 'orchestrator', { effort: 'max' }, o.name);
+  assert.equal(o.effort, 'max');
+  const before = p.log.ofType('notice').length;
+  await hub.setAgentSettings(p, 'w', { effort: 'low' });
+  assert.equal(p.log.ofType('notice').length, before + 1);
+  await assert.rejects(hub.setAgentSettings(p, 'nobody', { effort: 'low' }, o.name), /No agent called nobody/);
+});
+
+test('set_agent_settings arguments: only what is given changes; default and none reset', () => {
+  assert.deepEqual(settingsChanges({}), {});
+  assert.deepEqual(settingsChanges({ model: ' haiku ' }), { model: 'haiku' });
+  assert.deepEqual(settingsChanges({ model: 'Default', effort: 'default', type: 'none' }), { model: null, effort: null, type: null });
+  assert.deepEqual(settingsChanges({ effort: 'xhigh', type: 'reviewer' }), { effort: 'xhigh', type: 'reviewer' });
+});
+
+test('a live switch that never answers gives up, and the change applies at the next start', async () => {
+  const { hub, p } = setup();
+  const w = hub.startWorker(p, 'w', 'task');
+  w.q = { setModel: () => new Promise(() => { }), applyFlagSettings: async () => { } };
+  assert.equal(await w.applyLive({ model: 'claude-haiku-5-5' }, 20), false);
 });
 
 test('a successor keeps its predecessor\'s type, model and effort', () => {

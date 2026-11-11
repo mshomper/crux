@@ -15,6 +15,7 @@ import { HubSettings } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
+import { answerMessage } from '../public/questions.js';
 
 export class Project {
   constructor(dir) {
@@ -170,7 +171,7 @@ export class Hub {
   // Claude Code's live settings. A type change (new tools and instructions) needs a fresh start: at once if the
   // agent is resting, else as soon as it goes idle. It resumes the same conversation on its next message.
   async setAgentSettings(p, name, changes = {}, by = 'you') {
-    const a = p.agents.get(name);
+    const a = name === 'orchestrator' ? p.orchestrator() : p.agents.get(name);
     if (!a) throw new Error(`No agent called ${name}`);
     if (a.state === 'retired') throw new Error(`${name} has retired.`);
     const next = {};
@@ -204,7 +205,10 @@ export class Hub {
       else if (a.state === 'idle' && !a.retiring && !a.capture) { a.close(); when = 'from its next message'; }
       else { a.restartWhenIdle = true; when = 'once it finishes what it is doing'; }
     }
-    this.notice(p, a.thread, `${by === 'you' ? 'You' : by} set ${a.name} to ${this.describeSettings(a)}; it applies ${when}.`);
+    const line = `${by === 'you' ? 'You' : by} set ${a.name} to ${this.describeSettings(a)}; it applies ${when}.`;
+    this.notice(p, a.thread, line);
+    // The orchestrator's changes (set_agent_settings) are logged in its own thread too, for you to see in one place.
+    if (by !== 'you' && a.thread !== 'orchestrator') this.notice(p, 'orchestrator', line);
     return { changed: true, settings: this.describeSettings(a), when };
   }
 
@@ -227,12 +231,13 @@ export class Hub {
 
   // ---------- messages ----------
   // ids: attachment ids the page uploaded first (decision 23). The event keeps only id, type and size.
-  fromYou(p, thread, text, ids = []) {
+  // extra: more fields for the message event (answers: the summary questions it answers, from Needs you).
+  fromYou(p, thread, text, ids = [], extra = {}) {
     if (ids.length > MAX_PER_MESSAGE) throw new Error(`Up to ${MAX_PER_MESSAGE} images per message.`);
     const attachments = ids.map(id => p.attachments.ref(id));
     const a = thread === 'orchestrator' ? null : p.agents.get(thread);
     if (thread !== 'orchestrator' && (!a || a.state === 'retired')) throw new Error(`No active agent ${thread}`);
-    p.log.append('message', { thread, from: 'you', text, ...(attachments.length ? { attachments } : {}) });
+    p.log.append('message', { thread, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
     (a || this.ensureOrchestrator(p)).send(text, attachments);
   }
 
@@ -259,6 +264,37 @@ export class Hub {
     if (s.decisions_needed.length) lines.push(`Decisions waiting on {{who}}: ${s.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
     if (s.next_step) lines.push(`Proposed next step: ${s.next_step}`);
     this.ensureOrchestrator(p).send(lines.join('\n'));
+  }
+
+  // ---------- questions from round summaries (M010) ----------
+  askedIn(p, id) {
+    const ev = p.log.events.find(e => e.id === id && e.type === 'summary' && e.questions?.length);
+    if (!ev) throw new Error('That question is no longer here.');
+    return ev;
+  }
+
+  // Dismiss on a question card, or on one question in it (index): it leaves Needs you, and no phone notification
+  // goes out for it. The agent is not told; its summary stays in its thread. No thread, so nothing turns unread.
+  dismissQuestion(p, id, by = 'you', index = null) {
+    const ev = this.askedIn(p, id);
+    const i = index == null || index === '' ? null : Number(index);
+    if (i !== null && !(Number.isInteger(i) && i >= 0 && i < ev.questions.length)) throw new Error('No such question in that card.');
+    const same = e => e.type === 'question_dismissed' && e.question === id && (e.index ?? null) === i;
+    if (!p.log.events.some(same)) p.log.append('question_dismissed', { question: id, ...(i === null ? {} : { index: i }), asker: ev.from, by });
+    return { ok: true };
+  }
+
+  // Answers typed in Needs you: one message to the asking agent's thread, each question quoted with its answer.
+  // The message names the questions it answers, so those leave Needs you and the rest of the card stays.
+  answerQuestions(p, id, answers = []) {
+    const ev = this.askedIn(p, id);
+    const items = (Array.isArray(answers) ? answers : [])
+      .map(a => ({ index: Number(a?.index), answer: String(a?.text ?? '').trim() }))
+      .filter(a => a.answer && Number.isInteger(a.index) && a.index >= 0 && a.index < ev.questions.length);
+    if (!items.length) throw new Error('Type an answer first.');
+    const text = answerMessage(items.map(a => ({ question: ev.questions[a.index], answer: a.answer })));
+    this.fromYou(p, ev.thread, text, [], { answers: items.map(a => ({ question: id, index: a.index })) });
+    return { ok: true, thread: ev.thread, answered: items.map(a => a.index) };
   }
 
   // ---------- memory layers (decisions 13 and 15) ----------
