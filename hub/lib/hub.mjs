@@ -6,6 +6,7 @@ import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
 import { Agent } from './agent.mjs';
 import { Memory } from './memory.mjs';
+import { CommandPolicy } from './permissions.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE } from './prompts.mjs';
 
 export class Project {
@@ -208,30 +209,39 @@ export class Hub {
     if (/^(Bash|PowerShell)$/.test(toolName) && /^node\s+("[^"]*[\\/]crux[\\/]scripts[\\/](build|rollup)\.mjs"|\S*[\\/]crux[\\/]scripts[\\/](build|rollup)\.mjs)(\s+("[^"]*"|[\w.\\/:-]+))?$/.test(cmd)) {
       return { behavior: 'allow', updatedInput: input };
     }
+    // Commands that only read (listing, git status and diff, versions) run without a card.
+    if (/^(Bash|PowerShell)$/.test(toolName) && CommandPolicy.readOnly(toolName, cmd)) return { behavior: 'allow', updatedInput: input };
     return null;
   }
 
-  requestApproval(p, agent, toolName, input, { signal, title, description } = {}) {
+  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions } = {}) {
     const auto = this.autoAnswer(p, agent, toolName, input);
     if (auto) return Promise.resolve(auto);
     return new Promise(resolvePromise => {
       const id = randomUUID();
+      const always = CommandPolicy.alwaysRules(toolName, input, suggestions);
       const finish = (result, how) => {
         if (!this.approvals.has(id)) return;
         this.approvals.delete(id);
         p.log.append('approval_result', { thread: agent.thread, approval: id, how });
         resolvePromise(result);
       };
-      this.approvals.set(id, { p, agent, toolName, input, finish });
-      p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null });
+      this.approvals.set(id, { p, agent, toolName, input, finish, always });
+      p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null });
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
     });
   }
 
-  answerApproval(id, allow, note) {
+  // "Always" saves Claude Code's own suggested rule to the project's .claude/settings.local.json, where you can review or remove it.
+  answerApproval(id, allow, note, always = false) {
     const a = this.approvals.get(id);
     if (!a) throw new Error('That approval is no longer waiting (the agent may have restarted).');
-    a.finish(allow ? { behavior: 'allow', updatedInput: a.input } : { behavior: 'deny', message: note || this.memory.personalize('{{Who}} declined this.') }, allow ? 'allowed' : 'denied');
+    if (always && !a.always) throw new Error('This one can only be allowed once.');
+    if (always) this.notice(a.p, a.agent.thread, `Saved to this project's Claude Code settings (.claude/settings.local.json): always allow ${CommandPolicy.describe(a.always).join('; ')}`);
+    a.finish(allow
+      ? { behavior: 'allow', updatedInput: a.input, ...(always ? { updatedPermissions: a.always } : {}) }
+      : { behavior: 'deny', message: note || this.memory.personalize('{{Who}} declined this.') },
+      allow ? (always ? 'always allowed' : 'allowed') : 'denied');
   }
 
   // ---------- handoffs (decisions 10 and 16) ----------

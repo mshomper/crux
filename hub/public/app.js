@@ -215,7 +215,7 @@ function approvalCard(ev) {
     ${ev.description ? `<p class="muted">${esc(ev.description)}</p>` : ''}
     <pre>${esc(input)}</pre>
     <div class="row">${live
-      ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button><button class="btn" data-deny="${ev.approval}">${icon('x')}Deny</button>`
+      ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button>${ev.always ? `<button class="btn" data-approve="${ev.approval}" data-always title="Saved to this project's Claude Code settings, where you can remove it">${icon('check')}Always allow</button>` : ''}<button class="btn" data-deny="${ev.approval}">${icon('x')}Deny</button>${ev.always ? `<span class="faint always-rule">Always: ${esc(ev.always.join('; '))}</span>` : ''}`
       : `<span class="chip">${esc(result ? result.how : 'expired')}</span>`}</div>
   </article>`;
 }
@@ -382,7 +382,7 @@ document.addEventListener('click', e => {
   }
   const ls = e.target.closest('[data-lesson]');
   if (ls) return act(() => api('/api/lessons', { project: proj().name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
-  const ap = e.target.closest('[data-approve]'); if (ap) return act(() => api('/api/approval', { id: ap.dataset.approve, allow: true }));
+  const ap = e.target.closest('[data-approve]'); if (ap) return act(() => api('/api/approval', { id: ap.dataset.approve, allow: true, always: 'always' in ap.dataset }));
   const dn = e.target.closest('[data-deny]'); if (dn) return act(() => api('/api/approval', { id: dn.dataset.deny, allow: false }));
 });
 
