@@ -151,10 +151,27 @@ function md(src) {
 }
 
 // ---------- render: sidebar ----------
+// Everything in a project that waits for you: decisions, permission cards, questions, profile lessons (one card).
+function needsCount(p) { return openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length + (pendingLessons(p).length ? 1 : 0); }
+
+// One row however many projects there are: the current one, a count when it needs you, a dot when another does.
 function renderProjects() {
-  $('#projects').innerHTML = S.projects.length > 1
-    ? S.projects.map(p => `<button data-project="${esc(p.name)}" class="${p.name === S.current ? 'on' : ''}">${esc(p.name)}</button>`).join('')
-    : '';
+  const cur = proj();
+  if (!cur) { $('#projects').innerHTML = ''; return; }
+  const multi = S.projects.length > 1;
+  const elsewhere = S.projects.filter(p => p !== cur && needsCount(p) > 0);
+  const n = needsCount(cur);
+  const head = `<button class="proj-current" ${multi ? `data-proj-toggle aria-haspopup="listbox" aria-expanded="${S.projMenu ? 'true' : 'false'}"` : 'disabled'} title="${multi ? 'Switch project' : esc(cur.dir)}">
+    ${icon('projects')}<span class="pname">${esc(cur.name)}</span>
+    ${n ? `<span class="pbadge" title="${n} waiting here">${n}</span>` : ''}
+    ${elsewhere.length ? `<span class="pdot" title="${elsewhere.map(p => esc(p.name)).join(', ')} need${elsewhere.length === 1 ? 's' : ''} you"></span>` : ''}
+    ${multi ? icon('chevron') : ''}</button>`;
+  const menu = multi && S.projMenu ? `<div class="proj-menu" role="listbox" aria-label="Projects">${S.projects.map(p => {
+    const k = needsCount(p);
+    return `<button role="option" aria-selected="${p === cur}" data-project="${esc(p.name)}" class="pitem ${p === cur ? 'on' : ''}" title="${esc(p.dir)}">
+      <span class="pname">${esc(p.name)}</span><span class="pcount ${k ? 'hot' : ''}">${k ? `${k} waiting` : 'All clear'}</span></button>`;
+  }).join('')}</div>` : '';
+  $('#projects').innerHTML = `<div class="proj-switch">${head}${menu}</div>`;
 }
 
 function lastLine(p, t) {
@@ -176,7 +193,7 @@ function threadButton({ id, name, ava, avaClass = '', last, right }) {
 function renderThreads() {
   const p = proj();
   if (!p) { $('#threads').innerHTML = ''; return; }
-  const needs = openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length + (pendingLessons(p).length ? 1 : 0);
+  const needs = needsCount(p);
   const orch = orchestrator(p);
   const workers = p.agents.filter(a => a.role === 'worker');
   const active = workers.filter(a => a.state !== 'retired'), retired = workers.filter(a => a.state === 'retired');
@@ -333,6 +350,7 @@ function renderHead() {
   $('#thread-sub').innerHTML = sub;
   const a = p?.agents.find(a => a.thread === t && a.state !== 'retired') || p?.agents.find(a => a.thread === t);
   $('#retire').hidden = !(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring));
+  $('#retire-finished').hidden = !(p && t !== 'orchestrator' && t !== 'needs' && a && a.role === 'worker' && a.state !== 'retired' && !a.retiring);
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#input').placeholder = retired ? 'This agent has retired.' : t === 'needs' || t === 'orchestrator'
@@ -407,6 +425,10 @@ function openCard(project, card) {
 }
 const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: S.thread }), openCard });
 
+// The project menu closes on a click anywhere else, or Escape.
+document.addEventListener('pointerdown', e => { if (S.projMenu && !e.target.closest('.proj-switch')) { S.projMenu = false; renderProjects(); } });
+addEventListener('keydown', e => { if (e.key === 'Escape' && S.projMenu) { S.projMenu = false; renderProjects(); $('[data-proj-toggle]')?.focus(); } });
+
 document.addEventListener('click', e => {
   const ex = e.target.closest('[data-expand]');
   if (ex && !e.target.closest('a, [data-approve], [data-deny]')) {
@@ -415,7 +437,8 @@ document.addEventListener('click', e => {
     return render();
   }
   const t = e.target.closest('[data-thread]'); if (t) return selectThread(t.dataset.thread);
-  const pj = e.target.closest('[data-project]'); if (pj) { S.current = pj.dataset.project; store.set('project', S.current); return selectThread('needs'); }
+  if (e.target.closest('[data-proj-toggle]')) { S.projMenu = !S.projMenu; return renderProjects(); }
+  const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return selectThread('needs'); }
   const pick = e.target.closest('[data-pick]');
   if (pick && !pick.disabled) return act(() => api('/api/pick', { project: proj().name, picks: [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }] }).then(load));
   if (e.target.closest('[data-take-all]')) {
@@ -452,6 +475,11 @@ $('#input').addEventListener('input', autosize);
 $('#open-board').addEventListener('click', () => { $('#board').hidden = !$('#board').hidden; render(); });
 $('#close-board').addEventListener('click', () => { $('#board').hidden = true; render(); });
 $('#back').addEventListener('click', () => $('#app').classList.add('show-side'));
+$('#retire-finished').addEventListener('click', () => {
+  const t = S.thread;
+  if (confirm(`Retire ${t}? Use this when its job is done: it stops and moves to Retired, with no replacement.`))
+    act(async () => { const r = await api('/api/retire-finished', { project: proj().name, agent: t }); if (!/retired\.$/.test(r.result)) alert(r.result); });
+});
 $('#retire').addEventListener('click', () => {
   const t = S.thread, orch = t === 'orchestrator';
   if (confirm(orch ? 'Hand the orchestrator role to a new agent? The current one writes a handoff first, and the new one can ask it questions before it retires.'
