@@ -1,4 +1,5 @@
 // Crux hub interface: plain ES module, no build step.
+import { LiveMap } from './map.js';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = n => String(n).padStart(4, '0');
@@ -20,6 +21,7 @@ const S = {
 };
 
 const proj = () => S.projects.find(p => p.name === S.current) || S.projects[0];
+const map = new LiveMap($('#hud'), { open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t) });
 
 // ---------- data ----------
 async function api(path, body) {
@@ -30,7 +32,8 @@ async function api(path, body) {
 }
 
 async function load() {
-  const { projects } = await api('/api/state');
+  const { projects, retireAt } = await api('/api/state');
+  map.retireAt = retireAt;
   S.projects = projects;
   S.pending = new Set(projects.flatMap(p => p.pendingApprovals));
   if (!proj()) return render();
@@ -61,6 +64,7 @@ function connect() {
     } else if (ev.type === 'activity') {
       S.activity[key(p.name, ev.thread)] = `${ev.agent}: ${ev.text}`;
     }
+    map.event(p, ev);
     render();
   };
   es.onerror = () => { es.close(); setTimeout(() => { connect(); load(); }, 2000); };
@@ -323,6 +327,7 @@ function renderBoard() {
 
 function render() {
   renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard();
+  map.update(proj(), S.pending);
   $('#app').classList.toggle('with-board', !$('#board').hidden);
 }
 
