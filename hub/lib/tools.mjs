@@ -1,9 +1,10 @@
-// In-process MCP tools that connect an agent to the board and the hub.
+// In-process MCP tools that connect an agent to the board, the memory layers and the hub.
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 
 const text = s => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 const list = z.array(z.string()).optional().default([]);
+const heading = what => z.array(z.string()).min(1).describe(`${what}. Write "none" if there is nothing.`);
 
 export function cruxTools(hub, project, agent) {
   const board = project.board;
@@ -17,7 +18,7 @@ export function cruxTools(hub, project, agent) {
 
     tool('post_entry', 'Add an entry to the memory board. Use it as soon as something is settled.',
       {
-        kind: z.enum(['requirement', 'convention', 'memo', 'handoff']),
+        kind: z.enum(['requirement', 'convention', 'memo']),
         title: z.string(),
         summary: z.string().describe('One line for the board index.'),
         body: z.string(),
@@ -29,13 +30,43 @@ export function cruxTools(hub, project, agent) {
       {
         done: list.describe('What you finished this round.'),
         changed: list.describe('Files or areas changed.'),
-        questions: list.describe('Questions you need answered to continue.'),
+        questions: list.describe('Questions you need answered to continue, in plain words.'),
         decisions_needed: z.array(z.number()).optional().default([]).describe('Crux decision numbers waiting on the human.'),
         blocked_on: list,
-        next_step: z.string().optional().default('')
+        next_step: z.string().optional().default(''),
+        visuals: list.describe('Ids from post_visual that help answer the questions.')
       },
-      async (args) => { hub.postSummary(project, agent, args); return text('Summary posted. Stop here and wait for a reply.'); })
+      async (args) => { hub.postSummary(project, agent, args); return text('Summary posted. Stop here and wait for a reply.'); }),
+
+    tool('propose_lesson', 'Record a lasting lesson about how the human wants work done. "project" lessons go straight into this project\'s pack; "core" lessons (true across all projects) wait for the human\'s OK.',
+      { scope: z.enum(['project', 'core']), lesson: z.string().max(400).describe('One or two plain sentences, as a rule.') },
+      async ({ scope, lesson }) => text(hub.proposeLesson(project, agent, scope, lesson))),
+
+    tool('post_visual', 'Show the human a picture or a small self-contained HTML page from a file you wrote (png, jpg, gif, webp, svg, html; under 8 MB). Returns an id you can list under visuals in post_summary.',
+      { path: z.string().describe('Absolute path of the file.'), caption: z.string().max(200) },
+      async ({ path, caption }) => { const ev = hub.postVisual(project, agent, path, caption); return text(`Posted visual ${ev.visual}.`); }),
+
+    tool('profile_read', 'Re-read part of the human\'s profile: "core", "pack" (this project), "pack:<name>", "conventions", or "private" (only when the task needs it; give the reason; never copy it into files, commits or pages).',
+      { section: z.string(), reason: z.string().optional() },
+      async ({ section, reason }) => text(hub.readProfile(project, agent, section, reason))),
+
+    tool('write_handoff', 'Only when told you are retiring. The hub adds the facts it knows; you write the judgement under every heading.',
+      {
+        in_flight: heading('What is in flight, who is doing it, and why it is the way it is'),
+        promises: heading('Promises made to the human that are not yet kept'),
+        risks: heading('Risks, open questions, and things easy to miss'),
+        next_steps: heading('What you would do next, in order'),
+        retire_entries: z.array(z.object({ id: z.string(), why: z.string() })).optional().default([]).describe('Board entries that are stale and should be retired.'),
+        promote_to_core: list.describe('Lessons about the human that hold across all projects (queued for the human\'s OK).')
+      },
+      async (args) => text(hub.writeHandoff(project, agent, args)))
   ];
+
+  if (agent.predecessor) {
+    tools.push(tool('ask_predecessor', 'Ask the agent you took over from one short question (at most three in all). The answer is saved with the handoff.',
+      { question: z.string().max(500) },
+      async ({ question }) => text(await hub.askPredecessor(project, agent, question))));
+  }
 
   if (agent.role === 'orchestrator') {
     tools.push(
@@ -52,11 +83,12 @@ export function cruxTools(hub, project, agent) {
     );
   }
 
-  return createSdkMcpServer({ name: 'crux', version: '0.1.0', tools });
+  return createSdkMcpServer({ name: 'crux', version: '0.2.0', tools });
 }
 
-export function cruxToolNames(role) {
-  const names = ['board_index', 'board_read', 'post_entry', 'post_summary'];
-  if (role === 'orchestrator') names.push('list_agents', 'message_agent', 'start_worker');
+export function cruxToolNames(agent) {
+  const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
+  if (agent.predecessor) names.push('ask_predecessor');
+  if (agent.role === 'orchestrator') names.push('list_agents', 'message_agent', 'start_worker');
   return names.map(n => `mcp__crux__${n}`);
 }

@@ -86,9 +86,33 @@ function openQuestions(p) {
   }
   return out;
 }
+// Lessons about you that an agent wants added to the core profile, until you add or skip them.
+function pendingLessons(p) {
+  const done = new Set(p.events.filter(e => e.type === 'lesson_result').map(e => e.lesson));
+  return p.events.filter(e => e.type === 'lesson_proposed' && !done.has(e.lesson));
+}
+function lessonsCard(ls) {
+  return `<article class="card lessons">
+    <div class="card-head">${icon('star')}<h3>${ls.length === 1 ? 'A lesson' : `${ls.length} lessons`} for your core profile</h3></div>
+    <p class="muted">Agents noticed these about how you work. Added lessons go to every agent on every project.</p>
+    <ul class="lesson-list">${ls.map(l => `<li><span class="ltext">${esc(l.text)} <span class="faint">· ${esc(l.from)}</span></span>
+      <span class="row"><button class="btn" data-lesson="${esc(l.lesson)}" data-accept="1">${icon('check')}Add</button><button class="btn" data-lesson="${esc(l.lesson)}" data-accept="0">${icon('x')}Skip</button></span></li>`).join('')}</ul>
+    ${ls.length > 1 ? `<div class="row"><button class="btn primary" data-lesson="${ls.map(l => esc(l.lesson)).join(',')}" data-accept="1">${icon('check')}Add all ${ls.length}</button></div>` : ''}
+  </article>`;
+}
+function visualEl(p, ev, compact) {
+  const src = `/media/${encodeURIComponent(p.name)}/${encodeURIComponent(ev.visual)}`;
+  const view = ev.kind === 'page'
+    ? `<iframe class="vis-page" src="${src}" sandbox="allow-scripts" title="${esc(ev.caption || 'Visual')}" loading="lazy"></iframe>`
+    : `<img class="vis-img" src="${src}" alt="${esc(ev.caption || 'Visual')}" loading="lazy">`;
+  return `<figure class="visual ${compact ? 'compact' : ''}">${view}<figcaption>${esc(ev.caption || '')}<a href="${src}" target="_blank" rel="noopener" class="row">${icon('page')}Open</a></figcaption></figure>`;
+}
 function questionCard(ev) {
+  const p = proj();
+  const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
   return `<article class="card question">
     <div class="card-head">${icon('inbox')}<h3>${esc(ev.from)} asks</h3><span class="time">${timeOf(ev.ts)}</span></div>
+    ${vis.map(v => visualEl(p, v, true)).join('')}
     <ul>${ev.questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>
     <button class="btn" data-thread="${esc(ev.thread)}">Answer in ${ev.thread === 'orchestrator' ? 'the orchestrator thread' : esc(ev.thread)}</button>
   </article>`;
@@ -141,7 +165,7 @@ function threadButton({ id, name, ava, avaClass = '', last, right }) {
 function renderThreads() {
   const p = proj();
   if (!p) { $('#threads').innerHTML = ''; return; }
-  const needs = openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length;
+  const needs = openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length + (pendingLessons(p).length ? 1 : 0);
   const orch = orchestrator(p);
   const workers = p.agents.filter(a => a.role === 'worker');
   const active = workers.filter(a => a.state !== 'retired'), retired = workers.filter(a => a.state === 'retired');
@@ -242,7 +266,8 @@ function renderFeed() {
     const withRec = ds.filter(d => d.status === 'open' && d.recommended);
     let html = '';
     if (withRec.length > 1) html += `<div class="batch"><strong>${withRec.length} decisions have a recommendation.</strong><button class="btn primary" data-take-all>${icon('check')}Take all ${withRec.length}</button><span class="faint">or reply "all but 4A"</span></div>`;
-    html += aps.map(approvalCard).join('') + qs.map(questionCard).join('') + ds.map(d => decisionCard(p, d)).join('');
+    const ls = pendingLessons(p);
+    html += aps.map(approvalCard).join('') + qs.map(questionCard).join('') + (ls.length ? lessonsCard(ls) : '') + ds.map(d => decisionCard(p, d)).join('');
     feed.innerHTML = html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
     const evs = threadEvents(p, S.thread);
@@ -254,6 +279,10 @@ function renderFeed() {
         case 'pick': return `<div class="notice">You picked D${pad(ev.decision)} · ${esc(ev.label)}</div>`;
         case 'approval': return approvalCard(ev);
         case 'entry': return `<div class="notice">${esc(ev.from)} posted ${esc(ev.entryId)} to the board: ${esc(ev.title)}</div>`;
+        case 'visual': return `<div class="msg"><span class="who">${esc(ev.from)} · ${timeOf(ev.ts)}</span>${visualEl(p, ev)}</div>`;
+        case 'lesson': return `<div class="notice">${esc(ev.from)} added a lesson to the ${esc(ev.pack)} pack: ${esc(ev.text)}</div>`;
+        case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (in Needs you)</div>`;
+        case 'handoff_qa': return '';
         default: return '';
       }
     }).join('');
@@ -285,8 +314,8 @@ function renderHead() {
   }
   $('#thread-title').textContent = title;
   $('#thread-sub').innerHTML = sub;
-  $('#retire').hidden = !(p && t === 'orchestrator' && orchestrator(p));
-  const a = p?.agents.find(a => a.thread === t);
+  const a = p?.agents.find(a => a.thread === t && a.state !== 'retired') || p?.agents.find(a => a.thread === t);
+  $('#retire').hidden = !(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring));
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#input').placeholder = retired ? 'This agent has retired.' : t === 'needs' || t === 'orchestrator'
@@ -351,6 +380,8 @@ document.addEventListener('click', e => {
     const picks = openDecisions(proj()).filter(d => d.status === 'open' && d.recommended).map(d => ({ id: d.id, choice: d.recommended }));
     return act(() => api('/api/pick', { project: proj().name, picks }).then(load));
   }
+  const ls = e.target.closest('[data-lesson]');
+  if (ls) return act(() => api('/api/lessons', { project: proj().name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
   const ap = e.target.closest('[data-approve]'); if (ap) return act(() => api('/api/approval', { id: ap.dataset.approve, allow: true }));
   const dn = e.target.closest('[data-deny]'); if (dn) return act(() => api('/api/approval', { id: dn.dataset.deny, allow: false }));
 });
@@ -380,7 +411,10 @@ $('#open-board').addEventListener('click', () => { $('#board').hidden = !$('#boa
 $('#close-board').addEventListener('click', () => { $('#board').hidden = true; render(); });
 $('#back').addEventListener('click', () => $('#app').classList.add('show-side'));
 $('#retire').addEventListener('click', () => {
-  if (confirm('Hand the orchestrator role to a new agent? The current one writes a handoff to the board first.')) act(() => api('/api/retire', { project: proj().name }));
+  const t = S.thread, orch = t === 'orchestrator';
+  if (confirm(orch ? 'Hand the orchestrator role to a new agent? The current one writes a handoff first, and the new one can ask it questions before it retires.'
+    : `Hand ${t}'s task to a fresh agent? It writes a handoff first, and the new one can ask it questions before it retires.`))
+    act(() => api('/api/retire', { project: proj().name, agent: orch ? undefined : t }));
 });
 $('#new-agent').addEventListener('click', () => $('#agent-dialog').showModal());
 $('#agent-form').addEventListener('submit', e => {
