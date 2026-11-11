@@ -29,6 +29,12 @@ const SAFE = new Set(['ls', 'dir', 'pwd', 'cat', 'head', 'tail', 'wc', 'echo', '
   'gcm', 'get-process', 'gps', 'get-nettcpconnection', 'get-member', 'gm', 'tee-object', 'clear-content', 'expand-archive', 'compress-archive']);
 const NETWORK = new Set(['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod', 'ssh', 'scp', 'sftp', 'rsync', 'nc', 'ncat',
   'telnet', 'ftp', 'ping', 'nslookup', 'test-netconnection', 'tnc', 'start-bitstransfer']);
+// Programs that write to every path they are given, or only to the last one (the destination of a copy).
+const WRITE_ALL = new Set(['mkdir', 'md', 'touch', 'tee', 'tee-object', 'new-item', 'ni', 'set-content', 'add-content', 'ac', 'out-file',
+  'clear-content', 'expand-archive', 'compress-archive', 'rename-item', 'rni', 'ren', 'mv', 'move', 'move-item', 'mi']);
+const WRITE_LAST = new Set(['cp', 'copy', 'copy-item', 'cpi']);
+const GIT_READ = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'blame', 'describe', 'shortlog', 'grep', 'reflog',
+  'merge-base', 'merge-tree', 'show-ref', 'for-each-ref', 'rev-list', 'cat-file', 'check-ignore', 'ls-remote']);
 const DELETE = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'remove-item', 'ri', 'unlink', 'shred', 'rimraf']);
 const KILL = new Set(['kill', 'pkill', 'killall', 'taskkill', 'stop-process', 'spps']);
 const INSTALL = new Set(['npx', 'pnpx', 'bunx', 'pip', 'pip3', 'pipx', 'conda', 'winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'gem',
@@ -42,9 +48,10 @@ const NPM_NET = new Set(['publish', 'unpublish', 'deprecate', 'login', 'logout',
 const NPM_OK = new Set(['test', 't', 'tst', 'run', 'run-script', 'ls', 'list', '-v', '--version', 'explain', 'why', 'root', 'prefix', 'bin', 'start']);
 const GIT_LOCAL = new Set(['status', 'diff', 'log', 'show', 'add', 'commit', 'switch', 'checkout', 'restore', 'mv', 'stash', 'tag',
   'cherry-pick', 'revert', 'rev-parse', 'ls-files', 'blame', 'describe', 'shortlog', 'grep', 'reflog', 'init', 'worktree', 'merge-base',
-  'show-ref', 'for-each-ref', 'rev-list', 'cat-file', 'check-ignore', 'branch', 'config', 'reset', 'rm', 'remote', 'clean']);
+  'show-ref', 'for-each-ref', 'rev-list', 'cat-file', 'check-ignore', 'branch', 'config', 'reset', 'rm', 'remote', 'clean', 'merge-tree']);
 const GIT_HISTORY = new Set(['rebase', 'filter-branch', 'filter-repo', 'replace', 'update-ref', 'gc', 'prune']);
-const GIT_NETWORK = new Set(['pull', 'fetch', 'clone', 'ls-remote', 'submodule']);
+// Fetching from the repo's own remote (a named remote such as origin, or GitHub) is contained (R004).
+const GIT_FETCH = new Set(['pull', 'fetch', 'clone', 'ls-remote']);
 const DEP_FILES = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements[\w.-]*\.txt|pyproject\.toml|pipfile(\.lock)?|cargo\.(toml|lock)|go\.(mod|sum)|gemfile(\.lock)?)$/i;
 const SECRET = /(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub)(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i;
 const KNOWN_TOOLS = new Set(['Task', 'Agent', 'TodoWrite', 'TaskStop', 'KillShell', 'KillBash', 'BashOutput', 'ToolSearch', 'Skill',
@@ -58,14 +65,24 @@ export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = 
   if (/^(Bash|PowerShell)$/.test(tool)) c.command(cmd, tool === 'PowerShell');
   else c.tool(tool, input);
   // Something the hub could not read that also names a hard-stop action is not left to judgment.
-  const word = c.opaque && !c.reasons.length && RISKY_WORDS.exec(cmd);
-  if (word) c.stop(`Runs something the hub cannot read in full that mentions "${word[0]}"`);
+  const word = c.opaque && !c.reasons.length && RISKY_PATTERNS.map(r => r.exec(cmd)).find(Boolean);
+  if (word) c.stop(`Runs something the hub cannot read in full that includes "${word[0].trim()}"`);
   if (c.reasons.length) return { route: 'human', reasons: [...new Set(c.reasons)], unsure: [...new Set(c.doubts)] };
   if (c.doubts.length) return { route: 'unsure', reasons: [], unsure: [...new Set(c.doubts)] };
   return { route: 'allow', reasons: [], unsure: [] };
 }
 
-const RISKY_WORDS = /\b(push|merge|rebase|filter-branch|reset\s+--hard|branch\s+-[dD]|install|uninstall|publish|curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|ssh|scp|stop-process|taskkill|kill|credential|secret|password|token)\b|4747|\.env\b|\.ssh\b|\.crux-hub/i;
+// Real hard-stop shapes, looked for in text the hub could not read in full. Only the actual subcommands count:
+// "git merge-base" and "git merge-tree" only read, so they do not match.
+const RISKY_PATTERNS = [
+  /\bgit\b[^;&|\n]*?\s(push|merge(?![-\w])|filter-branch|filter-repo)\b/i,
+  /\bgh\s+pr\s+merge\b/i, /(^|\s)(push|merge)(\s|$)/i,
+  /\breset\s+--hard\b/i, /\bbranch\s+(-[dDfM]\b|--delete\b|--force\b)/,
+  /\b(npm|pnpm|yarn|bun)\s+(i|install|add|ci|uninstall|remove|publish|update)\b/i, /\b(npx|pip3?|pipx|winget|choco|scoop)\s/i,
+  /\b(stop-process|taskkill|killall|pkill)\b|(^|[\s;&|(])kill\s/i,
+  /\brm\s+-\w*[rf]\w*\s+(\/|~|\.\.|[a-z]:)/i, /\bremove-item\b[^;|\n]*(\.\.|~|[a-z]:\\)/i,
+  /\.env\b|\.ssh\b|\.crux-hub\b|\bid_(rsa|ed25519)\b|\bcredentials?\b|\bpassword\b|\bsecret\b|api[_-]?key/i
+];
 
 class Check {
   constructor(projectDir, tmp, home) {
@@ -77,22 +94,28 @@ class Check {
 
   // A path is fine inside the project folder or the system temp folder (where throwaway test projects go).
   where(p, cwd) {
-    let s = String(p).replace(TEMP_VARS, this.tmp.replace(/\\/g, '/'));
-    if (/^~(?=[\\/]|$)/.test(s)) s = this.home + s.slice(1);
-    if (/^\/dev\/null$|^nul$/i.test(s)) return 'null';
-    if (/^\/tmp(\/|$)/.test(s)) return 'tmp';
-    const m = /^\/([a-z])(\/.*)?$/i.exec(s);           // Git Bash: /c/Users/... is C:/Users/...
-    if (m) s = `${m[1]}:${m[2] || '/'}`;
-    else if (/^[\\/](?![\\/])/.test(s) && process.platform === 'win32') return 'outside'; // /usr/bin on Windows: not a project path
-    if (/^[\\/]{2}/.test(s)) return 'outside';         // network share
-    const abs = isAbsolute(s) ? resolve(s) : resolve(cwd, s);
+    const abs = this.abs(p, cwd);
+    if (abs === 'null' || abs === 'tmp' || abs === 'outside') return abs;
     if (under(abs, this.projectDir)) return 'inside';
     if (under(abs, this.tmp)) return 'tmp';
     return 'outside';
   }
+  // The full path a word names, from the folder it is used in. Understands ~, temp variables and Git Bash's /c/... form.
+  abs(p, cwd) {
+    let s = String(p).replace(TEMP_VARS, this.tmp.replace(/\\/g, '/'));
+    if (/^~(?=[\\/]|$)/.test(s)) s = this.home + s.slice(1);
+    if (/^\/dev\/null$|^nul$/i.test(s)) return 'null';
+    if (/^\/tmp(\/|$)/.test(s)) return s === '/tmp' ? this.tmp : join(this.tmp, s.slice(5));
+    const m = /^\/([a-z])(\/.*)?$/i.exec(s);           // Git Bash: /c/Users/... is C:/Users/...
+    if (m) s = `${m[1]}:${m[2] || '/'}`;
+    else if (/^[\\/](?![\\/])/.test(s) && process.platform === 'win32') return 'outside'; // /usr/bin on Windows: not a project path
+    if (/^[\\/]{2}/.test(s)) return 'outside';         // network share
+    return isAbsolute(s) ? resolve(s) : resolve(cwd, s);
+  }
+  // R004: reading anywhere is fine (secrets aside); writing outside the project folder or a temp folder is a hard stop.
   path(p, cwd, { write = false } = {}) {
     const w = this.where(p, cwd);
-    if (w === 'outside') this.stop(`Touches a path outside the project folder: ${p}`);
+    if (w === 'outside' && write) this.stop(`Writes outside the project folder: ${p}`);
     const n = norm(p);
     if (SECRET.test(n)) this.stop(`Touches secrets or credentials: ${p}`);
     if (write && w === 'inside') {
@@ -125,7 +148,7 @@ class Check {
 
   command(cmd, ps) {
     if (!cmd.trim()) return this.unsure('An empty command');
-    if (/4747/.test(cmd)) this.stop('Touches the hub on port 4747');
+    // Port 4747: reading the hub (a GET) is fine; stopping, restarting or changing it is a hard stop (see curl, KILL, hubPort).
     // A commit message passed through a quoted heredoc is plain text: $(cat <<'EOF' ... EOF)
     let s = cmd.replace(/\$\(\s*cat\s+<<-?\s*'(\w+)'[^\n]*\n[\s\S]*?\n\s*\1\s*\n?\s*\)/g, "'TEXT'");
     // PowerShell here-strings: literal when single-quoted
@@ -144,6 +167,9 @@ class Check {
     for (const part of splitParts(s, ps)) cwd = this.part(part, cwd, ps);
   }
 
+  pathLike(v) { return /[\\/]|^~|^\.\.?$|^[a-z]:/i.test(v) && !/^[\w.-]+:[^\\/]/.test(v); }
+  outside(v, cwd) { return this.pathLike(v) && this.where(v, cwd) === 'outside'; }
+
   // One simple command. Returns the working folder for the next one (only cd changes it).
   part(raw, cwd, ps) {
     let words = tokens(raw);
@@ -160,20 +186,29 @@ class Check {
       if (!/^\$null$/i.test(target.text)) this.path(target.text, cwd, { write: !w.text.startsWith('<') });
     }
     words = keep;
-    // Every word: variables, addresses, paths and secrets.
-    this.urlsHere = [];
-    for (const w of words) this.word(w, cwd);
-    while (words.length && /^\w+=/.test(words[0].text) && !words[0].quoted) words = words.slice(1); // VAR=value cmd
+    while (words.length && /^\w+=/.test(words[0].text) && !words[0].quoted) {   // VAR=value cmd
+      if (/^\w*PORT\w*=4747$/i.test(words[0].text)) this.stop('Starts something on the hub\'s port 4747');
+      words = words.slice(1);
+    }
     while (words.length && /^(if|then|else|elif|fi|do|done|while|until|!|time)$/.test(words[0].text)) words = words.slice(1);
     if (!words.length) return cwd;
-    const head = words[0].text.toLowerCase().replace(/\.exe$/, '');
+    // Running a program by its full path is running that program: "/c/Program Files/GitHub CLI/gh.exe" is gh.
+    const first = words[0].text;
+    const head = (this.pathLike(first) ? basename(first.replace(/\\/g, '/')) : first).toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
     const args = words.slice(1).map(w => w.text);
-    // An address in the words is a network call, except a push to a named remote or a PR's own text (R002).
-    const allowsAddress = (head === 'gh' && args[0] === 'pr' && args[1] === 'create');
+    // Every word after the program: variables, addresses and secrets (paths are judged by what the program does).
+    this.urlsHere = []; this.localUrls = [];
+    for (const w of words.slice(1)) this.word(w, cwd);
+    if (SECRET.test(norm(first))) this.stop(`Touches secrets or credentials: ${first}`);
+    // An address is a network call, except a PR's own text, GitHub for git, and this machine (localhost).
+    const github = this.urlsHere.every(u => /^(https:\/\/|git@)github\.com[/:]/i.test(u));
+    const allowsAddress = (head === 'gh' && args[0] === 'pr' && args[1] === 'create') || (head === 'git' && github && args.some(a => /^(clone|fetch|pull|ls-remote)$/.test(a)));
     if (this.urlsHere.length && !allowsAddress) this.stop(`Reaches the network (${this.urlsHere[0].slice(0, 80)})`);
     if (['cd', 'pushd', 'set-location', 'sl', 'push-location', 'chdir'].includes(head)) {
       const to = args.find(a => !a.startsWith('-'));
-      return to ? resolve(cwd, to.replace(/^~(?=[\\/]|$)/, this.home)) : this.home;
+      if (!to) return this.home;
+      const a = this.abs(to, cwd);
+      return a === 'outside' || a === 'null' ? resolve('/__outside__') : a;
     }
     this.run(head, args, words, cwd);
     return cwd;
@@ -181,7 +216,26 @@ class Check {
 
   run(head, args, words, cwd) {
     if (/^\$(_|psitem)\b/i.test(head) || /^-(and|or|not|eq|ne|gt|lt|ge|le|like|match)$/i.test(head)) return; // a PowerShell filter expression
+    const positional = args.filter(a => !a.startsWith('-'));
+    const outsideHere = this.where(cwd, cwd) === 'outside';
+    // A request to this machine: reading (GET) is fine anywhere, the hub on 4747 included. Sending data to the
+    // hub on 4747 changes it: a hard stop. Sending data to a test hub is left to the orchestrator.
+    if (/^(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)$/.test(head) && !this.urlsHere.length && this.localUrls.length) {
+      const sends = args.some(a => /^(-X|--request|-d|--data(-\w+)?|-F|--form|--json|-T|--upload-file|-Method|-Body|--post-data|--post-file)$/i.test(a) || /^-X(POST|PUT|PATCH|DELETE)$/i.test(a))
+        && !args.some((a, i) => /^(-X|--request|-Method)$/i.test(args[i - 1] || '') && /^(GET|HEAD)$/i.test(a));
+      if (sends && this.localUrls.some(u => /:4747\b/.test(u))) return this.stop('Sends a change to the hub on port 4747');
+      if (sends) return this.unsure('Sends data to a program on this machine', true);
+      const out = args.findIndex(a => /^(-o|--output|-OutFile)$/i.test(a));
+      if (out >= 0 && args[out + 1]) this.path(args[out + 1], cwd, { write: true });
+      return;
+    }
     if (NETWORK.has(head)) return this.stop(`Reaches the network (${head})`);
+    // Programs that write: a target outside the project folder or a temp folder is a hard stop.
+    const writes = WRITE_ALL.has(head) ? positional : WRITE_LAST.has(head) ? positional.slice(-1) : head === 'sed' && args.some(a => /^-i/.test(a)) ? positional.slice(-1) : null;
+    if (writes) {
+      for (const t of writes) if (this.outside(t, cwd) || (outsideHere && !this.pathLike(t))) this.stop(`Writes outside the project folder (${head} ${t})`);
+      return;
+    }
     if (KILL.has(head)) return this.stop(`Stops a process (${head}); the hub cannot tell it is not the hub on port 4747`);
     if (INSTALL.has(head)) return this.stop(`Installs software (${head})`);
     if (/^(env|printenv|set|get-credential|get-secret)$/.test(head)) return this.stop(`Reads environment variables or credentials (${head})`);
@@ -190,6 +244,10 @@ class Check {
     if (DELETE.has(head)) {
       const targets = args.filter(a => !a.startsWith('-'));
       if (!targets.length) return this.unsure(`${head} with nothing named`);
+      // "... | ForEach-Object { Remove-Item $_ }" deletes whatever the pipeline lists: outside anywhere in it is a hard stop.
+      if (targets.some(t => /^\$/.test(t))) {
+        return this.sawOutside ? this.stop(`Deletes what a pipeline lists, and the command names a path outside the project folder (${head} ${targets.join(' ')})`) : this.unsure(`Deletes what a pipeline lists (${head} ${targets.join(' ')})`, true);
+      }
       if (targets.some(t => this.where(t, cwd) === 'outside')) this.stop(`Deletes files outside the project or a temp folder (${head} ${targets.join(' ')})`);
       else if (targets.some(t => ['.', './', '*'].includes(t) || this.where(t, cwd) === 'inside' && norm(resolve(cwd, t)) === norm(this.projectDir))) this.stop(`Deletes the whole project folder (${head} ${targets.join(' ')})`);
       return;
@@ -198,12 +256,19 @@ class Check {
       if (args.some(a => /^-(exec|execdir|ok|okdir)$/.test(a))) this.unsure('find runs other commands (-exec)');
       return;
     }
-    if (SAFE.has(head)) return;
+    if (SAFE.has(head)) return;                        // reads, wherever it reads from
     if (head === 'git') return this.git(args, cwd);
     if (head === 'gh') return this.gh(args);
-    if (head === 'node') return this.node(args);
-    if (/^(python3?|py)$/.test(head)) return this.python(args);
-    if (/^(npm|pnpm|yarn|bun)$/.test(head)) return this.npm(args, cwd);
+    // Browsers in headless mode, for screenshots: the files they write must stay contained.
+    if (/^(msedge|chrome|chromium)$/.test(head)) {
+      for (const a of args) { const m = /^--(screenshot|print-to-pdf|user-data-dir)=(.+)$/.exec(a); if (m) this.path(m[2], cwd, { write: true }); }
+      return;
+    }
+    // Programs that may write anywhere: given a path outside, or run from outside, the orchestrator decides.
+    const away = outsideHere || positional.some(a => this.outside(a, cwd));
+    if (head === 'node') { this.node(args); if (away) this.unsure('Runs node with a path outside the project folder', true); return; }
+    if (/^(python3?|py)$/.test(head)) { this.python(args); if (away) this.unsure('Runs python with a path outside the project folder', true); return; }
+    if (/^(npm|pnpm|yarn|bun)$/.test(head)) { this.npm(args, cwd); if (away) this.unsure('Runs npm outside the project folder', true); return; }
     if (head === 'cargo' || head === 'go' || head === 'dotnet') {
       if (/^(install|add|get)$/.test(args[0] || '')) return this.stop(`Installs software (${head} ${args[0]})`);
       if (!/^(build|test|run|vet|fmt|check|clippy)$/.test(args[0] || '')) this.unsure(`Not sure what this does (${head} ${args[0] || ''})`.trim());
@@ -220,13 +285,18 @@ class Check {
       else if (/[$%]\{?\w*(key|token|secret|passw|auth|cred)/i.test(rest)) this.stop(`Reads what looks like a secret (${t})`);
       else if (/\$[\w{]|%\w+%/.test(rest)) this.unsure(`Uses a variable the hub cannot check (${t})`);
     }
-    if (/^[a-z][\w+.-]*:\/\//i.test(t) || /\b(https?|ftp|wss?):\/\//i.test(t) || /^[\w.-]+@[\w.-]+:/.test(t)) { this.urlsHere?.push(t); return; }
+    // Addresses: this machine (localhost) and local files are not the network.
+    const url = /(?:^|=)((?:https?|ftp|wss?|file):\/\/\S+|(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/\S*)?)/i.exec(t)?.[1];
+    if (url || /^[\w.-]+@[\w.-]+:/.test(t)) {
+      const u = url || t;
+      if (/^file:\/\//i.test(u)) return;
+      if (/^(?:https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(u)) { this.localUrls?.push(u); return; }
+      this.urlsHere?.push(u); return;
+    }
     const v = /^--?[\w-]+=(.+)$/.exec(t)?.[1] ?? (t.startsWith('-') ? null : t);
     if (v == null) return;
     if (SECRET.test(norm(v))) this.stop(`Touches secrets or credentials: ${v}`);
-    if (/[\\/]|^~|^\.\.?$|^[a-z]:/i.test(v) && !/^[\w.-]+:[^\\/]/.test(v)) {
-      if (this.where(v, cwd) === 'outside') this.stop(`Touches a path outside the project folder: ${v}`);
-    }
+    if (this.outside(v, cwd)) this.sawOutside = true;
   }
 
   git(args, cwd) {
@@ -241,11 +311,21 @@ class Check {
     const [sub, ...rest] = a;
     const flag = (...fs) => rest.some(x => fs.includes(x));
     if (!sub) return;
-    if (sub === 'push') return this.push(rest, cwd);
     if (sub === 'merge') return this.stop('Merges branches (git merge)');
+    // In a repo outside the project folder (git -C ../other, or after cd ..), only reading is fine.
+    if (this.where(cwd, cwd) === 'outside' && !GIT_READ.has(sub) && sub !== 'branch' || (sub === 'branch' && this.where(cwd, cwd) === 'outside' && rest.some(x => !x.startsWith('-')))) {
+      return this.stop(`Changes a git repo outside the project folder (git ${sub})`);
+    }
+    if (sub === 'push') return this.push(rest, cwd);
     if (sub === 'rebase') return this.unsure('Rebases (fine for a branch only this agent has; not for a shared one)', true);
     if (GIT_HISTORY.has(sub)) return this.stop(`Rewrites history (git ${sub})`);
-    if (GIT_NETWORK.has(sub)) return this.stop(`Reaches the network (git ${sub})`);
+    if (GIT_FETCH.has(sub)) {
+      const pos = rest.filter(x => !x.startsWith('-'));
+      if (pos[0] && !/^[\w.-]+$/.test(pos[0]) && !/^(https:\/\/|git@)github\.com[/:]/i.test(pos[0])) return this.stop(`Fetches from an address the hub cannot check (${pos[0]})`);
+      if (sub === 'clone' && pos[1] && this.outside(pos[1], cwd)) return this.stop(`Clones outside the project folder (${pos[1]})`);
+      return;
+    }
+    if (sub === 'submodule') return this.unsure('git submodule (may fetch other repos)', true);
     if (!GIT_LOCAL.has(sub)) return this.unsure(`Not sure what this does (git ${sub})`);
     if (sub === 'commit' && flag('--amend', '--fixup', '--squash')) this.unsure('Rewrites the last commit (fine unless it was pushed)', true);
     if (sub === 'commit' && flag('--no-verify', '-n')) this.unsure('Skips the commit hooks (--no-verify)', true);
@@ -345,8 +425,11 @@ class Check {
     if (/\b(child_process|execSync|execFileSync|spawn|spawnSync|exec\(|execFile|subprocess|os\.system|os\.popen)\b/.test(code)) this.unsure('An inline script that runs other programs');
     if (/\b(rmSync|unlinkSync|rmdirSync|rm\(|unlink\(|rmdir\(|os\.remove|os\.unlink|shutil\.rmtree)\b/.test(code)) this.unsure('An inline script that deletes files');
     if (/process\.env|os\.environ|homedir\(\)|expanduser/.test(code)) this.stop('An inline script that reads environment variables or the home folder');
-    for (const m of code.matchAll(/['"`]((?:[a-z]:)?[\\/][^'"`\n]*|\.\.[\\/][^'"`\n]*)['"`]/gi)) {
-      if (this.where(m[1], this.projectDir) === 'outside') this.stop(`An inline script that touches a path outside the project folder: ${m[1]}`);
+    // Reading anywhere is fine; a script that writes, given a real path outside ("C:/x", "../x", not "\n"), is not.
+    if (/\b(writeFile|appendFile|mkdir|rename|copyFile|cp|createWriteStream|symlink|truncate)(Sync)?\s*\(|open\([^)]*['"][wa]/.test(code)) {
+      for (const m of code.matchAll(/['"`]((?:[a-z]:[\\/]|\/)[\w.~ -][^'"`\n]*|\.\.[\\/][^'"`\n]*)['"`]/gi)) {
+        if (this.where(m[1], this.projectDir) === 'outside') this.stop(`An inline script that writes, with a path outside the project folder: ${m[1]}`);
+      }
     }
   }
 }

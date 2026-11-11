@@ -1,6 +1,5 @@
 // The hub: projects, their agents, and the routing between you, the orchestrator role and workers.
 import { basename, resolve, join } from 'node:path';
-import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
@@ -358,6 +357,10 @@ export class Hub {
     const auto = this.autoAnswer(p, agent, toolName, input);
     if (auto) return Promise.resolve(auto);
     const route = this.routeFor(p, agent, toolName, input);
+    if (route.logged) {
+      const i = input || {};
+      p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
+    }
     if (route.allow) return Promise.resolve({ behavior: 'allow', updatedInput: input });   // auto mode, contained (decision 34)
     return new Promise(resolvePromise => {
       const id = randomUUID();
@@ -392,6 +395,9 @@ export class Hub {
     const { route, reasons, unsure } = classify({ tool: toolName, input, projectDir: p.dir });
     if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
     if (route === 'allow' && this.permissionMode(p) === 'auto') return { allow: true };
+    // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,
+    // they are allowed and logged in its thread for Matt to audit.
+    if (route === 'unsure' && agent.role === 'orchestrator' && this.permissionMode(p) === 'auto') return { allow: true, logged: unsure };
     if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
     const orch = p.orchestrator();
