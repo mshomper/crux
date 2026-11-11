@@ -33,7 +33,7 @@ export class Board {
 
   decision(id) { return this.decisions().find(d => d.id === Number(id)); }
 
-  // Writes only the human's fields (status, chosen, reason, decided_on), then rebuilds the pages.
+  // Writes only the user's fields (status, chosen, reason, decided_on), then rebuilds the pages.
   pick(id, choice, reason) {
     const d = this.decision(id);
     if (!d) throw new Error(`No decision ${id}`);

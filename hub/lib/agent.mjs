@@ -1,5 +1,5 @@
 // One Claude Code agent hosted through the Agent SDK (decision 0001).
-// Runs on the machine's Claude Code login, so usage comes from the human's plan.
+// Runs on the machine's Claude Code login, so usage comes from the user's plan.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
@@ -66,7 +66,7 @@ export class Agent {
   send(textMsg) {
     if (this.state === 'retired' && !this.retiring) throw new Error(`${this.name} has retired`);
     if (!this.q) this.start();
-    this.inbox.push({ type: 'user', message: { role: 'user', content: textMsg }, parent_tool_use_id: null });
+    this.inbox.push({ type: 'user', message: { role: 'user', content: this.hub.memory.personalize(textMsg) }, parent_tool_use_id: null });
     this.setState('working');
   }
 
@@ -74,9 +74,9 @@ export class Agent {
     const p = this.project;
     const m = this.hub.memory;
     const mem = { index: p.board.index(), core: m.core(), pack: m.pack(p.name), conventions: m.conventions() };
-    const append = this.role === 'orchestrator'
+    const append = m.personalize(this.role === 'orchestrator'
       ? orchestratorPrompt({ project: p.name, handoff: p.board.latestHandoff(), generation: this.generation, ...mem })
-      : workerPrompt({ project: p.name, name: this.name, task: this.task, handoff: this.handoffEntry ? p.board.read(this.handoffEntry) : null, ...mem });
+      : workerPrompt({ project: p.name, name: this.name, task: this.task, handoff: this.handoffEntry ? p.board.read(this.handoffEntry) : null, ...mem }));
 
     this.inbox = new Inbox();
     const options = {

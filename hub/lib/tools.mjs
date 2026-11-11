@@ -7,14 +7,17 @@ const list = z.array(z.string()).optional().default([]);
 const heading = what => z.array(z.string()).min(1).describe(`${what}. Write "none" if there is nothing.`);
 
 export function cruxTools(hub, project, agent) {
+  // Agents call the person by name (from the core profile), or "the user".
+  const t = s => hub.memory.personalize(s);
+  const out = s => text(t(typeof s === 'string' ? s : JSON.stringify(s, null, 1)));
   const board = project.board;
   const tools = [
     tool('board_index', 'One line per active item on the Crux memory board for this project.', {},
-      async () => text(board.index())),
+      async () => out(board.index())),
 
     tool('board_read', 'Read one board item in full: a decision (D0007 or 7) or an entry (R003, C001, M002, H001).',
       { id: z.string() },
-      async ({ id }) => { const r = board.read(id); return text(r || `Nothing on the board with id ${id}.`); }),
+      async ({ id }) => { const r = board.read(id); return out(r || `Nothing on the board with id ${id}.`); }),
 
     tool('post_entry', 'Add an entry to the memory board. Use it as soon as something is settled.',
       {
@@ -24,62 +27,62 @@ export function cruxTools(hub, project, agent) {
         body: z.string(),
         supersedes: z.string().optional().describe('Entry id this replaces, if any.')
       },
-      async (args) => { const ev = board.addEntry({ ...args, from: agent.name }); return text(`Posted ${ev.entryId}.`); }),
+      async (args) => { const ev = board.addEntry({ ...args, from: agent.name }); return out(`Posted ${ev.entryId}.`); }),
 
-    tool('post_summary', 'Post your round summary to your thread. The orchestrator and the human act on it.',
+    tool('post_summary', t('Post your round summary to your thread. The orchestrator and {{who}} act on it.'),
       {
         done: list.describe('What you finished this round.'),
         changed: list.describe('Files or areas changed.'),
         questions: list.describe('Questions you need answered to continue, in plain words.'),
-        decisions_needed: z.array(z.number()).optional().default([]).describe('Crux decision numbers waiting on the human.'),
+        decisions_needed: z.array(z.number()).optional().default([]).describe(t('Crux decision numbers waiting on {{who}}.')),
         blocked_on: list,
         next_step: z.string().optional().default(''),
         visuals: list.describe('Ids from post_visual that help answer the questions.')
       },
-      async (args) => { hub.postSummary(project, agent, args); return text('Summary posted. Stop here and wait for a reply.'); }),
+      async (args) => { hub.postSummary(project, agent, args); return out('Summary posted. Stop here and wait for a reply.'); }),
 
-    tool('propose_lesson', 'Record a lasting lesson about how the human wants work done. "project" lessons go straight into this project\'s pack; "core" lessons (true across all projects) wait for the human\'s OK.',
+    tool('propose_lesson', t('Record a lasting lesson about how {{who}} wants work done. "project" lessons go straight into this project\'s pack; "core" lessons (true across all projects) wait for {{who}}\'s OK.'),
       { scope: z.enum(['project', 'core']), lesson: z.string().max(400).describe('One or two plain sentences, as a rule.') },
-      async ({ scope, lesson }) => text(hub.proposeLesson(project, agent, scope, lesson))),
+      async ({ scope, lesson }) => out(hub.proposeLesson(project, agent, scope, lesson))),
 
-    tool('post_visual', 'Show the human a picture or a small self-contained HTML page from a file you wrote (png, jpg, gif, webp, svg, html; under 8 MB). Returns an id you can list under visuals in post_summary.',
+    tool('post_visual', t('Show {{who}} a picture or a small self-contained HTML page from a file you wrote (png, jpg, gif, webp, svg, html; under 8 MB). Returns an id you can list under visuals in post_summary.'),
       { path: z.string().describe('Absolute path of the file.'), caption: z.string().max(200) },
-      async ({ path, caption }) => { const ev = hub.postVisual(project, agent, path, caption); return text(`Posted visual ${ev.visual}.`); }),
+      async ({ path, caption }) => { const ev = hub.postVisual(project, agent, path, caption); return out(`Posted visual ${ev.visual}.`); }),
 
-    tool('profile_read', 'Re-read part of the human\'s profile: "core", "pack" (this project), "pack:<name>", "conventions", or "private" (only when the task needs it; give the reason; never copy it into files, commits or pages).',
+    tool('profile_read', t('Re-read part of {{who}}\'s profile: "core", "pack" (this project), "pack:<name>", "conventions", or "private" (only when the task needs it; give the reason; never copy it into files, commits or pages).'),
       { section: z.string(), reason: z.string().optional() },
-      async ({ section, reason }) => text(hub.readProfile(project, agent, section, reason))),
+      async ({ section, reason }) => out(hub.readProfile(project, agent, section, reason))),
 
     tool('write_handoff', 'Only when told you are retiring. The hub adds the facts it knows; you write the judgement under every heading.',
       {
         in_flight: heading('What is in flight, who is doing it, and why it is the way it is'),
-        promises: heading('Promises made to the human that are not yet kept'),
+        promises: heading(t('Promises made to {{who}} that are not yet kept')),
         risks: heading('Risks, open questions, and things easy to miss'),
         next_steps: heading('What you would do next, in order'),
         retire_entries: z.array(z.object({ id: z.string(), why: z.string() })).optional().default([]).describe('Board entries that are stale and should be retired.'),
-        promote_to_core: list.describe('Lessons about the human that hold across all projects (queued for the human\'s OK).')
+        promote_to_core: list.describe(t('Lessons about {{who}} that hold across all projects (queued for {{who}}\'s OK).'))
       },
-      async (args) => text(hub.writeHandoff(project, agent, args)))
+      async (args) => out(hub.writeHandoff(project, agent, args)))
   ];
 
   if (agent.predecessor) {
     tools.push(tool('ask_predecessor', 'Ask the agent you took over from one short question (at most three in all). The answer is saved with the handoff.',
       { question: z.string().max(500) },
-      async ({ question }) => text(await hub.askPredecessor(project, agent, question))));
+      async ({ question }) => out(await hub.askPredecessor(project, agent, question))));
   }
 
   if (agent.role === 'orchestrator') {
     tools.push(
       tool('list_agents', 'List the worker agents on this project and what each is doing.', {},
-        async () => text(project.workers().map(w => ({ name: w.name, state: w.state, goal: w.goal })))),
+        async () => out(project.workers().map(w => ({ name: w.name, state: w.state, goal: w.goal })))),
 
       tool('message_agent', 'Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },
-        async ({ to, text: t }) => { hub.orchestratorToWorker(project, agent, to, t); return text(`Sent to ${to}.`); }),
+        async ({ to, text: msg }) => { hub.orchestratorToWorker(project, agent, to, msg); return out(`Sent to ${to}.`); }),
 
-      tool('start_worker', 'Start a new worker agent. Give it a short name (letters, digits, dashes), a one-line goal the human sees, and the full task as its briefing.',
-        { name: z.string().regex(/^[a-z0-9-]+$/i), goal: z.string().max(120).describe('One plain line for the human, under 80 characters: what this worker is for.'), task: z.string() },
-        async ({ name, goal, task }) => { const w = hub.startWorker(project, name, task, agent.name, goal); return text(`Started ${w.name}.`); })
+      tool('start_worker', t('Start a new worker agent. Give it a short name (letters, digits, dashes), a one-line goal {{who}} sees, and the full task as its briefing.'),
+        { name: z.string().regex(/^[a-z0-9-]+$/i), goal: z.string().max(120).describe(t('One plain line for {{who}}, under 80 characters: what this worker is for.')), task: z.string() },
+        async ({ name, goal, task }) => { const w = hub.startWorker(project, name, task, agent.name, goal); return out(`Started ${w.name}.`); })
     );
   }
 

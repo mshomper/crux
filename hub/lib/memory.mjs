@@ -1,4 +1,4 @@
-// The layers above a project's board (decision 13): what is known about the human, and what all projects share.
+// The layers above a project's board (decision 13): what is known about the user, and what all projects share.
 // They live in the private memory folder (decision 14): ~/crux, or CRUX_HOME.
 //   profile/core.md          loaded by every agent (decision 15)
 //   profile/packs/<name>.md  loaded only by agents in that project
@@ -22,6 +22,16 @@ export class Memory {
   }
 
   core() { return read(join(this.profileDir, 'core.md')).trim(); }
+
+  // The person's name, from the core's title ("# Working with Matt: core"). Agents use it instead of "the user".
+  userName() {
+    const m = /^#\s*Working with\s+([^:<\n]+?)\s*:/m.exec(this.core());
+    return m ? m[1] : null;
+  }
+  personalize(s) {
+    const name = this.userName();
+    return String(s).replaceAll('{{who}}', name || 'the user').replaceAll('{{Who}}', name || 'The user');
+  }
   private() { return read(join(this.profileDir, 'private.md')).trim(); }
   conventions() { return read(join(this.home, 'conventions.md')).trim(); }
 
@@ -63,7 +73,7 @@ export class Memory {
     return name;
   }
 
-  // A core lesson the human approved.
+  // A core lesson the user approved.
   addCoreLesson(text, from) {
     const file = join(this.profileDir, 'core.md');
     const body = read(file);

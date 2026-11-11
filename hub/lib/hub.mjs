@@ -128,7 +128,7 @@ export class Hub {
     const lines = [`[Summary from worker ${agent.name}]`];
     const sec = (label, xs) => xs?.length && lines.push(`${label}:\n${xs.map(x => '- ' + x).join('\n')}`);
     sec('Done', s.done); sec('Changed', s.changed); sec('Questions', s.questions); sec('Blocked on', s.blocked_on);
-    if (s.decisions_needed.length) lines.push(`Decisions waiting on the human: ${s.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
+    if (s.decisions_needed.length) lines.push(`Decisions waiting on {{who}}: ${s.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
     if (s.next_step) lines.push(`Proposed next step: ${s.next_step}`);
     this.ensureOrchestrator(p).send(lines.join('\n'));
   }
@@ -141,7 +141,7 @@ export class Hub {
       return `Added to the ${pack} pack.`;
     }
     p.log.append('lesson_proposed', { thread: agent.thread, from: agent.name, lesson: randomUUID(), text: lesson });
-    return 'Queued for the human to approve; it joins the core profile once they do.';
+    return 'Queued for {{who}} to approve; it joins the core profile once they do.';
   }
 
   pendingLessons(p) {
@@ -183,8 +183,8 @@ export class Hub {
     const done = picks.map(({ id, choice, reason }) => this.pick(p, id, choice, reason));
     const lines = done.map(({ d, label }) => `D${String(d.id).padStart(4, '0')} ${d.title}: picked ${label}${d.reason ? '. Reason: ' + d.reason : ''}`);
     const orch = p.orchestrator();
-    if (orch?.live) orch.send(`The human made these calls:\n${lines.join('\n')}\nCarry on with them.`);
-    else for (const w of p.workers().filter(w => w.live)) w.send(`The human made these calls:\n${lines.join('\n')}`);
+    if (orch?.live) orch.send(`{{Who}} made these calls:\n${lines.join('\n')}\nCarry on with them.`);
+    else for (const w of p.workers().filter(w => w.live)) w.send(`{{Who}} made these calls:\n${lines.join('\n')}`);
     return done.map(x => x.d);
   }
 
@@ -231,7 +231,7 @@ export class Hub {
   answerApproval(id, allow, note) {
     const a = this.approvals.get(id);
     if (!a) throw new Error('That approval is no longer waiting (the agent may have restarted).');
-    a.finish(allow ? { behavior: 'allow', updatedInput: a.input } : { behavior: 'deny', message: note || 'The human declined this.' }, allow ? 'allowed' : 'denied');
+    a.finish(allow ? { behavior: 'allow', updatedInput: a.input } : { behavior: 'deny', message: note || this.memory.personalize('{{Who}} declined this.') }, allow ? 'allowed' : 'denied');
   }
 
   // ---------- handoffs (decisions 10 and 16) ----------
@@ -288,13 +288,13 @@ export class Hub {
         return `- ${w.name} (${w.state}): ${w.goal || w.task.slice(0, 80)}${s ? `. Last summary: ${s.next_step || s.done[0] || 'posted'}` : ''}`;
       }) : ['- none']));
       const open = p.board.decisions().filter(d => ['open', 'found'].includes(d.status));
-      lines.push('Decisions waiting on the human:', ...(open.length ? open.map(d => `- D${String(d.id).padStart(4, '0')} ${d.title}${d.recommended ? ` (recommended ${d.recommended})` : ''}`) : ['- none']));
+      lines.push('Decisions waiting on {{who}}:', ...(open.length ? open.map(d => `- D${String(d.id).padStart(4, '0')} ${d.title}${d.recommended ? ` (recommended ${d.recommended})` : ''}`) : ['- none']));
       const cards = [...this.approvals.values()].filter(a => a.p === p);
       if (cards.length) lines.push('Permission cards waiting:', ...cards.map(a => `- ${a.agent.name} wants ${a.toolName}`));
       const lessons = this.pendingLessons(p);
-      if (lessons.length) lines.push('Profile lessons waiting for the human:', ...lessons.map(e => `- ${e.text}`));
+      if (lessons.length) lines.push('Profile lessons waiting for {{who}}:', ...lessons.map(e => `- ${e.text}`));
     }
-    if (mine.length) lines.push('Latest messages from the human:', ...mine.map(e => `- ${e.text.replace(/\s+/g, ' ').slice(0, 200)}`));
+    if (mine.length) lines.push('Latest messages from {{who}}:', ...mine.map(e => `- ${e.text.replace(/\s+/g, ' ').slice(0, 200)}`));
     return lines.join('\n');
   }
 
@@ -303,10 +303,10 @@ export class Hub {
     if (agent.leftHandoff) return `Handoff ${agent.leftHandoff} is already written. Reply "done".`;
     const sec = (title, xs) => `### ${title}\n${(xs || []).map(x => `- ${x}`).join('\n') || '- none'}`;
     const body = [
-      sec('In flight, and why', j.in_flight), sec('Promises to the human', j.promises),
+      sec('In flight, and why', j.in_flight), sec('Promises to {{who}}', j.promises),
       sec('Risks and things easy to miss', j.risks), sec('Next steps', j.next_steps),
       `### Facts (from the hub)\n${this.handoffFacts(p, agent)}`
-    ].join('\n\n');
+    ].join('\n\n').replaceAll('{{who}}', this.memory.userName() || 'the user');
     const ev = p.board.addEntry({ kind: 'handoff', title: `Handoff from ${agent.name}`, summary: (j.next_steps || [])[0] || 'handoff', body, from: agent.name, role: agent.role });
     agent.leftHandoff = ev.entryId;
     for (const r of j.retire_entries || []) p.board.retireEntry(r.id, r.why, agent.name);

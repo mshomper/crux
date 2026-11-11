@@ -1,12 +1,12 @@
 ---
 name: crux-dig
-description: Read an existing codebase and draft records of the decisions already baked into it, for the human to confirm, edit or reject. Use when the user types /crux-dig or asks to document why an existing tool is built the way it is. Writes only to .decisions/.
+description: Read an existing codebase and draft records of the decisions already baked into it, for the user to confirm, edit or reject. Use when the user types /crux-dig or asks to document why an existing tool is built the way it is. Writes only to .decisions/.
 argument-hint: "[folder or area to scan, optional]"
 ---
 
 # Crux Dig
 
-Every line of code is a decision someone made without writing it down. Find the important ones, draft them as records, and let the human confirm them. Never treat a finding as decided until the human says so.
+Every line of code is a decision someone made without writing it down. Find the important ones, draft them as records, and let the user confirm them. Never treat a finding as decided until the user says so.
 
 Arguments: **$ARGUMENTS** (a folder or area to focus on; empty means the whole repo)
 
@@ -47,7 +47,7 @@ Write one JSON file per finding in `.decisions/` using the crux skill's schema, 
 - `log_refs`: entries in the repo's own decision log that cover this finding, as `{ "file": "docs/DECISIONS.md", "entry": "2026-10-05" }`. If the log already records the decision fully, keep the finding short and let the link carry the detail.
 - `open_item`: true when the repo's own log marks this choice as awaiting review. Confirming the finding closes it.
 
-If you are working in a worktree (its path contains `.claude/worktrees/`, or `git rev-parse --git-common-dir` points outside it), tell the human in your summary, with the full path of `.decisions/`, that the findings reach the main copy when the branch is merged, and offer to merge after they review.
+If you are working in a worktree (its path contains `.claude/worktrees/`, or `git rev-parse --git-common-dir` points outside it), tell the user in your summary, with the full path of `.decisions/`, that the findings reach the main copy when the branch is merged, and offer to merge after they review.
 
 Then run the crux skill's build script:
 
@@ -55,7 +55,7 @@ Then run the crux skill's build script:
 node <crux skill folder>/scripts/build.mjs .decisions
 ```
 
-## 4. Review with the human
+## 4. Review with the user
 
 Give a short message in this order:
 1. Open items from the repo's own log, if any (these need a call first).
