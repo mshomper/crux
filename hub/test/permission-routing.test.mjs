@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';   // homedir: a path outside both the project and temp
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -89,7 +89,7 @@ test('escalate brings the card to you, with a phone push, and you answer it as b
 
 test('hard stops never reach the orchestrator', async () => {
   const { hub, p, w } = setup();
-  for (const cmd of ['git push origin main', 'git -C hub push --force origin feat/x', 'npm test && git push origin master', 'npm install zod', 'cat ../other/notes.txt', 'curl https://example.com', 'node server.mjs', 'gh pr merge 3']) {
+  for (const cmd of ['git push origin main', 'git -C hub push --force origin feat/x', 'npm test && git push origin master', 'npm install zod', `echo x > "${join(homedir(), 'notes.txt').replace(/\\/g, '/')}"`, 'curl https://example.com', 'node server.mjs', 'gh pr merge 3']) {
     ask(hub, p, w, cmd);
     const ap = last(p, 'approval');
     assert.equal(ap.routedTo, null, cmd);
@@ -249,6 +249,30 @@ test('auto mode (decision 34): contained work is allowed at once, only unclear r
   assert.equal(last(p, 'project_settings').permissionMode, 'standard');
   ask(hub, p, w, 'npm run build');
   assert.equal(last(p, 'approval').routedTo, orch.name, 'standard mode: through the orchestrator');
+});
+
+test('auto mode applies to the orchestrator too: its reads and contained work pass, unclear ones pass and are logged, hard stops come to you', async () => {
+  const { hub, p, orch } = setup();
+  writeFileSync(join(p.dir, '.crux-hub.json'), '{ "permissions": "auto" }');
+  const go = command => hub.requestApproval(p, orch, 'Bash', { command });
+  const before = p.log.ofType('permission_answer').length;
+  for (const c of [
+    `cd ${p.dir.replace(/\\/g, '/')} && git status --short`,
+    'curl -s localhost:4747/api/state | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>console.log(JSON.parse(s).projects.length))"',
+    'tail -n 400 .crux/events.jsonl | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>console.log(s.split(\'\\n\').length))"',
+    'grep -n "classify" hub/lib/permissions.mjs | head -30'
+  ]) assert.equal((await go(c)).behavior, 'allow', c);
+  assert.equal(p.log.ofType('permission_answer').length, before, 'clear reads are not logged');
+  // unclear, with no hard stop: allowed, and one line in its thread
+  assert.equal((await go('B=$(git branch --show-current); echo $B')).behavior, 'allow');
+  const line = last(p, 'permission_answer');
+  assert.equal(line.thread, 'orchestrator');
+  assert.equal(line.by, 'hub');
+  assert.match(line.reason, /not fully readable/);
+  // a real hard stop still comes to you as a card
+  go('git push origin main');
+  assert.equal(last(p, 'approval').agent, orch.name);
+  assert.ok(last(p, 'approval').stops.length);
 });
 
 test('without a repo setting, a repo stays in standard mode (the decision 21 flow)', () => {

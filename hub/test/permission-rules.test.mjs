@@ -92,28 +92,44 @@ test('installs, dependency changes and network commands are hard stops', () => {
     'npm install', 'npm i web-push', 'npm ci', 'npm uninstall zod', 'npx something', 'pip install x', 'python -m pip install x',
     'winget install x', 'cd hub && npm install x', 'npm publish', 'npm view zod',
     'curl https://example.com', 'wget http://x', 'Invoke-WebRequest https://x', 'iwr https://x', 'ssh host', 'scp a host:b',
-    'git fetch', 'git pull', 'git clone https://github.com/x/y', 'git remote add evil https://x', 'node -e "fetch(\'https://x\')"',
+    'git clone https://gitlab.com/x/y', 'git fetch https://example.com/x.git', 'git remote add evil https://x', 'node -e "fetch(\'https://x\')"',
     'node fetch.mjs https://example.com'
   ]) human(c);
+  // R004: the repo's own remote and GitHub are not "network"
+  for (const c of ['git fetch', 'git fetch origin', 'git pull', 'git pull origin main', 'git ls-remote origin', 'git clone https://github.com/x/y hub/tmp/y']) orch(c);
   assert.equal(toolRoute('Edit', { file_path: join(projectDir, 'hub', 'package.json'), old_string: 'a', new_string: 'b' }).route, 'human');
   assert.equal(toolRoute('Write', { file_path: join(projectDir, 'package-lock.json'), content: '{}' }).route, 'human');
   assert.equal(toolRoute('WebFetch', { url: 'https://example.com' }).route, 'unsure', 'reading docs is allowed, but the hub cannot tell docs apart');
 });
 
-test('paths outside the project folder, including ../ and home, are hard stops', () => {
+test('writes outside the project folder, including ../ and home, are hard stops', () => {
   for (const c of [
-    'cat ../secret.txt', 'ls ..', 'cat hub/../../other/file', 'echo x > ../evil.txt', 'echo x>../evil.txt', 'cp a.txt ../../x',
-    'cd .. && ls', 'cd ../other; npm test', 'cat ~/.claude/settings.json', 'ls ~/crux', `cat ${home.replace(/\\/g, '/')}/x.txt`,
-    'cat /c/Windows/win.ini', 'cat C:\\Windows\\win.ini', 'type "C:\\Program Files\\x"', 'cat /etc/passwd', 'git -C ../other status',
-    'node -e "require(\'fs\').writeFileSync(\'C:/x.txt\', 1)"', 'cat \\\\server\\share\\x'
+    'echo x > ../evil.txt', 'echo x>../evil.txt', 'cp a.txt ../../x', 'mv hub/a.mjs ../a.mjs', 'mkdir ~/crux/new', 'touch /c/Windows/x',
+    'cd .. && touch x', 'sed -i s/a/b/ ../other/file', 'git -C ../other commit -m x', 'cd ../other && git add .',
+    'node -e "require(\'fs\').writeFileSync(\'C:/x.txt\', 1)"'
   ]) human(c);
-  assert.equal(toolRoute('Read', { file_path: join(projectDir, '..', 'x.txt') }).route, 'human');
+  human('Set-Content -Path C:\\Users\\x.txt -Value 1', 'PowerShell');
+  assert.equal(toolRoute('Edit', { file_path: join(home, '.claude', 'settings.json') }).route, 'human');
+  assert.equal(toolRoute('Write', { file_path: join(projectDir, 'hub', '..', '..', 'x.mjs') }).route, 'human');
+});
+
+test('reading or running from outside the project folder is fine (R004); running a program with outside paths is for the orchestrator', () => {
+  for (const c of [
+    'cat ../notes.txt', 'ls ..', 'cat hub/../../other/file', 'cd .. && ls', 'cat ~/.claude/settings.json', 'ls ~/crux',
+    `cat ${home.replace(/\\/g, '/')}/x.txt`, 'cat /c/Windows/win.ini', 'cat C:\\Windows\\win.ini', 'type "C:\\Program Files\\x"', 'cat /etc/passwd',
+    'git -C ../other status', 'git -C ../other log --oneline -3', 'cp ../template.txt hub/x.txt', 'cat \\\\server\\share\\x'
+  ]) orch(c);
+  for (const c of ['cd ../other; npm test', 'node ../other/build.mjs', 'node scripts/x.mjs --out C:/elsewhere']) unsure(c);
+  assert.equal(toolRoute('Read', { file_path: join(projectDir, '..', 'x.txt') }).route, 'allow');
+  assert.equal(toolRoute('Glob', { pattern: 'C:/Users/**/*.md' }).route, 'allow');
+});
+
+test('paths written inside the project, a worktree or temp are contained', () => {
   assert.equal(toolRoute('Edit', { file_path: join(home, '.claude', 'settings.json') }).route, 'human');
   assert.equal(toolRoute('Write', { file_path: join(projectDir, 'hub', '..', '..', 'x.mjs') }).route, 'human');
   assert.equal(toolRoute('Edit', { file_path: join(projectDir, 'hub', 'lib', 'a.mjs') }).route, 'allow');
   assert.equal(toolRoute('Write', { file_path: join(tmp, 'proj', 'x.json') }).route, 'allow');
   assert.equal(toolRoute('Write', { file_path: join(projectDir, '.claude', 'worktrees', 'w1', 'hub', 'a.mjs') }).route, 'allow');
-  assert.equal(toolRoute('Glob', { pattern: 'C:/Users/**/*.md' }).route, 'human');
 });
 
 test('deleting outside the project or a temp folder is a hard stop; inside is contained (R004)', () => {
@@ -125,12 +141,14 @@ test('deleting outside the project or a temp folder is a hard stop; inside is co
   for (const c of ['rm -rf $HOME/x', 'rm']) unsure(c);
 });
 
-test('anything touching port 4747 or stopping processes is a hard stop', () => {
+test('stopping, restarting or changing the hub on 4747, or stopping processes, is a hard stop; reading it is fine', () => {
   for (const c of [
     'node server.mjs', 'node hub/server.mjs --port 4747', 'cd hub && npm start', 'npm start --prefix hub',
-    'curl localhost:4747/api/state', 'Stop-Process -Id 1234', 'taskkill /PID 1234 /F', 'kill 1234', 'netstat -ano | findstr 4747',
-    'CRUX_HUB_PORT=4747 node x.mjs'
+    'curl -X POST localhost:4747/api/retire', 'curl -s -d \'{"a":1}\' http://localhost:4747/api/send', 'Stop-Process -Id 1234',
+    'taskkill /PID 1234 /F', 'kill 1234', 'CRUX_HUB_PORT=4747 node x.mjs'
   ]) human(c);
+  for (const c of ['curl localhost:4747/api/state', 'curl -s http://localhost:4748/api/state', 'curl -s -o hub/tmp/s.json localhost:4748/api/state']) orch(c);
+  unsure('curl -X POST localhost:4748/api/send');
 });
 
 test('secrets, and unreadable shapes that name a hard-stop action, go to Matt', () => {
@@ -141,7 +159,7 @@ test('secrets, and unreadable shapes that name a hard-stop action, go to Matt', 
     'node - <<\'EOF\'\nrequire("child_process").execSync("git push origin main")\nEOF', 'sh -c "npm install x"'
   ]) human(c);
   human('Invoke-Expression "git push"', 'PowerShell');
-  human('& "C:\\tools\\x.exe"', 'PowerShell');
+  unsure('& "C:\\tools\\x.exe"', 'PowerShell');   // running a program by its path: not a hard stop, but unknown
   human('Get-ChildItem Env:', 'PowerShell');
   human('$x = "git"; & $x push', 'PowerShell');
 });
@@ -165,7 +183,40 @@ test('every hard stop says why in plain words', () => {
   assert.match(human('git push origin main').join(' '), /main/);
   assert.match(human('git push --force origin feat/x').join(' '), /Force/);
   assert.match(human('npm i x').join(' '), /packages/);
-  assert.match(human('cat ../x').join(' '), /outside the project/);
+  assert.match(human('echo x > ../x').join(' '), /outside the project/);
+});
+
+// The false hard stops Matt got after the restart on 6dcc81e, from .crux/events.jsonl, word for word.
+const WT = 'cd /c/Users/mshom/Documents/GitHub/crux/.claude/worktrees/chat-images && ';
+test('regressions from the log: none of these is a hard stop', () => {
+  const crux = 'C:/Users/mshom/Documents/GitHub/crux';
+  const at = (command) => classify({ tool: 'Bash', input: { command }, projectDir: crux, tmp, home });
+  const notHard = c => { const r = at(c); assert.notEqual(r.route, 'human', `${c}\n -> ${r.reasons.join('; ')}`); return r.route; };
+  // 1. running a program by its full path; 2. refs and branch names; 3. fetch from the repo's own remote; gh pr view/list/create
+  assert.equal(notHard(WT + '"/c/Program Files/GitHub CLI/gh.exe" pr list --head feat/chat-images --state all; git fetch origin && git log --oneline -5 origin/main && git status --short'), 'allow');
+  // 4. merge-base and merge-tree only read
+  assert.equal(notHard('git merge-base --is-ancestor origin/main HEAD && echo "up to date with main"; git status --short; git log --oneline -2; "/c/Program Files/GitHub CLI/gh.exe" pr view 7 --json files,state -q \'.state + " " + ([.files[].path]|join(", "))\' 2>&1'), 'allow');
+  // 5. a subshell the hub cannot read in full, with no real hard stop in it: unsure, for the orchestrator
+  assert.equal(notHard('B=$("/c/Program Files/GitHub CLI/gh.exe" pr view 7 --json headRefName -q .headRefName); git fetch -q origin $B && git merge-tree --write-tree --name-only HEAD origin/$B; echo "exit $?"'), 'unsure');
+  notHard('git commit -qam "Hub: move the attachments import so it merges cleanly with permission routing\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git merge-tree --write-tree --name-only HEAD origin/feat/permission-routing | tail -n +2; echo "exit $?"; cd hub && npm test 2>&1 | grep -E "^ℹ (pass|fail)"');
+  assert.equal(notHard('"/c/Program Files/GitHub CLI/gh.exe" pr create --base main --head feat/chat-images --title "Hub: images in threads (decision 23 A)" --body-file - <<\'EOF\'\nBuilds decision 23 A: images pasted into threads.\n\n**What changes**\n- paste (Ctrl+V)\nEOF'), 'allow');
+  assert.equal(notHard(`"/c/Program Files/Microsoft/Edge/Application/msedge.exe" --headless=new --screenshot="${join(tmp, 'shots', 'a.png').replace(/\\/g, '/')}" "http://localhost:4748/"`), 'allow');
+  assert.equal(at(`"/c/Program Files/Microsoft/Edge/Application/msedge.exe" --headless=new --screenshot="C:/Windows/a.png" "http://localhost:4748/"`).route, 'human', 'a screenshot written outside');
+  // the orchestrator's own reads: a GET to the hub piped into a node filter that only reads stdin, and log filters
+  assert.equal(notHard('curl -s -m 5 http://localhost:4747/api/state | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{const j=JSON.parse(s);for(const p of j.projects){console.log(p.name, JSON.stringify(p.settings||p.permissions||\'\'));for(const a of p.agents.filter(a=>a.state!==\'retired\'))console.log(\' \',a.name,a.state,a.model||a.modelSeen,a.effort,a.type)}})"; grep \'"version"\' hub/package.json'), 'allow');
+  assert.equal(notHard('tail -n 400 .crux/events.jsonl | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{for(const l of s.trim().split(\'\\n\')){let e;try{e=JSON.parse(l)}catch{continue};console.log(e.type)}})"'), 'allow');
+  assert.equal(notHard('grep \'"chat-images"\' .crux/events.jsonl | tail -n 12 | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{for(const l of s.trim().split(\'\\n\')){const e=JSON.parse(l);console.log(JSON.stringify(e).slice(0,90))}})"; grep -n "classify\\|auto" hub/lib/permissions.mjs | head -30'), 'allow');
+  assert.equal(notHard('cd /c/Users/mshom/Documents/GitHub/crux && git status --short'), 'allow');
+});
+
+test('regressions: real hard stops still trip', () => {
+  const crux = 'C:/Users/mshom/Documents/GitHub/crux';
+  const at = (command) => classify({ tool: 'Bash', input: { command }, projectDir: crux, tmp, home }).route;
+  for (const c of ['git merge main', 'gh pr merge 7', '"/c/Program Files/GitHub CLI/gh.exe" pr merge 7 --squash', 'git push origin main',
+    'rm -rf /c/Users/mshom/Documents/other', 'rm -rf ../other', WT + 'git push origin main', 'B=$(git branch --show-current); git push --force origin $B',
+    'X=$(cat x); git merge $X', 'echo $(date) && npm install left-pad']) {
+    assert.equal(at(c), 'human', c);
+  }
 });
 
 test('the rules entry is the newest active "permission rules" requirement', () => {
