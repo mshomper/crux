@@ -46,8 +46,11 @@ function describeTool(block) {
 }
 
 export class Agent {
-  constructor(hub, project, { name, role, task = '', goal = '', generation = 0, sessionId = null, state = 'asleep', predecessor = null, handoffEntry = null }) {
+  constructor(hub, project, { name, role, task = '', goal = '', generation = 0, sessionId = null, state = 'asleep', predecessor = null, handoffEntry = null, type = null, model = null, effort = null }) {
     Object.assign(this, { hub, project, name, role, task, goal, generation, sessionId, state, predecessor, handoffEntry });
+    // Decision 20: the agent type it was started as, and its model and effort (null = Claude Code's default).
+    // modelSeen is what Claude Code reported at start-up, so a default model still shows its name and colour.
+    Object.assign(this, { type, model, effort, modelSeen: null, restartWhenIdle: false });
     this.questionsLeft = predecessor ? 3 : 0;
     this.thread = role === 'orchestrator' ? 'orchestrator' : name;
     this.q = null;
@@ -70,16 +73,19 @@ export class Agent {
     this.setState('working');
   }
 
-  start() {
+  // The query options for this agent's next start. Kept apart from start() so tests can check them.
+  options() {
     const p = this.project;
     const m = this.hub.memory;
+    const type = this.type ? this.hub.agentTypes(p).get(this.type) : null;
     const mem = { index: p.board.index(), core: m.core(), pack: m.pack(p.name), conventions: m.conventions() };
     const append = m.personalize(this.role === 'orchestrator'
-      ? orchestratorPrompt({ project: p.name, handoff: p.board.latestHandoff(), generation: this.generation, ...mem })
-      : workerPrompt({ project: p.name, name: this.name, task: this.task, handoff: this.handoffEntry ? p.board.read(this.handoffEntry) : null, ...mem }));
-
-    this.inbox = new Inbox();
-    const options = {
+      ? orchestratorPrompt({ project: p.name, handoff: p.board.latestHandoff(), generation: this.generation, types: this.hub.agentTypes(p).list(), ...mem })
+      : workerPrompt({ project: p.name, name: this.name, task: this.task, handoff: this.handoffEntry ? p.board.read(this.handoffEntry) : null, type, ...mem }));
+    // A type's tools are limits, as in Claude Code: they set which built-in tools it has. They do not skip
+    // permission cards. The board tools are always there.
+    const builtIn = type?.tools?.filter(t => !t.startsWith('mcp__'));
+    return {
       cwd: p.dir,
       systemPrompt: { type: 'preset', preset: 'claude_code', append },
       settingSources: ['user', 'project', 'local'],
@@ -88,24 +94,53 @@ export class Agent {
       disallowedTools: this.role === 'orchestrator' ? ['NotebookEdit'] : [],
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
+      ...(builtIn?.length ? { tools: builtIn } : {}),
+      ...(this.model ? { model: this.model } : {}),
+      ...(this.effort ? { effort: this.effort } : {}),
       ...(this.sessionId ? { resume: this.sessionId } : {})
     };
+  }
+
+  start() {
+    const p = this.project;
+    this.inbox = new Inbox();
+    const options = this.options();
     options.env = cleanEnv();
-    this.q = query({ prompt: this.inbox, options });
+    this.restartWhenIdle = false;
+    const q = this.q = query({ prompt: this.inbox, options });
     this.setState('starting');
-    this.loop().catch(err => {
+    this.loop(q).catch(err => {
       console.error(`[${p.name}/${this.name}]`, err);
       this.hub.notice(p, this.thread, `${this.name} stopped with an error: ${err.message}`);
       this.setState('error');
-    }).finally(() => { this.q = null; this.inbox = null; if (!['retired', 'error'].includes(this.state)) this.setState('asleep'); });
+    }).finally(() => {
+      if (this.q && this.q !== q) return;   // closed for a restart, and already started again
+      this.q = null; this.inbox = null;
+      if (!['retired', 'error'].includes(this.state)) this.setState('asleep');
+    });
   }
 
-  async loop() {
-    for await (const m of this.q) {
+  // Change model or effort while the query is running. False when it cannot, so the caller restarts it instead.
+  async applyLive({ model, effort }) {
+    const q = this.q;
+    if (!q) return false;
+    try {
+      if (model !== undefined) await q.setModel(model || undefined);
+      if (effort !== undefined) await q.applyFlagSettings({ effortLevel: effort || null });
+      return true;
+    } catch (e) {
+      console.warn(`[${this.project.name}/${this.name}] live settings change failed:`, e.message);
+      return false;
+    }
+  }
+
+  async loop(q) {
+    for await (const m of q) {
       if (m.type === 'system' && m.subtype === 'init') {
+        if (m.model && m.model !== this.modelSeen) this.modelSeen = m.model;
         if (m.session_id !== this.sessionId) {
           this.sessionId = m.session_id;
-          this.project.log.append('agent_session', { agent: this.name, sessionId: m.session_id, model: m.model });
+          this.project.log.append('agent_session', { agent: this.name, sessionId: m.session_id, model: m.model, effort: this.effort, agentType: this.type });
         }
       } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
         const blocks = m.message?.content || [];
@@ -116,7 +151,7 @@ export class Agent {
         }
       } else if (m.type === 'result') {
         this.cost += m.total_cost_usd || 0;
-        try { this.contextPct = Math.round((await this.q.getContextUsage()).percentage); } catch { /* older CLI */ }
+        try { this.contextPct = Math.round((await q.getContextUsage()).percentage); } catch { /* older CLI */ }
         if (/not logged in/i.test(m.result || '')) {
           this.hub.notice(this.project, this.thread, 'Claude Code is not signed in on this machine. Stop the hub, run "npm run login" in the hub folder, sign in with your Claude plan, then start the hub again.');
         } else if (m.is_error && m.subtype !== 'success') {

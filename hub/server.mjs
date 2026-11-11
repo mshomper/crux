@@ -10,6 +10,7 @@ import { Hub } from './lib/hub.mjs';
 import { parseQuickPicks } from './lib/quick.mjs';
 import { checkRequest, extraHosts } from './lib/access.mjs';
 import { Push } from './lib/push.mjs';
+import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -19,12 +20,15 @@ const retireAt = Number(flag('--retire-at', 60));
 
 let projects = args.map(a => resolve(a));
 const cfg = join(homedir(), 'crux', 'hub.json');
-if (!projects.length && existsSync(cfg)) {
-  try { projects = (JSON.parse(readFileSync(cfg, 'utf8')).projects || []).map(p => resolve(p)); } catch (e) { console.warn(`Could not read ${cfg}: ${e.message}`); }
+// hub.json may also hold { "defaults": { "worker": { "model": "sonnet", "effort": "medium" }, "orchestrator": {...} } }.
+let hubCfg = {};
+if (existsSync(cfg)) {
+  try { hubCfg = JSON.parse(readFileSync(cfg, 'utf8')); } catch (e) { console.warn(`Could not read ${cfg}: ${e.message}`); }
 }
+if (!projects.length) projects = (hubCfg.projects || []).map(p => resolve(p));
 if (!projects.length) projects = [process.cwd()];
 
-const hub = new Hub({ projects, retireAt });
+const hub = new Hub({ projects, retireAt, defaults: hubCfg.defaults });
 
 // Phone notifications (decision 19): a card that needs you becomes a push to every subscribed phone.
 const push = new Push();
@@ -67,7 +71,7 @@ async function body(req) {
 }
 
 const routes = {
-  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt }),
+  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS }),
 
   'POST /api/send': ({ project, thread, text }) => {
     const p = hub.project(project);
@@ -93,7 +97,12 @@ const routes = {
   'POST /api/retire-finished': ({ project, agent }) => ({ result: hub.retireFinished(hub.project(project), agent) }),
   'POST /api/retire': ({ project, agent }) => { const p = hub.project(project); hub.retire(p, agent || p.orchestrator()); return { ok: true }; },
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.project(project), ids || [], !!accept) }),
-  'POST /api/worker': ({ project, name, task }) => ({ name: hub.startWorker(hub.project(project), name, task).name }),
+  'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
+  // Change an agent's model, effort or type. Only the keys sent change; an empty value means the default.
+  'POST /api/agent-settings': ({ project, agent, ...changes }) => {
+    const pick = Object.fromEntries(['type', 'model', 'effort'].filter(k => k in changes).map(k => [k, changes[k] || null]));
+    return hub.setAgentSettings(hub.project(project), agent, pick);
+  },
   // Phone notifications
   'GET /api/push/key': async () => ({ publicKey: (await push.keys()).publicKey }),
   'POST /api/push/status': ({ endpoint }) => ({ subscribed: push.has(endpoint), devices: push.subs.length }),

@@ -208,6 +208,63 @@ a.bitem:hover{border-color:var(--line2)}
 .dialog::backdrop{background:rgba(0,0,0,.55)}
 .dialog h2{margin-bottom:12px}
 
+/* ---------- model and effort (decision 20): hue per model, five pips for effort ---------- */
+.thread .ava{position:relative}
+.thread .ava.ring::after{content:"";position:absolute;inset:-2px;border-radius:12px;border:1.5px solid var(--mh);pointer-events:none;
+  box-shadow:0 0 10px -2px var(--mh),inset 0 0 9px -4px var(--mh)}
+.thread .ava.ring.gone::after{opacity:.35;box-shadow:none}
+
+.mchip{--mh:#8792ad;display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;min-width:0;max-width:100%;overflow:hidden;font:500 11.5px/20px var(--mono);letter-spacing:.02em;padding:0 8px 0 9px;border-radius:999px;white-space:nowrap;
+  color:color-mix(in srgb,var(--mh) 78%,#fff);background:color-mix(in srgb,var(--mh) 11%,transparent);border:1px solid color-mix(in srgb,var(--mh) 55%,transparent);
+  box-shadow:0 0 14px -6px var(--mh),inset 0 0 10px -6px var(--mh)}
+button.mchip{cursor:pointer;transition:background .15s,box-shadow .15s}
+button.mchip:hover,button.mchip[aria-expanded="true"]{background:color-mix(in srgb,var(--mh) 20%,transparent);box-shadow:0 0 18px -4px var(--mh),inset 0 0 10px -5px var(--mh)}
+button.mchip:focus-visible{outline:2px solid var(--mh);outline-offset:2px}
+.mchip .icon{width:12px;height:12px;opacity:.75;margin-left:-1px;transition:transform .15s}
+.mchip[aria-expanded="true"] .icon{transform:rotate(180deg)}
+.mchip .mtype{color:var(--text);padding-right:7px;margin-right:1px;border-right:1px solid color-mix(in srgb,var(--mh) 35%,transparent);overflow:hidden;text-overflow:ellipsis}
+.mchip .mname{overflow:hidden;text-overflow:ellipsis}
+.mchip .msep{opacity:.5}
+.mchip.nohue{color:var(--muted)}
+.mchip.pending{border-style:dashed}
+.mchip.mini{font-size:10.5px;line-height:17px;padding:0 7px;gap:5px;box-shadow:none;vertical-align:1px}
+.mchip.mini .pips i{width:4px;height:4px}
+.pips{display:inline-flex;gap:2.5px;align-items:center;flex:none}
+.pips i{width:5px;height:5px;border-radius:50%;background:color-mix(in srgb,var(--mh) 22%,transparent)}
+.pips i.on{background:var(--mh);box-shadow:0 0 5px var(--mh)}
+.pips.hollow i{background:transparent;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mh) 75%,transparent)}
+
+.mmenu{position:fixed;z-index:70;width:min(344px,calc(100vw - 16px));display:grid;gap:11px;padding:11px 12px 12px;border-radius:14px;
+  background:linear-gradient(165deg,#18202c,#0e1219);border:1px solid var(--line2);isolation:isolate;
+  box-shadow:0 18px 50px rgba(0,0,0,.55),0 0 0 1px rgba(111,227,255,.07),0 0 30px -12px rgba(111,227,255,.35)}
+.mmenu[hidden]{display:none}
+.mm-head{position:relative;display:grid;gap:1px;padding-right:30px}
+.mm-head b{font-size:13.5px}
+.mm-head .faint{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mm-x{position:absolute;right:-4px;top:-3px;display:grid;place-items:center;padding:5px;border:0;border-radius:7px;background:none;color:var(--faint);cursor:pointer}
+.mm-x:hover{color:var(--text);background:var(--surface2)}
+.mm-row{display:grid;gap:5px;margin:0}
+.mm-note{margin:0;font-size:12px}
+.flabel{font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.field{display:grid;gap:5px;margin-bottom:12px}
+.type-desc{margin:-6px 0 12px;font-size:12.5px}
+.type-desc:empty{display:none}
+
+.seg{display:grid;gap:3px;padding:3px;background:var(--bg);border:1px solid var(--line);border-radius:10px}
+.mseg{grid-template-columns:repeat(5,minmax(0,1fr))}
+.eseg{grid-template-columns:repeat(6,minmax(0,1fr))}
+.eseg.nohue{--mh:#8792ad}
+.segopt{position:relative;display:block;margin:0;cursor:pointer;color:var(--muted);min-width:0}
+.segopt input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.segopt > span{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:6px 2px 5px;border-radius:7px;border:1px solid transparent;font-size:11.5px;line-height:1.2;white-space:nowrap;overflow:hidden;transition:background .12s,border-color .12s}
+.segopt:hover > span{background:var(--surface2);color:var(--text)}
+.segopt input:checked + span{color:var(--text);background:color-mix(in srgb,var(--mh,#8792ad) 15%,transparent);border-color:color-mix(in srgb,var(--mh,#8792ad) 62%,transparent);box-shadow:0 0 14px -6px var(--mh,transparent),inset 0 0 10px -6px var(--mh,transparent)}
+.segopt input:focus-visible + span{outline:2px solid var(--accent);outline-offset:1px}
+.mseg .mdot{width:9px;height:9px;border-radius:50%;background:var(--mh);box-shadow:0 0 7px var(--mh)}
+.mseg .segopt.nohue .mdot{background:transparent;box-shadow:inset 0 0 0 1.5px var(--faint)}
+.eseg em{font-style:normal;font-size:10.5px;letter-spacing:.02em}
+.eseg .segopt > span{padding-top:9px;gap:6px}
+
 /* ---------- narrow screens: one pane at a time ---------- */
 @media (max-width: 1100px){
   .app.with-board{grid-template-columns:268px minmax(0,1fr)}
@@ -225,6 +282,8 @@ a.bitem:hover{border-color:var(--line2)}
   .head-actions .btn:not(.icon-only){font-size:0;gap:0;padding:7px}
   .head-actions .btn .icon{font-size:14px}
   .head-actions .btn .ext{display:none}
+  /* the header is narrow here: model name and pips only; the menu and the tooltip carry the rest */
+  .main-head .mchip :is(.mtype,.mver,.msep,.meff){display:none}
 }
 
 /* ---------- phone: home-screen app and notification deep links (decisions 18, 19) ---------- */

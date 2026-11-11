@@ -4,6 +4,7 @@
 
 import { clamp, lerp } from './map-layout.js';
 import { bend, onCurve, COLORS, TONE } from './map-particles.js';
+import { hueOf, rgb01, pipCount } from './models.js';
 
 const rgb = (c, a) => `rgba(${(c[0] * 255) | 0},${(c[1] * 255) | 0},${(c[2] * 255) | 0},${a})`;
 const TAU = Math.PI * 2;
@@ -232,16 +233,31 @@ export class HudPainter {
       const st = info.get(id);
       if (!st) continue;
       const fade = st.fade ?? 1;
+      // A worker's ring is its model's hue (decision 20); red, and the handoff gold, still win.
+      const hue = st.kind === 'worker' ? rgb01(hueOf(st.model)) : null;
       const col = st.needs || st.state === 'error' ? COLORS.red
         : st.kind === 'ghost' || st.handoff ? TONE.handoff
+        : hue ? hue
         : st.kind === 'board' ? COLORS.violet
         : st.kind === 'you' ? COLORS.white
         : st.state === 'asleep' ? COLORS.dim
         : st.state === 'starting' ? COLORS.accent : COLORS.cyan;
       const R = s.r + 3;
-      c.lineWidth = 1.2;
-      c.strokeStyle = rgb(col, (st.state === 'asleep' ? 0.3 : 0.55) * fade);
+      c.lineWidth = hue ? 1.6 : 1.2;
+      c.strokeStyle = rgb(col, (st.state === 'asleep' ? (hue ? 0.45 : 0.3) : hue ? 0.75 : 0.55) * fade);
       c.beginPath(); c.arc(s.x, s.y, R, 0, TAU); c.stroke();
+      // Effort: five pips over the station in the model's hue, lit 1 to 5 for low to max; hollow at the default.
+      if (hue && s.r >= 8) {
+        const n = pipCount(st.effort), pr = R + 5.5, step = 0.3;
+        for (let k = 0; k < 5; k++) {
+          const ang = -Math.PI / 2 + (k - 2) * step * (13 / Math.max(13, s.r));
+          const px = s.x + Math.cos(ang) * pr, py = s.y + Math.sin(ang) * pr;
+          c.beginPath(); c.arc(px, py, 1.7, 0, TAU);
+          if (!n) { c.lineWidth = 1; c.strokeStyle = rgb(hue, 0.75 * fade); c.stroke(); }
+          else if (k < n) { c.save(); c.shadowColor = rgb(hue, 0.9); c.shadowBlur = 6; c.fillStyle = rgb(hue, 0.95 * fade); c.fill(); c.restore(); }
+          else { c.fillStyle = rgb(hue, 0.22 * fade); c.fill(); }
+        }
+      }
       if (st.kind === 'worker' && st.ctx != null) {
         c.lineWidth = 2;
         c.strokeStyle = rgb(col, 0.9 * fade);

@@ -12,6 +12,7 @@ import { ParticleCore, Effects, STRIDE } from './map-particles.js';
 import { createRenderer } from './map-gl.js';
 import { HudPainter } from './map-hud.js';
 import { NeedsPopover } from './map-needs.js';
+import { hueOf, describe } from './models.js';
 
 const ICON = {
   agent: '<rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 4v3M9.5 12h.01M14.5 12h.01"/>',
@@ -224,13 +225,17 @@ export class LiveMap {
       const sub = s.kind === 'ghost' ? 'handing over'
         : s.kind === 'worker' ? (s.needs ? 'needs you' : s.handoff === 'writing' ? 'writing handoff' : s.handoff === 'overlap' ? 'handing over' : s.activity || s.state) : s.sub;
       const cls = `hs ${s.kind} ${s.state || ''} ${s.handoff ? 'handoff' : ''} ${s.needs ? 'needs' : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}`;
-      if (el.className !== cls) el.className = cls;
+      // The station body takes its model's hue too (decision 20).
+      const hue = s.kind === 'worker' ? hueOf(s.model) : null;
+      const full = hue && !s.needs && !s.handoff && s.state !== 'error' ? `${cls} mh` : cls;   // red and handoff gold win
+      if (el.className !== full) el.className = full;
+      if ((el.style.getPropertyValue('--mh') || null) !== hue) hue ? el.style.setProperty('--mh', hue) : el.style.removeProperty('--mh');
       el.dataset.thread = s.thread;
       const label = s.kind === 'worker' || s.kind === 'ghost' ? s.name : s.name.toUpperCase();
       const b = el.querySelector('b'), i = el.querySelector('i');
       if (b.textContent !== label) b.textContent = label;
       if (i.dataset.text !== sub) this.decode(i, sub);
-      const tip = s.kind === 'worker' || s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? (s.needs ? 'Point here to see and answer what is waiting' : 'Nothing waiting') : 'Open the memory board';
+      const tip = s.kind === 'worker' ? `${s.name} (${describe(s)}): ${s.goal || s.state}` : s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? (s.needs ? 'Point here to see and answer what is waiting' : 'Nothing waiting') : 'Open the memory board';
       if (el.title !== tip) { el.title = tip; el.setAttribute('aria-label', `${label}, ${sub}`); }
     }
     for (const [id, el] of this.stationEls) if (!seen.has(id)) { el.remove(); this.stationEls.delete(id); }

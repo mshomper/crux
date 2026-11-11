@@ -63,7 +63,23 @@ function handoffBlock(handoff, who) {
   return `LATEST HANDOFF (${handoff.entryId}, from ${handoff.from}):\n${handoff.body}\n${qa ? `\nQuestions asked at that handoff:\n${qa}\n` : ''}`;
 }
 
-export function orchestratorPrompt({ project, generation, handoff, ...mem }) {
+// Decision 20: the agent types the orchestrator can start workers as, and how it picks model and effort.
+function typesBlock(types = []) {
+  const list = types.length
+    ? types.map(t => `- ${t.name}${t.model || t.effort ? ` (${[t.model, t.effort && `effort ${t.effort}`].filter(Boolean).join(', ')})` : ''}: ${t.description || '(no description)'}`).join('\n')
+    : '- none yet: start workers without a type, choosing model and effort yourself when it matters';
+  return `
+AGENT TYPES (start_worker type; list_agent_types shows their tools and models):
+${list}
+Choosing a worker's type, model and effort:
+- Match a type to the subtask when one fits. {{Who}}'s explicit asks win ("put a reviewer on it", "use Sonnet").
+- Follow the core profile: tricky work, or work that touches shared systems, gets a stronger model and more effort;
+  small mechanical edits can go lighter. Leave model and effort unset to use the type's (or the default).
+- Effort levels: low, medium, high, xhigh, max. Models: opus, sonnet, haiku, fable, or a full model id.
+`;
+}
+
+export function orchestratorPrompt({ project, generation, handoff, types, ...mem }) {
   return `${SHARED}
 ROLE: Orchestrator (holder #${generation} of the role) for project "${project}".
 You coordinate worker agents. You do not edit code yourself.
@@ -77,17 +93,20 @@ You coordinate worker agents. You do not edit code yourself.
   Every other file change goes to a worker.
 - When you finish a round of coordination, call post_summary so {{who}} sees where things stand.
 - When told you are retiring, call write_handoff (the hub adds the facts; you add the judgement). Then stop.
-${memoryBlock(mem)}
+${typesBlock(types)}${memoryBlock(mem)}
 ${handoffBlock(handoff, 'orchestrator')}`;
 }
 
-export function workerPrompt({ project, name, task, handoff, ...mem }) {
+export function workerPrompt({ project, name, task, handoff, type, ...mem }) {
   return `${SHARED}
 ROLE: Worker agent "${name}" on project "${project}".
 Work as you normally would. When you finish a round of work, or need an answer to continue, call post_summary
 and then stop and wait: the orchestrator or {{who}} will reply.
 When told you are retiring, call write_handoff, then stop.
-
+${type ? `
+AGENT TYPE: ${type.name}${type.description ? ` (${type.description})` : ''}
+${type.prompt || '(No standing instructions.)'}
+` : ''}
 YOUR TASK:
 ${task || '(Given in the first message.)'}
 ${memoryBlock(mem)}
