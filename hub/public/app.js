@@ -350,6 +350,7 @@ function renderHead() {
   $('#thread-sub').innerHTML = sub;
   const a = p?.agents.find(a => a.thread === t && a.state !== 'retired') || p?.agents.find(a => a.thread === t);
   $('#retire').hidden = !(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring));
+  $('#retire-finished').hidden = !(p && t !== 'orchestrator' && t !== 'needs' && a && a.role === 'worker' && a.state !== 'retired' && !a.retiring);
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#input').placeholder = retired ? 'This agent has retired.' : t === 'needs' || t === 'orchestrator'
@@ -474,6 +475,11 @@ $('#input').addEventListener('input', autosize);
 $('#open-board').addEventListener('click', () => { $('#board').hidden = !$('#board').hidden; render(); });
 $('#close-board').addEventListener('click', () => { $('#board').hidden = true; render(); });
 $('#back').addEventListener('click', () => $('#app').classList.add('show-side'));
+$('#retire-finished').addEventListener('click', () => {
+  const t = S.thread;
+  if (confirm(`Retire ${t}? Use this when its job is done: it stops and moves to Retired, with no replacement.`))
+    act(async () => { const r = await api('/api/retire-finished', { project: proj().name, agent: t }); if (!/retired\.$/.test(r.result)) alert(r.result); });
+});
 $('#retire').addEventListener('click', () => {
   const t = S.thread, orch = t === 'orchestrator';
   if (confirm(orch ? 'Hand the orchestrator role to a new agent? The current one writes a handoff first, and the new one can ask it questions before it retires.'

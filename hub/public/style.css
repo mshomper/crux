@@ -91,6 +91,8 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .head-actions .btn:hover .icon{color:var(--accent)}
 .head-actions .btn.on{background:var(--accent-bg);color:var(--accent)}
 .head-actions .btn.on .icon{color:var(--accent)}
+.head-actions #retire-finished:hover{background:var(--good-bg);color:var(--good)}
+.head-actions #retire-finished:hover .icon{color:var(--good)}
 .head-actions #retire:hover{background:var(--warn-bg);color:var(--warn)}
 .head-actions #retire:hover .icon{color:var(--warn)}
 .head-actions .btn .ext{width:12px;height:12px;margin-left:-2px;opacity:.7}

@@ -34,6 +34,38 @@ export class Hub {
     this.approvals = new Map();
     this.projects = new Map();
     for (const dir of projects) this.addProject(dir);
+    // After listeners are attached: deliver any message of yours that a restart cut off.
+    setTimeout(() => { for (const p of this.projects.values()) this.redeliver(p); }, 0);
+  }
+
+  // A message you sent within the last 10 minutes that its agent never acted on (no event from that agent since)
+  // most likely died with a restart. Deliver it again, with a note, rather than leave you waiting on silence.
+  undelivered(p, now = Date.now()) {
+    const evs = p.log.events;
+    const out = [];
+    for (const thread of new Set(evs.filter(e => e.type === 'message' && e.from === 'you').map(e => e.thread))) {
+      const i = evs.findLastIndex(e => e.type === 'message' && e.from === 'you' && e.thread === thread);
+      const m = evs[i];
+      if (!m || now - Date.parse(m.ts) > 10 * 60 * 1000) continue;
+      const agent = thread === 'orchestrator' ? p.orchestrator() : p.agents.get(thread);
+      if (thread !== 'orchestrator' && (!agent || agent.state === 'retired')) continue;
+      const names = new Set([agent?.name, ...(thread === 'orchestrator' ? [...p.agents.values()].filter(a => a.role === 'orchestrator').map(a => a.name) : [])].filter(Boolean));
+      // Starting up (agent_created, agent_session) is not acting on it; a reply, summary, card or pick is.
+      const actedOn = evs.slice(i + 1).some(e => e.type === 'pick' || (!['agent_created', 'agent_session', 'notice'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
+      if (!actedOn) out.push(m);
+    }
+    return out;
+  }
+
+  redeliver(p) {
+    for (const m of this.undelivered(p)) {
+      const when = new Date(m.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      this.notice(p, m.thread, `The hub restarted before your message from ${when} reached its agent, so it was delivered again.`);
+      try {
+        if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(m.text);
+        else p.agents.get(m.thread)?.send(m.text);
+      } catch (e) { this.notice(p, m.thread, `Could not deliver it again: ${e.message}`); }
+    }
   }
 
   // ---------- plumbing ----------
@@ -354,6 +386,18 @@ export class Hub {
     p.log.append('handoff_qa', { entryId: succ.handoffEntry, from: succ.name, q: question, a: answer, thread: succ.thread });
     if (succ.questionsLeft === 0) this.finishRetire(p, old);
     return answer;
+  }
+
+  // A worker whose job is finished: retire it with no handoff and no successor. You or the orchestrator can do this.
+  retireFinished(p, name, by = 'you', reason = '') {
+    const a = p.agents.get(name);
+    if (!a || a.role !== 'worker') throw new Error(`No worker called ${name}`);
+    if (a.state === 'retired') return `${name} has already retired.`;
+    if (a.retiring) return `${name} is already handing off.`;
+    if ([...this.approvals.values()].some(x => x.agent === a)) return `${name} is waiting on a permission card; answer or deny it first.`;
+    this.finishRetire(p, a);
+    this.notice(p, a.thread, `${by === 'you' ? 'You' : by} retired ${name} as finished${reason ? `: ${reason}` : ''}.`);
+    return `${name} retired.`;
   }
 
   finishRetire(p, agent) {

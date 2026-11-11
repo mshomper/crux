@@ -76,7 +76,11 @@ export function cruxTools(hub, project, agent) {
       tool('list_agents', 'List the worker agents on this project and what each is doing.', {},
         async () => out(project.workers().map(w => ({ name: w.name, state: w.state, goal: w.goal })))),
 
-      tool('message_agent', 'Send a message to a worker: answers, fixes, or the next step.',
+      tool('retire_worker', 'Retire a worker whose job is finished and has nothing more coming: it stops and leaves the active list. No handoff, no successor. For a worker that should continue under a fresh agent, ask the human to use Hand off instead.',
+        { name: z.string(), reason: z.string().max(200).describe('One plain line, e.g. "phone access merged".') },
+        async ({ name, reason }) => out(hub.retireFinished(project, name, agent.name, reason))),
+
+      tool('message_agent','Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },
         async ({ to, text: msg }) => { hub.orchestratorToWorker(project, agent, to, msg); return out(`Sent to ${to}.`); }),
 
@@ -92,6 +96,6 @@ export function cruxTools(hub, project, agent) {
 export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
-  if (agent.role === 'orchestrator') names.push('list_agents', 'message_agent', 'start_worker');
+  if (agent.role === 'orchestrator') names.push('list_agents', 'message_agent', 'start_worker', 'retire_worker');
   return names.map(n => `mcp__crux__${n}`);
 }
