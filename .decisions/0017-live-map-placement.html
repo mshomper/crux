@@ -91,6 +91,7 @@ svg{max-width:100%}
 .bad-read{border-color:var(--bad)}.bad-read .icon{color:var(--bad)}
 .ruled{margin-top:12px}
 .deep-chip{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.hub-nav{display:flex;gap:14px;align-items:center;font-size:14px}.hub-nav a{color:var(--muted);text-decoration:none}.hub-nav a:hover{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -125,7 +126,7 @@ function refLinks(list){
 }
 function fileOf(n){ return (D._links || {})[n] || 'index.html'; }
 
-let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></div>`;
+let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><span class="row" style="gap:14px"><nav class="hub-nav"><a id="hub-link" hidden href="http://localhost:4747/">Hub</a></nav><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></span></div>`;
 h += `<div class="row" style="margin-top:14px"><span class="muted">${pad(D.id)}</span><span class="chip ${esc(D.status)}">${esc(D.status)}</span><span class="chip">${I.clock}${esc(D.date)}</span>${(D.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}${D.deep?'<span class="chip deep-chip">deep</span>':''}</div>`;
 h += `<h1>${esc(D.title)}</h1><p>${esc(D.context)}</p>`;
 if ((D.depends_on||[]).length) h += `<p class="muted row" style="gap:6px">${I.link}Builds on ${refLinks(D.depends_on)}</p>`;
@@ -266,6 +267,14 @@ if (rev) rev.addEventListener('click', async () => {
   catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
 });
 document.getElementById('why')?.addEventListener('input', () => document.getElementById('err').textContent = '');
+</script>
+<script>
+// Links to the Crux hub: shown when the page comes from the hub, or when a running hub answers on this machine.
+(() => {
+  const show = (id, href) => { const a = document.getElementById(id); if (a) { if (href) a.href = href; a.hidden = false; } };
+  if (location.protocol !== 'file:') { show('hub-link', '/'); show('all-link', '/all'); return; }
+  fetch('http://localhost:4747/api/ping').then(r => { if (r.ok) show('hub-link'); }).catch(() => {});
+})();
 </script>
 </body>
 </html>

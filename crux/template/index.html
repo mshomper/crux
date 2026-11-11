@@ -59,12 +59,14 @@
 .more .chev{transform:rotate(90deg)}
 .more.less .chev{transform:rotate(-90deg)}
 .dcard .line{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.hub-nav{display:flex;gap:14px;align-items:center;font-size:14px}.hub-nav a{color:var(--muted);text-decoration:none}.hub-nav a:hover{color:var(--accent)}
 </style>
 </head>
 <body>
 <main>
 <div class="top">
   <div class="brand"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg>Crux <span class="repo" id="repo"></span></div>
+  <nav class="hub-nav"><a id="all-link" hidden href="/all">All projects</a><a id="hub-link" hidden href="http://localhost:4747/">Hub</a></nav>
   <label class="search"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="q" type="search" placeholder="Search decisions" aria-label="Search decisions"></label>
 </div>
 <div class="sub" id="sub"></div>
@@ -218,6 +220,14 @@ function render(){
 sub();
 document.getElementById('q').addEventListener('input', render);
 render();
+</script>
+<script>
+// Links to the Crux hub: shown when the page comes from the hub, or when a running hub answers on this machine.
+(() => {
+  const show = (id, href) => { const a = document.getElementById(id); if (a) { if (href) a.href = href; a.hidden = false; } };
+  if (location.protocol !== 'file:') { show('hub-link', '/'); show('all-link', '/all'); return; }
+  fetch('http://localhost:4747/api/ping').then(r => { if (r.ok) show('hub-link'); }).catch(() => {});
+})();
 </script>
 </body>
 </html>

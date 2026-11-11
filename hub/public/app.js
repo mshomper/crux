@@ -342,7 +342,7 @@ function renderBoard() {
     <div class="bs">${esc(e.summary || '')} <span class="faint">· ${esc(e.from)}</span></div></summary><div class="bbody">${esc(e.body || '')}</div></details></div>`;
   const live = es.filter(e => e.status === 'active');
   const handoff = live.filter(e => e.kind === 'handoff').at(-1);
-  $('#board-body').innerHTML =
+  $('#board-body').innerHTML = (ds.length ? `<a class="bitem board-page" href="/p/${encodeURIComponent(p.name)}/index.html" target="_blank" rel="noopener"><div class="bt"><span>${icon('page')}</span><span>Open this project's Crux board</span></div></a>` : '') +
     group('Waiting for your call', ds.filter(d => d.status === 'open' || d.status === 'found').map(dItem)) +
     group('Requirements', live.filter(e => e.kind === 'requirement').map(eItem)) +
     group('Decided', ds.filter(d => d.status === 'decided').map(dItem)) +
