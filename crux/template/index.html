@@ -59,14 +59,14 @@
 .more .chev{transform:rotate(90deg)}
 .more.less .chev{transform:rotate(-90deg)}
 .dcard .line{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.hub-nav{display:flex;gap:14px;align-items:center;font-size:14px}.hub-nav a{color:var(--muted);text-decoration:none}.hub-nav a:hover{color:var(--accent)}
+.hub-nav{display:flex;gap:8px;align-items:center}.hub-nav a{display:inline-flex;align-items:center;gap:7px;padding:6px 14px 6px 11px;border-radius:999px;border:1px solid var(--line2);background:var(--surface);color:var(--text);font-size:13.5px;font-weight:500;text-decoration:none;transition:border-color .15s,background .15s,color .15s}.hub-nav a[hidden]{display:none}.hub-nav a svg{width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.hub-nav a:hover{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}.hub-nav a.hub{background:var(--accent-bg);border-color:transparent;color:var(--accent)}.hub-nav a.hub:hover{border-color:var(--accent)}
 </style>
 </head>
 <body>
 <main>
 <div class="top">
   <div class="brand"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg>Crux <span class="repo" id="repo"></span></div>
-  <nav class="hub-nav"><a id="all-link" hidden href="/all">All projects</a><a id="hub-link" hidden href="http://localhost:4747/">Hub</a></nav>
+  <nav class="hub-nav"><a id="all-link" hidden href="/all" title="Every project's decisions"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>All projects</a><a id="hub-link" class="hub" hidden href="http://localhost:4747/" title="Back to the Crux hub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h10a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2H8.5L5 16.5V14H4a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2z"/><path d="M18.5 8.5H20a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2h-1v2.5L15.5 18H12"/></svg>Open hub</a></nav>
   <label class="search"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="q" type="search" placeholder="Search decisions" aria-label="Search decisions"></label>
 </div>
 <div class="sub" id="sub"></div>

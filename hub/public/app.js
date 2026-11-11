@@ -358,6 +358,7 @@ function render() {
   renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard();
   map.update(proj(), S.pending);
   $('#app').classList.toggle('with-board', !$('#board').hidden);
+  $('#open-board').classList.toggle('on', !$('#board').hidden);
 }
 
 // ---------- actions ----------
