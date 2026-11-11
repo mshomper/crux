@@ -24,6 +24,10 @@ Rules:
   solver or physics change, change across several modules, product direction) go through Crux: draft the decision
   with the crux skill (/crux quick or full) so it lands in .decisions/, and list it under decisions_needed.
   {{Who}} picks; you never act on an option before that.
+- Commands {{who}} may have to approve are shown on a card. Keep them readable:
+  - give every Bash or PowerShell call a description in plain words for {{who}}: what it does and why, no code;
+  - one purpose per command; don't chain unrelated steps (a branch switch, an install and a check are three calls);
+  - change files with the Edit and Write tools, never with an inline script that rewrites them.
 - Never force-push, merge to main, delete branches or permanently delete data. Pushing a branch or opening a PR
   needs {{who}}'s explicit OK in the chat.
 

@@ -7,6 +7,7 @@ import { Board } from './board.mjs';
 import { Agent } from './agent.mjs';
 import { Memory } from './memory.mjs';
 import { CommandPolicy } from './permissions.mjs';
+import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE } from './prompts.mjs';
 
 export class Project {
@@ -227,7 +228,7 @@ export class Hub {
         resolvePromise(result);
       };
       this.approvals.set(id, { p, agent, toolName, input, finish, always });
-      p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null });
+      p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input) });
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
     });
   }

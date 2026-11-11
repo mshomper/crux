@@ -215,15 +215,21 @@ function approvalCard(ev) {
   const p = proj();
   const result = p.events.find(e => e.type === 'approval_result' && e.approval === ev.approval);
   const input = ev.input?.command || ev.input?.file_path || JSON.stringify(ev.input, null, 1);
+  // Plain words first: what it will do (the hub reads the command), what it touches, and the agent's own reason.
+  const plain = ev.summary?.plain;
+  const why = ev.input?.description && ev.input.description !== plain && !String(input).startsWith(ev.input.description.replace(/…$/, '')) ? ev.input.description : '';
   if (!live && !S.open.has(ev.approval)) {
-    // Answered: one line. Click to see the command again.
-    const what = ev.description || ev.input?.description || String(input).split('\n')[0];
-    return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${esc(ev.agent)} · ${esc(ev.tool)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
+    // Answered: one line. Click to see it again.
+    const what = plain || ev.input?.description || ev.description || String(input).split('\n')[0];
+    return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${esc(ev.agent)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
   }
+  const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
+  const raw = `<pre>${esc(input)}</pre>`;
   return `<article class="card approval ${live ? '' : 'answered'}" ${live ? '' : `data-expand="${esc(ev.approval)}"`}>
-    <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to use ${esc(ev.title || ev.tool)}</h3></div>
-    ${ev.description ? `<p class="muted">${esc(ev.description)}</p>` : ''}
-    <pre>${esc(input)}</pre>
+    <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}</h3></div>
+    ${tags ? `<div class="tags">${tags}</div>` : ''}
+    ${why ? `<p class="muted why">Why: ${esc(why)}</p>` : (!plain && ev.description ? `<p class="muted">${esc(ev.description)}</p>` : '')}
+    ${plain ? `<div class="raw">${fold('cmd:' + ev.approval, raw, String(input).length > 120 || String(input).includes('\n'))}</div>` : raw}
     <div class="row">${live
       ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button>${ev.always ? `<button class="btn" data-approve="${ev.approval}" data-always title="Saved to this project's Claude Code settings, where you can remove it">${icon('check')}Always allow</button>` : ''}<button class="btn" data-deny="${ev.approval}">${icon('x')}Deny</button>${ev.always ? `<span class="faint always-rule">Always: ${esc(ev.always.join('; '))}</span>` : ''}`
       : `<span class="chip">${esc(result ? result.how : 'expired')}</span>`}</div>

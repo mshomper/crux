@@ -148,6 +148,14 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .decision .foot .spacer{flex:1}
 .card.approval{border-left:3px solid var(--warn)}
 .card.question{border-left:3px solid var(--warn)}
+.approval .tags{display:flex;flex-wrap:wrap;gap:6px;margin:-2px 0 10px}
+.tag{font-size:12px;line-height:20px;padding:0 9px;border-radius:999px;border:1px solid var(--line2);color:var(--muted);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.tag.read{color:var(--good);background:var(--good-bg);border-color:transparent}
+.tag.write{color:var(--accent);background:var(--accent-bg);border-color:transparent}
+.tag.care{color:var(--warn);background:var(--warn-bg);border-color:transparent}
+.approval .why{margin:0 0 10px;font-size:13px}
+.approval .raw .fold:not(.open){max-height:4.6em}
+.approval .raw pre{margin-bottom:4px}
 .always-rule{flex:1 1 100%;min-width:0;font-size:12px;overflow-wrap:anywhere}
 .card.lessons{border-left:3px solid var(--accent)}
 .lesson-list{list-style:none;margin:0 0 10px;padding:0;display:grid;gap:8px}

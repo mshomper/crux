@@ -228,7 +228,7 @@ export class MapModel {
       case 'lesson': return L('lesson', ev.from, `added a lesson to the ${ev.pack} pack`, 'entry');
       case 'visual': return L('visual', ev.from, `shared a ${ev.kind || 'visual'}${ev.caption ? ': ' + short(ev.caption) : ''}`, 'reply');
       case 'pick': return L('pick', 'You', `picked D${String(ev.decision).padStart(4, '0')} ${short(ev.label)}`, 'pick');
-      case 'approval': return L('approval', ev.agent, `asks to use ${ev.title || ev.tool}`, 'alert');
+      case 'approval': return L('approval', ev.agent, ev.summary?.plain ? `wants to ${ev.summary.plain[0].toLowerCase()}${ev.summary.plain.slice(1)}` : `asks to use ${ev.title || ev.tool}`, 'alert');
       case 'approval_result': return L('approval', 'You', `${ev.how || 'answered'} a request`, ev.how === 'allowed' ? 'you' : 'alert');
       case 'agent_created':
         if (ev.role === 'orchestrator') return L('created', ev.agent, `takes the orchestrator role (gen ${ev.generation})${ev.predecessor ? ' from ' + ev.predecessor : ''}`, 'core');
