@@ -392,7 +392,9 @@ export class Hub {
   // Standard mode (decision 21): everything that is not a hard stop goes to the orchestrator.
   routeFor(p, agent, toolName, input) {
     const rules = rulesEntry(p.board);
-    const { route, reasons, unsure } = classify({ tool: toolName, input, projectDir: p.dir });
+    agent.tempDirs ||= new Set();
+    const { route, reasons, unsure, tempMade } = classify({ tool: toolName, input, projectDir: p.dir, agent: agent.name, madeTemp: agent.tempDirs });
+    for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
     if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
     if (route === 'allow' && this.permissionMode(p) === 'auto') return { allow: true };
     // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,
@@ -405,21 +407,23 @@ export class Hub {
     return { to: orch.name, stops: [], rules: rules.entryId, unsure };
   }
 
-  // Per repo: "auto" or "standard". A change made from the hub (logged in the project's events) wins over the
-  // repo's committed .crux-hub.json ({ "permissions": "auto" }); with neither, standard.
+  // Per project: "auto" or "standard" (shown as Auto and Ask). The switch in the page, kept in hub settings by project
+  // folder, wins; then the repo's committed .crux-hub.json ({ "permissions": "auto" }) as the starting value; else standard.
   permissionMode(p) {
-    const ev = p.log.events.findLast(e => e.type === 'project_settings' && 'permissionMode' in e);
-    if (ev) return ev.permissionMode === 'auto' ? 'auto' : 'standard';
+    const set = this.settings.project?.(p.dir)?.permissionMode;
+    if (set) return set === 'auto' ? 'auto' : 'standard';
     try { return JSON.parse(readFileSync(join(p.dir, '.crux-hub.json'), 'utf8')).permissions === 'auto' ? 'auto' : 'standard'; } catch { return 'standard'; }
   }
 
   setPermissionMode(p, mode, by = 'you') {
     mode = mode === 'auto' ? 'auto' : 'standard';
-    if (mode === this.permissionMode(p)) return mode;
+    const was = this.permissionMode(p);
+    this.settings.setProject(p.dir, { permissionMode: mode });
+    if (mode === was) return mode;
     p.log.append('project_settings', { permissionMode: mode, by, thread: 'orchestrator' });
     this.notice(p, 'orchestrator', mode === 'auto'
-      ? `${by === 'you' ? 'You' : by} turned auto mode on: contained work is allowed at once; only unclear requests go to the orchestrator, and hard stops to you.`
-      : `${by === 'you' ? 'You' : by} turned auto mode off: requests that are not hard stops go to the orchestrator first.`);
+      ? `${by === 'you' ? 'You' : by} switched ${p.name} to Auto: work that stays in the project or a temp folder runs without asking; unclear requests go to the orchestrator, hard stops to you.`
+      : `${by === 'you' ? 'You' : by} switched ${p.name} to Ask: anything beyond reading goes to the orchestrator first, hard stops to you.`);
     return mode;
   }
 

@@ -43,6 +43,18 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 /* project switcher: one row, however many projects */
 .projects{padding:0 12px 10px}
 .proj-switch{position:relative}
+/* Decision 34: the project's permission mode, Auto or Ask, beside its name */
+.proj-row{display:flex;gap:6px;align-items:stretch}
+.proj-row .proj-current{flex:1;min-width:0}
+.mode-switch{flex:none;display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12px;font-weight:600;padding:0 9px;border-radius:10px;border:1px solid var(--line2);background:var(--surface);color:var(--muted);cursor:pointer}
+.mode-switch .mode-knob{width:22px;height:12px;border-radius:999px;background:var(--line2);position:relative;flex:none}
+.mode-switch .mode-knob::after{content:"";position:absolute;top:2px;left:2px;width:8px;height:8px;border-radius:50%;background:var(--muted);transition:left .15s}
+.mode-switch.auto{color:var(--accent);border-color:transparent;background:var(--accent-bg)}
+.mode-switch.auto .mode-knob{background:var(--accent)}
+.mode-switch.auto .mode-knob::after{left:12px;background:var(--accent-ink)}
+.mode-switch:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media (prefers-reduced-motion:reduce){.mode-switch .mode-knob::after{transition:none}}
+.pmode{font-size:11.5px;color:var(--faint);margin-left:auto;margin-right:8px}
 .proj-current{width:100%;display:flex;align-items:center;gap:8px;font:inherit;font-size:13.5px;font-weight:600;padding:7px 10px;border-radius:10px;border:1px solid var(--line2);background:var(--surface);color:var(--text);cursor:pointer;text-align:left}
 .proj-current:hover:not(:disabled){border-color:rgba(255,255,255,.2);background:var(--surface2)}
 .proj-current:disabled{cursor:default}
