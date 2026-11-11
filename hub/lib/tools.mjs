@@ -98,6 +98,23 @@ export function cruxTools(hub, project, agent) {
           return out(types.length ? types.map(({ name, description, model, effort, tools, source }) => ({ name, description, model: model || 'default', effort: effort || 'default', tools: tools || 'all', from: source === 'project' ? 'this project' : 'all projects' })) : 'No agent types are set up yet.');
         }),
 
+      // Decision 20: the same change as the model chip on a thread. Logged in that agent's thread and in yours.
+      tool('set_agent_settings', t('Change a running or resting agent\'s model, effort or type: the same as {{who}} clicking the model chip on its thread. Model and effort switch at once on a live agent; a new type (with its tools and instructions) applies once the agent is free, and it keeps its conversation. Send only what changes. Logged in that agent\'s thread and in yours.'),
+        {
+          name: z.string().describe('The agent\'s name from list_agents, or "orchestrator" for yourself.'),
+          model: z.string().optional().describe('opus, sonnet, haiku, fable, a full model id, or "default". Leave out to keep it.'),
+          effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'default']).optional().describe('Leave out to keep it.'),
+          type: z.string().optional().describe('An agent type from list_agent_types, or "none". A new type brings its own model and effort unless you set those too. Leave out to keep it.')
+        },
+        async ({ name, ...picks }) => {
+          const changes = settingsChanges(picks);
+          if (!Object.keys(changes).length) return out('Nothing to change: give a model, an effort or a type.');
+          try {
+            const r = await hub.setAgentSettings(project, name.trim(), changes, agent.name);
+            return out(r.changed ? `${name} now runs as ${r.settings}; it applies ${r.when}.` : `No change: ${name} already runs as ${r.settings}.`);
+          } catch (e) { return out(`Not changed: ${e.message}`); }
+        }),
+
       tool('start_worker', t('Start a new worker agent. Give it a short name (letters, digits, dashes), a one-line goal {{who}} sees, and the full task as its briefing. Optionally an agent type, and a model and effort that override the type\'s.'),
         {
           name: z.string().regex(/^[a-z0-9-]+$/i),
@@ -119,9 +136,18 @@ export function cruxTools(hub, project, agent) {
   return createSdkMcpServer({ name: 'crux', version: '0.3.0', tools });
 }
 
+// set_agent_settings arguments to Hub.setAgentSettings changes: only the keys given; "default" or type "none" is null.
+export function settingsChanges({ model, effort, type } = {}) {
+  const changes = {};
+  if (model !== undefined) changes.model = /^(default)?$/i.test(String(model).trim()) ? null : String(model).trim();
+  if (effort !== undefined) changes.effort = /^(default)?$/i.test(String(effort).trim()) ? null : effort;
+  if (type !== undefined) changes.type = /^(none|default)?$/i.test(String(type).trim()) ? null : String(type).trim();
+  return changes;
+}
+
 export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
-  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'retire_worker', 'answer_permission');
+  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'answer_permission');
   return names.map(n => `mcp__crux__${n}`);
 }

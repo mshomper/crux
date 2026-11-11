@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { questionOpen } from '../public/questions.js';
 
 const pad = n => String(n).padStart(4, '0');
 export const QUESTION_GRACE_MS = 60 * 1000; // the orchestrator often answers a worker's question itself
@@ -45,15 +46,12 @@ export function isLooking(card, presences, now = Date.now()) {
   return false;
 }
 
-// Is the card still waiting by the time we would send it?
-export function stillOpen(card, { approvals, decisionOpen, events }) {
+// Is the card still waiting by the time we would send it? Questions follow the same rule as the Needs you list
+// (public/questions.js): answered, dismissed, asked by an agent that has retired, or answered by your picks.
+export function stillOpen(card, { approvals, decisionOpen, decisionStatus, events }) {
   if (card.kind === 'approval') return approvals.has(card.card.slice('approval:'.length));
   if (card.kind === 'decision') return decisionOpen(Number(card.card.slice('decision:'.length)));
-  if (card.kind === 'question') {
-    const i = events.findIndex(e => e.id === card.askedAt);
-    if (i < 0) return false;
-    return !events.slice(i + 1).some(e => e.thread === card.thread && e.type === 'message' && e.from !== card.asker);
-  }
+  if (card.kind === 'question') return questionOpen(events, card.askedAt, { decisionStatus });
   return false;
 }
 
@@ -118,15 +116,17 @@ export class Push {
     for (const [k, p] of this.presences) if (now - p.ts > 10 * 60 * 1000) this.presences.delete(k);
   }
 
-  // Called for every logged hub event. `ctx` gives the live state: approvals, decisionOpen(project, id), events(project).
+  // Called for every logged hub event. `ctx` gives the live state: approvals, decisionOpen(project, id),
+  // decisionStatus(project, id) and events(project).
   handle(ev, ctx) {
     if (!this.subs.length) return;
     const decisionOpen = id => ctx.decisionOpen(ev.project, id);
+    const decisionStatus = id => ctx.decisionStatus?.(ev.project, id);
     for (const card of cardsFor(ev, { decisionOpen })) {
       if (this.sent.has(card.card)) continue;
       const go = () => {
         if (this.sent.has(card.card)) return;
-        if (!stillOpen(card, { approvals: ctx.approvals, decisionOpen, events: ctx.events(ev.project) })) return;
+        if (!stillOpen(card, { approvals: ctx.approvals, decisionOpen, decisionStatus, events: ctx.events(ev.project) })) return;
         if (isLooking(card, this.presences.values())) return;
         this.sent.add(card.card);
         this.send(payloadOf(card)).catch(e => console.warn(`Push failed: ${e.message}`));

@@ -133,17 +133,23 @@ export class Agent {
   }
 
   // Change model or effort while the query is running. False when it cannot, so the caller restarts it instead.
-  async applyLive({ model, effort }) {
+  // Bounded in time: the orchestrator may change its own settings from inside a tool call (set_agent_settings),
+  // and a switch that never answers must not hold that call up; it then applies at the next start instead.
+  async applyLive({ model, effort }, timeoutMs = 8000) {
     const q = this.q;
     if (!q) return false;
+    let timer;
+    const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error('no answer in time')), timeoutMs); });
     try {
-      if (model !== undefined) await q.setModel(model || undefined);
-      if (effort !== undefined) await q.applyFlagSettings({ effortLevel: effort || null });
+      await Promise.race([(async () => {
+        if (model !== undefined) await q.setModel(model || undefined);
+        if (effort !== undefined) await q.applyFlagSettings({ effortLevel: effort || null });
+      })(), late]);
       return true;
     } catch (e) {
       console.warn(`[${this.project.name}/${this.name}] live settings change failed:`, e.message);
       return false;
-    }
+    } finally { clearTimeout(timer); }
   }
 
   async loop(q) {

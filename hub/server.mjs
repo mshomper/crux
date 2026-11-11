@@ -13,8 +13,12 @@ import { decodeDataUrl, MAX_BYTES } from './lib/attachments.mjs';
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings } from './lib/settings.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile } from './lib/relaunch.mjs';
+import { randomUUID } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Changes with every start, so a page waiting through a restart knows when the new hub is up.
+const BOOT = randomUUID();
 const args = process.argv.slice(2);
 const flag = (name, dflt) => { const i = args.indexOf(name); if (i < 0) return dflt; const v = args[i + 1]; args.splice(i, 2); return v; };
 const port = Number(flag('--port', process.env.CRUX_HUB_PORT || 4747));
@@ -36,8 +40,9 @@ const hub = new Hub({ projects, retireAt, defaults: hubCfg.defaults, settings })
 
 // Phone notifications (decision 19): a card that needs you becomes a push to every subscribed phone.
 const push = new Push();
-const decisionOpen = (project, id) => { try { return ['open', 'found'].includes(hub.project(project).board.decision(id)?.status); } catch { return false; } };
-hub.on(ev => { if (ev.logged) push.handle(ev, { approvals: hub.approvals, decisionOpen, events: name => hub.project(name).log.events }); });
+const decisionStatus = (project, id) => { try { return hub.project(project).board.decision(id)?.status; } catch { return undefined; } };
+const decisionOpen = (project, id) => ['open', 'found'].includes(decisionStatus(project, id));
+hub.on(ev => { if (ev.logged) push.handle(ev, { approvals: hub.approvals, decisionOpen, decisionStatus, events: name => hub.project(name).log.events }); });
 const hosts = extraHosts();
 
 // The folders the Crux roll-up scans (same rule as crux/scripts/rollup.mjs): every project's Crux pages under
@@ -82,7 +87,9 @@ async function body(req, limit = 1e6) {
 }
 
 const routes = {
-  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all() }),
+  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT }),
+  // Restart from the hub's own menu: answer first, then hand over to a fresh hub started the same way (M010).
+  'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },
   // The off switch for decision 21: false sends every permission request to you.
   // Per repo (decision 34): { project, permissionMode: 'auto' | 'standard' }.
   'POST /api/settings': ({ routePermissions, project, permissionMode }) => {
@@ -121,6 +128,9 @@ const routes = {
   'POST /api/approval': ({ id, allow, note, always }) => { hub.answerApproval(id, !!allow, note, !!always); return { ok: true }; },
   'POST /api/retire-finished': ({ project, agent }) => ({ result: hub.retireFinished(hub.project(project), agent) }),
   'POST /api/retire': ({ project, agent }) => { const p = hub.project(project); hub.retire(p, agent || p.orchestrator()); return { ok: true }; },
+  'POST /api/dismiss': ({ project, question, index }) => hub.dismissQuestion(hub.project(project), String(question || ''), 'you', index ?? null),
+  // Answers typed in Needs you: { question: summary event id, answers: [{ index, text }] }.
+  'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.project(project), String(question || ''), answers),
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.project(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
   // Change an agent's model, effort or type. Only the keys sent change; an empty value means the default.
@@ -139,7 +149,7 @@ const routes = {
   'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId })
 };
 
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   // Only this machine and the tailnet address get in, and only the hub's own pages may change anything.
   const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts });
@@ -180,7 +190,7 @@ createServer(async (req, res) => {
     // Pages ask this to know the hub is running, so they can show a link back to it (they may be opened as files).
     if (url.pathname === '/api/ping') {
       res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' });
-      return res.end('{"hub":true}');
+      return res.end(JSON.stringify({ hub: true, boot: BOOT }));
     }
 
     // The all-projects page, with its links pointed at the hub instead of files.
@@ -220,13 +230,42 @@ createServer(async (req, res) => {
   } catch (e) {
     send(res, 400, { error: e.message });
   }
-}).listen(port, '127.0.0.1', () => {
+});
+
+// A hub started by a restart may find the old one still letting go of the port: it waits up to 20 seconds.
+// Any other start fails at once, so two hubs never end up on one port.
+const waitForPort = process.env.CRUX_HUB_RESTARTED === '1';
+const firstTry = Date.now();
+server.on('error', e => {
+  if (server.listening) return console.warn(`Server: ${e.message}`);
+  if (e.code === 'EADDRINUSE' && waitForPort && Date.now() - firstTry < 20000) return void setTimeout(() => server.listen(port, '127.0.0.1'), 300);
+  console.error(e.code === 'EADDRINUSE' ? `Port ${port} is already in use: is the hub running already?` : `Could not start: ${e.message}`);
+  process.exit(1);
+});
+server.on('listening', () => {
   console.log(`Crux hub: http://localhost:${port}  (phone: tailscale serve --bg ${port}, see README)`);
   console.log(`Projects: ${[...hub.projects.values()].map(p => p.name).join(', ')}`);
   console.log(`Orchestrator hands off at ${retireAt}% context.`);
+  saveLaunch(launchSpec({ port }));   // so the restart script can start it the same way
 });
+server.listen(port, '127.0.0.1');
 
-process.on('SIGINT', () => {
-  for (const p of hub.projects.values()) for (const a of p.agents.values()) a.close();
-  process.exit(0);
-});
+function stopAgents() { for (const p of hub.projects.values()) for (const a of p.agents.values()) a.close(); }
+
+// Stop taking requests, close the pages' live streams (they reconnect to the new hub) and the agents (they resume
+// on their next message, as after any restart), start the new hub detached with no window, then leave.
+let restarting = false;
+function restart() {
+  if (restarting) return;
+  restarting = true;
+  console.log('Restarting...');
+  server.close();
+  for (const res of clients) { try { res.end(); } catch { } }
+  clients.clear();
+  stopAgents();
+  try { startDetached(launchSpec({ port })); }
+  catch (e) { console.error(`Could not start the new hub: ${e.message}`); restarting = false; server.listen(port, '127.0.0.1'); return; }
+  setTimeout(() => process.exit(0), 300);
+}
+
+process.on('SIGINT', () => { stopAgents(); process.exit(0); });

@@ -77,6 +77,54 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .dot.unread{background:var(--warn)}
 .side-label{font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.6px;padding:12px 10px 4px}
 .side-foot{padding:10px;border-top:1px solid var(--line)}
+/* the hub's own menu (M010): Restart */
+.side-head strong{flex:1}
+.hub-menu-wrap{position:relative}
+#hub-menu-btn{color:var(--faint);padding:5px}
+#hub-menu-btn:hover,#hub-menu-btn[aria-expanded="true"]{color:var(--hud-cyan);border-color:var(--hud-line)}
+.hub-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:40;width:min(290px,calc(100vw - 24px));padding:5px;border-radius:12px;
+  background:linear-gradient(165deg,#18202c,#0e1219);border:1px solid var(--hud-line);box-shadow:0 18px 50px rgba(0,0,0,.55),0 0 30px -12px rgba(111,227,255,.35)}
+.hm-item{display:flex;gap:11px;align-items:flex-start;width:100%;font:inherit;color:var(--text);background:none;border:0;border-radius:8px;padding:9px 10px;text-align:left;cursor:pointer}
+.hm-item:hover,.hm-item:focus-visible{background:rgba(111,227,255,.07);outline:none}
+.hm-item .icon{color:var(--hud-cyan);margin-top:1px}
+.hm-item > span{display:grid;gap:1px;font-size:13.5px}
+.hm-item .faint{font-size:12px}
+.hm-confirm{display:grid;gap:8px;padding:9px 10px}
+.hm-confirm b{font-size:13.5px}
+.hm-confirm p{margin:0;font-size:12.5px;line-height:1.45}
+/* while the hub restarts: a small panel, the page reconnects on its own */
+.restarting{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:rgba(6,11,18,.62);backdrop-filter:blur(2px)}
+.rs-panel{display:flex;gap:14px;align-items:center;max-width:min(440px,calc(100vw - 24px));padding:16px 14px 16px 18px;border-radius:14px;
+  background:linear-gradient(165deg,#141c27,#0b1017);border:1px solid var(--hud-faint);box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 40px -8px rgba(111,227,255,.35)}
+.rs-ring{width:34px;height:34px;flex:none;fill:none;stroke-width:3;stroke-linecap:round}
+.rs-ring circle{stroke:var(--hud-line)}
+.rs-ring path{stroke:var(--hud-cyan);transform-origin:24px 24px;animation:rs-spin 1s linear infinite;filter:drop-shadow(0 0 4px var(--hud-cyan))}
+@keyframes rs-spin{to{transform:rotate(360deg)}}
+.rs-text{flex:1;min-width:0;display:grid;gap:3px}
+.rs-text b{font-size:14px;color:var(--hud-ice)}
+.rs-text .faint{font-size:12.5px}
+.restarting.warn .rs-ring path{stroke:var(--hud-amber);filter:none}
+.restarting.done .rs-ring path{stroke:var(--good);animation:none;filter:none}
+@media (prefers-reduced-motion: reduce){.rs-ring path{animation-duration:3s}}
+.q-done{margin:6px 0 0;font-size:12.5px}
+/* questions answered right in Needs you: a row per question, its own reply box */
+.qrows{display:grid;gap:0;margin:2px 0 0;border-top:1px solid var(--hud-line)}
+.qrow{display:grid;gap:7px;padding:10px 0;border-bottom:1px solid var(--hud-line)}
+.qtext{margin:0;font-size:13.5px;line-height:1.5;color:var(--text)}
+.qreply{display:flex;gap:6px;align-items:flex-end;min-width:0}
+.qbox{flex:1;min-width:0;min-height:36px;max-height:140px;padding:7px 11px;line-height:20px;border-radius:10px;background:var(--bg);border-color:var(--line2);overflow-y:hidden;font-size:13.5px}
+.qbox:focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.25),0 0 14px -4px rgba(111,227,255,.45)}
+.qquick{flex:none;height:36px;min-width:52px;padding:0 12px;font:600 12.5px/1 var(--font);letter-spacing:.02em;color:var(--hud-ice);background:rgba(111,227,255,.05);border:1px solid var(--hud-faint);border-radius:10px;cursor:pointer}
+.qquick:hover{background:rgba(111,227,255,.11);border-color:var(--hud-dim)}
+.qquick.on{color:#06141b;background:var(--hud-cyan);border-color:var(--hud-cyan);box-shadow:0 0 14px -2px rgba(111,227,255,.55)}
+.qquick:focus-visible{outline:2px solid var(--hud-cyan);outline-offset:2px}
+.qx{flex:none;height:36px;width:36px;color:var(--faint)}
+.qx:hover{color:var(--text)}
+.qfoot{margin-top:10px}
+.qfoot .spacer{flex:1}
+.qfoot .btn.primary:disabled{opacity:.4}
+.msg.you .yq{display:block;margin:0 0 4px;padding:1px 0 1px 9px;border-left:2px solid var(--hud-dim);color:var(--muted);font-size:12.5px}
+@media (max-width:720px){.qquick{min-width:48px;padding:0 10px}.qbox,.qquick,.qx{min-height:40px;height:auto}.qx{height:40px;width:40px}}
 
 .main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .main-head{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);min-height:58px}

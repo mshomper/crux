@@ -2,6 +2,8 @@
 import { LiveMap } from './map.js';
 import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
+import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
+import { enterAction, insertLineBreak } from './composer-keys.js';
 const EFFORT_SHORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'x-high', max: 'max' };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,7 +22,8 @@ const S = {
   seen: store.get('seen', {}),
   open: new Set(), // expanded messages, answered approvals and task lines
   activity: {},
-  pending: new Set()
+  pending: new Set(),
+  drafts: store.get('drafts', {})   // answers typed in Needs you, by "<summary id>:<question place>"
 };
 
 const proj = () => S.projects.find(p => p.name === S.current) || S.projects[0];
@@ -35,12 +38,17 @@ async function api(path, body) {
 }
 
 async function load() {
-  const { projects, retireAt, models, settings } = await api('/api/state');
+  const { projects, retireAt, models, settings, boot } = await api('/api/state');
+  S.boot = boot;
   map.retireAt = retireAt;
   S.settings = settings || {};
   S.models = models || [];
   S.projects = projects;
   S.pending = new Set(projects.flatMap(p => p.pendingApprovals));
+  // Drafts for questions that are no longer waiting are let go.
+  const live = new Set(projects.flatMap(p => openQuestions(p).flatMap(q => q.open.map(x => draftKey(q.id, x.i)))));
+  for (const k of Object.keys(S.drafts)) if (!live.has(k)) delete S.drafts[k];
+  store.set('drafts', S.drafts);
   if (!proj()) return render();
   S.current = proj().name;
   render();
@@ -49,8 +57,10 @@ async function load() {
 let refreshTimer;
 function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(load, 250); }
 
+let es = null;
 function connect() {
-  const es = new EventSource('/api/stream');
+  es?.close();
+  es = new EventSource('/api/stream');
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
     const p = S.projects.find(x => x.name === ev.project);
@@ -72,8 +82,65 @@ function connect() {
     map.event(p, ev);
     render();
   };
-  es.onerror = () => { es.close(); setTimeout(() => { connect(); load(); }, 2000); };
+  // Lost the hub: try again every two seconds. During a restart the restart view does the reconnecting.
+  es.onerror = () => { es.close(); if (!S.restarting) setTimeout(() => { if (!S.restarting) { connect(); load().catch(() => { }); } }, 2000); };
 }
+
+// ---------- restart (M010): the hub menu's Restart, then wait for the new hub and reconnect ----------
+function working() { return S.projects.flatMap(p => p.agents.filter(a => ['working', 'starting'].includes(a.state))); }
+function renderHubMenu() {
+  const el = $('#hub-menu');
+  $('#hub-menu-btn').setAttribute('aria-expanded', String(!!S.hubMenu));
+  if (!S.hubMenu) { el.hidden = true; return; }
+  const busy = working();
+  el.innerHTML = S.hubMenu === 'confirm'
+    ? `<div class="hm-confirm"><b>Restart the hub now?</b>
+        <p class="faint">${busy.length ? `${busy.length === 1 ? `${esc(busy[0].name)} is` : `${busy.length} agents are`} working; ${busy.length === 1 ? 'it stops' : 'they stop'} and pick${busy.length === 1 ? 's' : ''} up again on the next message.` : 'Agents pick up where they left off on their next message.'} The page reconnects by itself.</p>
+        <div class="row"><button class="btn primary" data-restart-go>${icon('restart')}Restart</button><button class="btn ghost" data-hub-menu-close>Cancel</button></div></div>`
+    : `<button class="hm-item" role="menuitem" data-restart>${icon('restart')}<span><b>Restart hub</b><span class="faint">Stops and starts the server; agents resume</span></span></button>`;
+  el.hidden = false;
+}
+function closeHubMenu() { if (!S.hubMenu) return; S.hubMenu = null; renderHubMenu(); }
+
+async function restartHub() {
+  closeHubMenu();
+  const old = S.boot;
+  const r = await api('/api/restart', {});
+  S.restarting = true;
+  es?.close();
+  showRestarting('Restarting the hub…', 'This page reconnects by itself.');
+  const started = Date.now();
+  let warned = false;
+  while (S.restarting) {
+    await new Promise(ok => setTimeout(ok, 700));
+    const boot = await fetch('/api/ping', { cache: 'no-store' }).then(x => x.ok ? x.json() : null).then(j => j?.boot).catch(() => null);
+    if (boot && boot !== (old || r.boot)) break;
+    if (!warned && Date.now() - started > 45000) {
+      warned = true;
+      showRestarting('The hub has not come back yet', `Still trying. If it stays away, double-click Restart Crux Hub; what the hub printed is in ${r.log || 'hub-4747.log'}.`, true);
+    }
+  }
+  S.restarting = false;
+  await load().catch(() => { });
+  connect();
+  showRestarting('Back', '', false, true);
+  setTimeout(() => { if (!S.restarting) $('#restarting').hidden = true; }, 900);
+}
+function showRestarting(title, sub, warn = false, done = false) {
+  const el = $('#restarting');
+  $('#rs-title').textContent = title;
+  $('#rs-sub').textContent = sub;
+  el.classList.toggle('warn', warn);
+  el.classList.toggle('done', done);
+  el.hidden = false;
+}
+$('#rs-close').addEventListener('click', () => { $('#restarting').hidden = true; });
+$('#hub-menu-btn').addEventListener('click', () => { S.hubMenu = S.hubMenu ? null : 'menu'; renderHubMenu(); $('#hub-menu [data-restart]')?.focus(); });
+$('#hub-menu').addEventListener('click', e => {
+  if (e.target.closest('[data-restart]')) { S.hubMenu = 'confirm'; renderHubMenu(); $('#hub-menu [data-restart-go]')?.focus(); }
+  else if (e.target.closest('[data-restart-go]')) act(restartHub);
+  else if (e.target.closest('[data-hub-menu-close]')) closeHubMenu();
+});
 const key = (p, t) => `${p}::${t}`;
 
 // ---------- helpers ----------
@@ -88,19 +155,8 @@ function escalation(p, id) { return p.events.findLast(e => e.type === 'approval_
 function withOrchestrator(p) { return waitingApprovals(p).filter(e => e.routedTo && !escalation(p, e.approval)); }
 function pendingApprovals(p) { return waitingApprovals(p).filter(e => !e.routedTo || escalation(p, e.approval)); }
 function pendingForYou(p) { return new Set(p ? pendingApprovals(p).map(e => e.approval) : []); }
-// The latest summary in each thread that asked something, until someone other than the asker replies there.
-function openQuestions(p) {
-  const out = [];
-  for (const t of new Set(p.events.map(e => e.thread).filter(Boolean))) {
-    const evs = p.events.filter(e => e.thread === t);
-    const lastAsk = evs.findLastIndex(e => e.type === 'summary' && e.questions?.length);
-    if (lastAsk < 0) continue;
-    const asker = evs[lastAsk].from;
-    if (evs.slice(lastAsk + 1).some(e => e.type === 'message' && e.from !== asker)) continue; // you or the orchestrator replied
-    out.push(evs[lastAsk]);
-  }
-  return out;
-}
+// Questions agents asked that still wait on you; the rule lives in questions.js, shared with the map and the server.
+function openQuestions(p) { return askedOpen(p.events, { decisionStatus: pageStatus(p) }); }
 // Lessons about you that an agent wants added to the core profile, until you add or skip them.
 function pendingLessons(p) {
   const done = new Set(p.events.filter(e => e.type === 'lesson_result').map(e => e.lesson));
@@ -139,15 +195,67 @@ function visualEl(p, ev, compact) {
     : `<img class="vis-img" src="${src}" alt="${esc(ev.caption || 'Visual')}" loading="lazy">`;
   return `<figure class="visual ${compact ? 'compact' : ''}">${view}<figcaption>${esc(ev.caption || '')}<a href="${src}" target="_blank" rel="noopener" class="row">${icon('page')}Open</a></figcaption></figure>`;
 }
+// A round summary's questions, each answerable here (M010): its own row and reply box, Yes and No where the
+// question is plainly yes or no. Send answers posts every filled box to the agent's thread as one message.
+// ev.open: the questions still waiting; ev.byPicks: how many your picks answered. Dismiss (a row, or the card)
+// takes it out of Needs you without telling the agent; the summary stays in its thread.
+// Drafts live in S.drafts, so the list can redraw while you type.
+const draftKey = (id, i) => `${id}:${i}`;
+function filledAnswers(ev) { return ev.open.map(q => ({ index: q.i, text: (S.drafts[draftKey(ev.id, q.i)] || '').trim() })).filter(a => a.text); }
 function questionCard(ev) {
   const p = proj();
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
+  const where = ev.thread === 'orchestrator' ? 'the orchestrator thread' : ev.thread;
+  const filled = filledAnswers(ev).length;
+  const rows = ev.open.map(q => {
+    const k = draftKey(ev.id, q.i), draft = S.drafts[k] || '';
+    const yn = isYesNo(q.text) ? ['Yes', 'No'].map(w => `<button class="qquick ${draft === w ? 'on' : ''}" data-quick="${esc(k)}" data-word="${w}" aria-pressed="${draft === w}">${w}</button>`).join('') : '';
+    return `<div class="qrow">
+      <p class="qtext">${esc(q.text)}</p>
+      <div class="qreply">${yn}<textarea class="qbox" rows="1" data-answer="${esc(k)}" data-q="${esc(ev.id)}" aria-label="Your answer" placeholder="${ev.open.length > 1 ? 'Answer this one' : 'Your answer'}">${esc(draft)}</textarea>
+        <button class="btn ghost icon-only qx" data-dismiss="${esc(ev.id)}" data-index="${q.i}" aria-label="Dismiss this question" title="Dismiss this question: it leaves Needs you, and ${esc(ev.from)} is not told">${icon('x')}</button></div>
+    </div>`;
+  }).join('');
   return `<article class="card question" data-card="question:${esc(ev.id)}">
     <div class="card-head">${icon('inbox')}<h3>${esc(ev.from)} asks</h3><span class="time">${timeOf(ev.ts)}</span></div>
     ${vis.map(v => visualEl(p, v, true)).join('')}
-    <ul>${ev.questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>
-    <button class="btn" data-thread="${esc(ev.thread)}">Answer in ${ev.thread === 'orchestrator' ? 'the orchestrator thread' : esc(ev.thread)}</button>
+    <div class="qrows">${rows}</div>
+    ${ev.byPicks ? `<p class="faint q-done">${ev.byPicks === 1 ? 'One more question was' : `${ev.byPicks} more questions were`} answered by your picks.</p>` : ''}
+    <div class="row qfoot"><button class="btn primary" data-send-answers="${esc(ev.id)}" ${filled ? '' : 'disabled'} title="Send every filled answer to ${esc(ev.from)} as one message">${icon('send')}<span class="qcount">${sendLabel(filled, ev.open.length)}</span></button>
+      <button class="btn ghost" data-thread="${esc(ev.thread)}" title="Open ${esc(where)}">Open thread</button>
+      <span class="spacer"></span>${ev.open.length > 1 ? `<button class="btn ghost" data-dismiss="${esc(ev.id)}" title="Take the whole card out of Needs you. The agent is not told.">${icon('x')}Dismiss all</button>` : ''}</div>
   </article>`;
+}
+const sendLabel = (n, of) => !n ? 'Send answers' : n === 1 && of === 1 ? 'Send answer' : `Send ${n} answer${n === 1 ? '' : 's'}`;
+function sendAnswers(id) {
+  const p = proj(), ev = openQuestions(p).find(q => q.id === id);
+  if (!ev || S.sending) return;
+  const answers = filledAnswers(ev);
+  if (!answers.length) return;
+  S.sending = true;
+  act(async () => {
+    try {
+      await api('/api/answer', { project: p.name, question: id, answers });
+      for (const a of answers) delete S.drafts[draftKey(id, a.index)];
+      store.set('drafts', S.drafts);
+    } finally { S.sending = false; }
+  });
+}
+// Typing in a reply box: keep the draft, grow the box, and light the card's Send button, without a redraw.
+function draftChanged(box) {
+  S.drafts[box.dataset.answer] = box.value;
+  if (!box.value) delete S.drafts[box.dataset.answer];
+  store.set('drafts', S.drafts);
+  growBox(box, 140);
+  const ev = openQuestions(proj()).find(q => q.id === box.dataset.q);
+  const btn = box.closest('.card')?.querySelector('[data-send-answers]');
+  if (ev && btn) { const n = filledAnswers(ev).length; btn.disabled = !n; btn.querySelector('.qcount').textContent = sendLabel(n, ev.open.length); }
+  for (const b of box.closest('.qrow')?.querySelectorAll('.qquick') || []) { const on = box.value === b.dataset.word; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+}
+function growBox(box, max) {
+  box.style.height = 'auto';
+  box.style.height = Math.min(box.scrollHeight + 2, max) + 'px';
+  box.style.overflowY = box.scrollHeight > max ? 'auto' : 'hidden';
 }
 function threadEvents(p, t) {
   const agentThread = new Map(p.agents.map(a => [a.name, a.thread]));
@@ -206,7 +314,7 @@ function lastLine(p, t) {
   if (!ev) return '';
   if (ev.type === 'summary') return `Summary: ${(ev.done || [])[0] || ev.next_step || 'posted'}`;
   if (ev.type === 'pick') return `Picked D${pad(ev.decision)} ${ev.label}`;
-  return `${ev.from === 'you' ? 'You: ' : ''}${ev.text}`;
+  return `${ev.from === 'you' ? 'You: ' : ''}${ev.from === 'you' ? String(ev.text || '').replace(/^> /gm, '') : ev.text}`;
 }
 function unread(p, t) { return threadEvents(p, t).length > (S.seen[key(p.name, t)] || 0); }
 
@@ -324,7 +432,8 @@ function isTall(text, limit) { const s = String(text || ''); return s.length > l
 function messageEl(p, ev) {
   const you = ev.from === 'you';
   const relay = !you && S.thread !== 'orchestrator' && /^orchestrator-/.test(ev.from);
-  const body = you ? `<p>${esc(ev.text).replace(/\n/g, '<br>')}</p>` : md(ev.text);
+  // Your words as typed; "> " lines (a question quoted by an answer from Needs you) show as a quote.
+  const body = you ? `<p>${String(ev.text || '').split('\n').map(l => /^> /.test(l) ? `<span class="yq">${esc(l.slice(2))}</span>` : esc(l)).join('<br>').replace(/<\/span><br>/g, '</span>')}</p>` : md(ev.text);
   // A brief that started a worker says what it was started as.
   const runs = 'model' in ev || 'effort' in ev ? modelChip({ type: ev.agentType, model: ev.model, effort: ev.effort, modelSeen: S.thread !== 'orchestrator' && p.agents.find(a => a.thread === ev.thread)?.modelSeen }, { mini: true }) : '';
   const shots = ev.attachments?.length ? shotsEl(p, ev.attachments) : '';
@@ -415,6 +524,13 @@ function renderFeed() {
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
 
   if (S.thread === 'needs') {
+    // A reply box being typed in keeps its focus and cursor through the redraw.
+    const typing = document.activeElement?.matches?.('.qbox') ? { k: document.activeElement.dataset.answer, a: document.activeElement.selectionStart, b: document.activeElement.selectionEnd } : null;
+    queueMicrotask(() => {
+      for (const box of feed.querySelectorAll('.qbox')) if (box.value) growBox(box, 140);
+      const box = typing && [...feed.querySelectorAll('.qbox')].find(x => x.dataset.answer === typing.k);
+      if (box) { box.focus({ preventScroll: true }); box.setSelectionRange(typing.a, typing.b); }
+    });
     const ds = openDecisions(p), aps = pendingApprovals(p), qs = openQuestions(p);
     const withRec = ds.filter(d => d.status === 'open' && d.recommended);
     let html = '';
@@ -488,9 +604,11 @@ function renderHead() {
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#attach').disabled = !!retired;
+  // The new-line hint only where there is a real keyboard and room for it.
+  const keys = matchMedia('(min-width: 721px) and (pointer: fine)').matches ? ' Alt+Enter for a new line.' : '';
   $('#input').placeholder = retired ? 'This agent has retired.' : t === 'needs' || t === 'orchestrator'
-    ? `Message the orchestrator. Short replies like "all" or "4A 7B" pick decisions.`
-    : `Message ${t} directly.`;
+    ? `Message the orchestrator. Short replies like "all" or "4A 7B" pick decisions.${keys}`
+    : `Message ${t} directly.${keys}`;
   const act = p && S.activity[key(p.name, t === 'needs' ? 'orchestrator' : t)];
   $('#activity').textContent = act || '';
   $('#activity').classList.toggle('on', !!act);
@@ -564,10 +682,12 @@ const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.
 document.addEventListener('pointerdown', e => {
   if (S.projMenu && !e.target.closest('.proj-switch')) { S.projMenu = false; renderProjects(); }
   if (S.mmenu && !e.target.closest('#mmenu, [data-mchip]')) closeModelMenu();
+  if (S.hubMenu && !e.target.closest('.hub-menu-wrap')) closeHubMenu();
 });
 addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (S.mmenu) return closeModelMenu();
+  if (S.hubMenu) { closeHubMenu(); return $('#hub-menu-btn').focus(); }
   if (S.projMenu) { S.projMenu = false; renderProjects(); $('[data-proj-toggle]')?.focus(); }
 });
 addEventListener('resize', () => { placeModelMenu(); autosize(); });
@@ -601,6 +721,16 @@ document.addEventListener('click', e => {
     const picks = openDecisions(proj()).filter(d => d.status === 'open' && d.recommended).map(d => ({ id: d.id, choice: d.recommended }));
     return act(() => api('/api/pick', { project: proj().name, picks }).then(load));
   }
+  const dq = e.target.closest('[data-dismiss]');
+  if (dq) return act(() => api('/api/dismiss', { project: proj().name, question: dq.dataset.dismiss, ...('index' in dq.dataset ? { index: Number(dq.dataset.index) } : {}) }));
+  const qq = e.target.closest('[data-quick]');
+  if (qq) {
+    const box = [...document.querySelectorAll('.qbox')].find(x => x.dataset.answer === qq.dataset.quick);
+    if (box) { box.value = box.value === qq.dataset.word ? '' : qq.dataset.word; draftChanged(box); box.focus(); }
+    return;
+  }
+  const sa = e.target.closest('[data-send-answers]');
+  if (sa && !sa.disabled) return sendAnswers(sa.dataset.sendAnswers);
   const ls = e.target.closest('[data-lesson]');
   if (ls) return act(() => api('/api/lessons', { project: proj().name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
   const ap = e.target.closest('[data-approve]'); if (ap) return act(() => api('/api/approval', { id: ap.dataset.approve, allow: true, always: 'always' in ap.dataset }));
@@ -727,7 +857,25 @@ $('#composer').addEventListener('submit', e => {
     finally { S.sending = false; }
   });
 });
-$('#input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); } });
+// Reply boxes in Needs you: the same keys as the composer; Enter sends the card's filled answers together.
+$('#feed').addEventListener('input', e => { if (e.target.matches('.qbox')) draftChanged(e.target); });
+$('#feed').addEventListener('keydown', e => {
+  if (!e.target.matches('.qbox')) return;
+  const what = enterAction(e);
+  if (what === 'native') return;
+  e.preventDefault();
+  if (what === 'newline') insertLineBreak(e.target);
+  else sendAnswers(e.target.dataset.q);
+});
+
+// Enter sends; Alt+Enter and Shift+Enter start a new line (composer-keys.js).
+$('#input').addEventListener('keydown', e => {
+  const what = enterAction(e);
+  if (what === 'native') return;
+  e.preventDefault();
+  if (what === 'newline') insertLineBreak(e.target);
+  else $('#composer').requestSubmit();
+});
 function autosize() {
   const i = $('#input');
   i.style.height = 'auto';

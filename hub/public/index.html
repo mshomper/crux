@@ -21,6 +21,10 @@
     <header class="side-head">
       <img src="icon.svg" alt="" width="22" height="22">
       <strong>Crux Hub</strong>
+      <div class="hub-menu-wrap">
+        <button class="btn ghost icon-only" id="hub-menu-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Hub menu" title="Hub menu"><svg class="icon"><use href="#i-more"/></svg></button>
+        <div id="hub-menu" class="hub-menu" role="menu" aria-label="Hub" hidden></div>
+      </div>
     </header>
     <nav id="projects" class="projects" aria-label="Projects"></nav>
     <nav id="threads" class="threads" aria-label="Threads"></nav>
@@ -73,6 +77,14 @@
 
 <div id="mmenu" class="mmenu" role="dialog" aria-label="Model and effort" hidden></div>
 
+<div id="restarting" class="restarting" role="status" aria-live="polite" hidden>
+  <div class="rs-panel">
+    <svg class="rs-ring" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="20"/><path d="M24 4a20 20 0 0 1 20 20"/></svg>
+    <div class="rs-text"><b id="rs-title">Restarting the hub…</b><span id="rs-sub" class="faint">This page reconnects by itself.</span></div>
+    <button class="btn ghost icon-only" id="rs-close" aria-label="Hide" title="Hide this; the page keeps reconnecting"><svg class="icon"><use href="#i-x"/></svg></button>
+  </div>
+</div>
+
 <dialog id="agent-dialog" class="dialog">
   <form method="dialog" id="agent-form">
     <h2>New agent</h2>
@@ -121,6 +133,8 @@
     <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17.5l5-4.5 3.5 3 3-2.5 4.5 4"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.5" cy="12" r="1.3"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></symbol>
   </defs>
 </svg>
