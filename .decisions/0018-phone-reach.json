@@ -1,0 +1,119 @@
+{
+ "id": 18,
+ "slug": "phone-reach",
+ "title": "How does your phone reach the hub when you are away from your desk?",
+ "date": "2026-11-11",
+ "mode": "full",
+ "lenses": [
+  "architecture"
+ ],
+ "status": "decided",
+ "context": "The hub runs on your PC and only answers on that PC (localhost). Away from your desk you cannot see cards or answer them, so agents stall on permission prompts and decisions. Whatever opens it up must keep everyone else out: the hub can run commands on your machine through its agents.",
+ "depends_on": [
+  4
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "source": "claude",
+   "key": "A",
+   "name": "Private network for your devices",
+   "summary": "Install Tailscale on the PC and the phone. The hub gets an https address that only your own signed-in devices can open; nothing is reachable from the open internet. On the phone it is the same hub page, added to the home screen like an app.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='60' width='90' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='65' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Phone</text><rect x='215' y='60' width='90' height='60' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='260' y='87' font-size='12' text-anchor='middle' fill='currentColor'>PC</text><text x='260' y='101' font-size='12' text-anchor='middle' fill='currentColor'>hub</text><rect x='125' y='40' width='75' height='100' rx='10' fill='none' stroke='currentColor' stroke-dasharray='4 3'/><line x1='112' y1='90' x2='213' y2='90' stroke='currentColor'/><polygon points='213,90 206.7,93.0 206.7,87.0' fill='currentColor'/><text x='162' y='160' font-size='11' text-anchor='middle' fill='currentColor'>your devices only</text></svg>",
+   "pros": [
+    "Nothing exposed to the internet at all",
+    "Full hub on the phone: cards, threads, board, live map",
+    "Free for personal use; no domain or server to run",
+    "Gives the https the phone needs for notifications"
+   ],
+   "cons": [
+    "One more app on the PC and the phone",
+    "Works only on devices you have signed in",
+    "The PC has to be on and awake"
+   ],
+   "effort": "Small: install two apps, one command, plus a short hub change to trust the address"
+  },
+  {
+   "source": "claude",
+   "key": "B",
+   "name": "Public address behind a sign-in",
+   "summary": "A Cloudflare tunnel publishes the hub at a subdomain of a domain you own, with Cloudflare Access asking for a one-time email code before anything loads.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='15' y='60' width='80' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='55' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Phone</text><rect x='120' y='50' width='90' height='80' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor' stroke-dasharray='4 3'/><text x='165' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Sign-in</text><text x='165' y='101' font-size='12' text-anchor='middle' fill='currentColor'>gate</text><rect x='235' y='60' width='70' height='60' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='270' y='87' font-size='12' text-anchor='middle' fill='currentColor'>PC</text><text x='270' y='101' font-size='12' text-anchor='middle' fill='currentColor'>hub</text><line x1='97' y1='90' x2='118' y2='90' stroke='currentColor'/><polygon points='118,90 111.7,93.0 111.7,87.0' fill='currentColor'/><line x1='212' y1='90' x2='233' y2='90' stroke='currentColor'/><polygon points='233,90 226.7,93.0 226.7,87.0' fill='currentColor'/><text x='165' y='160' font-size='11' text-anchor='middle' fill='currentColor'>on the internet</text></svg>",
+   "pros": [
+    "Opens from any browser, even one you have never used",
+    "No app on the phone"
+   ],
+   "cons": [
+    "The hub sits on the open internet; safety rests on the sign-in gate",
+    "Needs the domain's DNS moved to Cloudflare",
+    "More to set up and to keep right"
+   ],
+   "effort": "Medium"
+  },
+  {
+   "source": "claude",
+   "key": "C",
+   "name": "No remote page: chat only",
+   "summary": "Keep the hub on the PC only. Away from your desk, everything comes and goes through a chat app (decision 19 picks which).",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='60' width='90' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='65' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Phone</text><text x='65' y='101' font-size='12' text-anchor='middle' fill='currentColor'>chat app</text><rect x='215' y='60' width='90' height='60' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='260' y='87' font-size='12' text-anchor='middle' fill='currentColor'>PC</text><text x='260' y='101' font-size='12' text-anchor='middle' fill='currentColor'>hub</text><rect x='120' y='120' width='80' height='40' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor' stroke-dasharray='4 3'/><text x='160' y='137' font-size='12' text-anchor='middle' fill='currentColor'>Chat</text><text x='160' y='151' font-size='12' text-anchor='middle' fill='currentColor'>service</text><line x1='60' y1='122' x2='118' y2='140' stroke='currentColor' stroke-dasharray='4 3'/><polygon points='118,140 111.1,141.0 112.9,135.2' fill='currentColor'/><line x1='213' y1='120' x2='202' y2='140' stroke='currentColor' stroke-dasharray='4 3'/><polygon points='202,140 202.4,133.0 207.7,135.9' fill='currentColor'/></svg>",
+   "pros": [
+    "Nothing on the PC is opened up",
+    "Works in an app you already check"
+   ],
+   "cons": [
+    "Only what fits in a chat message: no board, no live map, no full decision pages",
+    "Every card's contents pass through the chat company's servers"
+   ],
+   "effort": "Medium (it is all in decision 19)"
+  }
+ ],
+ "criteria": [
+  {
+   "name": "Keeps strangers out",
+   "scores": {
+    "A": 3,
+    "B": 2,
+    "C": 3
+   }
+  },
+  {
+   "name": "Full hub on the phone",
+   "scores": {
+    "A": 3,
+    "B": 3,
+    "C": 1
+   }
+  },
+  {
+   "name": "Contents stay with you",
+   "scores": {
+    "A": 3,
+    "B": 2,
+    "C": 1
+   },
+   "note": "B passes through Cloudflare; C through the chat company"
+  },
+  {
+   "name": "Setup",
+   "scores": {
+    "A": 3,
+    "B": 1,
+    "C": 2
+   }
+  }
+ ],
+ "recommended": "A",
+ "recommendation": "It gives you the whole hub on the phone without putting anything on the internet, and it is the least to set up. It also provides the secure address that phone notifications (decision 19) need.",
+ "confidence": "strong",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "remote access to local tools",
+   "value": "private Tailscale network (tailscale serve gives an https address only your devices can open); nothing exposed on the public internet"
+  }
+ ]
+}

@@ -1,5 +1,6 @@
 // Crux hub interface: plain ES module, no build step.
 import { LiveMap } from './map.js';
+import { initPhone } from './phone.js';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = n => String(n).padStart(4, '0');
@@ -114,7 +115,7 @@ function visualEl(p, ev, compact) {
 function questionCard(ev) {
   const p = proj();
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
-  return `<article class="card question">
+  return `<article class="card question" data-card="question:${esc(ev.id)}">
     <div class="card-head">${icon('inbox')}<h3>${esc(ev.from)} asks</h3><span class="time">${timeOf(ev.ts)}</span></div>
     ${vis.map(v => visualEl(p, v, true)).join('')}
     <ul>${ev.questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>
@@ -135,6 +136,12 @@ function md(src) {
     return b.trim().split(/\n{2,}/).map(par => {
       const lines = par.split('\n');
       const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
+      // A markdown table: rows of | cells |, the second row being the --- separator. Cells wrap; the table never scrolls sideways.
+      if (lines.length >= 2 && lines.every(l => /^\s*\|.*\|\s*$/.test(l)) && /^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*$/.test(lines[1])) {
+        const cells = l => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map(c => inline(c.trim().replace(/\\\|/g, '|')));
+        const [head, , ...rows] = lines;
+        return `<table class="md-table"><thead><tr>${cells(head).map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${cells(r).map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+      }
       if (lines.every(l => /^\s*[-*] /.test(l))) return `<ul>${lines.map(l => `<li>${inline(l.replace(/^\s*[-*] /, ''))}</li>`).join('')}</ul>`;
       if (lines.every(l => /^\s*\d+[.)] /.test(l))) return `<ol>${lines.map(l => `<li>${inline(l.replace(/^\s*\d+[.)] /, ''))}</li>`).join('')}</ol>`;
       if (/^#{1,4} /.test(par)) return `<p><strong>${inline(par.replace(/^#+ /, ''))}</strong></p>`;
@@ -196,7 +203,7 @@ function decisionCard(p, d) {
     : found
       ? `<button class="btn good" data-pick="${d.id}" data-choice="confirm">${icon('check')}Confirm</button><button class="btn" data-pick="${d.id}" data-choice="reject">${icon('x')}Reject</button>`
       : `<span class="chip ${esc(d.status)}">${esc(d.status)}${d.chosen ? ' · ' + esc(d.chosen) : ''}</span>`;
-  return `<article class="card decision ${open || found ? '' : 'done'}">
+  return `<article class="card decision ${open || found ? '' : 'done'}" data-card="decision:${d.id}">
     <div class="card-head"><h3>D${pad(d.id)} · ${esc(d.title)}</h3><span class="chip ${esc(d.status)}">${esc(d.status)}</span></div>
     ${d.context ? `<p class="ctx">${esc(d.context)}</p>` : ''}
     ${found ? '' : `<div class="options">${opts}</div>`}
@@ -209,15 +216,21 @@ function approvalCard(ev) {
   const p = proj();
   const result = p.events.find(e => e.type === 'approval_result' && e.approval === ev.approval);
   const input = ev.input?.command || ev.input?.file_path || JSON.stringify(ev.input, null, 1);
+  // Plain words first: what it will do (the hub reads the command), what it touches, and the agent's own reason.
+  const plain = ev.summary?.plain;
+  const why = ev.input?.description && ev.input.description !== plain && !String(input).startsWith(ev.input.description.replace(/…$/, '')) ? ev.input.description : '';
   if (!live && !S.open.has(ev.approval)) {
-    // Answered: one line. Click to see the command again.
-    const what = ev.description || ev.input?.description || String(input).split('\n')[0];
-    return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${esc(ev.agent)} · ${esc(ev.tool)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
+    // Answered: one line. Click to see it again.
+    const what = plain || ev.input?.description || ev.description || String(input).split('\n')[0];
+    return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${esc(ev.agent)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
   }
-  return `<article class="card approval ${live ? '' : 'answered'}" ${live ? '' : `data-expand="${esc(ev.approval)}"`}>
-    <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to use ${esc(ev.title || ev.tool)}</h3></div>
-    ${ev.description ? `<p class="muted">${esc(ev.description)}</p>` : ''}
-    <pre>${esc(input)}</pre>
+  const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
+  const raw = `<pre>${esc(input)}</pre>`;
+  return `<article class="card approval ${live ? '' : 'answered'}" data-card="approval:${esc(ev.approval)}" ${live ? '' : `data-expand="${esc(ev.approval)}"`}>
+    <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}</h3></div>
+    ${tags ? `<div class="tags">${tags}</div>` : ''}
+    ${why ? `<p class="muted why">Why: ${esc(why)}</p>` : (!plain && ev.description ? `<p class="muted">${esc(ev.description)}</p>` : '')}
+    ${plain ? `<div class="raw">${fold('cmd:' + ev.approval, raw, String(input).length > 120 || String(input).includes('\n'))}</div>` : raw}
     <div class="row">${live
       ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button>${ev.always ? `<button class="btn" data-approve="${ev.approval}" data-always title="Saved to this project's Claude Code settings, where you can remove it">${icon('check')}Always allow</button>` : ''}<button class="btn" data-deny="${ev.approval}">${icon('x')}Deny</button>${ev.always ? `<span class="faint always-rule">Always: ${esc(ev.always.join('; '))}</span>` : ''}`
       : `<span class="chip">${esc(result ? result.how : 'expired')}</span>`}</div>
@@ -342,7 +355,7 @@ function renderBoard() {
     <div class="bs">${esc(e.summary || '')} <span class="faint">· ${esc(e.from)}</span></div></summary><div class="bbody">${esc(e.body || '')}</div></details></div>`;
   const live = es.filter(e => e.status === 'active');
   const handoff = live.filter(e => e.kind === 'handoff').at(-1);
-  $('#board-body').innerHTML =
+  $('#board-body').innerHTML = (ds.length ? `<a class="bitem board-page" href="/p/${encodeURIComponent(p.name)}/index.html" target="_blank" rel="noopener"><div class="bt"><span>${icon('page')}</span><span>Open this project's Crux board</span></div></a>` : '') +
     group('Waiting for your call', ds.filter(d => d.status === 'open' || d.status === 'found').map(dItem)) +
     group('Requirements', live.filter(e => e.kind === 'requirement').map(eItem)) +
     group('Decided', ds.filter(d => d.status === 'decided').map(dItem)) +
@@ -358,6 +371,7 @@ function render() {
   renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard();
   map.update(proj(), S.pending);
   $('#app').classList.toggle('with-board', !$('#board').hidden);
+  $('#open-board').classList.toggle('on', !$('#board').hidden);
 }
 
 // ---------- actions ----------
@@ -367,8 +381,31 @@ function selectThread(t) {
   S.thread = t; S.justSwitched = true; store.set('thread', t);
   $('#app').classList.remove('show-side');
   render();
+  phone.viewChanged();
   $('#input').focus();
 }
+
+// Open the card a notification points at (card = "approval:<id>", "decision:<n>" or "question:<event id>").
+// Waiting cards are in Needs you; one already answered is shown in its own thread instead.
+function openCard(project, card) {
+  if (project && S.projects.some(p => p.name === project)) { S.current = project; store.set('project', project); }
+  const p = proj();
+  if (!p) return;
+  const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];
+  const waiting = kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
+    : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
+      : openQuestions(p).some(e => e.id === id);
+  const ev = kind === 'approval' ? p.events.find(e => e.type === 'approval' && e.approval === id) : kind === 'question' ? p.events.find(e => e.id === id) : null;
+  if (kind === 'approval' && ev) S.open.add(id);
+  S.thread = waiting || !ev ? 'needs' : ev.thread;
+  store.set('thread', S.thread);
+  $('#app').classList.remove('show-side');
+  render();
+  phone.viewChanged();
+  const el = [...document.querySelectorAll('[data-card]')].find(x => x.dataset.card === card);
+  if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2400); }
+}
+const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: S.thread }), openCard });
 
 document.addEventListener('click', e => {
   const ex = e.target.closest('[data-expand]');
@@ -430,4 +467,4 @@ $('#agent-form').addEventListener('submit', e => {
 });
 
 if (matchMedia('(max-width: 720px)').matches) $('#app').classList.add('show-side');
-load().then(connect);
+load().then(() => { phone.openFromLocation(); phone.viewChanged(); connect(); });

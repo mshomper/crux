@@ -8,6 +8,8 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
 import { parseQuickPicks } from './lib/quick.mjs';
+import { checkRequest, extraHosts } from './lib/access.mjs';
+import { Push } from './lib/push.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -24,8 +26,29 @@ if (!projects.length) projects = [process.cwd()];
 
 const hub = new Hub({ projects, retireAt });
 
+// Phone notifications (decision 19): a card that needs you becomes a push to every subscribed phone.
+const push = new Push();
+const decisionOpen = (project, id) => { try { return ['open', 'found'].includes(hub.project(project).board.decision(id)?.status); } catch { return false; } };
+hub.on(ev => { if (ev.logged) push.handle(ev, { approvals: hub.approvals, decisionOpen, events: name => hub.project(name).log.events }); });
+const hosts = extraHosts();
+
+// The folders the Crux roll-up scans (same rule as crux/scripts/rollup.mjs): every project's Crux pages under
+// them are served at /files/..., so the all-projects page, boards and decision pages all open from the hub.
+const crux = process.env.CRUX_HOME || join(homedir(), 'crux');
+let roots = [join(homedir(), 'Documents', 'GitHub')];
+try { const c = JSON.parse(readFileSync(join(crux, 'config.json'), 'utf8')); if (Array.isArray(c.roots) && c.roots.length) roots = c.roots; } catch { }
+roots = roots.map(r => resolve(r)).filter(r => existsSync(r));
+const slash = s => s.replace(/\\/g, '/');
+// file:///C:/.../GitHub/AcuLoad/.decisions/0002-x.html  ->  /files/0/AcuLoad/.decisions/0002-x.html
+function hubUrl(fileUrl) {
+  let path;
+  try { path = slash(decodeURIComponent(new URL(fileUrl).pathname)).replace(/^\/([A-Za-z]:)/, '$1'); } catch { return fileUrl; }
+  const i = roots.findIndex(r => path.toLowerCase().startsWith(slash(r).toLowerCase() + '/'));
+  return i < 0 ? fileUrl : `/files/${i}/${path.slice(slash(roots[i]).length + 1).split('/').map(encodeURIComponent).join('/')}`;
+}
+
 // ---------- http ----------
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.webmanifest': 'application/manifest+json' };
 const clients = new Set();
 hub.on(ev => { const line = `data: ${JSON.stringify(ev)}\n\n`; for (const res of clients) res.write(line); });
 
@@ -70,14 +93,25 @@ const routes = {
   'POST /api/retire': ({ project, agent }) => { const p = hub.project(project); hub.retire(p, agent || p.orchestrator()); return { ok: true }; },
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.project(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task }) => ({ name: hub.startWorker(hub.project(project), name, task).name }),
+  // Phone notifications
+  'GET /api/push/key': async () => ({ publicKey: (await push.keys()).publicKey }),
+  'POST /api/push/status': ({ endpoint }) => ({ subscribed: push.has(endpoint), devices: push.subs.length }),
+  'POST /api/push/subscribe': ({ subscription, label }) => ({ devices: push.subscribe(subscription, label) }),
+  'POST /api/push/unsubscribe': ({ endpoint }) => ({ removed: push.unsubscribe(endpoint) }),
+  'POST /api/push/test': async () => ({ sent: await push.send({ kind: 'test', title: 'Crux Hub', body: 'Notifications reach this device.', card: '', url: '/' }) }),
+  // Where an open hub page is and whether you are using it, so cards you are looking at do not buzz your phone.
+  'POST /api/presence': ({ client, ...info }) => { push.presence(String(client || ''), info); return { ok: true }; },
   'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId })
 };
 
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  // Only this machine and the tailnet address get in, and only the hub's own pages may change anything.
+  const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts });
+  if (refused) return send(res, 403, { error: refused });
   try {
     if (url.pathname === '/api/stream') {
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
       res.write(': hello\n\n');
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
@@ -90,6 +124,31 @@ createServer(async (req, res) => {
     // Crux decision pages for each project: /p/<project>/<file>
     const m = /^\/p\/([^/]+)\/([\w.-]+\.html)$/.exec(url.pathname);
     if (m) return serveFile(res, join(hub.project(decodeURIComponent(m[1])).board.decisionsDir, m[2]));
+
+    // Pages ask this to know the hub is running, so they can show a link back to it (they may be opened as files).
+    if (url.pathname === '/api/ping') {
+      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' });
+      return res.end('{"hub":true}');
+    }
+
+    // The all-projects page, with its links pointed at the hub instead of files.
+    if (url.pathname === '/all') {
+      const file = join(crux, 'index.html');
+      if (!existsSync(file)) return send(res, 404, 'No all-projects page yet: it appears after your first Crux decision.', 'text/plain; charset=utf-8');
+      const html = readFileSync(file, 'utf8').replace(/file:\/\/\/[^"'\\\s)<>]+/g, hubUrl);
+      return send(res, 200, html, TYPES['.html']);
+    }
+
+    // Any project's Crux pages under the roll-up folders: only .html files inside a .decisions folder.
+    const f = /^\/files\/(\d+)\/(.+)$/.exec(url.pathname);
+    if (f) {
+      const root = roots[Number(f[1])];
+      const rel = decodeURIComponent(f[2]);
+      const file = root && normalize(join(root, rel));
+      if (!file || !file.startsWith(root + (root.endsWith('\\') ? '' : '\\')) && !file.startsWith(root + '/')) return send(res, 403, { error: 'Forbidden' });
+      if (!/[\\/]\.decisions[\\/][\w.-]+\.html$/.test(file)) return send(res, 403, { error: 'Only Crux pages are served here' });
+      return serveFile(res, file);
+    }
 
     // Visuals agents posted: /media/<project>/<file>. Pages run sandboxed, away from the hub's own origin.
     const v = /^\/media\/([^/]+)\/([\w.-]+)$/.exec(url.pathname);
@@ -110,7 +169,7 @@ createServer(async (req, res) => {
     send(res, 400, { error: e.message });
   }
 }).listen(port, '127.0.0.1', () => {
-  console.log(`Crux hub: http://localhost:${port}`);
+  console.log(`Crux hub: http://localhost:${port}  (phone: tailscale serve --bg ${port}, see README)`);
   console.log(`Projects: ${[...hub.projects.values()].map(p => p.name).join(', ')}`);
   console.log(`Orchestrator hands off at ${retireAt}% context.`);
 });

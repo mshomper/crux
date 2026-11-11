@@ -11,6 +11,7 @@ import { stripLayout, radialLayout, blendLayouts, easeInOut, clamp, lerp } from 
 import { ParticleCore, Effects, STRIDE } from './map-particles.js';
 import { createRenderer } from './map-gl.js';
 import { HudPainter } from './map-hud.js';
+import { NeedsPopover } from './map-needs.js';
 
 const ICON = {
   agent: '<rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 4v3M9.5 12h.01M14.5 12h.01"/>',
@@ -45,6 +46,7 @@ export class LiveMap {
     this.entering = new Map();
     this.feedKey = '';
     this.last = performance.now();
+    this.needsPop = new NeedsPopover({ open: t => this.go(t) });
     this.build();
     this.hud = new HudPainter(this.lineCanvas);
     this.core = new ParticleCore(this.phone ? 300 : 760);
@@ -114,7 +116,9 @@ export class LiveMap {
 
     this.panel.addEventListener('click', e => {
       const st = e.target.closest('.hs');
-      if (st) return this.go(st.dataset.thread);
+      // You: the first tap shows what is waiting, right here; a second tap opens Needs you.
+      if (st?.dataset.id === 'you' && this.needsPop.count && this.needsPop.el.hidden) return this.needsPop.show();
+      if (st) { this.needsPop.hide(); return this.go(st.dataset.thread); }
       if (e.target.closest('[data-needs]')) return this.go('needs');
       if (e.target.closest('.hud-close')) return this.collapse();
       if (e.target.closest('.tele-feed li[data-thread]')) return this.go(e.target.closest('li').dataset.thread);
@@ -180,6 +184,9 @@ export class LiveMap {
     this.info.set('you', { id: 'you', kind: 'you', name: 'You', thread: 'needs', state: needs ? 'needs' : 'idle', needs: needs > 0, traffic: 0.5, sub: needs ? `${needs} waiting` : 'all clear' });
     this.info.set('board', { id: 'board', kind: 'board', name: 'Board', thread: 'board', state: 'idle', needs: false, traffic: 0.35, sub: `${board.decisions} decision${board.decisions === 1 ? '' : 's'} · ${board.entries} entr${board.entries === 1 ? 'y' : 'ies'}` });
     this.syncStations();
+    this.needsPop.set(project, pending, needs);
+    const youEl = this.stationEls.get('you');
+    if (youEl) this.needsPop.attach(youEl);
     this.syncText(core, needs);
     this.syncFeed();
     if (this.reduced) this.drawStatic();
@@ -223,7 +230,7 @@ export class LiveMap {
       const b = el.querySelector('b'), i = el.querySelector('i');
       if (b.textContent !== label) b.textContent = label;
       if (i.dataset.text !== sub) this.decode(i, sub);
-      const tip = s.kind === 'worker' || s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? 'Needs you' : 'Open the memory board';
+      const tip = s.kind === 'worker' || s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? (s.needs ? 'Point here to see and answer what is waiting' : 'Nothing waiting') : 'Open the memory board';
       if (el.title !== tip) { el.title = tip; el.setAttribute('aria-label', `${label}, ${sub}`); }
     }
     for (const [id, el] of this.stationEls) if (!seen.has(id)) { el.remove(); this.stationEls.delete(id); }

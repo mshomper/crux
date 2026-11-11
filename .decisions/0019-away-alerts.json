@@ -1,0 +1,140 @@
+{
+ "id": 19,
+ "slug": "away-alerts",
+ "title": "How does the hub get your attention, and take quick answers, when you are away?",
+ "date": "2026-11-11",
+ "mode": "full",
+ "lenses": [
+  "architecture",
+  "ui"
+ ],
+ "status": "decided",
+ "context": "Reaching the hub is half of it; the other half is knowing when it needs you. A card waiting for an Allow, a decision ready to pick, or a question from an agent should reach you within a minute, and simple answers (Allow, Deny, \"all\", \"4A\") should take one tap or a short reply. Some projects hold confidential work, so where card contents travel matters.",
+ "depends_on": [
+  18
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "source": "claude",
+   "key": "A",
+   "name": "Notifications from the hub itself",
+   "summary": "The hub page, added to the phone's home screen, sends its own notifications. Tapping one opens that card in the hub. Nothing passes through a chat company. On iPhone the page has to be added to the home screen first.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='30' width='110' height='120' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='75' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Phone</text><text x='75' y='101' font-size='12' text-anchor='middle' fill='currentColor'>hub app</text><rect x='200' y='60' width='100' height='60' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='250' y='87' font-size='12' text-anchor='middle' fill='currentColor'>PC</text><text x='250' y='101' font-size='12' text-anchor='middle' fill='currentColor'>hub</text><line x1='198' y1='80' x2='132' y2='70' stroke='currentColor'/><polygon points='132,70 138.7,67.9 137.8,74.0' fill='currentColor'/><text x='165' y='60' font-size='11' text-anchor='middle' fill='currentColor'>alert</text><line x1='132' y1='110' x2='198' y2='100' stroke='currentColor'/><polygon points='198,100 192.2,104.0 191.3,97.9' fill='currentColor'/><text x='165' y='128' font-size='11' text-anchor='middle' fill='currentColor'>tap</text></svg>",
+   "pros": [
+    "Card contents stay between your PC and your phone",
+    "Tapping lands on the real card with all its context",
+    "No accounts or bots to run"
+   ],
+   "cons": [
+    "Needs decision 18 A (or B) for the secure address",
+    "Answers happen in the hub page, not as a chat reply"
+   ],
+   "effort": "Medium"
+  },
+  {
+   "source": "claude",
+   "key": "B",
+   "name": "Slack",
+   "summary": "A Slack app posts each card to a private channel with Allow, Deny and Take buttons; a reply like \"4A\" in the thread picks. Slack's socket mode means the hub needs no public address.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='60' width='90' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='65' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Slack</text><text x='65' y='101' font-size='12' text-anchor='middle' fill='currentColor'>on phone</text><rect x='130' y='60' width='70' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor' stroke-dasharray='4 3'/><text x='165' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Slack</text><rect x='220' y='60' width='85' height='60' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='262.5' y='87' font-size='12' text-anchor='middle' fill='currentColor'>PC</text><text x='262.5' y='101' font-size='12' text-anchor='middle' fill='currentColor'>hub</text><line x1='202' y1='90' x2='112' y2='90' stroke='currentColor'/><polygon points='112,90 118.3,87.0 118.3,93.0' fill='currentColor'/></svg>",
+   "pros": [
+    "Buttons and threads suit cards well",
+    "Works without decision 18",
+    "You may already have Slack open all day"
+   ],
+   "cons": [
+    "Card contents (commands, file names, questions) are stored on Slack's servers",
+    "A Slack app to create and keep",
+    "Confidential projects would have to be kept off it"
+   ],
+   "effort": "Medium"
+  },
+  {
+   "source": "claude",
+   "key": "C",
+   "name": "Telegram",
+   "summary": "A Telegram bot sends cards with tap buttons and takes short replies. The bot polls, so no public address either.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='60' width='90' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='65' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Telegram</text><text x='65' y='101' font-size='12' text-anchor='middle' fill='currentColor'>on phone</text><rect x='130' y='60' width='70' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor' stroke-dasharray='4 3'/><text x='165' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Bot</text><rect x='220' y='60' width='85' height='60' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='262.5' y='87' font-size='12' text-anchor='middle' fill='currentColor'>PC</text><text x='262.5' y='101' font-size='12' text-anchor='middle' fill='currentColor'>hub</text><line x1='202' y1='90' x2='112' y2='90' stroke='currentColor'/><polygon points='112,90 118.3,87.0 118.3,93.0' fill='currentColor'/></svg>",
+   "pros": [
+    "The quickest bot to set up",
+    "Good buttons, works on any phone"
+   ],
+   "cons": [
+    "Contents stored by Telegram",
+    "One more chat app if you do not use it already",
+    "Confidential projects kept off it"
+   ],
+   "effort": "Small to medium"
+  },
+  {
+   "source": "claude",
+   "key": "D",
+   "name": "WhatsApp",
+   "summary": "Cards arrive as WhatsApp messages with reply buttons, through Meta's business messaging platform.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='60' width='90' height='60' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='65' y='87' font-size='12' text-anchor='middle' fill='currentColor'>WhatsApp</text><text x='65' y='101' font-size='12' text-anchor='middle' fill='currentColor'>on phone</text><rect x='130' y='50' width='80' height='80' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor' stroke-dasharray='4 3'/><text x='170' y='87' font-size='12' text-anchor='middle' fill='currentColor'>Meta</text><text x='170' y='101' font-size='12' text-anchor='middle' fill='currentColor'>business</text><rect x='230' y='60' width='75' height='60' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='267.5' y='87' font-size='12' text-anchor='middle' fill='currentColor'>PC</text><text x='267.5' y='101' font-size='12' text-anchor='middle' fill='currentColor'>hub</text><line x1='228' y1='90' x2='112' y2='90' stroke='currentColor'/><polygon points='112,90 118.3,87.0 118.3,93.0' fill='currentColor'/></svg>",
+   "pros": [
+    "The app you probably check most"
+   ],
+   "cons": [
+    "Needs a Meta business account and a separate phone number",
+    "Replies need a public address for Meta to call",
+    "Message rules and possible per-message charges",
+    "Contents pass through Meta"
+   ],
+   "effort": "Large"
+  }
+ ],
+ "criteria": [
+  {
+   "name": "Contents stay with you",
+   "scores": {
+    "A": 3,
+    "B": 1,
+    "C": 1,
+    "D": 1
+   }
+  },
+  {
+   "name": "One-tap answers",
+   "scores": {
+    "A": 2,
+    "B": 3,
+    "C": 3,
+    "D": 2
+   }
+  },
+  {
+   "name": "Works without opening the PC up",
+   "scores": {
+    "A": 1,
+    "B": 3,
+    "C": 3,
+    "D": 1
+   }
+  },
+  {
+   "name": "Setup",
+   "scores": {
+    "A": 2,
+    "B": 2,
+    "C": 3,
+    "D": 1
+   }
+  }
+ ],
+ "recommended": "A",
+ "recommendation": "With decision 18 A in place, the hub's own notifications reach you without any card leaving your devices, which matters for confidential projects. Slack can be added later as an extra channel for projects that are safe to post, if one-tap replies in chat turn out to matter.",
+ "confidence": "lean",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "phone notifications from local tools",
+   "value": "web push from the tool itself to its home-screen app; card contents never pass through a third-party chat service"
+  }
+ ]
+}

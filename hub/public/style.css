@@ -67,7 +67,18 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .title-block{flex:1;min-width:0}
 .title-block h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sub{font-size:12.5px;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.head-actions{display:flex;gap:4px}
+/* header actions: one toolbar, each action a quiet segment that lights up on hover */
+.head-actions{display:flex;align-items:center;gap:2px;padding:3px;background:var(--surface);border:1px solid var(--line2);border-radius:11px}
+.head-actions .btn{border:0;border-radius:8px;padding:6px 12px;color:var(--muted);text-decoration:none;font-weight:500;transition:background .15s,color .15s}
+.head-actions .btn .icon{color:var(--faint);transition:color .15s}
+.head-actions .btn:hover{background:var(--surface2);color:var(--text)}
+.head-actions .btn:hover .icon{color:var(--accent)}
+.head-actions .btn.on{background:var(--accent-bg);color:var(--accent)}
+.head-actions .btn.on .icon{color:var(--accent)}
+.head-actions #retire:hover{background:var(--warn-bg);color:var(--warn)}
+.head-actions #retire:hover .icon{color:var(--warn)}
+.head-actions .btn .ext{width:12px;height:12px;margin-left:-2px;opacity:.7}
+.head-actions .btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .task-line{flex:1 1 200px;min-width:0;font:inherit;color:var(--faint);background:none;border:0;padding:0;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .task-line:hover{color:var(--muted)}
 .task-line.open{flex-basis:100%;white-space:pre-wrap;max-height:40vh;overflow-y:auto;color:var(--muted)}
@@ -92,6 +103,10 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .bubble pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:6px 0;white-space:pre-wrap;font:12.5px/1.45 var(--mono)}
 .bubble code{font:12.5px var(--mono);background:rgba(255,255,255,.06);padding:1px 5px;border-radius:5px}
 .bubble pre code{background:none;padding:0}
+.md-table{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:12.5px;table-layout:auto}
+.md-table th,.md-table td{border:1px solid var(--line2);padding:5px 8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.md-table th{background:var(--surface2);color:var(--muted);font-weight:600}
+.md-table tbody tr:nth-child(even) td{background:rgba(255,255,255,.02)}
 .bubble ul,.bubble ol{margin:4px 0 8px;padding-left:20px}
 .fold:not(.open){max-height:9.5em;overflow:hidden;-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
 .msg.relay .fold:not(.open){max-height:4.5em}
@@ -133,6 +148,14 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .decision .foot .spacer{flex:1}
 .card.approval{border-left:3px solid var(--warn)}
 .card.question{border-left:3px solid var(--warn)}
+.approval .tags{display:flex;flex-wrap:wrap;gap:6px;margin:-2px 0 10px}
+.tag{font-size:12px;line-height:20px;padding:0 9px;border-radius:999px;border:1px solid var(--line2);color:var(--muted);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.tag.read{color:var(--good);background:var(--good-bg);border-color:transparent}
+.tag.write{color:var(--accent);background:var(--accent-bg);border-color:transparent}
+.tag.care{color:var(--warn);background:var(--warn-bg);border-color:transparent}
+.approval .why{margin:0 0 10px;font-size:13px}
+.approval .raw .fold:not(.open){max-height:4.6em}
+.approval .raw pre{margin-bottom:4px}
 .always-rule{flex:1 1 100%;min-width:0;font-size:12px;overflow-wrap:anywhere}
 .card.lessons{border-left:3px solid var(--accent)}
 .lesson-list{list-style:none;margin:0 0 10px;padding:0;display:grid;gap:8px}
@@ -183,4 +206,11 @@ a.bitem:hover{border-color:var(--line2)}
   .summary dt{margin-top:4px}
   .head-actions .btn:not(.icon-only){font-size:0;gap:0;padding:7px}
   .head-actions .btn .icon{font-size:14px}
+  .head-actions .btn .ext{display:none}
 }
+
+/* ---------- phone: home-screen app and notification deep links (decisions 18, 19) ---------- */
+@media (display-mode: standalone){.app{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}}
+.card.flash{animation:card-flash 2.4s ease-out}
+@keyframes card-flash{0%,30%{box-shadow:0 0 0 2px var(--accent),0 0 28px rgba(142,168,255,.45)}100%{box-shadow:0 0 0 0 transparent}}
+@media (prefers-reduced-motion: reduce){.card.flash{animation:none;outline:2px solid var(--accent)}}

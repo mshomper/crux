@@ -20,6 +20,27 @@ Then open http://localhost:4747. With no folders given, it uses `~/crux/hub.json
 
 Options: `--port 4747`, `--retire-at 60` (orchestrator hands off at this % of context).
 
+## On your phone (Tailscale)
+
+The hub only listens on this PC (127.0.0.1). Your phone reaches it through Tailscale, a private network made of your own signed-in devices; nothing is opened to the internet or to your Wi-Fi (decision 18). The hub turns away requests addressed to any other name, and lets only its own page make changes.
+
+**Before you start: check the PC's name.** Turning on HTTPS gets the PC a certificate, and every certificate's name is written to public certificate-transparency logs. The address will be `https://<pc-name>.<tailnet>.ts.net`, so the PC name should not say anything private (no client or employer names). Check it with `hostname` in a terminal. Rename it under Settings > System > About > Rename this PC if needed (it takes a restart).
+
+1. **Install** Tailscale on the PC (https://tailscale.com/download/windows, or `winget install tailscale.tailscale`) and on the phone (App Store or Play Store).
+2. **Sign in** on both with the same **personal** account (your personal Gmail, on the free Personal plan). Not a work email: a work domain starts a company trial instead.
+3. **Turn on HTTPS:** in the admin console (https://login.tailscale.com/admin/dns), make sure MagicDNS is on, then click **Enable HTTPS** under HTTPS Certificates.
+4. **Start the hub** as usual (`npm start`), then in a terminal on the PC:
+   ```bash
+   tailscale serve --bg 4747
+   ```
+   It prints the address, `https://<pc-name>.<tailnet>.ts.net`. `--bg` keeps it running across restarts; `tailscale serve status` shows it and `tailscale serve reset` stops it. Use `tailscale serve`, never `tailscale funnel` (funnel publishes to the whole internet).
+5. **On the phone**, open that address. To put it on the home screen: in Safari tap Share, then **Add to Home Screen** (Android Chrome: menu, then **Install app**).
+6. **Notifications:** open Crux from the home-screen icon and tap the bell at the top. Allow notifications; a test one arrives. On iPhone this works only from the home-screen icon (iOS 16.4 or later), not from a Safari tab.
+
+Notifications arrive when a permission request waits for Allow, a decision is ready to pick, or an agent asks a question (questions wait a minute first, since the orchestrator often answers them itself). They say only what kind of card it is and which agent or decision number. Tapping one opens the hub at that card; the details load over Tailscale. Nothing is sent while you are using the hub on the PC on the same view.
+
+The notification keys and the list of subscribed phones are kept in `~/.crux-hub/` (outside every repo). Tap the bell again to turn notifications off on a device. If the PC sleeps, the hub cannot be reached and no notifications go out.
+
 ## Usage and billing
 
 Agents run through the Claude Agent SDK on this machine's Claude Code login, so they draw from your Claude plan's limits, the same pool as your own Claude Code sessions. Several agents at once use those limits faster. An `ANTHROPIC_API_KEY` in your environment is ignored unless you set `CRUX_HUB_USE_API_KEY=1`.
@@ -29,6 +50,7 @@ Agents run through the Claude Agent SDK on this machine's Claude Code login, so 
 | Where | What |
 | --- | --- |
 | `<project>/.crux/events.jsonl` | Append-only log: messages, summaries, picks, board entries, agent sessions. Threads and board entries are rebuilt from it. Commit it if you want the memory to travel with the repo. |
+| `~/.crux-hub/` | Notification keys (`vapid.json`) and subscribed phones (`push-subscriptions.json`). Never in a repo. |
 | `<project>/.decisions/*.json` | Your picks (status, choice, reason, date) on Crux records, then the Crux pages are rebuilt. Claude still writes everything else in a record. |
 
 ## How it fits together
