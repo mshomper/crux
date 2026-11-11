@@ -70,6 +70,11 @@ export class Agent {
 
   send(textMsg, attachments = []) {
     if (this.state === 'retired' && !this.retiring) throw new Error(`${this.name} has retired`);
+    // A test hub: the message is in the log, but no Claude Code process starts.
+    if (this.hub.noAgents) {
+      if (!this.toldNoAgents) { this.toldNoAgents = true; this.hub.notice(this.project, this.thread, `Test hub: ${this.name} does not start here, so messages to it are kept but not read.`); }
+      return;
+    }
     const message = this.userMessage(textMsg, attachments);   // built first: a missing image fails before start-up
     if (!this.q) this.start();
     this.inbox.push(message);

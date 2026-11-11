@@ -38,8 +38,10 @@ export class Hub {
   // defaults: { orchestrator: { type, model, effort }, worker: {...} } from ~/crux/hub.json (decision 20).
   // agentHome: the folder whose .claude/agents holds the all-projects types (your home folder).
   // settings: HubSettings (routePermissions, permissionTimeoutSec), from ~/.crux-hub/settings.json.
-  constructor({ projects, retireAt = 60, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings() }) {
+  // noAgents: a test hub; messages are logged but no real agent starts (see relaunch.mjs, testHubWithoutAgents).
+  constructor({ projects, retireAt = 60, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false }) {
     this.retireAt = retireAt;
+    this.noAgents = !!noAgents;
     this.memory = memory;
     this.settings = settings;
     this.defaults = defaults || {};

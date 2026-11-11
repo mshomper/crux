@@ -5,8 +5,8 @@
 // <data>/hub-<port>.log. <data> is CRUX_HUB_DATA or ~/.crux-hub, outside every repo, as for the hub's settings.
 import { spawn, execFile } from 'node:child_process';
 import { openSync, closeSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 export const HUB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -14,6 +14,16 @@ export const DEFAULT_PORT = 4747;
 export const dataDir = (env = process.env) => env.CRUX_HUB_DATA || join(homedir(), '.crux-hub');
 export const launchFile = (port, env) => join(dataDir(env), `launch-${port}.json`);
 export const logFile = (port, env) => join(dataDir(env), `hub-${port}.log`);
+
+// A test hub starts no real agents, so a click-test cannot spend plan usage or act in a project by accident:
+// when started with --no-agents, or with its data folder (CRUX_HUB_DATA) inside the system temp folder.
+// CRUX_HUB_AGENTS=1 lets a test that needs a real agent have one.
+export function testHubWithoutAgents({ args = [], env = process.env, tmp = tmpdir() } = {}) {
+  if (env.CRUX_HUB_AGENTS === '1') return false;
+  if (args.includes('--no-agents')) return true;
+  const norm = s => resolve(String(s)).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+  return !!env.CRUX_HUB_DATA && (norm(env.CRUX_HUB_DATA) + '/').startsWith(norm(tmp) + '/');
+}
 
 // How this process was started: the same node, flags, script, arguments and folder.
 export function launchSpec({ port, execPath = process.execPath, execArgv = process.execArgv, argv = process.argv, cwd = process.cwd() }) {
