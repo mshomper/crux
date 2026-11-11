@@ -16,7 +16,7 @@ const LOOK_IDLE_MS = 2 * 60 * 1000;          // no clicks or keys for this long:
 export function cardsFor(ev, { decisionOpen = () => true } = {}) {
   const project = ev.project;
   if (ev.type === 'approval') {
-    return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${ev.agent} is waiting for Allow`, body: ev.summary?.plain ? `${ev.summary.plain} · ${project}` : `${project} · wants to use ${ev.tool}` }];
+    return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${ev.agent} is waiting for Allow`, body: `${project} · wants to use ${ev.tool}` }]; // kept minimal on purpose: it can show on a locked phone
   }
   if (ev.type !== 'summary') return [];
   const out = [];
