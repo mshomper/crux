@@ -85,6 +85,12 @@
 .hs.needs .hud-i,.hs.error .hud-i{filter:drop-shadow(0 0 4px rgba(242,114,122,.8))}
 .hs.needs .hs-label i,.hs.error .hs-label i{color:var(--hud-red)}
 @keyframes hud-alarm{50%{filter:brightness(1.35)}}
+.hs.ghost,.hs.handoff{color:#ffd17a}
+.hs.ghost .hs-body,.hs.handoff .hs-body{background:radial-gradient(circle at 50% 30%,rgba(255,209,122,.22),rgba(22,16,8,.94) 68%);box-shadow:inset 0 0 0 1px rgba(255,209,122,.6),0 0 20px rgba(255,209,122,.25)}
+.hs.ghost .hs-body{opacity:.75}
+.hs.ghost .hs-body::after,.hs.handoff .hs-body::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px dashed rgba(255,209,122,.6);animation:hud-spin 9s linear infinite reverse}
+.hs.ghost .hud-i,.hs.handoff .hud-i{filter:drop-shadow(0 0 3px rgba(255,209,122,.7))}
+.hs.ghost .hs-label i,.hs.handoff .hs-label i{color:#ffd17a}
 .hs.entering .hs-body{animation:hud-materialize .7s ease-out both}
 @keyframes hud-materialize{from{transform:scale(.2);filter:brightness(3) blur(2px)}60%{transform:scale(1.15)}to{transform:scale(1);filter:none}}
 
@@ -172,6 +178,9 @@
 .tele-feed li.tone-summary{border-left-color:#5fd3ae}
 .tele-feed li.tone-entry{border-left-color:var(--hud-violet)}
 .tele-feed li.tone-pick{border-left-color:var(--hud-amber)}
+.tele-feed li.tone-handoff{border-left-color:#ffd17a;background:rgba(255,209,122,.05)}
+.tele-feed li.tone-handoff span{color:#ffe2a8}
+.th-state.writing{color:#ffd17a;border-color:rgba(255,209,122,.6)}
 .tele-feed li.tone-alert{border-left-color:var(--hud-red)}
 .tele-feed li.tone-alert span{color:#f7a9ae}
 .tele-feed li.tone-you{border-left-color:#f4f7ff}

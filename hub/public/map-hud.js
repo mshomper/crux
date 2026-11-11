@@ -60,6 +60,17 @@ export class HudPainter {
         }
       };
       const traffic = st.traffic ?? 0.4;
+      if (st.kind === 'ghost' || st.handoff) {
+        // a handoff in progress: a dashed gold line
+        path();
+        c.setLineDash([5, 6]);
+        c.lineDashOffset = -t * 18;
+        c.strokeStyle = rgb(TONE.handoff, 0.6 * fade);
+        c.lineWidth = 1.4;
+        c.stroke();
+        c.setLineDash([]);
+        continue;
+      }
       const scale = lerp(0.75, 1.15, e);
       const needs = st.needs;
       // base spoke: thicker where more work went
@@ -222,6 +233,7 @@ export class HudPainter {
       if (!st) continue;
       const fade = st.fade ?? 1;
       const col = st.needs || st.state === 'error' ? COLORS.red
+        : st.kind === 'ghost' || st.handoff ? TONE.handoff
         : st.kind === 'board' ? COLORS.violet
         : st.kind === 'you' ? COLORS.white
         : st.state === 'asleep' ? COLORS.dim

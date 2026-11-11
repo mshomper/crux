@@ -20,7 +20,8 @@ export const COLORS = {
 
 export const TONE = {
   you: COLORS.white, reply: COLORS.cyan, brief: COLORS.accent, summary: COLORS.good,
-  entry: COLORS.violet, pick: COLORS.amber, alert: COLORS.red, spawn: COLORS.cyan, core: COLORS.accent, activity: COLORS.dim
+  entry: COLORS.violet, pick: COLORS.amber, alert: COLORS.red, spawn: COLORS.cyan, core: COLORS.accent, activity: COLORS.dim,
+  handoff: [1.0, 0.82, 0.48]
 };
 
 const mix3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
@@ -48,6 +49,7 @@ const MOODS = {
   asleep: { form: 'sphere', spin: 0.1, turb: 0.06, bright: 0.55, radius: 0.97, breathe: 0.6 },
   idle: { form: 'sphere', spin: 0.2, turb: 0.12, bright: 0.82, radius: 1.0, breathe: 1 },
   starting: { form: 'helix', spin: 0.9, turb: 0.25, bright: 0.95, radius: 1.0, breathe: 0.3 },
+  writing: { form: 'sphere', spin: 0.55, turb: 0.16, bright: 1.0, radius: 0.9, breathe: 2.2 },
   working: { form: 'sphere', spin: 0.36, turb: 0.42, bright: 1.08, radius: 1.05, breathe: 1.4 },
   error: { form: 'sphere', spin: 0.1, turb: 1.4, bright: 0.8, radius: 1.02, breathe: 0.2 }
 };
@@ -101,7 +103,7 @@ export class ParticleCore {
     this.time = 0;
     this.yaw = 0;
     this.pitch = 0.36;
-    this.p = { ...MOODS.vacant, red: 0, amber: 0, ctx: 0, flash: 0, throb: 0 };
+    this.p = { ...MOODS.vacant, red: 0, amber: 0, ctx: 0, flash: 0, throb: 0, gold: 0 };
     this.goal = { ...this.p };
     this.sequence = [];
   }
@@ -119,7 +121,8 @@ export class ParticleCore {
       ctx: ctx == null ? 0 : ctx / 100,
       amber: clamp((frac - 0.8) / 0.2, 0, 1),
       red: state === 'error' ? 1 : frac >= 1 ? 0.6 : 0,
-      throb: needs ? 1 : 0
+      throb: needs ? 1 : 0,
+      gold: state === 'writing' ? 0.55 : 0   // writing its handoff: the whole core warms
     });
     if (!this.sequence.length) this.form = m.form;
   }
@@ -164,7 +167,7 @@ export class ParticleCore {
     this.time += dt;
     const t = this.time, P = this.p, G = this.goal;
     const k = 1 - Math.exp(-dt * 2.2);
-    for (const key of ['spin', 'turb', 'bright', 'radius', 'breathe', 'red', 'amber', 'ctx', 'throb']) P[key] += (G[key] - P[key]) * k;
+    for (const key of ['spin', 'turb', 'bright', 'radius', 'breathe', 'red', 'amber', 'ctx', 'throb', 'gold']) P[key] += (G[key] - P[key]) * k;
     P.flash *= Math.exp(-dt * 2.4);
     while (this.sequence.length && t >= this.sequence[0].at) {
       const s = this.sequence.shift();
@@ -215,6 +218,7 @@ export class ParticleCore {
       else if (g === 1) { col = mix3(COLORS.cyan, COLORS.accent, s); size = 1.3 + s * 1.2; a = 0.62; }
       else { col = mix3(COLORS.accent, COLORS.violet, s * 0.7); size = 1.3 + s * 0.9; a = 0.72; }
       if (g !== 0 && this.used[i] < P.ctx) col = mix3(mix3(col, COLORS.warm, 0.3), COLORS.amber, P.amber * 0.85);
+      if (P.gold > 0.01) col = mix3(col, TONE.handoff, P.gold);
       if (P.red > 0.01 || throb > 0.01) col = mix3(col, COLORS.red, Math.max(P.red, throb * 0.75));
       if (P.flash > 0.01) col = mix3(col, COLORS.white, P.flash);
       const depth = clamp(1.15 - z2 * 0.38, 0.3, 1.6);

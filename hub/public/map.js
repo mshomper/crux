@@ -18,7 +18,8 @@ const ICON = {
   board: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15M14.5 4.5v15"/>',
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
-  alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>'
+  alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+  ghost: '<circle cx="12" cy="6" r="2.5"/><circle cx="6" cy="17" r="2.5"/><circle cx="18" cy="17" r="2.5"/><path d="M11 8.2L7.2 14.8M13 8.2l3.8 6.6"/>'
 };
 const svg = (name, cls = 'hud-i') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -213,22 +214,23 @@ export class LiveMap {
         this.stationsEl.append(el);
         this.stationEls.set(s.id, el);
       }
-      const sub = s.kind === 'worker' ? (s.needs ? 'needs you' : s.activity || s.state) : s.sub;
-      const cls = `hs ${s.kind} ${s.state || ''} ${s.needs ? 'needs' : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}`;
+      const sub = s.kind === 'ghost' ? 'handing over'
+        : s.kind === 'worker' ? (s.needs ? 'needs you' : s.handoff === 'writing' ? 'writing handoff' : s.handoff === 'overlap' ? 'handing over' : s.activity || s.state) : s.sub;
+      const cls = `hs ${s.kind} ${s.state || ''} ${s.handoff ? 'handoff' : ''} ${s.needs ? 'needs' : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}`;
       if (el.className !== cls) el.className = cls;
       el.dataset.thread = s.thread;
-      const label = s.kind === 'worker' ? s.name : s.name.toUpperCase();
+      const label = s.kind === 'worker' || s.kind === 'ghost' ? s.name : s.name.toUpperCase();
       const b = el.querySelector('b'), i = el.querySelector('i');
       if (b.textContent !== label) b.textContent = label;
       if (i.dataset.text !== sub) this.decode(i, sub);
-      const tip = s.kind === 'worker' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? 'Needs you' : 'Open the memory board';
+      const tip = s.kind === 'worker' || s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? 'Needs you' : 'Open the memory board';
       if (el.title !== tip) { el.title = tip; el.setAttribute('aria-label', `${label}, ${sub}`); }
     }
     for (const [id, el] of this.stationEls) if (!seen.has(id)) { el.remove(); this.stationEls.delete(id); }
   }
 
   syncText(core, needs) {
-    const st = core.state === 'vacant' ? 'vacant' : core.state;
+    const st = core.state === 'writing' ? 'writing handoff' : core.state;
     this.decode(this.r.gen, core.state === 'vacant' ? 'NO HOLDER' : `GEN ${pad2(core.generation)} · ${st.toUpperCase()}`);
     this.decode(this.r.ctx, core.ctx == null ? `HANDOFF AT ${core.retireAt}%` : `${core.ctx}% · HANDOFF ${core.retireAt}%`);
     this.r.proj.textContent = this.model.project ? `// ${this.model.project.name}` : '';
@@ -241,7 +243,7 @@ export class LiveMap {
       el.classList.toggle('hot', needs > 0);
       el.setAttribute('aria-label', needs ? `${needs} waiting for your call` : 'Nothing waiting for you');
     }
-    const workers = this.model.project?.agents.filter(a => a.role === 'worker' && a.state !== 'retired') || [];
+    const workers = this.workers.filter(w => w.kind === 'worker');
     const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;
     const lvl = this.barEl.dataset.level;
     const holder = `
@@ -323,6 +325,18 @@ export class LiveMap {
     return L;
   }
 
+  // When a station joins or leaves, the others glide to their new places instead of jumping.
+  glide(L, k) {
+    this.smooth ||= new Map();
+    for (const [id, s] of L.at) {
+      const p = this.smooth.get(id);
+      if (!p || k >= 1) { this.smooth.set(id, { ...s }); continue; }
+      p.x += (s.x - p.x) * k; p.y += (s.y - p.y) * k; p.r += (s.r - p.r) * k;
+      L.at.set(id, { ...p });
+    }
+    for (const id of this.smooth.keys()) if (!L.at.has(id)) this.smooth.delete(id);
+  }
+
   // Leaving stations keep their last spot while they fade; entering ones fade in.
   withTransitions(L, now) {
     const info = new Map(this.info);
@@ -370,6 +384,7 @@ export class LiveMap {
     const zooming = this.e !== this.target || (this.e > 0 && this.e < 1);
     if (this.target === 1) this.boot = Math.min(1, this.boot + dt / 1.1);
     const L = this.place(E);
+    this.glide(L, zooming ? 1 : 1 - Math.exp(-dt * 7));
     const info = this.withTransitions(L, now);
     this.core.step(dt);
     this.fx.step(dt, now,
