@@ -1,0 +1,53 @@
+{
+  "id": 21,
+  "slug": "permission-answers",
+  "title": "Who answers the agents' permission requests?",
+  "date": "2026-11-11",
+  "mode": "quick",
+  "lenses": ["architecture", "research"],
+  "status": "decided",
+  "context": "Every permission prompt from every agent (bash commands, file edits and so on) goes to Matt today, which makes him the bottleneck. The idea was always that these reach the orchestrator, which answers them under authority Matt grants, while he watches and can review. Extends decision 7: push, merge and delete stay with Matt.",
+  "depends_on": [7, 19],
+  "conflicts": [],
+  "options": [
+    {
+      "key": "A",
+      "name": "Orchestrator answers within rules Matt sets",
+      "summary": "Requests go to the orchestrator first. A rules entry on the board says what it may allow (build, test, read, edits inside the project, local commits). Push, merge, delete, package installs, anything outside the project folder and network access always go to Matt. Every answer is logged in the orchestrator's thread, and Matt can change or revoke the rules at any time.",
+      "pros": ["Removes almost all bash prompts", "Hard-to-undo actions stay with Matt", "Every answer is logged for audit"],
+      "cons": ["The orchestrator may misjudge a borderline request"],
+      "effort": "Medium",
+      "source": "claude"
+    },
+    {
+      "key": "B",
+      "name": "Fixed allowlist, no judgment",
+      "summary": "The hub auto-approves anything matching a pattern list; the rest still goes to Matt.",
+      "pros": ["Predictable"],
+      "cons": ["Every new command shape is another prompt", "Lists tend to grow loose"],
+      "effort": "Small",
+      "source": "claude"
+    },
+    {
+      "key": "C",
+      "name": "Orchestrator answers everything except a short block list",
+      "summary": "Only push, merge, delete and work outside the project reach Matt.",
+      "pros": ["The fewest prompts"],
+      "cons": ["Installs and network access pass without Matt seeing them"],
+      "effort": "Small",
+      "source": "claude"
+    }
+  ],
+  "criteria": [],
+  "recommended": "A",
+  "recommendation": "Removes almost all the bash prompts while keeping Matt in charge of anything hard to undo, with a log to audit. B can be added later as a fast path for obviously safe commands.",
+  "confidence": "lean",
+  "chosen": "A",
+  "reason": "A is perfect",
+  "decided_on": "2026-11-11",
+  "superseded_by": null,
+  "challenge": null,
+  "settles": [
+    { "key": "agent permission authority", "value": "orchestrator answers permission prompts within human-set rules; push, merge, delete, installs, outside-project and network always go to the human; every answer logged" }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+ "id": 33,
+ "slug": "hud-look",
+ "title": "How far does the JARVIS look reach beyond the live map?",
+ "date": "2026-11-11",
+ "mode": "quick",
+ "lenses": [
+  "ui"
+ ],
+ "status": "decided",
+ "context": "The live map strip is full HUD (cyan glass, mono labels, corner brackets, scan lines); the rest of the hub is a calm messaging app, so the two halves read like different products. You asked for a futuristic JARVIS look at maximum polish. Readability of long messages and cards must not suffer. Found in the ux-review round.",
+ "depends_on": [
+  12,
+  17,
+  20
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "HUD frame, readable content",
+   "summary": "The shell takes the HUD language: sidebar and headers get cyan hairlines and glow edges, cards waiting on you get corner brackets, labels become small mono capitals, decision options get hexagon keys, a short boot sequence on load, a lock-on flash when a notification opens a card. Message and card text stays in the normal sans font at full contrast.",
+   "pros": [
+    "One product from strip to composer",
+    "Long text stays easy to read",
+    "Respects reduced motion"
+   ],
+   "cons": [
+    "Touches most of style.css",
+    "Needs care so brackets do not clutter long threads"
+   ],
+   "effort": "Large, in two or three passes",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Full HUD everywhere",
+   "summary": "Everything in the HUD style, including mono text for messages and a glass background over a live grid.",
+   "pros": [
+    "Strongest look"
+   ],
+   "cons": [
+    "Mono body text is slower to read on a phone",
+    "Glass and grids lower contrast"
+   ],
+   "effort": "Large",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Keep the HUD in the map",
+   "summary": "Only small touches outside the map (focus rings, link light).",
+   "pros": [
+    "Little work",
+    "Calm chat"
+   ],
+   "cons": [
+    "Two visual languages stay side by side"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  }
+ ],
+ "recommended": "A",
+ "recommendation": "It carries the map's look into every frame you touch while keeping what you read in a readable font; the desktop and phone mockups from this round show it.",
+ "confidence": "lean",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": []
+}

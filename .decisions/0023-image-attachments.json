@@ -1,0 +1,53 @@
+{
+  "id": 23,
+  "slug": "image-attachments",
+  "title": "When you paste a screenshot into a thread, where is the image kept?",
+  "date": "2026-11-11",
+  "mode": "quick",
+  "lenses": ["data-model", "ui"],
+  "status": "decided",
+  "context": "Matt wants to paste or drop screenshots into hub threads, and copy screenshots agents post. The images have to be stored somewhere, and agents must receive them as real images. Builds on decision 2 (append-only event log).",
+  "depends_on": [2, 12],
+  "conflicts": [],
+  "options": [
+    {
+      "key": "A",
+      "name": "Files next to the project's event log",
+      "summary": "Images are saved under the project's .crux/attachments/; the message event points to the file. Agents receive the image itself. Screenshots agents post can share the same store.",
+      "pros": ["Keeps the event log lean", "Each project is self-contained", ".crux/ is already kept out of git"],
+      "cons": ["The folder grows; needs an occasional tidy"],
+      "effort": "Medium",
+      "source": "claude"
+    },
+    {
+      "key": "B",
+      "name": "Inline in the event log",
+      "summary": "Images are stored as data inside the message events.",
+      "pros": ["Simplest"],
+      "cons": ["The append-only log keeps every image forever, growing heavy and slow to replay"],
+      "effort": "Small",
+      "source": "claude"
+    },
+    {
+      "key": "C",
+      "name": "In the home folder, outside every project",
+      "summary": "Images go to ~/.crux-hub/attachments/.",
+      "pros": ["Confidential screenshots never sit in a project folder"],
+      "cons": ["The project's history depends on files kept elsewhere"],
+      "effort": "Medium",
+      "source": "claude"
+    }
+  ],
+  "criteria": [],
+  "recommended": "A",
+  "recommendation": "Keeps the log lean and the project self-contained, and .crux/ is already out of git.",
+  "confidence": "lean",
+  "chosen": "A",
+  "reason": null,
+  "decided_on": "2026-11-11",
+  "superseded_by": null,
+  "challenge": null,
+  "settles": [
+    { "key": "chat image attachments storage", "value": "files under the project's .crux/attachments/, referenced by id from message events; never inline in the event log" }
+  ]
+}

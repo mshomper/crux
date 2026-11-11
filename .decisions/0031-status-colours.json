@@ -1,0 +1,72 @@
+{
+ "id": 31,
+ "slug": "status-colours",
+ "title": "What does each status colour mean across the hub?",
+ "date": "2026-11-11",
+ "mode": "quick",
+ "lenses": [
+  "ui"
+ ],
+ "status": "decided",
+ "context": "Today 'needs you' is amber in the sidebar and project badge but red on the live map, unread messages are also amber, and blue means both 'working' and 'open decision' and is the colour of every main button. Decision 20 kept the model hues clear of red, amber, green and blue, so those four need one fixed meaning each. Found in the ux-review round.",
+ "depends_on": [
+  12,
+  17,
+  20
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Red is your call, everywhere",
+   "summary": "Red only for things waiting on you (badges, card frames, map stations, the phone strip). Amber only for warnings (handoff threshold, 'runs code' tags, amber marks). Green for done or resting, cyan-blue for working. Unread becomes a small white dot.",
+   "pros": [
+    "One glance anywhere tells you whether you are needed",
+    "Matches the map, which already uses red",
+    "Amber warnings stop competing with your queue"
+   ],
+   "cons": [
+    "A lot of red when many things wait; mitigated by red counts rather than whole red stations"
+   ],
+   "effort": "Small: colour tokens in style.css and map.css, a few class names in app.js",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Amber is your call, everywhere",
+   "summary": "Keep the sidebar's amber for 'needs you' and change the map's red stations to amber; red is kept for errors only.",
+   "pros": [
+    "Calmer screen",
+    "Red stays rare, so an error stands out"
+   ],
+   "cons": [
+    "Amber also means warning, so 'needs you' and 'careful' blur together",
+    "Changes the map you already approved"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Leave as is",
+   "summary": "Sidebar amber, map red, unread amber.",
+   "pros": [
+    "No work"
+   ],
+   "cons": [
+    "The same state shows in two colours depending on where you look"
+   ],
+   "effort": "None",
+   "source": "claude"
+  }
+ ],
+ "recommended": "A",
+ "recommendation": "Red already carries 'act here' on the map and in phone notifications; using it for exactly that everywhere, and amber only for warnings, makes the queue readable at a glance.",
+ "confidence": "lean",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": []
+}
