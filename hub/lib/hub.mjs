@@ -1,5 +1,6 @@
 // The hub: projects, their agents, and the routing between you, the orchestrator role and workers.
-import { basename, resolve } from 'node:path';
+import { basename, resolve, join } from 'node:path';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
@@ -51,7 +52,7 @@ export class Hub {
   restore(p) {
     for (const ev of p.log.events) {
       if (ev.type === 'agent_created') {
-        p.agents.set(ev.agent, new Agent(this, p, { name: ev.agent, role: ev.role, task: ev.task, generation: ev.generation }));
+        p.agents.set(ev.agent, new Agent(this, p, { name: ev.agent, role: ev.role, task: ev.task, goal: ev.goal, generation: ev.generation }));
         if (ev.role === 'orchestrator') p.generation = Math.max(p.generation, ev.generation);
       } else if (ev.type === 'agent_session' && p.agents.has(ev.agent)) {
         p.agents.get(ev.agent).sessionId = ev.sessionId;
@@ -64,14 +65,14 @@ export class Hub {
   notice(p, thread, text) { p.log.append('notice', { thread, text }); }
 
   // ---------- agents ----------
-  createAgent(p, { name, role, task = '' }) {
+  createAgent(p, { name, role, task = '', goal = '' }) {
     const generation = role === 'orchestrator' ? ++p.generation : 0;
     if (role === 'orchestrator') name = `orchestrator-${generation}`;
     let unique = name, n = 2;
     while (p.agents.has(unique)) unique = `${name}-${n++}`;
-    const a = new Agent(this, p, { name: unique, role, task, generation });
+    const a = new Agent(this, p, { name: unique, role, task, goal, generation });
     p.agents.set(unique, a);
-    p.log.append('agent_created', { agent: unique, role, task, generation, thread: a.thread });
+    p.log.append('agent_created', { agent: unique, role, task, goal, generation, thread: a.thread });
     return a;
   }
 
@@ -83,8 +84,8 @@ export class Hub {
     return a;
   }
 
-  startWorker(p, name, task, by = 'you') {
-    const w = this.createAgent(p, { name, role: 'worker', task });
+  startWorker(p, name, task, by = 'you', goal = '') {
+    const w = this.createAgent(p, { name, role: 'worker', task, goal });
     p.log.append('message', { thread: w.thread, from: by, text: task });
     w.send(task);
     return w;
@@ -141,7 +142,30 @@ export class Hub {
   }
 
   // ---------- approvals (tool permission prompts become cards) ----------
+  // Settled without a card: reading Crux's own files, the orchestrator writing decision records and
+  // running the Crux build. Refused without a card: the orchestrator editing anything else.
+  autoAnswer(p, agent, toolName, input) {
+    const norm = s => String(s || '').replace(/\\/g, '/').toLowerCase();
+    const file = norm(input.file_path || input.path || input.notebook_path);
+    const home = norm(homedir());
+    const cruxDirs = [`${home}/.claude/skills/`, `${home}/crux/`];
+    if (['Read', 'Glob', 'Grep'].includes(toolName) && file && cruxDirs.some(d => file.startsWith(d))) return { behavior: 'allow', updatedInput: input };
+    const decisions = norm(join(p.dir, '.decisions')) + '/';
+    if (['Write', 'Edit', 'MultiEdit'].includes(toolName) && agent.role === 'orchestrator') {
+      return file.startsWith(decisions)
+        ? { behavior: 'allow', updatedInput: input }
+        : { behavior: 'deny', message: 'The orchestrator only writes Crux decision records (.decisions/). Send other file changes to a worker with message_agent or start_worker.' };
+    }
+    const cmd = String(input.command || '').trim();
+    if (/^(Bash|PowerShell)$/.test(toolName) && /^node\s+("[^"]*[\\/]crux[\\/]scripts[\\/](build|rollup)\.mjs"|\S*[\\/]crux[\\/]scripts[\\/](build|rollup)\.mjs)(\s+("[^"]*"|[\w.\\/:-]+))?$/.test(cmd)) {
+      return { behavior: 'allow', updatedInput: input };
+    }
+    return null;
+  }
+
   requestApproval(p, agent, toolName, input, { signal, title, description } = {}) {
+    const auto = this.autoAnswer(p, agent, toolName, input);
+    if (auto) return Promise.resolve(auto);
     return new Promise(resolvePromise => {
       const id = randomUUID();
       const finish = (result, how) => {
@@ -196,7 +220,7 @@ export class Hub {
   state() {
     return [...this.projects.values()].map(p => ({
       name: p.name, dir: p.dir,
-      agents: [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, contextPct: a.contextPct, live: a.live })),
+      agents: [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live })),
       events: p.log.events,
       board: p.board.snapshot(),
       pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id)

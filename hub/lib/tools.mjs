@@ -40,15 +40,15 @@ export function cruxTools(hub, project, agent) {
   if (agent.role === 'orchestrator') {
     tools.push(
       tool('list_agents', 'List the worker agents on this project and what each is doing.', {},
-        async () => text(project.workers().map(w => ({ name: w.name, state: w.state, task: w.task })))),
+        async () => text(project.workers().map(w => ({ name: w.name, state: w.state, goal: w.goal })))),
 
       tool('message_agent', 'Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },
         async ({ to, text: t }) => { hub.orchestratorToWorker(project, agent, to, t); return text(`Sent to ${to}.`); }),
 
-      tool('start_worker', 'Start a new worker agent with a task. Give it a short name (letters, digits, dashes).',
-        { name: z.string().regex(/^[a-z0-9-]+$/i), task: z.string() },
-        async ({ name, task }) => { const w = hub.startWorker(project, name, task, agent.name); return text(`Started ${w.name}.`); })
+      tool('start_worker', 'Start a new worker agent. Give it a short name (letters, digits, dashes), a one-line goal the human sees, and the full task as its briefing.',
+        { name: z.string().regex(/^[a-z0-9-]+$/i), goal: z.string().max(120).describe('One plain line for the human, under 80 characters: what this worker is for.'), task: z.string() },
+        async ({ name, goal, task }) => { const w = hub.startWorker(project, name, task, agent.name, goal); return text(`Started ${w.name}.`); })
     );
   }
 

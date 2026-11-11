@@ -14,6 +14,7 @@ const S = {
   current: store.get('project', null),
   thread: store.get('thread', 'needs'),
   seen: store.get('seen', {}),
+  open: new Set(), // expanded messages, answered approvals and task lines
   activity: {},
   pending: new Set()
 };
@@ -50,7 +51,8 @@ function connect() {
       p.events.push(ev);
       if (ev.type === 'approval') S.pending.add(ev.approval);
       if (ev.type === 'approval_result') S.pending.delete(ev.approval);
-      if (['agent_created', 'agent_session', 'agent_retired', 'pick', 'entry'].includes(ev.type)) refreshSoon();
+      // Agents write decision records straight to .decisions/; a summary is the signal to re-read the board.
+      if (['agent_created', 'agent_session', 'agent_retired', 'pick', 'entry', 'summary'].includes(ev.type)) refreshSoon();
       if (ev.type === 'message' && ev.from !== 'you') delete S.activity[key(p.name, ev.thread)];
     } else if (ev.type === 'agent_state') {
       const a = p.agents.find(a => a.name === ev.agent);
@@ -70,6 +72,26 @@ function openDecisions(p) { return p.board.decisions.filter(d => d.status === 'o
 function pendingApprovals(p) {
   const done = new Set(p.events.filter(e => e.type === 'approval_result').map(e => e.approval));
   return p.events.filter(e => e.type === 'approval' && !done.has(e.approval) && S.pending.has(e.approval));
+}
+// The latest summary in each thread that asked something, until someone other than the asker replies there.
+function openQuestions(p) {
+  const out = [];
+  for (const t of new Set(p.events.map(e => e.thread).filter(Boolean))) {
+    const evs = p.events.filter(e => e.thread === t);
+    const lastAsk = evs.findLastIndex(e => e.type === 'summary' && e.questions?.length);
+    if (lastAsk < 0) continue;
+    const asker = evs[lastAsk].from;
+    if (evs.slice(lastAsk + 1).some(e => e.type === 'message' && e.from !== asker)) continue; // you or the orchestrator replied
+    out.push(evs[lastAsk]);
+  }
+  return out;
+}
+function questionCard(ev) {
+  return `<article class="card question">
+    <div class="card-head">${icon('inbox')}<h3>${esc(ev.from)} asks</h3><span class="time">${timeOf(ev.ts)}</span></div>
+    <ul>${ev.questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>
+    <button class="btn" data-thread="${esc(ev.thread)}">Answer in ${ev.thread === 'orchestrator' ? 'the orchestrator thread' : esc(ev.thread)}</button>
+  </article>`;
 }
 function threadEvents(p, t) {
   const agentThread = new Map(p.agents.map(a => [a.name, a.thread]));
@@ -119,14 +141,14 @@ function threadButton({ id, name, ava, avaClass = '', last, right }) {
 function renderThreads() {
   const p = proj();
   if (!p) { $('#threads').innerHTML = ''; return; }
-  const needs = openDecisions(p).length + pendingApprovals(p).length;
+  const needs = openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length;
   const orch = orchestrator(p);
   const workers = p.agents.filter(a => a.role === 'worker');
   const active = workers.filter(a => a.state !== 'retired'), retired = workers.filter(a => a.state === 'retired');
   const dot = (a, t) => `<span class="dot ${S.thread !== t && unread(p, t) ? 'unread' : a?.state || ''}"></span>`;
   let html = threadButton({ id: 'needs', name: 'Needs you', ava: 'inbox', avaClass: needs ? 'needs' : '', last: needs ? `${needs} waiting for your call` : 'Nothing waiting', right: needs ? `<span class="badge">${needs}</span>` : '' });
   html += threadButton({ id: 'orchestrator', name: orch ? `Orchestrator · ${orch.name.replace('orchestrator-', '#')}` : 'Orchestrator', ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator') });
-  if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || a.task, right: dot(a, a.thread) })).join('');
+  if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread) })).join('');
   if (retired.length) html += `<div class="side-label">Retired</div>` + retired.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread), right: '' })).join('');
   $('#threads').innerHTML = html;
 }
@@ -159,7 +181,12 @@ function approvalCard(ev) {
   const p = proj();
   const result = p.events.find(e => e.type === 'approval_result' && e.approval === ev.approval);
   const input = ev.input?.command || ev.input?.file_path || JSON.stringify(ev.input, null, 1);
-  return `<article class="card approval">
+  if (!live && !S.open.has(ev.approval)) {
+    // Answered: one line. Click to see the command again.
+    const what = ev.description || ev.input?.description || String(input).split('\n')[0];
+    return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${esc(ev.agent)} · ${esc(ev.tool)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
+  }
+  return `<article class="card approval ${live ? '' : 'answered'}" ${live ? '' : `data-expand="${esc(ev.approval)}"`}>
     <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to use ${esc(ev.title || ev.tool)}</h3></div>
     ${ev.description ? `<p class="muted">${esc(ev.description)}</p>` : ''}
     <pre>${esc(input)}</pre>
@@ -174,16 +201,33 @@ function summaryCard(p, ev) {
   const decisions = (ev.decisions_needed || []).map(id => p.board.decisions.find(d => d.id === Number(id))).filter(Boolean);
   return `<article class="card summary">
     <div class="card-head">${icon('check')}<h3>${esc(ev.from)} finished a round</h3><span class="time">${timeOf(ev.ts)}</span></div>
-    <dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${sec('Questions', ev.questions)}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>
+    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${sec('Questions', ev.questions)}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
+      isTall([ev.done, ev.changed, ev.questions, ev.blocked_on, ev.next_step].flat().filter(Boolean).join('\n'), 700))}
   </article>${decisions.map(d => decisionCard(p, d)).join('')}`;
 }
+
+// Long text is folded to a few lines; briefs between agents fold harder. S.open remembers what you expanded.
+function fold(id, html, tall) {
+  if (!tall) return html;
+  const open = S.open.has(id);
+  return `<div class="fold ${open ? 'open' : ''}">${html}</div><button class="more" data-expand="${esc(id)}">${open ? 'Show less' : 'Show all'}</button>`;
+}
+function isTall(text, limit) { const s = String(text || ''); return s.length > limit || s.split('\n').length > limit / 60; }
 
 function messageEl(p, ev) {
   const you = ev.from === 'you';
   const relay = !you && S.thread !== 'orchestrator' && /^orchestrator-/.test(ev.from);
+  const body = you ? `<p>${esc(ev.text).replace(/\n/g, '<br>')}</p>` : md(ev.text);
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
-    <span class="who">${you ? 'You' : esc(ev.from)} · ${timeOf(ev.ts)}</span>
-    <div class="bubble">${you ? `<p>${esc(ev.text).replace(/\n/g, '<br>')}</p>` : md(ev.text)}</div></div>`;
+    <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}</span>
+    <div class="bubble">${fold(ev.id, body, isTall(ev.text, relay ? 240 : 900))}</div></div>`;
+}
+
+// What a worker is for, in one line: its goal, else the first line of its task.
+function goalOf(a) {
+  if (a?.goal) return a.goal;
+  const first = String(a?.task || '').split(/\n|(?<=\.)\s/)[0];
+  return first.length > 90 ? first.slice(0, 88) + '…' : first;
 }
 
 // ---------- render: main ----------
@@ -194,12 +238,12 @@ function renderFeed() {
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
 
   if (S.thread === 'needs') {
-    const ds = openDecisions(p), aps = pendingApprovals(p);
+    const ds = openDecisions(p), aps = pendingApprovals(p), qs = openQuestions(p);
     const withRec = ds.filter(d => d.status === 'open' && d.recommended);
     let html = '';
     if (withRec.length > 1) html += `<div class="batch"><strong>${withRec.length} decisions have a recommendation.</strong><button class="btn primary" data-take-all>${icon('check')}Take all ${withRec.length}</button><span class="faint">or reply "all but 4A"</span></div>`;
-    html += aps.map(approvalCard).join('') + ds.map(d => decisionCard(p, d)).join('');
-    feed.innerHTML = html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions and permission requests from your agents show up here.</p></div>`;
+    html += aps.map(approvalCard).join('') + qs.map(questionCard).join('') + ds.map(d => decisionCard(p, d)).join('');
+    feed.innerHTML = html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
     const evs = threadEvents(p, S.thread);
     const html = evs.map(ev => {
@@ -234,7 +278,8 @@ function renderHead() {
   } else if (p && t !== 'needs') {
     const a = p.agents.find(a => a.thread === t);
     title = t;
-    sub = a ? `<span class="chip ${esc(a.state)}">${esc(a.state)}</span>${a.contextPct != null ? `<span>${a.contextPct}% context</span>` : ''}<span class="faint">${esc(a.task || '')}</span>` : '';
+    const full = S.open.has('task:' + t);
+    sub = a ? `<span class="chip ${esc(a.state)}">${esc(a.state)}</span>${a.contextPct != null ? `<span>${a.contextPct}% context</span>` : ''}${a.task ? `<button class="task-line ${full ? 'open' : ''}" data-expand="task:${esc(t)}" title="${full ? 'Show less' : 'Show the full task'}">${esc(full ? a.task : goalOf(a))}</button>` : ''}` : '';
   } else if (p) {
     sub = `<span>${esc(p.name)}</span>`;
   }
@@ -292,6 +337,12 @@ function selectThread(t) {
 }
 
 document.addEventListener('click', e => {
+  const ex = e.target.closest('[data-expand]');
+  if (ex && !e.target.closest('a, [data-approve], [data-deny]')) {
+    const id = ex.dataset.expand;
+    S.open.has(id) ? S.open.delete(id) : S.open.add(id);
+    return render();
+  }
   const t = e.target.closest('[data-thread]'); if (t) return selectThread(t.dataset.thread);
   const pj = e.target.closest('[data-project]'); if (pj) { S.current = pj.dataset.project; store.set('project', S.current); return selectThread('needs'); }
   const pick = e.target.closest('[data-pick]');

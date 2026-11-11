@@ -46,8 +46,8 @@ function describeTool(block) {
 }
 
 export class Agent {
-  constructor(hub, project, { name, role, task = '', generation = 0, sessionId = null, state = 'asleep' }) {
-    Object.assign(this, { hub, project, name, role, task, generation, sessionId, state });
+  constructor(hub, project, { name, role, task = '', goal = '', generation = 0, sessionId = null, state = 'asleep' }) {
+    Object.assign(this, { hub, project, name, role, task, goal, generation, sessionId, state });
     this.thread = role === 'orchestrator' ? 'orchestrator' : name;
     this.q = null;
     this.inbox = null;
@@ -83,7 +83,7 @@ export class Agent {
       settingSources: ['user', 'project', 'local'],
       mcpServers: { crux: cruxTools(this.hub, p, this) },
       allowedTools: cruxToolNames(this.role),
-      disallowedTools: this.role === 'orchestrator' ? ['Edit', 'Write', 'NotebookEdit'] : [],
+      disallowedTools: this.role === 'orchestrator' ? ['NotebookEdit'] : [],
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
       ...(this.sessionId ? { resume: this.sessionId } : {})

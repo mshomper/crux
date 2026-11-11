@@ -50,6 +50,11 @@ const routes = {
     const p = hub.project(project);
     text = String(text || '').trim();
     if (!text) throw new Error('Empty message');
+    if (/^\/(login|logout)\b/i.test(text)) {
+      p.log.append('message', { thread, from: 'you', text });
+      hub.notice(p, thread, 'Agents run headless, so signing in happens in a terminal, not here. Stop the hub, run "npm run login" in the hub folder, type /login there, then start the hub again.');
+      return { ok: true };
+    }
     const open = p.board.decisions().filter(d => d.status === 'open');
     const picks = parseQuickPicks(text, open);
     if (picks) {
