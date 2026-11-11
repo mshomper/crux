@@ -1,0 +1,98 @@
+{
+ "id": 3,
+ "slug": "follow-ups",
+ "title": "When the orchestrator sends work back, which agent gets it?",
+ "date": "2026-11-11",
+ "mode": "full",
+ "lenses": [
+  "architecture"
+ ],
+ "status": "decided",
+ "context": "After reading a summary, the orchestrator sends an agent back for fixes or the next step. It can continue with the same agent, which keeps context but grows long, or start a new one from the board, which is clean but loses what the agent learned.",
+ "depends_on": [
+  1,
+  7
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "source": "claude",
+   "key": "A",
+   "name": "Always the same agent",
+   "summary": "Fixes and next steps go back to the agent that did the work.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='10' y='65' width='90' height='50' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='55' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Orchestrator</text><line x1='100' y1='82' x2='198' y2='82' stroke='currentColor'/><polygon points='198,82 191.7,85.0 191.7,79.0' fill='currentColor'/><line x1='200' y1='98' x2='102' y2='98' stroke='currentColor'/><polygon points='102,98 108.3,95.0 108.3,101.0' fill='currentColor'/><rect x='200' y='65' width='110' height='50' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='255' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Same agent</text></svg>",
+   "pros": [
+    "Keeps what the agent learned"
+   ],
+   "cons": [
+    "Long agents slow down and lose focus"
+   ],
+   "effort": "None"
+  },
+  {
+   "source": "claude",
+   "key": "B",
+   "name": "New agent per step",
+   "summary": "Each next step starts a new agent that reads the board.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='10' y='65' width='90' height='50' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='55' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Orchestrator</text><line x1='100' y1='80' x2='198' y2='45' stroke='currentColor'/><polygon points='198,45 193.1,50.0 191.0,44.3' fill='currentColor'/><line x1='100' y1='100' x2='198' y2='135' stroke='currentColor'/><polygon points='198,135 191.0,135.7 193.1,130.0' fill='currentColor'/><rect x='200' y='25' width='110' height='40' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='255' y='49' font-size='12' text-anchor='middle' fill='currentColor'>Step 1 agent</text><rect x='200' y='115' width='110' height='40' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='255' y='139' font-size='12' text-anchor='middle' fill='currentColor'>Step 2 agent</text></svg>",
+   "pros": [
+    "Clean context; tests the board"
+   ],
+   "cons": [
+    "Loses short-term context",
+    "More threads"
+   ],
+   "effort": "Small"
+  },
+  {
+   "source": "claude",
+   "key": "C",
+   "name": "Same for fixes, new for new scope",
+   "summary": "Fixes go back to the same agent; new scope, or an agent near its context limit, gets a new agent that starts from the board and a handoff memo.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='10' y='65' width='90' height='50' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='55' y='94' font-size='12' text-anchor='middle' fill='currentColor'>Orchestrator</text><line x1='100' y1='80' x2='198' y2='45' stroke='currentColor'/><polygon points='198,45 193.1,50.0 191.0,44.3' fill='currentColor'/><line x1='100' y1='100' x2='198' y2='135' stroke='currentColor'/><polygon points='198,135 191.0,135.7 193.1,130.0' fill='currentColor'/><rect x='200' y='25' width='110' height='40' rx='6' fill='var(--muted)' fill-opacity='0.35' stroke='currentColor'/><text x='255' y='49' font-size='12' text-anchor='middle' fill='currentColor'>Same agent</text><rect x='200' y='115' width='110' height='40' rx='6' fill='var(--accent)' fill-opacity='0.85' stroke='currentColor'/><text x='255' y='139' font-size='12' text-anchor='middle' fill='currentColor'>New agent</text><text x='150' y='50' font-size='11' text-anchor='middle' fill='currentColor'>fix</text><text x='150' y='140' font-size='11' text-anchor='middle' fill='currentColor'>new scope</text></svg>",
+   "pros": [
+    "Context where it helps, clean starts where not",
+    "Workers retire the same way orchestrators do"
+   ],
+   "cons": [
+    "The orchestrator must judge when to split"
+   ],
+   "effort": "Small"
+  }
+ ],
+ "criteria": [
+  {
+   "name": "Keeps useful context",
+   "scores": {
+    "A": 3,
+    "B": 1,
+    "C": 3
+   }
+  },
+  {
+   "name": "Focus over time",
+   "scores": {
+    "A": 1,
+    "B": 3,
+    "C": 3
+   }
+  },
+  {
+   "name": "Effort",
+   "scores": {
+    "A": 3,
+    "B": 2,
+    "C": 2
+   }
+  }
+ ],
+ "recommended": "C",
+ "recommendation": "The same retire-and-handoff rule as the orchestrator role, applied to workers: fixes stay, new scope starts clean from the board.",
+ "confidence": "lean",
+ "chosen": "C",
+ "reason": "",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": []
+}
