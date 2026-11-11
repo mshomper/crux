@@ -8,6 +8,8 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
 import { parseQuickPicks } from './lib/quick.mjs';
+import { checkRequest, extraHosts } from './lib/access.mjs';
+import { Push } from './lib/push.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -23,6 +25,12 @@ if (!projects.length && existsSync(cfg)) {
 if (!projects.length) projects = [process.cwd()];
 
 const hub = new Hub({ projects, retireAt });
+
+// Phone notifications (decision 19): a card that needs you becomes a push to every subscribed phone.
+const push = new Push();
+const decisionOpen = (project, id) => { try { return ['open', 'found'].includes(hub.project(project).board.decision(id)?.status); } catch { return false; } };
+hub.on(ev => { if (ev.logged) push.handle(ev, { approvals: hub.approvals, decisionOpen, events: name => hub.project(name).log.events }); });
+const hosts = extraHosts();
 
 // The folders the Crux roll-up scans (same rule as crux/scripts/rollup.mjs): every project's Crux pages under
 // them are served at /files/..., so the all-projects page, boards and decision pages all open from the hub.
@@ -40,7 +48,7 @@ function hubUrl(fileUrl) {
 }
 
 // ---------- http ----------
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.webmanifest': 'application/manifest+json' };
 const clients = new Set();
 hub.on(ev => { const line = `data: ${JSON.stringify(ev)}\n\n`; for (const res of clients) res.write(line); });
 
@@ -85,14 +93,25 @@ const routes = {
   'POST /api/retire': ({ project, agent }) => { const p = hub.project(project); hub.retire(p, agent || p.orchestrator()); return { ok: true }; },
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.project(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task }) => ({ name: hub.startWorker(hub.project(project), name, task).name }),
+  // Phone notifications
+  'GET /api/push/key': async () => ({ publicKey: (await push.keys()).publicKey }),
+  'POST /api/push/status': ({ endpoint }) => ({ subscribed: push.has(endpoint), devices: push.subs.length }),
+  'POST /api/push/subscribe': ({ subscription, label }) => ({ devices: push.subscribe(subscription, label) }),
+  'POST /api/push/unsubscribe': ({ endpoint }) => ({ removed: push.unsubscribe(endpoint) }),
+  'POST /api/push/test': async () => ({ sent: await push.send({ kind: 'test', title: 'Crux Hub', body: 'Notifications reach this device.', card: '', url: '/' }) }),
+  // Where an open hub page is and whether you are using it, so cards you are looking at do not buzz your phone.
+  'POST /api/presence': ({ client, ...info }) => { push.presence(String(client || ''), info); return { ok: true }; },
   'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId })
 };
 
 createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  // Only this machine and the tailnet address get in, and only the hub's own pages may change anything.
+  const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts });
+  if (refused) return send(res, 403, { error: refused });
   try {
     if (url.pathname === '/api/stream') {
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
       res.write(': hello\n\n');
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
@@ -150,7 +169,7 @@ createServer(async (req, res) => {
     send(res, 400, { error: e.message });
   }
 }).listen(port, '127.0.0.1', () => {
-  console.log(`Crux hub: http://localhost:${port}`);
+  console.log(`Crux hub: http://localhost:${port}  (phone: tailscale serve --bg ${port}, see README)`);
   console.log(`Projects: ${[...hub.projects.values()].map(p => p.name).join(', ')}`);
   console.log(`Orchestrator hands off at ${retireAt}% context.`);
 });
