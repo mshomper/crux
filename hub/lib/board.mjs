@@ -33,7 +33,7 @@ export class Board {
 
   decision(id) { return this.decisions().find(d => d.id === Number(id)); }
 
-  // Writes only the human's fields (status, chosen, reason, decided_on), then rebuilds the pages.
+  // Writes only the user's fields (status, chosen, reason, decided_on), then rebuilds the pages.
   pick(id, choice, reason) {
     const d = this.decision(id);
     if (!d) throw new Error(`No decision ${id}`);
@@ -70,18 +70,30 @@ export class Board {
     for (const ev of this.log.ofType('entry_retired')) {
       if (byId.has(ev.entryId)) byId.get(ev.entryId).status = 'retired';
     }
+    // Questions the next holder asked at a handoff are kept with it (decision 16).
+    for (const ev of this.log.ofType('handoff_qa')) {
+      const h = byId.get(ev.entryId);
+      if (h) (h.qa ||= []).push({ from: ev.from, q: ev.q, a: ev.a });
+    }
     return [...byId.values()];
   }
 
-  addEntry({ kind, title, summary, body, supersedes, from }) {
+  addEntry({ kind, title, summary, body, supersedes, from, ...extra }) {
     if (!ENTRY_KINDS.includes(kind)) throw new Error(`Unknown entry kind ${kind}`);
     const n = this.log.ofType('entry').filter(e => e.kind === kind).length + 1;
     const entryId = `${PREFIX[kind]}${String(n).padStart(3, '0')}`;
-    return this.log.append('entry', { entryId, kind, title, summary, body, supersedes: supersedes || null, from });
+    return this.log.append('entry', { entryId, kind, title, summary, body, supersedes: supersedes || null, from, ...extra });
   }
 
+  // The orchestrator role's latest handoff (workers' handoffs are read by their own successors).
   latestHandoff() {
-    return this.entries().filter(e => e.kind === 'handoff' && e.status === 'active').at(-1) || null;
+    return this.entries().filter(e => e.kind === 'handoff' && e.status === 'active' && (e.role || 'orchestrator') === 'orchestrator').at(-1) || null;
+  }
+
+  retireEntry(entryId, why, from) {
+    const e = this.entries().find(x => x.entryId.toUpperCase() === String(entryId).toUpperCase());
+    if (!e || e.status !== 'active' || e.kind === 'handoff') return null;
+    return this.log.append('entry_retired', { entryId: e.entryId, why, from });
   }
 
   // One line per active item: the start-up reading for every agent.

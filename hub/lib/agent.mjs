@@ -1,5 +1,5 @@
 // One Claude Code agent hosted through the Agent SDK (decision 0001).
-// Runs on the machine's Claude Code login, so usage comes from the human's plan.
+// Runs on the machine's Claude Code login, so usage comes from the user's plan.
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
@@ -46,8 +46,9 @@ function describeTool(block) {
 }
 
 export class Agent {
-  constructor(hub, project, { name, role, task = '', goal = '', generation = 0, sessionId = null, state = 'asleep' }) {
-    Object.assign(this, { hub, project, name, role, task, goal, generation, sessionId, state });
+  constructor(hub, project, { name, role, task = '', goal = '', generation = 0, sessionId = null, state = 'asleep', predecessor = null, handoffEntry = null }) {
+    Object.assign(this, { hub, project, name, role, task, goal, generation, sessionId, state, predecessor, handoffEntry });
+    this.questionsLeft = predecessor ? 3 : 0;
     this.thread = role === 'orchestrator' ? 'orchestrator' : name;
     this.q = null;
     this.inbox = null;
@@ -65,16 +66,17 @@ export class Agent {
   send(textMsg) {
     if (this.state === 'retired' && !this.retiring) throw new Error(`${this.name} has retired`);
     if (!this.q) this.start();
-    this.inbox.push({ type: 'user', message: { role: 'user', content: textMsg }, parent_tool_use_id: null });
+    this.inbox.push({ type: 'user', message: { role: 'user', content: this.hub.memory.personalize(textMsg) }, parent_tool_use_id: null });
     this.setState('working');
   }
 
   start() {
     const p = this.project;
-    const index = p.board.index();
-    const append = this.role === 'orchestrator'
-      ? orchestratorPrompt({ project: p.name, index, handoff: p.board.latestHandoff(), generation: this.generation })
-      : workerPrompt({ project: p.name, name: this.name, index, task: this.task });
+    const m = this.hub.memory;
+    const mem = { index: p.board.index(), core: m.core(), pack: m.pack(p.name), conventions: m.conventions() };
+    const append = m.personalize(this.role === 'orchestrator'
+      ? orchestratorPrompt({ project: p.name, handoff: p.board.latestHandoff(), generation: this.generation, ...mem })
+      : workerPrompt({ project: p.name, name: this.name, task: this.task, handoff: this.handoffEntry ? p.board.read(this.handoffEntry) : null, ...mem }));
 
     this.inbox = new Inbox();
     const options = {
@@ -82,7 +84,7 @@ export class Agent {
       systemPrompt: { type: 'preset', preset: 'claude_code', append },
       settingSources: ['user', 'project', 'local'],
       mcpServers: { crux: cruxTools(this.hub, p, this) },
-      allowedTools: cruxToolNames(this.role),
+      allowedTools: cruxToolNames(this),
       disallowedTools: this.role === 'orchestrator' ? ['NotebookEdit'] : [],
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),

@@ -25,7 +25,7 @@ if (!projects.length) projects = [process.cwd()];
 const hub = new Hub({ projects, retireAt });
 
 // ---------- http ----------
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 const clients = new Set();
 hub.on(ev => { const line = `data: ${JSON.stringify(ev)}\n\n`; for (const res of clients) res.write(line); });
 
@@ -67,7 +67,8 @@ const routes = {
 
   'POST /api/pick': ({ project, picks }) => ({ picked: hub.pickMany(hub.project(project), picks).map(d => d.id) }),
   'POST /api/approval': ({ id, allow, note }) => { hub.answerApproval(id, !!allow, note); return { ok: true }; },
-  'POST /api/retire': ({ project }) => { hub.retire(hub.project(project)); return { ok: true }; },
+  'POST /api/retire': ({ project, agent }) => { const p = hub.project(project); hub.retire(p, agent || p.orchestrator()); return { ok: true }; },
+  'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.project(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task }) => ({ name: hub.startWorker(hub.project(project), name, task).name }),
   'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId })
 };
@@ -89,6 +90,17 @@ createServer(async (req, res) => {
     // Crux decision pages for each project: /p/<project>/<file>
     const m = /^\/p\/([^/]+)\/([\w.-]+\.html)$/.exec(url.pathname);
     if (m) return serveFile(res, join(hub.project(decodeURIComponent(m[1])).board.decisionsDir, m[2]));
+
+    // Visuals agents posted: /media/<project>/<file>. Pages run sandboxed, away from the hub's own origin.
+    const v = /^\/media\/([^/]+)\/([\w.-]+)$/.exec(url.pathname);
+    if (v) {
+      const file = hub.memory.mediaPath(decodeURIComponent(v[1]), v[2]);
+      if (!existsSync(file)) return send(res, 404, { error: 'Not found' });
+      const headers = { 'content-type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream', 'cache-control': 'no-store' };
+      if (extname(file).toLowerCase() === '.html') headers['content-security-policy'] = 'sandbox allow-scripts';
+      res.writeHead(200, headers);
+      return res.end(readFileSync(file));
+    }
 
     const pub = join(here, 'public');
     const file = normalize(join(pub, url.pathname === '/' ? 'index.html' : url.pathname));
