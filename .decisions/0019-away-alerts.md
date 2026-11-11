@@ -4,6 +4,7 @@
 - Date: 2026-11-11, decided 2026-11-11
 - Lenses: architecture, ui
 - Builds on: 0018
+- Settles: phone notifications from local tools = web push from the tool itself to its home-screen app; card contents never pass through a third-party chat service
 
 ## Decision
 

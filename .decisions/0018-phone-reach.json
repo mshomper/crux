@@ -110,5 +110,10 @@
  "decided_on": "2026-11-11",
  "superseded_by": null,
  "challenge": null,
- "settles": []
+ "settles": [
+  {
+   "key": "remote access to local tools",
+   "value": "private Tailscale network (tailscale serve gives an https address only your devices can open); nothing exposed on the public internet"
+  }
+ ]
 }

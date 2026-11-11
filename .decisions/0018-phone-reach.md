@@ -4,6 +4,7 @@
 - Date: 2026-11-11, decided 2026-11-11
 - Lenses: architecture
 - Builds on: 0004
+- Settles: remote access to local tools = private Tailscale network (tailscale serve gives an https address only your devices can open); nothing exposed on the public internet
 
 ## Decision
 

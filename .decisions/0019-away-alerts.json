@@ -131,5 +131,10 @@
  "decided_on": "2026-11-11",
  "superseded_by": null,
  "challenge": null,
- "settles": []
+ "settles": [
+  {
+   "key": "phone notifications from local tools",
+   "value": "web push from the tool itself to its home-screen app; card contents never pass through a third-party chat service"
+  }
+ ]
 }
