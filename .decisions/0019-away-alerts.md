@@ -1,9 +1,14 @@
 # 0019 How does the hub get your attention, and take quick answers, when you are away?
 
-- Status: open
-- Date: 2026-11-11
+- Status: decided
+- Date: 2026-11-11, decided 2026-11-11
 - Lenses: architecture, ui
 - Builds on: 0018
+- Settles: phone notifications from local tools = web push from the tool itself to its home-screen app; card contents never pass through a third-party chat service
+
+## Decision
+
+**A: Notifications from the hub itself.** The hub page, added to the phone's home screen, sends its own notifications. Tapping one opens that card in the hub. Nothing passes through a chat company. On iPhone the page has to be added to the home screen first.
 
 ## Context
 
@@ -11,7 +16,7 @@ Reaching the hub is half of it; the other half is knowing when it needs you. A c
 
 ## Options
 
-### A: Notifications from the hub itself (recommended)
+### A: Notifications from the hub itself (chosen) (recommended)
 
 The hub page, added to the phone's home screen, sends its own notifications. Tapping one opens that card in the hub. Nothing passes through a chat company. On iPhone the page has to be added to the home screen first.
 - Pro: Card contents stay between your PC and your phone

@@ -1,5 +1,6 @@
 // Crux hub interface: plain ES module, no build step.
 import { LiveMap } from './map.js';
+import { initPhone } from './phone.js';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = n => String(n).padStart(4, '0');
@@ -114,7 +115,7 @@ function visualEl(p, ev, compact) {
 function questionCard(ev) {
   const p = proj();
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
-  return `<article class="card question">
+  return `<article class="card question" data-card="question:${esc(ev.id)}">
     <div class="card-head">${icon('inbox')}<h3>${esc(ev.from)} asks</h3><span class="time">${timeOf(ev.ts)}</span></div>
     ${vis.map(v => visualEl(p, v, true)).join('')}
     <ul>${ev.questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul>
@@ -202,7 +203,7 @@ function decisionCard(p, d) {
     : found
       ? `<button class="btn good" data-pick="${d.id}" data-choice="confirm">${icon('check')}Confirm</button><button class="btn" data-pick="${d.id}" data-choice="reject">${icon('x')}Reject</button>`
       : `<span class="chip ${esc(d.status)}">${esc(d.status)}${d.chosen ? ' · ' + esc(d.chosen) : ''}</span>`;
-  return `<article class="card decision ${open || found ? '' : 'done'}">
+  return `<article class="card decision ${open || found ? '' : 'done'}" data-card="decision:${d.id}">
     <div class="card-head"><h3>D${pad(d.id)} · ${esc(d.title)}</h3><span class="chip ${esc(d.status)}">${esc(d.status)}</span></div>
     ${d.context ? `<p class="ctx">${esc(d.context)}</p>` : ''}
     ${found ? '' : `<div class="options">${opts}</div>`}
@@ -225,7 +226,7 @@ function approvalCard(ev) {
   }
   const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
   const raw = `<pre>${esc(input)}</pre>`;
-  return `<article class="card approval ${live ? '' : 'answered'}" ${live ? '' : `data-expand="${esc(ev.approval)}"`}>
+  return `<article class="card approval ${live ? '' : 'answered'}" data-card="approval:${esc(ev.approval)}" ${live ? '' : `data-expand="${esc(ev.approval)}"`}>
     <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}</h3></div>
     ${tags ? `<div class="tags">${tags}</div>` : ''}
     ${why ? `<p class="muted why">Why: ${esc(why)}</p>` : (!plain && ev.description ? `<p class="muted">${esc(ev.description)}</p>` : '')}
@@ -380,8 +381,31 @@ function selectThread(t) {
   S.thread = t; S.justSwitched = true; store.set('thread', t);
   $('#app').classList.remove('show-side');
   render();
+  phone.viewChanged();
   $('#input').focus();
 }
+
+// Open the card a notification points at (card = "approval:<id>", "decision:<n>" or "question:<event id>").
+// Waiting cards are in Needs you; one already answered is shown in its own thread instead.
+function openCard(project, card) {
+  if (project && S.projects.some(p => p.name === project)) { S.current = project; store.set('project', project); }
+  const p = proj();
+  if (!p) return;
+  const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];
+  const waiting = kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
+    : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
+      : openQuestions(p).some(e => e.id === id);
+  const ev = kind === 'approval' ? p.events.find(e => e.type === 'approval' && e.approval === id) : kind === 'question' ? p.events.find(e => e.id === id) : null;
+  if (kind === 'approval' && ev) S.open.add(id);
+  S.thread = waiting || !ev ? 'needs' : ev.thread;
+  store.set('thread', S.thread);
+  $('#app').classList.remove('show-side');
+  render();
+  phone.viewChanged();
+  const el = [...document.querySelectorAll('[data-card]')].find(x => x.dataset.card === card);
+  if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2400); }
+}
+const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: S.thread }), openCard });
 
 document.addEventListener('click', e => {
   const ex = e.target.closest('[data-expand]');
@@ -443,4 +467,4 @@ $('#agent-form').addEventListener('submit', e => {
 });
 
 if (matchMedia('(max-width: 720px)').matches) $('#app').classList.add('show-side');
-load().then(connect);
+load().then(() => { phone.openFromLocation(); phone.viewChanged(); connect(); });

@@ -1,9 +1,14 @@
 # 0018 How does your phone reach the hub when you are away from your desk?
 
-- Status: open
-- Date: 2026-11-11
+- Status: decided
+- Date: 2026-11-11, decided 2026-11-11
 - Lenses: architecture
 - Builds on: 0004
+- Settles: remote access to local tools = private Tailscale network (tailscale serve gives an https address only your devices can open); nothing exposed on the public internet
+
+## Decision
+
+**A: Private network for your devices.** Install Tailscale on the PC and the phone. The hub gets an https address that only your own signed-in devices can open; nothing is reachable from the open internet. On the phone it is the same hub page, added to the home screen like an app.
 
 ## Context
 
@@ -11,7 +16,7 @@ The hub runs on your PC and only answers on that PC (localhost). Away from your 
 
 ## Options
 
-### A: Private network for your devices (recommended)
+### A: Private network for your devices (chosen) (recommended)
 
 Install Tailscale on the PC and the phone. The hub gets an https address that only your own signed-in devices can open; nothing is reachable from the open internet. On the phone it is the same hub page, added to the home screen like an app.
 - Pro: Nothing exposed to the internet at all

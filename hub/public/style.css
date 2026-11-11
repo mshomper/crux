@@ -208,3 +208,9 @@ a.bitem:hover{border-color:var(--line2)}
   .head-actions .btn .icon{font-size:14px}
   .head-actions .btn .ext{display:none}
 }
+
+/* ---------- phone: home-screen app and notification deep links (decisions 18, 19) ---------- */
+@media (display-mode: standalone){.app{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}}
+.card.flash{animation:card-flash 2.4s ease-out}
+@keyframes card-flash{0%,30%{box-shadow:0 0 0 2px var(--accent),0 0 28px rgba(142,168,255,.45)}100%{box-shadow:0 0 0 0 transparent}}
+@media (prefers-reduced-motion: reduce){.card.flash{animation:none;outline:2px solid var(--accent)}}
