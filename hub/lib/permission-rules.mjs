@@ -207,6 +207,8 @@ class Check {
       if (/\b(node|python3?|py)\s+-(\s|$)/.test(before)) this.script(body);
       return `${before}${after}`;
     });
+    // "stopped $($_.ProcessId)": a property of the pipeline object inside a string is only text.
+    if (ps) s = s.replace(/\$\(\s*\$(?:_|psitem)(?:\.\w+)+\s*\)/gi, 'PROP');
     if (/`/.test(s.replace(/'[^']*'/g, ''))) this.unsure(ps ? 'Backtick escapes the hub cannot read' : 'Command substitution (backticks)');
     if (/\$\(|<\(|>\(/.test(s.replace(/'[^']*'/g, ''))) this.unsure('Command substitution the hub cannot read');
     let cwd = this.projectDir;
@@ -354,6 +356,8 @@ class Check {
     }
     while (words.length && /^(if|then|else|elif|fi|do|done|while|until|!|time|foreach)$/.test(words[0].text)) words = words.slice(1);
     if (!words.length) return cwd;
+    // A string on its own in PowerShell ("checked") is only printed.
+    if (ps && words.length === 1 && words[0].quoted && !this.pathLike(words[0].text)) { this.word(words[0], cwd); return cwd; }
     // Running a program by its full path is running that program: "/c/Program Files/GitHub CLI/gh.exe" is gh.
     const first = words[0].text;
     const head = (this.pathLike(first) ? basename(first.replace(/\\/g, '/')) : first).toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
@@ -379,6 +383,7 @@ class Check {
   }
 
   run(head, args, words, cwd) {
+    this.noteFilters(head, args);
     if (/^\$(_|psitem)\b/i.test(head) || /^-(and|or|not|eq|ne|gt|lt|ge|le|like|match)$/i.test(head)) return; // a PowerShell filter expression
     // Using one of its own variables ($s.TargetPath, $s = ...): an expression, judged by its other words.
     // A bare system variable as a statement just prints it ($env:ProgramFiles).
@@ -450,7 +455,7 @@ class Check {
       }
       return;
     }
-    if (KILL.has(head)) return this.stop(`Stops a process (${head}); the hub cannot tell it is not the hub on port 4747`);
+    if (KILL.has(head)) return this.kill(head, args, cwd);
     if (INSTALL.has(head)) return this.stop(`Installs software (${head})`);
     if (/^(env|printenv|set|get-credential|get-secret)$/.test(head)) return this.stop(`Reads environment variables or credentials (${head})`);
     if (INDIRECT.has(head)) return this.unsure(`Runs commands the hub cannot read (${head})`);
@@ -574,6 +579,71 @@ class Check {
     }
   }
 
+  // What a filter earlier in the command pins the processes to: a command line or path (-like, -match, a WMI filter)
+  // or a local port (Get-NetTCPConnection -LocalPort). Collected from every part; stopping needs at least one.
+  noteFilters(head, args) {
+    this.cmdFilters ||= []; this.portFilters ||= [];
+    const low = args.map(a => a.toLowerCase());
+    if (/^\$(_|psitem)\.(commandline|path|executablepath|name|processname)$/i.test(head)) {
+      if (low.includes('-or')) this.cmdFilters.push('*');   // a second condition that may widen the match
+      args.forEach((a, i) => { if (/^-[ci]?(like|match)$/i.test(a) && args[i + 1] && /commandline|path/i.test(head + ' ' + (args[i - 1] || ''))) this.cmdFilters.push(args[i + 1]); });
+      if (/^-[ci]?(like|match)$/i.test(args[0] || '') && !/commandline|path/i.test(head)) this.nameFilter = true;
+    } else if (/^(get-ciminstance|get-wmiobject|gcim|gwmi)$/.test(head)) {
+      const f = args[low.indexOf('-filter') + 1] || '';
+      const m = /commandline\s+like\s+'([^']+)'/i.exec(f);
+      if (m) this.cmdFilters.push(m[1]);
+    } else if (head === 'get-nettcpconnection') {
+      const i = low.indexOf('-localport');
+      if (i >= 0) for (const p of String(args[i + 1] || '').split(',')) this.portFilters.push(p.trim());
+    }
+  }
+  // 'ok': pins the processes to this agent's own temp folder. 'unsure': clearly a different temp path, so not the hub.
+  // 'bad': could match the hub on 4747 (or anything).
+  judgeCmd(raw, cwd) {
+    const s = String(raw).replace(/\*/g, '').replace(/%(temp|tmp)%/gi, '$env:TEMP').replace(/%/g, '').replace(/\\+/g, '/').replace(/^['"]|['"]$/g, '');
+    const p = s.toLowerCase();
+    if (!p || /4747/.test(p)) return 'bad';
+    let path = null;
+    if (/^([a-z]:\/|\$env:te?mp|\$\{?env:te?mp)/i.test(s)) path = s;
+    else if (/(^|\/)temp\/[^/]/.test(p)) path = join(this.tmp, s.replace(/^.*?(^|\/)temp\//i, ''));
+    if (path) {
+      const top = this.tempTop(path, this.projectDir);
+      if (top === null || top === '') return 'bad';
+      return this.ownTemp(path, this.projectDir) ? 'ok' : 'unsure';
+    }
+    const first = p.split('/')[0];
+    if (/^(node|server\.mjs|hub|crux|claude)$/.test(first) || first.length < 5) return 'bad';
+    const tracked = [...(this.madeTemp || []), ...(this.tempMade || [])].map(m => basename(m).toLowerCase());
+    if (tracked.includes(first) || (this.agent.length >= 3 && first.includes(this.agent))) return 'ok';
+    return /^[a-z0-9._-]{6,}$/.test(first) && !/hub|server|node|main|claude/.test(first) ? 'unsure' : 'bad';
+  }
+  judgePort(p) { const n = Number(p); return Number.isInteger(n) && n > 0 && n < 65536 && n !== 4747 ? 'ok' : 'bad'; }
+
+  // Stopping processes: only ones a filter pins to this agent's own temp folder or to a port other than 4747. By name,
+  // by a PID the hub cannot attribute, or with no filter, it could be the hub on 4747: a hard stop.
+  kill(head, args, cwd) {
+    const low = args.map(a => a.toLowerCase());
+    const pipe = v => v != null && this.unresolved(v);       // $_.ProcessId, $_.OwningProcess, a variable set at run time
+    let how = null;
+    if (head === 'stop-process' || head === 'spps') {
+      const i = low.findIndex(a => /^-(id|inputobject)$/.test(a));
+      if (!low.some(a => a === '-name') && i >= 0 && pipe(args[i + 1])) how = 'id';
+    } else if (head === 'taskkill') {
+      const i = low.indexOf('/pid');
+      if (i >= 0 && pipe(args[i + 1]) && !low.includes('/im') && !low.includes('/fi')) how = 'id';
+    } else if (head === 'pkill' && low.includes('-f')) {
+      const pat = args.filter(a => !a.startsWith('-'))[0];
+      const v = pat ? this.judgeCmd(pat, cwd) : 'bad';
+      if (v === 'ok') return;
+      if (v === 'unsure') return this.unsure(`Stops processes whose command line names a folder that is not this agent's own (${pat})`, true);
+    }
+    const verdicts = [...(this.cmdFilters || []).map(f => this.judgeCmd(f, cwd)), ...(this.portFilters || []).map(f => this.judgePort(f))];
+    if (!how || !verdicts.length || verdicts.includes('bad')) {
+      return this.stop(`Stops a process (${head}) the hub cannot tell is not the hub on port 4747 (no filter on its own temp folder or a port other than 4747)`);
+    }
+    if (verdicts.includes('unsure')) this.unsure('Stops processes picked by a filter that excludes the hub, but not on one of this agent\'s own folders', true);
+  }
+
   // A rebase of a branch that has no upstream, or whose upstream does not contain HEAD (the commits are not pushed), is
   // contained. A pushed branch, main, a detached HEAD and anything that runs other commands (--exec, -i) are not.
   rebase(rest, cwd) {
@@ -628,7 +698,12 @@ class Check {
     const i = args.findIndex(x => /^(-e|-p|--eval|--print)$/.test(x));
     if (i >= 0) return this.script(args[i + 1] || '');
     const file = args.find(x => !x.startsWith('-'));
-    if (file && basename(file) === 'server.mjs') this.hubPort(args);
+    if (file && /^(server|restart)\.mjs$/.test(basename(file))) this.hubPort(args);   // restart.mjs with no port restarts the hub on 4747
+    // hub/tools/stop-test-hub.mjs <port> stops that port's process tree and refuses 4747.
+    if (file && basename(file) === 'stop-test-hub.mjs') {
+      const port = Number(args[args.indexOf(file) + 1]);
+      if (!Number.isInteger(port) || port <= 0 || port > 65535 || port === 4747) this.stop('Stops a hub without a port other than 4747');
+    }
   }
 
   python(args) {
@@ -666,6 +741,7 @@ class Check {
     if (/\b(fetch|https?|net|dgram|tls|http2|XMLHttpRequest|WebSocket|urllib|requests|socket)\b/.test(code)) this.stop('An inline script that could reach the network');
     if (/\b(child_process|execSync|execFileSync|spawn|spawnSync|exec\(|execFile|subprocess|os\.system|os\.popen)\b/.test(code)) this.unsure('An inline script that runs other programs');
     if (/\b(rmSync|unlinkSync|rmdirSync|rm\(|unlink\(|rmdir\(|os\.remove|os\.unlink|shutil\.rmtree)\b/.test(code)) this.unsure('An inline script that deletes files');
+    if (/\b(stopTree|pidsOnPort|process\.kill|taskkill)\b/.test(code) && /4747/.test(code)) this.stop("An inline script that stops processes and names the hub's port 4747");
     if (/process\.env|os\.environ|homedir\(\)|expanduser/.test(code)) this.stop('An inline script that reads environment variables or the home folder');
     // Reading anywhere is fine; a script that writes, given a real path outside ("C:/x", "../x", not "\n"), is not.
     if (/\b(writeFile|appendFile|mkdir|rename|copyFile|cp|createWriteStream|symlink|truncate)(Sync)?\s*\(|open\([^)]*['"][wa]/.test(code)) {
