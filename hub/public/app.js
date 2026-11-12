@@ -10,6 +10,9 @@ import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
 import { UsageUI } from './usage-ui.js';
 import { md } from './markdown.js';
+import { retiredView, RETIRED_RECENT_DAYS } from './retired-list.js';
+import { SideResizer } from './side-width.js';
+import { routeSwitch } from './route-switch.js';
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
 { const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
@@ -34,7 +37,9 @@ const S = {
   activity: {},
   pending: new Set(),
   drafts: store.get('drafts', {}),   // answers typed in Needs you, by "<summary id>:<question place>"
-  boardOpen: store.get('board-open', {})   // board sections you opened or closed, by key
+  boardOpen: store.get('board-open', {}),   // board sections you opened or closed, by key
+  retiredOpen: store.get('retired-open', false),   // the Retired section of the thread list, folded by default
+  retiredOlder: false   // "Show older" in it: for this visit only, so old ones age out again on the next load
 };
 
 const proj = () => S.projects.find(p => p.name === S.current) || S.projects[0];
@@ -42,6 +47,8 @@ const proj = () => S.projects.find(p => p.name === S.current) || S.projects[0];
 const phoneMq = matchMedia('(max-width: 720px)');
 const fineMq = matchMedia('(pointer: fine)');
 const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches) el?.focus(); };
+// The seam between the list and the conversation widens the list on a desk with a mouse (side-width.js).
+new SideResizer({ app: $('#app'), grip: $('#side-grip'), canResize: matchMedia('(min-width: 721px) and (pointer: fine)'), onResize: () => placeModelMenu() });
 const map = new LiveMap($('#hud'), { open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t) });
 
 // Decision 36: plan meters in the strip (not on the core) and the usage panel behind them.
@@ -362,6 +369,7 @@ function bootReadout() {
 
 // One row however many projects there are: the current one, a count when it needs you, a dot when another does.
 function renderProjects() {
+  renderHubSwitches();
   const cur = proj();
   if (!cur) { $('#projects').innerHTML = ''; return; }
   const multi = S.projects.length > 1;
@@ -378,6 +386,13 @@ function renderProjects() {
       <span class="pname">${esc(p.name)}</span><span class="pmode">${modeWord(p)}</span><span class="pcount ${k ? 'hot' : ''}">${k ? `${k} waiting` : 'All clear'}</span></button>`;
   }).join('')}</div>` : '';
   $('#projects').innerHTML = `<div class="proj-switch"><div class="proj-row">${head}${modeSwitch(cur)}${connSwitch(cur)}</div>${menu}</div>`;
+}
+
+// Decision 21's switch, one for the whole hub, under the hub's name (route-switch.js); amber mark when off.
+function renderHubSwitches() {
+  const r = routeSwitch({ on: S.settings?.routePermissions !== false, rules: proj()?.permissionRules });
+  $('#hub-switches').innerHTML = `<button class="mode-switch route ${r.on ? 'auto' : 'off'}" role="switch" aria-checked="${r.on}" data-route-toggle title="${esc(r.tip)}" aria-label="${esc(r.tip)}">
+    <i class="mode-knob"></i>${icon('shield')}<span class="rw">${esc(r.word)}</span>${r.warn ? `<span class="amber-mark">${icon('warn')}</span>` : ''}</button>`;
 }
 
 // Which permission rules apply here (decision 34): Auto lets contained work run and asks only about the rest;
@@ -424,13 +439,31 @@ function renderThreads() {
   const needs = needsCount(p);
   const orch = orchestrator(p);
   const workers = p.agents.filter(a => a.role === 'worker');
-  const active = workers.filter(a => a.state !== 'retired'), retired = workers.filter(a => a.state === 'retired');
+  const active = workers.filter(a => a.state !== 'retired');
   const dot = (a, t) => `<span class="dot ${S.thread !== t && unread(p, t) ? 'unread' : a?.state || ''}"></span>`;
   let html = threadButton({ id: 'needs', name: 'Needs you', ava: 'inbox', avaClass: needs ? 'needs' : '', last: needs ? `${needs} waiting for your call` : 'Nothing waiting', right: needs ? `<span class="badge">${needs}</span>` : '' });
   html += threadButton({ id: 'orchestrator', name: orch ? `Orchestrator · ${orch.name.replace('orchestrator-', '#')}` : 'Orchestrator', ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator'), agent: orch });
   if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread), agent: a })).join('');
-  if (retired.length) html += `<div class="side-label">Retired</div>` + retired.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', avaClass: 'gone', last: lastLine(p, a.thread), right: '', agent: a })).join('');
+  html += retiredSection(p, workers);
   $('#threads').innerHTML = html;
+}
+
+// Retired workers (read-only threads): one folded row, "Retired (N)" with N the recent ones; compact rows inside,
+// the older ones behind "Show older (M)" (retired-list.js). The open thread is never hidden: the section opens for it.
+function retiredSection(p, workers) {
+  const rv = retiredView(workers, p.events, { showOlder: S.retiredOlder, current: S.thread });
+  if (!rv.any) return '';
+  if (rv.holdsCurrent && !S.retiredOpen && S.retiredAutoFor !== S.thread) { S.retiredOpen = true; store.set('retired-open', true); }
+  S.retiredAutoFor = rv.holdsCurrent ? S.thread : null;   // once opened for this thread, closing it again is yours
+  const open = S.retiredOpen;
+  const tip = `${open ? 'Fold' : 'Show'} retired agents. They are read-only; older than ${RETIRED_RECENT_DAYS} days sit behind Show older.`;
+  const head = `<button class="side-label retired-head ${open ? 'open' : ''} ${!open && rv.holdsCurrent ? 'holds' : ''}" data-retired-toggle aria-expanded="${open}" title="${esc(tip)}">${icon('chevron')}<span class="rk">Retired (${rv.count})</span></button>`;
+  if (!open) return head;
+  const row = a => `<button class="thread mini ${S.thread === a.thread ? 'on' : ''}" data-thread="${esc(a.thread)}" title="${esc(a.name)}">
+    <span class="ava gone">${robot(a, { size: 16, cls: 'calm' })}</span><span class="name">${esc(a.name)}</span></button>`;
+  const more = rv.olderCount ? `<button class="thread mini more" data-retired-older aria-expanded="${S.retiredOlder}" title="Retired more than ${RETIRED_RECENT_DAYS} days ago">
+    <span class="ava">${icon('chevron')}</span><span class="name">${S.retiredOlder ? 'Hide older' : 'Show older'} (${rv.olderCount})</span></button>` : '';
+  return head + `<div class="retired-list">${rv.shown.map(row).join('')}${more}</div>`;
 }
 
 // ---------- render: cards ----------
@@ -720,16 +753,6 @@ function renderHead() {
   const a = p?.agents.find(a => a.thread === t && a.state !== 'retired') || p?.agents.find(a => a.thread === t);
   $('#retire').hidden = !(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring));
   $('#retire-finished').hidden = !(p && t !== 'orchestrator' && t !== 'needs' && a && a.role === 'worker' && a.state !== 'retired' && !a.retiring);
-  // The off switch for decision 21, beside the orchestrator it applies to.
-  const rp = $('#route-perms'), on = S.settings?.routePermissions !== false;
-  rp.hidden = !(p && t === 'orchestrator');
-  rp.classList.toggle('on', on);
-  rp.setAttribute('aria-pressed', String(on));
-  const rules = p?.permissionRules;
-  rp.title = on
-    ? `The orchestrator answers workers' permission requests${rules ? ` under ${rules}` : ' (no rules on the board yet, so they all come to you)'}; hard stops still come to you. Click to answer every request yourself.`
-    : 'Every permission request comes to you. Click to let the orchestrator answer them within the board\'s rules.';
-  rp.setAttribute('aria-label', rp.title);
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#attach').disabled = !!retired;
@@ -915,7 +938,10 @@ document.addEventListener('click', e => {
   const mc = e.target.closest('[data-mchip]');
   if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; renderHead(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
   const t = e.target.closest('[data-thread]'); if (t) return selectThread(t.dataset.thread);
+  if (e.target.closest('[data-retired-toggle]')) { S.retiredOpen = !S.retiredOpen; store.set('retired-open', S.retiredOpen); return renderThreads(); }
+  if (e.target.closest('[data-retired-older]')) { S.retiredOlder = !S.retiredOlder; return renderThreads(); }
   if (e.target.closest('[data-proj-toggle]')) { S.projMenu = !S.projMenu; return renderProjects(); }
+  if (e.target.closest('[data-route-toggle]')) return toggleRouting();
   if (e.target.closest('[data-conn-toggle]')) {
     const p = proj();
     return act(async () => { await api('/api/settings', { project: p.name, connectors: !p.connectors }); await load(); });
@@ -1134,11 +1160,13 @@ $('#input').addEventListener('keydown', e => {
 function autosize() { growBox($('#input'), 200); }
 $('#input').addEventListener('input', autosize);
 
-$('#route-perms').addEventListener('click', () => act(async () => {
-  const on = S.settings?.routePermissions !== false;
-  const { settings } = await api('/api/settings', { routePermissions: !on });
-  S.settings = settings; render();
-}));
+function toggleRouting() {
+  return act(async () => {
+    const on = S.settings?.routePermissions !== false;
+    const { settings } = await api('/api/settings', { routePermissions: !on });
+    S.settings = settings; render();
+  });
+}
 function setBoard(open) {
   $('#board').hidden = !open;
   render();
