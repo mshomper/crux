@@ -1,9 +1,13 @@
 # 0041 Which decision record files go into git?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: architecture, data-model
 - Builds on: 0035, 0040
+
+## Decision
+
+**A: Commit .json and .md; build the pages locally.** A .gitignore inside .decisions ignores *.html, so the pages and index.html stay on disk but out of git. The build script writes that .gitignore whenever it creates a .decisions folder, the hub's records worktree does the same, and the hub rebuilds a project's pages after a pull when a .json is newer than its page.
 
 ## Context
 
@@ -11,7 +15,7 @@ Each record is saved three ways: the .json is the source (about 70 lines), the .
 
 ## Options
 
-### A: Commit .json and .md; build the pages locally (recommended)
+### A: Commit .json and .md; build the pages locally (chosen) (recommended)
 
 A .gitignore inside .decisions ignores *.html, so the pages and index.html stay on disk but out of git. The build script writes that .gitignore whenever it creates a .decisions folder, the hub's records worktree does the same, and the hub rebuilds a project's pages after a pull when a .json is newer than its page.
 - Pro: Records pull requests shrink to about a quarter
