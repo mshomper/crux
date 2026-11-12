@@ -1,0 +1,28 @@
+/* Model-family robots (M015, robots.js): line work in the model hue, a faint plate, a glowing visor. */
+.bot{display:block;flex:none;fill:none;stroke:currentColor;stroke-width:var(--sw,2.4);stroke-linecap:round;stroke-linejoin:round;overflow:visible}
+.bot .f{fill:color-mix(in srgb,currentColor 15%,transparent)}
+.bot .g{fill:color-mix(in srgb,currentColor calc(var(--glow,.7) * 100%),transparent);stroke:none;filter:drop-shadow(0 0 calc(var(--glow,.7) * 3px) currentColor);transform-box:fill-box;transform-origin:center}
+.bot .p{stroke:none;fill:color-mix(in srgb,currentColor 24%,transparent)}
+.bot .p.on{fill:currentColor}
+.bot .p.hollow{fill:none;stroke:color-mix(in srgb,currentColor 70%,transparent);stroke-width:.6}
+.bot .crown{fill:color-mix(in srgb,currentColor 32%,transparent);stroke-width:calc(var(--sw,2.4) * .8)}
+
+/* state: idle blinks now and then, working pulses, asleep and retired go dim, an error is amber */
+.bot.st-idle .g{animation:bot-blink 6s ease-in-out infinite}
+.bot.st-working .g,.bot.st-starting .g{animation:bot-work 1.5s ease-in-out infinite}
+.bot.st-asleep .g,.bot.st-retired .g{--glow:.18;filter:none}
+.bot.st-retired{opacity:.55}
+.bot.st-error .g{fill:var(--hud-amber,#f3b955);filter:drop-shadow(0 0 3px var(--hud-amber,#f3b955))}
+/* waiting on Matt: the helmet keeps its model hue, the visor turns red (decision 31) */
+.bot.needs .g{fill:var(--hud-red,#f2727a);filter:drop-shadow(0 0 4px var(--hud-red,#f2727a));animation:bot-alarm 1.5s ease-in-out infinite}
+@keyframes bot-blink{0%,91%,100%{transform:scaleY(1)}94.5%{transform:scaleY(.1)}}
+@keyframes bot-work{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes bot-alarm{0%,100%{opacity:1}50%{opacity:.45}}
+.bot.calm .g{animation:none}   /* in a brief or a list of many: no motion */
+@media (prefers-reduced-motion:reduce){.bot .g{animation:none!important}}
+
+/* where they sit */
+.thread .ava .bot{width:26px;height:26px}
+.mchip .bot{width:18px;height:18px;margin:-3px 1px -3px -3px;color:var(--mh)}
+.mchip.mini .bot{width:15px;height:15px}
+.hs-body .bot{width:calc(var(--r) * 1.3);height:calc(var(--r) * 1.3);stroke-width:var(--sw,2.4);filter:none}

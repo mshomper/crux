@@ -16,6 +16,7 @@ import { HudPainter } from './map-hud.js';
 import { NeedsPopover } from './map-needs.js';
 import { CoreReadout, coreReadout } from './map-readout.js';
 import { hueOf, describe } from './models.js';
+import { robot, robotKey } from './robots.js';
 
 const ICON = {
   agent: '<rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 4v3M9.5 12h.01M14.5 12h.01"/>',
@@ -263,6 +264,10 @@ export class LiveMap {
       // The station body takes its model's hue too (decision 20).
       const hue = s.kind === 'worker' ? hueOf(s.model) : null;
       const full = hue && !s.handoff && s.state !== 'error' ? `${cls} mh` : cls;   // handoff gold and the error amber win
+      if (s.kind === 'worker') {   // its model family's robot (M015), redrawn only when its look changes
+        const key = robotKey(s, asking);
+        if (el.dataset.bot !== key) { el.dataset.bot = key; el.querySelector('.hs-body > svg').outerHTML = robot(s, { size: 28, needs: asking, cls: 'hud-i' }); }
+      }
       const badge = el.querySelector('.hs-badge');
       const n = asking ? Math.max(1, s.asks || 0) : 0;
       if (badge && badge.textContent !== String(n || '')) { badge.textContent = n ? String(n) : ''; badge.hidden = !n; }
