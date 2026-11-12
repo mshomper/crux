@@ -1,8 +1,10 @@
-# Hub ideas (not decided)
+# Hub ideas
 
-## Live map of the orchestrator and workers (2026-11-11)
+## Live map of the orchestrator and workers (2026-11-11): decided and built
 
-Matt's idea: a quick-to-read picture of who is doing what, like **lot-map**, with the centre drawn as a particle system like **particles.casberry.in**.
+**Status:** decided in decision 17 (an always-on strip that zooms to the centre) and built (`public/map*.js`; see "Agent types, models and effort" in [README.md](README.md)). The notes below are the original idea, kept as history.
+
+The idea: a quick-to-read picture of who is doing what, like **lot-map**, with the centre drawn as a particle system like **particles.casberry.in**.
 
 ### References
 
@@ -44,4 +46,4 @@ The hub already streams everything a map needs over SSE (`agent_state`, `activit
 - House UI rules apply: no horizontal scrolling, drawn icons only, and the map must work at phone width.
 - Respect `prefers-reduced-motion`: fall back to a static map with no particles.
 - Particle count must stay modest; it's a sidebar or header, not the main view.
-- Main-screen decision 0012 is threads / conversation / board on request. Where the map lives (a header strip, a toggle, or its own tab) needs a quick Crux decision before it's built.
+- Main-screen decision 0012 is threads / conversation / board on request. Where the map lives was settled by decision 17: an always-on strip that zooms to the centre.

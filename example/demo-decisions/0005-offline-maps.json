@@ -1,0 +1,41 @@
+{
+ "id": 5,
+ "slug": "offline-maps",
+ "title": "Should maps be kept for areas with no signal?",
+ "date": "2026-11-02",
+ "mode": "quick",
+ "lenses": [
+  "data-model"
+ ],
+ "status": "parked",
+ "revisit": {
+  "date": "2027-03-01",
+  "trigger": "when the first user asks for it"
+ },
+ "context": "Many trails have no phone signal. The map could be downloaded ahead of time for the area around a planned route.",
+ "depends_on": [
+  1
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Download the route's area",
+   "summary": "Keep map tiles for a band around each saved route."
+  },
+  {
+   "key": "B",
+   "name": "Online only",
+   "summary": "Leave it to the phone's own map app."
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "Vector tiles (0001) keep the download small.",
+ "confidence": "lean",
+ "chosen": null,
+ "reason": null,
+ "decided_on": null,
+ "superseded_by": null,
+ "challenge": null
+}
