@@ -4,13 +4,13 @@
 - Date: 2026-11-11, decided 2026-11-11
 - Lenses: architecture
 - Builds on: 0010, 0013, 0016
-- Settles: orchestrator idle handoff = hand off automatically after 3 hours idle when above 25% context, in addition to the 60% threshold and on the human's word
+- Settles: orchestrator idle handoff = hand off automatically after 1 hour idle when above 25% context, published from a rolling handoff draft without waking the old agent; in addition to the 60% threshold and on the human's word
 
 ## Decision
 
 **B: Automatically after a long idle stretch.** If the orchestrator has been idle for 3 hours and is above 25% context, it writes the handoff and retires; the next message goes to a fresh orchestrator. Matt can still say hand off any time. The 60% threshold stays.
 
-Reason: B, with the idle window at 3 hours and the floor at 25%
+Reason: B, with the idle window at 3 hours and the floor at 25%; then, once a rolling handoff draft makes handing off cheap, the idle window drops to 1 hour (as the prompt cache expires)
 
 ## Context
 

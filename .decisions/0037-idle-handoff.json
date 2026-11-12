@@ -43,11 +43,11 @@
   "recommendation": "Handles the overnight case without Matt thinking about it; the floor keeps it from churning on light days.",
   "confidence": "lean",
   "chosen": "B",
-  "reason": "B, with the idle window at 3 hours and the floor at 25%",
+  "reason": "B, with the idle window at 3 hours and the floor at 25%; then, once a rolling handoff draft makes handing off cheap, the idle window drops to 1 hour (as the prompt cache expires)",
   "decided_on": "2026-11-11",
   "superseded_by": null,
   "challenge": null,
   "settles": [
-    { "key": "orchestrator idle handoff", "value": "hand off automatically after 3 hours idle when above 25% context, in addition to the 60% threshold and on the human's word" }
+    { "key": "orchestrator idle handoff", "value": "hand off automatically after 1 hour idle when above 25% context, published from a rolling handoff draft without waking the old agent; in addition to the 60% threshold and on the human's word" }
   ]
 }
