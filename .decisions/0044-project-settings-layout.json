@@ -101,40 +101,34 @@
  "settles": [],
  "images": [
   {
-   "from": "2ec8e2df",
+   "file": "images/0044-a-settings-panel-from-the-three-dots.png",
    "caption": "A: Settings panel from the three-dots menu (desktop)",
-   "option": "A",
-   "missing": "not found"
+   "option": "A"
   },
   {
-   "from": "c802b7eb",
+   "file": "images/0044-a-phone.png",
    "caption": "A: phone",
-   "option": "A",
-   "missing": "not found"
+   "option": "A"
   },
   {
-   "from": "187ef623",
+   "file": "images/0044-b-card-per-project-from-its-level-chip.png",
    "caption": "B: card per project from its level chip (desktop)",
-   "option": "B",
-   "missing": "not found"
+   "option": "B"
   },
   {
-   "from": "e681d3d9",
+   "file": "images/0044-b-phone.png",
    "caption": "B: phone",
-   "option": "B",
-   "missing": "not found"
+   "option": "B"
   },
   {
-   "from": "021fc494",
+   "file": "images/0044-c-all-projects-in-one-table-desktop.png",
    "caption": "C: all projects in one table (desktop)",
-   "option": "C",
-   "missing": "not found"
+   "option": "C"
   },
   {
-   "from": "a28e9444",
+   "file": "images/0044-c-phone.png",
    "caption": "C: phone",
-   "option": "C",
-   "missing": "not found"
+   "option": "C"
   }
  ]
 }

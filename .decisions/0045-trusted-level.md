@@ -10,9 +10,17 @@
 
 **B: A, plus the orchestrator merges after a review.** As A, and in a Trusted project the orchestrator may merge a code pull request once a reviewer has passed it and the tests are green, reporting it in one line. You click-test on main afterwards.
 
+Reason: Matt: "install packages, open web, merge after a review with owner permission" (and to the mockup worker: "Yes, an orchestrator can do the merges, but needs permission."). So in a Trusted project the orchestrator runs the merge itself after a reviewer has passed it, but only once the owner says yes to that merge; the merge never happens on the orchestrator's own judgement.
+
 ## Context
 
 Matt wants personal projects to give agents more room than work repos. Today each repo is Ask or Auto (decision 34); in Auto, contained work runs on its own, and the hard stops (rules entry R005) are the same in every repo and fixed in code. This decision sets what a third level, Trusted, adds. Whatever is picked, some stops stay at every level (Claude's judgement): force push, rewriting pushed history, deleting branches, pushing straight to main (C005), writes outside the project or its worktrees and temp folders (including ~/.claude and ~/crux), secrets, stopping or restarting the live hub, system-wide installers, and any send, share or delete through mail, calendar or drive (R006). Trusted can be set only from the hub page, never from the repo's own .crux-hub.json, so a cloned repo cannot trust itself. Amends decision 34 and rules entry R005; option B would also change the core rule that merges are always Matt's (decision 22).
+
+## Pictures
+
+![The three levels as drawn in the settings card \(option B of decision 44\)](images/0045-the-three-levels-as-drawn-in-the.png)
+
+*The three levels as drawn in the settings card \(option B of decision 44\)*
 
 ## Options
 

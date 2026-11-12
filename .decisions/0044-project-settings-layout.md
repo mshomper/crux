@@ -18,6 +18,15 @@ Matt asked for per-project settings in the hub's screen: how much room agents ge
 ### A: One Settings panel from the three-dots menu
 
 A Settings dialog from the three-dots menu at the top, with the projects listed on the left plus a Whole hub entry. Each project shows its level, the three handoff numbers and connectors.
+
+![A: Settings panel from the three-dots menu \(desktop\)](images/0044-a-settings-panel-from-the-three-dots.png)
+
+*A: Settings panel from the three-dots menu \(desktop\)*
+
+![A: phone](images/0044-a-phone.png)
+
+*A: phone*
+
 - Pro: Everything in one place
 - Pro: Familiar: settings live where settings usually live
 - Con: A big dialog; on the phone it is long
@@ -27,6 +36,15 @@ A Settings dialog from the three-dots menu at the top, with the projects listed 
 ### B: A card per project, opened from its level chip (chosen) (recommended)
 
 The project row's Ask/Auto switch becomes a level chip (ASK, AUTO, TRUSTED). Tapping it opens that project's settings card: pick the level, see what it allows (the always-to-you list folds open on request), and three plain number fields (idle minutes, idle floor %, handoff %) with the hub default under each. The few hub-wide settings (orchestrator answers requests, the 120 s wait, role defaults) go in a small Whole hub panel in the three-dots menu.
+
+![B: card per project from its level chip \(desktop\)](images/0044-b-card-per-project-from-its-level-chip.png)
+
+*B: card per project from its level chip \(desktop\)*
+
+![B: phone](images/0044-b-phone.png)
+
+*B: phone*
+
 - Pro: One tap from where the project already shows its level
 - Pro: Replaces today's switch instead of adding a new place
 - Pro: Shortest on the phone
@@ -37,6 +55,15 @@ The project row's Ask/Auto switch becomes a level chip (ASK, AUTO, TRUSTED). Tap
 ### C: All projects in one table
 
 One settings screen with a row per project (level, three numbers, connectors) and what each level allows underneath. On the phone each project becomes a card.
+
+![C: all projects in one table \(desktop\)](images/0044-c-all-projects-in-one-table-desktop.png)
+
+*C: all projects in one table \(desktop\)*
+
+![C: phone](images/0044-c-phone.png)
+
+*C: phone*
+
 - Pro: Best for comparing work and personal projects side by side
 - Con: Dense; a table of numbers is the least HUD of the three
 - Con: A separate screen away from the project

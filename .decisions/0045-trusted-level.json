@@ -63,7 +63,7 @@
  "recommendation": "A removes the cards that slow personal projects without touching the merge rule you settled; B can follow later for a project where you want it.",
  "confidence": "lean",
  "chosen": "B",
- "reason": "",
+ "reason": "Matt: \"install packages, open web, merge after a review with owner permission\" (and to the mockup worker: \"Yes, an orchestrator can do the merges, but needs permission.\"). So in a Trusted project the orchestrator runs the merge itself after a reviewer has passed it, but only once the owner says yes to that merge; the merge never happens on the orchestrator's own judgement.",
  "decided_on": "2026-11-12",
  "superseded_by": null,
  "challenge": null,
@@ -75,9 +75,8 @@
  ],
  "images": [
   {
-   "from": "187ef623",
-   "caption": "The three levels as drawn in the settings card (option B of decision 44)",
-   "missing": "not found"
+   "file": "images/0045-the-three-levels-as-drawn-in-the.png",
+   "caption": "The three levels as drawn in the settings card (option B of decision 44)"
   }
  ]
 }
