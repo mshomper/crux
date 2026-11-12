@@ -1,0 +1,179 @@
+/* Crux hub HUD frame (decision 33 A, M008 pass 2): the live map's language around the whole app.
+   The frame is HUD (hairlines, small mono labels, corner brackets, hexagon keys); what you read stays a
+   readable sans at full contrast. Everything here hangs off html[data-hud], set by hud.js:
+     data-hud="restrained"  hairlines, labels, brackets on what waits for you, hexagon keys
+     data-hud="full"        all of that, plus chamfered glass panels, a grid, glow edges, a boot sequence
+   Red is only ever "your call" (decision 31). Motion stops under prefers-reduced-motion. */
+
+html[data-hud]{--hud-edge:rgba(111,227,255,.22);--hud-edge2:rgba(111,227,255,.4);--hud-label:rgba(150,232,255,.74);--hud-redline:rgba(242,114,122,.5);--br:14px}
+
+/* ---------- hairlines: the shell's edges are light, not grey ---------- */
+html[data-hud] .side{border-right-color:var(--hud-line)}
+html[data-hud] .main-head{border-bottom-color:var(--hud-line);position:relative}
+html[data-hud] .main-head::after{content:"";position:absolute;left:0;bottom:-1px;width:min(260px,40%);height:1px;background:linear-gradient(90deg,var(--hud-cyan),transparent);opacity:.7;pointer-events:none}
+html[data-hud] .side-foot{border-top-color:var(--hud-line)}
+html[data-hud] .side-head{border-bottom:1px solid transparent}
+
+/* ---------- small mono labels ---------- */
+html[data-hud] .side-label{font:600 10.5px/1 var(--mono);letter-spacing:.22em;color:var(--hud-label);padding:16px 10px 7px;display:flex;align-items:center;gap:8px}
+html[data-hud] .side-label::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--hud-line),transparent)}
+html[data-hud] .summary dt{font:600 10.5px/1.9 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--hud-label)}
+html[data-hud] .time,html[data-hud] .msg .who{font-family:var(--mono);font-size:11px;letter-spacing:.04em}
+html[data-hud] .notice{font:500 11px/1.5 var(--mono);letter-spacing:.04em;color:var(--faint)}
+html[data-hud] .chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;border-radius:4px}
+html[data-hud] .card-head h3{letter-spacing:.01em}
+
+/* ---------- sidebar: the open thread carries a light on its edge ---------- */
+html[data-hud] .thread{position:relative;border-radius:8px}
+html[data-hud] .thread.on{background:linear-gradient(90deg,rgba(111,227,255,.09),rgba(111,227,255,.02) 70%)}
+html[data-hud] .thread.on::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--hud-cyan);box-shadow:0 0 10px var(--hud-cyan)}
+
+/* ---------- cards: corner brackets ----------
+   Eight short strokes, two per corner, drawn as background layers so nothing has to wrap the card. */
+html[data-hud] .card{border-radius:6px;position:relative;--bk:var(--hud-edge2);
+  background-image:linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),
+    linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk)),linear-gradient(var(--bk),var(--bk));
+  background-repeat:no-repeat;
+  background-size:var(--br) 1.5px,1.5px var(--br),var(--br) 1.5px,1.5px var(--br),var(--br) 1.5px,1.5px var(--br),var(--br) 1.5px,1.5px var(--br);
+  background-position:0 0,0 0,100% 0,100% 0,0 100%,0 100%,100% 100%,100% 100%}
+/* a finished round: calm, green, top corners only */
+html[data-hud] .card.summary{border-left:1px solid var(--line);--bk:rgba(95,211,174,.7);background-size:var(--br) 1.5px,1.5px var(--br),var(--br) 1.5px,1.5px var(--br),0 0,0 0,0 0,0 0}
+html[data-hud] .card.summary .card-head .icon{color:var(--good)}
+/* waiting for Matt: red brackets on every corner and a red hairline (decision 31) */
+html[data-hud] .card:is(.decision:not(.done),.question,.approval:not(.answered),.lessons){--bk:var(--hud-red);--br:18px;border:1px solid var(--hud-redline);border-left-width:1px;
+  box-shadow:0 0 0 1px rgba(0,0,0,.3),0 0 26px -12px rgba(242,114,122,.55)}
+html[data-hud] .card.decision.done,html[data-hud] .card.approval.answered{border-left:1px solid var(--line);--bk:rgba(95,211,174,.55)}
+html[data-hud] .card:is(.decision:not(.done),.question,.approval:not(.answered),.lessons) .card-head .icon{color:var(--hud-red)}
+
+/* ---------- decision options: hexagon keys ---------- */
+html[data-hud] .opt{border-radius:6px;grid-template-columns:32px minmax(0,1fr)}
+html[data-hud] .opt .key{width:32px;height:28px;border-radius:0;font:700 13px/1 var(--mono);clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%);background:rgba(111,227,255,.14);color:var(--hud-ice)}
+html[data-hud] .opt:hover{border-color:var(--hud-cyan);box-shadow:0 0 18px -8px var(--hud-cyan)}
+html[data-hud] .opt:hover .key{background:var(--hud-cyan);color:#06141b}
+html[data-hud] .opt.rec{border-color:rgba(142,168,255,.5)}
+html[data-hud] .opt.rec .key{background:var(--accent);color:var(--accent-ink)}
+html[data-hud] .opt.chosen .key{background:var(--good);color:#06261c}
+
+/* ---------- composer and inputs ---------- */
+html[data-hud] .composer textarea{border-color:var(--hud-line);border-radius:8px}
+html[data-hud] .composer textarea:focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.22),0 0 18px -6px rgba(111,227,255,.5)}
+
+/* ---------- empty states: calm, with a mark instead of a blank ---------- */
+html[data-hud] .empty{display:grid;justify-items:center;gap:6px}
+html[data-hud] .empty::before{content:"";width:46px;height:46px;border-radius:50%;margin-bottom:8px;border:1px solid var(--hud-edge);
+  background:radial-gradient(circle,rgba(111,227,255,.5) 0 2px,transparent 3px),conic-gradient(from 0deg,var(--hud-cyan) 0 12%,transparent 12% 100%);
+  -webkit-mask:radial-gradient(circle,#000 0 3px,transparent 4px 17px,#000 18px);mask:radial-gradient(circle,#000 0 3px,transparent 4px 17px,#000 18px);animation:hud-turn 6s linear infinite;opacity:.8}
+html[data-hud] .empty h2{font:600 11px/1.4 var(--mono);letter-spacing:.24em;text-transform:uppercase;color:var(--hud-ice);margin:0}
+html[data-hud] .empty p{margin:0;font-size:13.5px;color:var(--muted)}
+@keyframes hud-turn{to{transform:rotate(1turn)}}
+
+/* ---------- lock-on: a card opened from a notification snaps its brackets in ---------- */
+html[data-hud] .card.flash{animation:hud-lock 1.9s cubic-bezier(.2,.8,.2,1)}
+@keyframes hud-lock{
+  0%{--br:46px;box-shadow:0 0 0 14px rgba(111,227,255,0),0 0 0 rgba(111,227,255,0);background-color:rgba(111,227,255,.16)}
+  22%{--br:26px;box-shadow:0 0 0 2px var(--hud-cyan),0 0 34px rgba(111,227,255,.5);background-color:rgba(111,227,255,.08)}
+  34%{box-shadow:0 0 0 1px var(--hud-cyan),0 0 12px rgba(111,227,255,.25)}
+  46%{box-shadow:0 0 0 2px var(--hud-cyan),0 0 30px rgba(111,227,255,.45)}
+  100%{box-shadow:0 0 0 0 transparent}}
+@property --br{syntax:"<length>";inherits:true;initial-value:14px}
+
+/* ---------- the boot line (hud.js): one line when the hub opens ---------- */
+.hud-bootline{position:absolute;left:0;right:0;top:calc(100% + 1px);z-index:4;padding:9px 16px 12px;background:linear-gradient(180deg,var(--bg) 70%,transparent);display:flex;gap:14px;align-items:center;font:600 10.5px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--hud-label);pointer-events:none;white-space:nowrap;overflow:hidden;animation:hud-bootline 3.2s ease-out both}
+.hud-bootline b{color:var(--hud-ice);font-weight:600}
+.hud-bootline i{flex:1;height:1px;background:linear-gradient(90deg,var(--hud-cyan),transparent);transform-origin:left;animation:hud-draw .9s ease-out both}
+@keyframes hud-bootline{0%{opacity:0}10%,78%{opacity:1}100%{opacity:0}}
+@keyframes hud-draw{from{transform:scaleX(0)}}
+html[data-hud-hold] .hud-bootline{animation:none}
+
+/* ================= full HUD: everything above, plus ================= */
+/* a faint grid behind the conversation, and glass panels */
+html[data-hud="full"] .main{background:
+  linear-gradient(rgba(111,227,255,.028) 1px,transparent 1px) 0 0/28px 28px,
+  linear-gradient(90deg,rgba(111,227,255,.028) 1px,transparent 1px) 0 0/28px 28px,
+  radial-gradient(ellipse at 50% 0,rgba(60,120,255,.07),transparent 60%)}
+html[data-hud="full"] .side{background:linear-gradient(180deg,#0d131b,#0a0e14)}
+html[data-hud="full"] .main-head{background:linear-gradient(180deg,rgba(14,22,34,.6),rgba(8,12,18,.2))}
+html[data-hud="full"] .title-block h1{font:600 13px/1.3 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--hud-ice)}
+html[data-hud="full"] .title-block h1::before{content:"// ";color:var(--hud-dim)}
+
+/* chamfered plates: one corner cut, with the cut drawn */
+html[data-hud="full"] :is(.card,.msg .bubble,.bitem,.visual){--cut:12px;border-radius:2px;clip-path:polygon(0 0,calc(100% - var(--cut)) 0,100% var(--cut),100% 100%,0 100%)}
+html[data-hud="full"] :is(.card,.msg .bubble,.bitem,.visual)::after{content:"";position:absolute;right:0;top:0;width:var(--cut);height:var(--cut);pointer-events:none;
+  background:linear-gradient(to bottom left,transparent calc(50% - .8px),var(--cutline,var(--hud-edge2)) calc(50% - .8px) calc(50% + .8px),transparent calc(50% + .8px))}
+html[data-hud="full"] :is(.msg .bubble,.bitem,.visual){position:relative}
+html[data-hud="full"] .card{background-color:rgba(18,26,37,.82);border-color:var(--hud-edge);
+  /* the top-right bracket moves in from the cut */
+  background-position:0 0,0 0,calc(100% - var(--cut)) 0,100% var(--cut),0 100%,0 100%,100% 100%,100% 100%}
+html[data-hud="full"] .card:is(.decision:not(.done),.question,.approval:not(.answered),.lessons){--cutline:var(--hud-red);background-color:rgba(30,16,22,.78)}
+html[data-hud="full"] .card.summary{--cutline:rgba(95,211,174,.7)}
+html[data-hud="full"] .msg .bubble{--cut:9px;background:rgba(18,26,37,.8);border-color:var(--hud-edge);border-left:2px solid var(--hud-edge2)}
+html[data-hud="full"] .msg.you .bubble{background:rgba(111,227,255,.1);border-color:rgba(111,227,255,.3);border-left-width:1px;border-right:2px solid var(--hud-cyan)}
+html[data-hud="full"] .msg.relay .bubble{border-style:dashed}
+
+/* sidebar rows as plates; the open one glows */
+html[data-hud="full"] .thread{border-radius:2px;border:1px solid transparent}
+html[data-hud="full"] .thread:hover{border-color:var(--hud-line);background:rgba(111,227,255,.04)}
+html[data-hud="full"] .thread.on{border-color:var(--hud-edge);box-shadow:inset 0 0 22px -10px rgba(111,227,255,.5)}
+html[data-hud="full"] .thread .ava{border-radius:4px}
+html[data-hud="full"] .thread .ava.ring::after{border-radius:6px}
+html[data-hud="full"] .thread .last{font-size:12px}
+
+/* buttons, inputs and chips take the edge */
+html[data-hud="full"] .btn{border-radius:3px}
+html[data-hud="full"] .btn:not(.ghost){border-color:var(--hud-edge)}
+html[data-hud="full"] .btn:hover{border-color:var(--hud-cyan);background:rgba(111,227,255,.07)}
+html[data-hud="full"] .btn.primary{background:rgba(111,227,255,.14);color:var(--hud-ice);border:1px solid var(--hud-cyan);box-shadow:0 0 18px -6px var(--hud-cyan),inset 0 0 14px -6px var(--hud-cyan);letter-spacing:.02em}
+html[data-hud="full"] .btn.primary:hover{background:var(--hud-cyan);color:#06141b;filter:none}
+html[data-hud="full"] .composer .btn.primary{clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+html[data-hud="full"] .head-actions{border-radius:3px;border-color:var(--hud-edge);background:rgba(10,16,24,.7)}
+html[data-hud="full"] .head-actions .btn{border-radius:2px}
+html[data-hud="full"] :is(.proj-current,.mode-switch){border-radius:3px;border-color:var(--hud-edge);background:rgba(14,22,32,.8)}
+html[data-hud="full"] .composer textarea{border-radius:2px;background:rgba(10,16,24,.85);border-color:var(--hud-edge)}
+html[data-hud="full"] .composer{position:relative}
+html[data-hud="full"] :is(.qbox,.board-filter input){border-radius:2px}
+html[data-hud="full"] .opt{border-radius:2px;background:rgba(111,227,255,.035);border-color:var(--hud-line)}
+html[data-hud="full"] .opt .key{filter:drop-shadow(0 0 5px rgba(111,227,255,.35))}
+html[data-hud="full"] :is(.qquick,.cb-chip,.qchip,.tag){border-radius:3px}
+html[data-hud="full"] .mchip{border-radius:4px}
+
+/* the board: sections marked like instrument blocks */
+html[data-hud="full"] .board{background:linear-gradient(180deg,#0c121a,#090d13)}
+html[data-hud="full"] .bsec-head::before{content:"";width:3px;height:12px;background:var(--hud-cyan);box-shadow:0 0 8px var(--hud-cyan);opacity:.75}
+html[data-hud="full"] .bsec.hot .bsec-head::before{background:var(--hud-red);box-shadow:0 0 8px var(--hud-red)}
+html[data-hud="full"] .bitem{--cut:8px;background:rgba(18,26,37,.7);border-color:var(--hud-line)}
+
+/* a slow scan over the conversation, once, when a thread opens */
+html[data-hud="full"] .feed{position:relative}
+html[data-hud="full"] .countbar{background:linear-gradient(180deg,#0a0e14 78%,rgba(10,14,20,0))}
+
+/* the boot sequence (hud.js): a short overlay, then the hub */
+.hud-boot{position:fixed;inset:0;z-index:90;display:grid;place-items:center;background:#070b11;animation:hud-boot-out .45s ease-in 1.55s both}
+.hud-boot-panel{width:min(420px,calc(100vw - 48px));display:grid;gap:9px;font:500 12px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--hud-label);position:relative;padding:22px 24px}
+.hud-boot-panel::before,.hud-boot-panel::after{content:"";position:absolute;width:20px;height:20px;border:0 solid var(--hud-cyan);animation:hud-bracket .5s cubic-bezier(.2,.8,.2,1) both}
+.hud-boot-panel::before{left:0;top:0;border-width:1.5px 0 0 1.5px}
+.hud-boot-panel::after{right:0;bottom:0;border-width:0 1.5px 1.5px 0}
+.hud-boot-panel h2{font:600 13px/1 var(--mono);letter-spacing:.34em;color:var(--hud-ice);margin:0 0 6px}
+.hud-boot-panel p{margin:0;display:flex;gap:10px;align-items:center;opacity:0;animation:hud-boot-row .3s ease-out both}
+.hud-boot-panel p i{flex:1;height:1px;background:linear-gradient(90deg,var(--hud-line),var(--hud-edge2));transform-origin:left;animation:hud-draw .5s ease-out both;animation-delay:inherit}
+.hud-boot-panel p b{color:var(--hud-cyan);font-weight:600}
+.hud-boot-panel p b.hot{color:var(--hud-red)}
+.hud-boot-panel p:nth-of-type(1){animation-delay:.25s}.hud-boot-panel p:nth-of-type(2){animation-delay:.55s}.hud-boot-panel p:nth-of-type(3){animation-delay:.85s}.hud-boot-panel p:nth-of-type(4){animation-delay:1.15s}
+@keyframes hud-boot-row{from{opacity:0;transform:translateX(-6px)}to{opacity:1}}
+@keyframes hud-bracket{from{width:60px;height:60px;opacity:0}}
+@keyframes hud-boot-out{to{opacity:0;visibility:hidden}}
+html[data-hud-hold] .hud-boot,html[data-hud-hold] .hud-boot *,html[data-hud-hold] .hud-boot-panel::before,html[data-hud-hold] .hud-boot-panel::after{animation:none!important;opacity:1!important}
+
+/* ---------- phone ---------- */
+@media (max-width:720px){
+  html[data-hud] .card{--br:12px}
+  html[data-hud] .card:is(.decision:not(.done),.question,.approval:not(.answered),.lessons){--br:14px}
+  html[data-hud="full"] :is(.card,.msg .bubble,.bitem,.visual){--cut:9px}
+  .hud-bootline{font-size:9.5px;letter-spacing:.14em;gap:8px}
+}
+
+/* ---------- reduced motion: the frame stays, nothing moves ---------- */
+@media (prefers-reduced-motion:reduce){
+  html[data-hud] .empty::before{animation:none}
+  html[data-hud] .card.flash{animation:none;outline:2px solid var(--hud-cyan);outline-offset:2px}
+  .hud-bootline,.hud-boot{display:none}
+}

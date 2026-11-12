@@ -3,6 +3,7 @@ import { LiveMap } from './map.js';
 import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
+import { hudBoot } from './hud.js';
 import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
 import { enterAction, insertLineBreak, composerHint, replyHint, filterHint } from './composer-keys.js';
 import { ViewportFit } from './viewport.js';
@@ -338,6 +339,11 @@ function md(src) {
 // ---------- render: sidebar ----------
 // Everything in a project that waits for you: decisions, permission cards, questions, profile lessons (one card).
 function needsCount(p) { return openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length + (pendingLessons(p).length ? 1 : 0); }
+// The HUD frame's boot readout (decision 33), once, when the hub opens.
+function bootReadout() {
+  const p = proj(), live = p ? p.agents.filter(a => a.state !== 'retired') : [];
+  hudBoot({ project: p?.name, agents: live.length, working: live.filter(a => ['working', 'starting'].includes(a.state)).length, waiting: p ? needsCount(p) : 0 });
+}
 
 // One row however many projects there are: the current one, a count when it needs you, a dot when another does.
 function renderProjects() {
@@ -1157,5 +1163,5 @@ function startView() {
   if (p && needsCount(p)) { S.thread = 'needs'; S.justSwitched = true; store.set('thread', 'needs'); $('#app').classList.remove('show-side'); render(); }
   else $('#app').classList.add('show-side');
 }
-load().then(() => { startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); })
+load().then(() => { startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); bootReadout(); })
   .catch(() => { if (phoneStart) $('#app').classList.add('show-side'); connect(); });
