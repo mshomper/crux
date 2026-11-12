@@ -17,6 +17,7 @@ import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
 import { answerMessage } from '../public/questions.js';
+import { Usage } from './usage.mjs';
 
 export class Project {
   constructor(dir) {
@@ -55,7 +56,10 @@ export class Hub {
     this.listeners = new Set();
     this.approvals = new Map();
     this.projects = new Map();
+    this.bootAt = Date.now();   // "this session" in the usage panel: since the hub started
+    this.usage = new Usage(this);
     for (const dir of projects) this.addProject(dir);
+    this.usage.restore();
     // After listeners are attached: wake the agents a restart interrupted (M014), every project, a few seconds apart.
     this.resumed = [];
     setTimeout(() => {
@@ -82,7 +86,7 @@ export class Hub {
       const m = evs[i];
       if (!m || now - Date.parse(m.ts) > RESUME_WINDOW_MS) continue;
       // Starting up (agent_created, agent_session, agent_busy) is not acting on it; a reply, summary, card or pick is.
-      const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
+      const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
       if (!actedOn) out.push(m);
     }
     return out;
