@@ -41,6 +41,11 @@ html[data-hud] .thread.on::before{content:"";position:absolute;left:0;top:9px;bo
 html[data-hud] .thread .ava{border-radius:4px}
 html[data-hud] .thread .ava.ring::after{border-radius:6px}
 html[data-hud] .thread .last{font-size:12px}
+html[data-hud] .thread.mini .ava{border-radius:3px}
+html[data-hud] .thread.mini.on::before{top:5px;bottom:5px}
+html[data-hud] .retired-head{border-radius:2px}
+html[data-hud] .retired-head .icon{color:var(--hud-dim)}
+html[data-hud] .retired-head:is(:hover,.holds){color:var(--hud-ice)}
 
 /* ---------- plates: one corner cut, with the cut drawn ---------- */
 html[data-hud] :is(.card,.msg .bubble,.bitem,.visual,.perm-line,.batch){border-radius:2px;position:relative;clip-path:polygon(0 0,calc(100% - var(--cut)) 0,100% var(--cut),100% 100%,0 100%)}
