@@ -96,3 +96,28 @@ export function answerMessage(items) {
     return `> ${quoted}\n${String(answer).trim()}`;
   }).join('\n\n');
 }
+
+// One line for the orchestrator thread when you answer a worker's questions from Needs you:
+//   You answered map-core: Hide the map strip while typing? Yes; Which hint would you keep…? Neither
+// Each question shrinks to its gist (the sentence that asks, cut at a word), each answer to one short line.
+export const GIST_MAX = 72, ANSWER_MAX = 60, NOTE_MAX = 280;
+const flat = s => String(s || '').replace(/\s+/g, ' ').trim();
+function cut(s, max) {
+  if (s.length <= max) return s;
+  const head = s.slice(0, max - 1);
+  return (head.lastIndexOf(' ') > max * 0.6 ? head.slice(0, head.lastIndexOf(' ')) : head).replace(/[\s,;:.]+$/, '') + '…';
+}
+export function questionGist(question) {
+  const q = flat(question);
+  const asks = q.split(/(?<=[.!?])\s+/).filter(x => x.endsWith('?'));
+  const s = asks.at(-1) || q;
+  if (s.length <= GIST_MAX) return s;
+  return s.endsWith('?') ? cut(s.slice(0, -1), GIST_MAX - 1) + '?' : cut(s, GIST_MAX);
+}
+export function answerNote(who, asker, items) {
+  const parts = items.filter(x => flat(x.answer)).map(({ question, answer }) => {
+    const g = questionGist(question);
+    return `${g}${/[?:]$/.test(g) ? '' : ':'} ${cut(flat(answer), ANSWER_MAX)}`;
+  });
+  return cut(`${who} answered ${asker}: ${parts.join('; ')}`, NOTE_MAX);
+}
