@@ -3,10 +3,11 @@
 // on a test hub (port 4752), never on 4747.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { launchSpec, saveLaunch, readLaunch, startDetached, listeningPids, openApp, launchFile, logFile, HUB_DIR } from '../lib/relaunch.mjs';
+import { testHubFolderError, launchSpec, saveLaunch, readLaunch, startDetached, listeningPids, openApp, launchFile, logFile, HUB_DIR } from '../lib/relaunch.mjs';
 
 const tempData = () => ({ CRUX_HUB_DATA: mkdtempSync(join(tmpdir(), 'crux-hub-data-')) });
 
@@ -19,6 +20,20 @@ test('a hub is started again with the same node, flags, script, projects and fol
   assert.ok(launchFile(4752, env).startsWith(env.CRUX_HUB_DATA), 'kept in the hub data folder, outside the repo');
   assert.deepEqual(readLaunch(4752, env), spec);
   assert.ok(!existsSync(launchFile(4747, env)), 'one file per port, so a test hub never replaces the main one');
+});
+
+test('a test hub refuses to start without project folders, and a normal start is unchanged', async () => {
+  assert.match(testHubFolderError({ noAgents: true, folders: [] }), /refused/);
+  assert.equal(testHubFolderError({ noAgents: true, folders: ['C:/tmp/p'] }), '');
+  assert.equal(testHubFolderError({ noAgents: false, folders: [] }), '', 'the live hub still falls back to hub.json');
+  // The real script, in a temp data folder (a test hub), with no folders: it exits at once, before any port or log.
+  const home = mkdtempSync(join(tmpdir(), 'crux-guard-'));
+  try {
+    const r = spawnSync(process.execPath, [join(HUB_DIR, 'server.mjs'), '--port', '4799', '--no-agents'], { env: { ...process.env, CRUX_HUB_DATA: join(home, 'data'), CRUX_HOME: join(home, 'home') }, encoding: 'utf8', timeout: 20000 });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /Test hub refused/);
+    assert.ok(!existsSync(join(home, 'data')), 'nothing written');
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
 test('with nothing saved, the script starts node server.mjs in the hub folder', () => {
