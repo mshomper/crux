@@ -89,6 +89,10 @@ export function cruxTools(hub, project, agent) {
         { name: z.string(), reason: z.string().max(200).describe('One plain line, e.g. "phone access merged".') },
         async ({ name, reason }) => out(hub.retireFinished(project, name, agent.name, reason))),
 
+      tool('mark_entry_done', 'Mark a finished memo done: it leaves the board index and stays readable in full with board_read. Memos only; not for superseded entries.',
+        { id: z.string().describe('The memo id, e.g. M008.'), note: z.string().max(300).optional().describe('One plain line, e.g. "built and merged in #48".') },
+        async ({ id, note }) => out(markEntryDone(board, id, agent.name, note))),
+
       tool('answer_permission', t('Answer a worker\'s permission request that the hub sent you ([Permission request <id>]). allow or deny within the board\'s permission rules; escalate sends it to {{who}} as a card. Always give a one-line reason: it is logged in your thread for {{who}} to audit, and a denied worker sees it.'),
         {
           request_id: z.string().describe('The id from the request message.'),
@@ -154,9 +158,17 @@ export function settingsChanges({ model, effort, type } = {}) {
   return changes;
 }
 
+// mark_entry_done's reply: what was marked, or the plain reason it was refused (the board throws it).
+export function markEntryDone(board, id, from, note = '') {
+  try {
+    const ev = board.setEntryStatus(id, 'done', from, note);
+    return `${ev.entryId} marked done. It is off the board index; board_read ${ev.entryId} still shows it.`;
+  } catch (e) { return `Not marked: ${e.message}`; }
+}
+
 export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
-  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'answer_permission');
+  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'answer_permission', 'mark_entry_done');
   return names.map(n => `mcp__crux__${n}`);
 }

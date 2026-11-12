@@ -10,10 +10,15 @@ export const SECTIONS = [
   { key: 'memos', label: 'Memos' },
   { key: 'handoffs', label: 'Handoffs' },
   { key: 'parked', label: 'Parked' },
-  { key: 'history', label: 'History', note: 'Superseded, rejected or retired. Kept, never deleted.' }
+  { key: 'history', label: 'History', note: 'Superseded, rejected or retired. Kept, never deleted.' },
+  { key: 'done', label: 'Done', note: 'Finished memos, off the active list. Kept in full; undo puts one back.' }
 ];
 
 const pad = n => String(n).padStart(4, '0');
+
+// Which entry gets the check icon (mark done) or the undo icon (back to active). Memos only, like the board.
+export const canMarkDone = e => e?.kind === 'memo' && e.status === 'active';
+export const canUndoDone = e => e?.status === 'done';
 
 // Board snapshot ({ decisions, entries }) to sections of items, newest handoff first.
 export function groupBoard(board = {}) {
@@ -29,7 +34,8 @@ export function groupBoard(board = {}) {
     memos: live.filter(e => e.kind === 'memo').map(ent),
     handoffs: live.filter(e => e.kind === 'handoff').map(ent).reverse(),
     parked: ds.filter(d => d.status === 'parked').map(dec),
-    history: [...ds.filter(d => ['superseded', 'rejected'].includes(d.status)).map(dec), ...es.filter(e => e.status !== 'active' && e.kind !== 'handoff').map(ent)]
+    history: [...ds.filter(d => ['superseded', 'rejected'].includes(d.status)).map(dec), ...es.filter(e => !['active', 'done'].includes(e.status) && e.kind !== 'handoff').map(ent)],
+    done: es.filter(e => e.status === 'done').map(ent)
   };
   return SECTIONS.map(s => ({ ...s, items: by[s.key] }));
 }

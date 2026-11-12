@@ -1,7 +1,8 @@
 // The memory board: every agent reads its index before starting (decision 0011).
 // Decisions come from the Crux records in .decisions/*.json (Crux keeps writing them).
 // Requirements, conventions, memos and handoffs are typed entries built from the event log
-// (decision 0009): same lifecycle idea, superseded rather than deleted.
+// (decision 0009): same lifecycle idea, superseded rather than deleted. A finished memo can be marked done: it leaves
+// the index and stays readable in full.
 import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -13,6 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const BUILD = resolve(here, '../../crux/scripts/build.mjs');
 export const ENTRY_KINDS = ['requirement', 'convention', 'memo', 'handoff'];
 const PREFIX = { requirement: 'R', convention: 'C', memo: 'M', handoff: 'H' };
+export const DONE_KINDS = ['memo'];   // entries that can be marked done (and back)
 
 export class Board {
   // desk: the project's DecisionsDesk (decision 35). Records are read from the main folder and from the desk's
@@ -117,6 +119,15 @@ export class Board {
     for (const ev of this.log.ofType('entry_retired')) {
       if (byId.has(ev.entryId)) byId.get(ev.entryId).status = 'retired';
     }
+    // Marked done, or back to active (Matt's yes, 2026-11-12): only between those two, so superseded or retired wins.
+    // The newest event counts. A done entry leaves the index but is still read in full.
+    for (const ev of this.log.ofType('entry_status')) {
+      const e = byId.get(ev.entryId);
+      if (!e || !['active', 'done'].includes(e.status) || !['active', 'done'].includes(ev.status)) continue;
+      e.status = ev.status;
+      if (ev.status === 'done') e.done = { from: ev.from, ts: ev.ts, ...(ev.note ? { note: ev.note } : {}) };
+      else delete e.done;
+    }
     // Questions the next holder asked at a handoff are kept with it (decision 16).
     for (const ev of this.log.ofType('handoff_qa')) {
       const h = byId.get(ev.entryId);
@@ -141,6 +152,19 @@ export class Board {
     const e = this.entries().find(x => x.entryId.toUpperCase() === String(entryId).toUpperCase());
     if (!e || e.status !== 'active' || e.kind === 'handoff') return null;
     return this.log.append('entry_retired', { entryId: e.entryId, why, from });
+  }
+
+  // Mark an entry done, or back to active: a new event, never an edit to the log. Memos only for now. Throws a plain
+  // reason for anything it refuses (unknown id, superseded or retired, not a memo, no change).
+  setEntryStatus(entryId, status, from, note = '') {
+    if (!['done', 'active'].includes(status)) throw new Error(`Unknown status ${status}`);
+    const e = this.entries().find(x => x.entryId.toUpperCase() === String(entryId || '').trim().toUpperCase());
+    if (!e) throw new Error(`Nothing on the board with id ${entryId}.`);
+    if (!DONE_KINDS.includes(e.kind)) throw new Error(`${e.entryId} is a ${e.kind}; only memos can be marked done.`);
+    if (!['active', 'done'].includes(e.status)) throw new Error(`${e.entryId} is already ${e.status}, so it is off the active list.`);
+    if (e.status === status) throw new Error(`${e.entryId} is already ${status}.`);
+    const n = String(note || '').trim().slice(0, 300);
+    return this.log.append('entry_status', { entryId: e.entryId, status, from, ...(n ? { note: n } : {}) });
   }
 
   // One line per active item: the start-up reading for every agent.
