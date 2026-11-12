@@ -23,7 +23,7 @@ installPictures();   // decision 43: the pictures button on decision cards opens
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
 { const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
-import { boardView, groupBoard, SECTIONS } from './board.js';
+import { boardView, groupBoard, SECTIONS, canMarkDone, canUndoDone } from './board.js';
 const EFFORT_SHORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'x-high', max: 'max' };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -121,7 +121,7 @@ function connect() {
       if (ev.type === 'approval') S.pending.add(ev.approval);
       if (ev.type === 'approval_result') S.pending.delete(ev.approval);
       // Agents write decision records straight to .decisions/; a summary is the signal to re-read the board.
-      if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'summary', 'project_settings'].includes(ev.type)) refreshSoon();
+      if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'entry_status', 'summary', 'project_settings'].includes(ev.type)) refreshSoon();
       if (ev.type === 'message' && ev.from !== 'you') delete S.activity[key(p.name, ev.thread)];
       if (['approval_result', 'pick', 'question_dismissed', 'message'].includes(ev.type)) queueMicrotask(() => phone.clearSettled(cardWaiting));
     } else if (ev.type === 'agent_state') {
@@ -826,9 +826,13 @@ function renderBoard() {
         <span class="bid">${it.id}</span><span class="bt">${esc(it.title)}</span><span class="bs">${line}</span></button>`;
     }
     const e = it.e, k = `entry:${e.entryId}`, open = S.open.has(k);
-    return `<div class="bitem entry ${open ? 'open' : ''}"><button class="bhead" data-expand="${esc(k)}" aria-expanded="${open}">
+    // A check on each active memo marks it done; a done one gets an undo icon (each asks first, see the click handler).
+    const mark = canMarkDone(e) ? `<button class="bmark" data-entry-status="done" data-entry="${esc(e.entryId)}" title="Mark done" aria-label="Mark ${esc(e.entryId)} done">${icon('check')}</button>`
+      : canUndoDone(e) ? `<button class="bmark" data-entry-status="active" data-entry="${esc(e.entryId)}" title="Undo: back to the active list" aria-label="Put ${esc(e.entryId)} back on the active list">${icon('undo')}</button>` : '';
+    const done = e.done ? ` · done by ${esc(e.done.from)}${e.done.note ? `: ${esc(e.done.note)}` : ''}` : e.status !== 'active' ? ` · ${esc(e.status)}` : '';
+    return `<div class="bitem entry ${open ? 'open' : ''} ${mark ? 'markable' : ''}"><button class="bhead" data-expand="${esc(k)}" aria-expanded="${open}">
         <span class="bid">${esc(e.entryId)}</span><span class="bt">${esc(e.title)}</span>
-        <span class="bs">${esc(e.summary || '')}<span class="faint"> · ${esc(e.from)}${e.status !== 'active' ? ` · ${esc(e.status)}` : ''}</span></span></button>
+        <span class="bs">${esc(e.summary || '')}<span class="faint"> · ${esc(e.from)}${done}</span></span></button>${mark}
       ${open ? `<div class="bbody">${esc(e.body || '')}</div>` : ''}</div>`;
   };
   const html = view.map(s => `<section class="bsec ${s.isOpen ? 'open' : ''} ${s.hot ? 'hot' : ''}" data-sec="${s.key}">
@@ -1081,6 +1085,16 @@ document.addEventListener('click', e => {
     const el = jump.closest('.feed')?.querySelector(`.card.${CSS.escape(jump.dataset.jump)}`);
     if (el) { el.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); lockOn(el); }
     return;
+  }
+  // Mark a memo done (asks first, with a plain way out), or undo it from the Done group (no ask: undo is harmless).
+  const markBtn = e.target.closest('[data-entry-status]');
+  if (markBtn) {
+    const id = markBtn.dataset.entry, status = markBtn.dataset.entryStatus, project = proj().name;
+    return act(async () => {
+      if (status === 'done' && !await hubConfirm({ k: 'Board', title: `Mark ${id} done?`, body: 'It leaves the active list and goes to Done at the bottom of the board. Nothing is deleted; you can undo it there.', ok: 'Mark done' })) return;
+      await api('/api/entry-status', { project, id, status });
+      await load();
+    });
   }
   const bs = e.target.closest('[data-board-sec]');
   if (bs && !bs.disabled) {

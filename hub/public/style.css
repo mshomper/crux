@@ -475,6 +475,14 @@ a.bitem:hover,.bitem.entry:hover{border-color:var(--hud-faint);background:#18202
 .bhead{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);gap:1px 9px;align-items:baseline;padding:8px 10px;font:inherit;font-size:13px;color:var(--text);background:none;border:0;border-radius:9px;text-align:left;cursor:pointer}
 .bhead:focus-visible{outline:none;box-shadow:inset 0 0 0 1px var(--hud-cyan)}
 .bitem.entry.open{border-color:var(--hud-faint)}
+/* mark a memo done (check) or put it back (undo): a small icon beside the entry's head, labelled on hover */
+.bitem.entry.markable{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start}
+.bitem.entry.markable .bbody{grid-column:1/-1}
+.bmark{display:grid;place-items:center;width:30px;height:30px;margin:5px 6px 0 0;padding:0;color:var(--hud-dim);background:none;border:1px solid transparent;border-radius:7px;cursor:pointer}
+.bmark .icon{width:16px;height:16px}
+.bmark:hover{color:var(--good);border-color:var(--hud-line);background:rgba(111,227,255,.06)}
+.bmark:focus-visible{outline:none;border-color:var(--hud-cyan)}
+.bsec[data-sec="done"] .bitem .bt{color:var(--muted)}
 .bbody{margin:0 10px 10px;padding:9px 0 0;border-top:1px solid var(--line);white-space:pre-wrap;color:var(--muted);font-size:12.5px;line-height:1.5}
 .board-empty{padding:18px 8px;font-size:13px}
 .board-page{display:flex;align-items:center;gap:8px;margin:14px 8px 0;font-size:12.5px;color:var(--muted);text-decoration:none}
@@ -654,6 +662,7 @@ button.mchip:focus-visible{outline:2px solid var(--mh);outline-offset:2px}
   .fchips{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}   /* two chips a row on a phone */
   .fchips.sent{grid-template-columns:repeat(auto-fit,minmax(140px,165px))}
   .board-filter input{min-height:44px}
+  .bmark{width:44px;height:44px;margin:0}
   /* Needs you with one thumb: the main answer buttons fill the width, low in the card */
   .card.approval .row .btn{flex:1 1 0}
   .card.approval .always-btn{flex-basis:100%}

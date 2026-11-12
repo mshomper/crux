@@ -176,7 +176,9 @@ const routes = {
   'POST /api/push/test': async () => ({ sent: await push.send({ kind: 'test', title: 'Crux Hub', body: 'Notifications reach this device.', card: '', url: '/' }) }),
   // Where an open hub page is and whether you are using it, so cards you are looking at do not buzz your phone.
   'POST /api/presence': ({ client, ...info }) => { push.presence(String(client || ''), info); return { ok: true }; },
-  'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId })
+  'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId }),
+  // Mark a memo done, or back to active, from the board panel: a new event in the log, never an edit.
+  'POST /api/entry-status': ({ project, id, status }) => ({ entryId: hub.project(project).board.setEntryStatus(String(id || ''), status === 'active' ? 'active' : 'done', 'you').entryId })
 };
 
 const server = createServer(async (req, res) => {
