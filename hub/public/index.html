@@ -29,6 +29,7 @@
         <div id="hub-menu" class="hub-menu" role="menu" aria-label="Hub" hidden></div>
       </div>
     </header>
+    <div id="hub-switches" class="hub-switches"></div>
     <nav id="projects" class="projects" aria-label="Projects"></nav>
     <nav id="threads" class="threads" aria-label="Threads"></nav>
     <div class="side-foot">
@@ -49,7 +50,6 @@
       <div class="head-actions">
         <button class="btn ghost" id="retire-finished" hidden title="This worker's job is done: stop it, no replacement"><svg class="icon"><use href="#i-check"/></svg>Retire</button>
         <button class="btn ghost" id="retire" hidden title="Hand the work to a fresh agent: it writes a handoff first"><svg class="icon"><use href="#i-handoff"/></svg>Hand off</button>
-        <button class="btn ghost icon-only" id="route-perms" hidden aria-pressed="true"><svg class="icon"><use href="#i-shield"/></svg></button>
         <button class="btn ghost icon-only" id="phone-alerts" hidden aria-label="Phone notifications" title="Phone notifications"><svg class="icon"><use href="#i-bell"/></svg></button>
         <button class="btn ghost" id="open-board"><svg class="icon"><use href="#i-board"/></svg>Board</button>
         <a class="btn ghost" id="all-projects" href="/all" target="_blank" rel="noopener" title="Every project's decisions, in a new tab"><svg class="icon"><use href="#i-projects"/></svg>All projects<svg class="icon ext" aria-hidden="true"><use href="#i-external"/></svg></a>
@@ -162,6 +162,7 @@
     <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></symbol>
     <symbol id="i-restart"viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.3v.2"/></symbol>
     <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><path d="M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/></symbol>
   </defs>
 </svg>

@@ -75,6 +75,14 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .mode-switch.auto .mode-knob::after{left:12px;background:var(--accent-ink)}
 .mode-switch:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 @media (prefers-reduced-motion:reduce){.mode-switch .mode-knob::after{transition:none}}
+/* Decision 21, one switch for the whole hub: its own line under the hub's name, clear of the project row */
+.hub-switches{padding:0 12px 10px;display:flex}
+.mode-switch.route{min-height:32px;max-width:100%;min-width:0}
+.mode-switch.route>.icon{width:14px;height:14px;flex:none}
+.mode-switch.route .rw{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.mode-switch.route.off{color:var(--text)}
+.amber-mark{display:inline-grid;place-items:center;flex:none;color:var(--hud-amber,#f3b955)}
+.amber-mark .icon{width:14px;height:14px;filter:drop-shadow(0 0 4px rgba(243,185,85,.55))}
 .mode-switch.conn{gap:5px;padding:0 7px}
 .mode-switch.conn .icon{width:14px;height:14px}
 .pmode{font-size:11.5px;color:var(--faint);margin-left:auto;margin-right:8px}
@@ -329,7 +337,6 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .route-note .icon{flex:none;width:14px;height:14px;margin-top:2px;color:var(--accent)}
 .route-note.stop .icon{color:var(--warn)}
 .routed-label{margin-top:10px}
-#route-perms.on .icon{color:var(--accent)}
 .notice{align-self:center;font-size:12.5px;color:var(--faint);text-align:center;display:flex;gap:10px;align-items:center}
 .notice::before,.notice::after{content:"";flex:1;height:1px;background:var(--line)}
 .time{font-size:11px;color:var(--faint)}
@@ -554,7 +561,7 @@ button.mchip:focus-visible{outline:2px solid var(--mh);outline-offset:2px}
   .opt{padding:11px}
   #hub-menu-btn{min-width:44px;min-height:44px}
   .hm-item{min-height:48px;align-items:center}
-  .retired-head,.thread.mini{min-height:44px}   /* compact to the eye, still a thumb-sized target */
+  .retired-head,.thread.mini,.mode-switch.route{min-height:44px}   /* compact to the eye, still a thumb-sized target */
   .always-btn{min-height:44px;align-items:center}
 }
 

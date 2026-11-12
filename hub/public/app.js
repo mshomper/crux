@@ -12,6 +12,7 @@ import { UsageUI } from './usage-ui.js';
 import { md } from './markdown.js';
 import { retiredView, RETIRED_RECENT_DAYS } from './retired-list.js';
 import { SideResizer } from './side-width.js';
+import { routeSwitch } from './route-switch.js';
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
 { const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
@@ -368,6 +369,7 @@ function bootReadout() {
 
 // One row however many projects there are: the current one, a count when it needs you, a dot when another does.
 function renderProjects() {
+  renderHubSwitches();
   const cur = proj();
   if (!cur) { $('#projects').innerHTML = ''; return; }
   const multi = S.projects.length > 1;
@@ -384,6 +386,13 @@ function renderProjects() {
       <span class="pname">${esc(p.name)}</span><span class="pmode">${modeWord(p)}</span><span class="pcount ${k ? 'hot' : ''}">${k ? `${k} waiting` : 'All clear'}</span></button>`;
   }).join('')}</div>` : '';
   $('#projects').innerHTML = `<div class="proj-switch"><div class="proj-row">${head}${modeSwitch(cur)}${connSwitch(cur)}</div>${menu}</div>`;
+}
+
+// Decision 21's switch, one for the whole hub, under the hub's name (route-switch.js); amber mark when off.
+function renderHubSwitches() {
+  const r = routeSwitch({ on: S.settings?.routePermissions !== false, rules: proj()?.permissionRules });
+  $('#hub-switches').innerHTML = `<button class="mode-switch route ${r.on ? 'auto' : 'off'}" role="switch" aria-checked="${r.on}" data-route-toggle title="${esc(r.tip)}" aria-label="${esc(r.tip)}">
+    <i class="mode-knob"></i>${icon('shield')}<span class="rw">${esc(r.word)}</span>${r.warn ? `<span class="amber-mark">${icon('warn')}</span>` : ''}</button>`;
 }
 
 // Which permission rules apply here (decision 34): Auto lets contained work run and asks only about the rest;
@@ -744,16 +753,6 @@ function renderHead() {
   const a = p?.agents.find(a => a.thread === t && a.state !== 'retired') || p?.agents.find(a => a.thread === t);
   $('#retire').hidden = !(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring));
   $('#retire-finished').hidden = !(p && t !== 'orchestrator' && t !== 'needs' && a && a.role === 'worker' && a.state !== 'retired' && !a.retiring);
-  // The off switch for decision 21, beside the orchestrator it applies to.
-  const rp = $('#route-perms'), on = S.settings?.routePermissions !== false;
-  rp.hidden = !(p && t === 'orchestrator');
-  rp.classList.toggle('on', on);
-  rp.setAttribute('aria-pressed', String(on));
-  const rules = p?.permissionRules;
-  rp.title = on
-    ? `The orchestrator answers workers' permission requests${rules ? ` under ${rules}` : ' (no rules on the board yet, so they all come to you)'}; hard stops still come to you. Click to answer every request yourself.`
-    : 'Every permission request comes to you. Click to let the orchestrator answer them within the board\'s rules.';
-  rp.setAttribute('aria-label', rp.title);
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#attach').disabled = !!retired;
@@ -942,6 +941,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-retired-toggle]')) { S.retiredOpen = !S.retiredOpen; store.set('retired-open', S.retiredOpen); return renderThreads(); }
   if (e.target.closest('[data-retired-older]')) { S.retiredOlder = !S.retiredOlder; return renderThreads(); }
   if (e.target.closest('[data-proj-toggle]')) { S.projMenu = !S.projMenu; return renderProjects(); }
+  if (e.target.closest('[data-route-toggle]')) return toggleRouting();
   if (e.target.closest('[data-conn-toggle]')) {
     const p = proj();
     return act(async () => { await api('/api/settings', { project: p.name, connectors: !p.connectors }); await load(); });
@@ -1160,11 +1160,13 @@ $('#input').addEventListener('keydown', e => {
 function autosize() { growBox($('#input'), 200); }
 $('#input').addEventListener('input', autosize);
 
-$('#route-perms').addEventListener('click', () => act(async () => {
-  const on = S.settings?.routePermissions !== false;
-  const { settings } = await api('/api/settings', { routePermissions: !on });
-  S.settings = settings; render();
-}));
+function toggleRouting() {
+  return act(async () => {
+    const on = S.settings?.routePermissions !== false;
+    const { settings } = await api('/api/settings', { routePermissions: !on });
+    S.settings = settings; render();
+  });
+}
 function setBoard(open) {
   $('#board').hidden = !open;
   render();
