@@ -75,10 +75,10 @@ const thread = (f, name, last, extra = {}) => `<div class="thr" style="--mh:${MO
 sheet.innerHTML = `<h1>Model robots · sleek visor</h1>
   <div class="cols">${FAM.map(col).join('')}</div>
   <div class="grid2">
-    <section class="wide"><div class="lab">On the live map (one waits on Matt, one asleep)</div>
+    <section class="wide"><div class="lab">On the live map (one waits on you, one asleep)</div>
       <div class="stations">${station(FAM[0], 'quick-fix', { state: 'asleep' })}${station(FAM[1], 'reviewer')}${station(FAM[2], 'hub-polish', { state: 'idle' }, { needs: true })}${station(FAM[3], 'map-core')}</div></section>
     <section class="wide"><div class="lab">In the sidebar (the orchestrator wears the crown)</div>
-      <div class="side">${thread(FAM[2], 'Orchestrator · #3', 'Matt picked C. Building it out.', { role: 'orchestrator', state: 'working' })}${thread(FAM[3], 'map-core', 'Posted the robot set', { state: 'working' })}${thread(FAM[1], 'reviewer', 'Reading the whole change before Matt click-tests it')}${thread(FAM[0], 'quick-fix', 'Done. Asleep until needed.', { state: 'asleep' })}</div></section>
+      <div class="side">${thread(FAM[2], 'Orchestrator · #3', 'You picked C. Building it out.', { role: 'orchestrator', state: 'working' })}${thread(FAM[3], 'map-core', 'Posted the robot set', { state: 'working' })}${thread(FAM[1], 'reviewer', 'Reading the whole change before you click-test it')}${thread(FAM[0], 'quick-fix', 'Done. Asleep until needed.', { state: 'asleep' })}</div></section>
   </div>`;
 document.title = 'ready';
 </script>

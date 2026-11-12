@@ -1,0 +1,112 @@
+{
+ "id": 38,
+ "slug": "plan-login-wording",
+ "title": "How should the public page present running the Hub on a Claude plan login?",
+ "date": "2026-11-12",
+ "mode": "quick",
+ "lenses": [
+  "research"
+ ],
+ "status": "decided",
+ "context": "The Hub runs its agents on the user's own Claude Code login and plan limits by default. Anthropic's Agent SDK documentation says third-party developers may not offer claude.ai login or plan limits in their products unless previously approved, and should use API keys instead (reported by the docs-audit worker from the SDK overview page; not yet re-checked by a second reader). The public page at crux.notarobot-eng.com will market the Hub to strangers, so how setup is worded matters before it is written.",
+ "depends_on": [
+  1,
+  36
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Ask Anthropic for approval",
+   "summary": "Write to Anthropic and ask for approval to offer plan login in the Hub. The page waits, or launches with option B's wording until an answer comes.",
+   "pros": [
+    "The only route that makes plan login a fully supported, advertised way to run the Hub",
+    "A clear answer either way"
+   ],
+   "cons": [
+    "No known timeline or guarantee of an answer",
+    "Holds the Hub part of the page, or needs B's wording in the meantime anyway"
+   ],
+   "effort": "One email from Matt; unknown wait",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "API key is the documented way",
+   "summary": "The page and README tell strangers to run the Hub with their own Anthropic API key. Plan login stays in the code as Matt's personal setup and is not advertised. The API-key switch already exists.",
+   "pros": [
+    "Matches Anthropic's stated rule as written",
+    "No waiting: the page can go ahead now",
+    "Needs only wording, plus making the API key the easy path in setup"
+   ],
+   "cons": [
+    "API use is paid per token, so the Hub is less attractive to people who already pay for a plan",
+    "The plan usage meters mean little to API-key users",
+    "The default in the code (plan login) and the documented way would differ unless the default is flipped later"
+   ],
+   "effort": "Wording only now; a small follow-up if the default should flip",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "A personal tool you run yourself",
+   "summary": "The page describes the Hub as open-source software each person runs on their own machine with their own Claude Code login, the same as running Claude Code. Setup shows plan login first and the API key as the alternative.",
+   "pros": [
+    "Most attractive to plan subscribers",
+    "Describes how the Hub actually works today"
+   ],
+   "cons": [
+    "Rests on Matt's reading that an open-source tool run locally is not 'offering' plan login; Anthropic may read it differently",
+    "Marketing it publicly makes that reading riskier",
+    "If Anthropic objects, the page and setup need rewriting"
+   ],
+   "effort": "Wording only",
+   "source": "claude"
+  }
+ ],
+ "criteria": [
+  {
+   "name": "Fits Anthropic's stated rule",
+   "scores": {
+    "A": 3,
+    "B": 3,
+    "C": 1
+   },
+   "note": "C depends on an untested reading of the rule"
+  },
+  {
+   "name": "Page can go ahead now",
+   "scores": {
+    "A": 1,
+    "B": 3,
+    "C": 3
+   }
+  },
+  {
+   "name": "Appeal to strangers",
+   "scores": {
+    "A": 3,
+    "B": 2,
+    "C": 3
+   },
+   "note": "A scores 3 only if approval is granted"
+  },
+  {
+   "name": "Risk of rework later",
+   "scores": {
+    "A": 2,
+    "B": 3,
+    "C": 1
+   }
+  }
+ ],
+ "recommended": "B",
+ "recommendation": "Document the API key as the way to run the Hub now, and send the approval request in parallel if plan login matters for marketing. It is the only wording that is safe today and it does not block the page. This is Claude's judgment, not legal advice.",
+ "confidence": "lean",
+ "chosen": "B",
+ "reason": "",
+ "decided_on": "2026-11-12",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": []
+}

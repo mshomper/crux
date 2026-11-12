@@ -1,0 +1,53 @@
+{
+ "id": 2,
+ "slug": "distance-unit",
+ "title": "Distances are stored in miles",
+ "date": "2026-11-02",
+ "mode": "quick",
+ "lenses": [
+  "data-model"
+ ],
+ "status": "found",
+ "context": "All route code (src/route/*.js) stores distances in miles, with no unit written in saved routes.",
+ "depends_on": [],
+ "conflicts": [
+  4
+ ],
+ "options": [
+  {
+   "key": "A",
+   "name": "Miles, implicit",
+   "summary": "What the code does now: every distance is in miles, never stated.",
+   "pros": [
+    "Matches the trail guides the first users read"
+   ],
+   "cons": [
+    "Saved routes carry no unit"
+   ]
+  },
+  {
+   "key": "B",
+   "name": "Kilometres inside, miles on screen if asked",
+   "summary": "Store kilometres everywhere and convert only for display.",
+   "pros": [
+    "Matches GPX files and most map data",
+    "Safe to share routes"
+   ],
+   "cons": [
+    "Every distance in the code and in saved routes changes"
+   ]
+  }
+ ],
+ "criteria": [],
+ "recommended": "B",
+ "recommendation": "Route files and map data are metric, so miles force a conversion at every edge of the app.",
+ "confidence": "lean",
+ "chosen": null,
+ "reason": null,
+ "decided_on": null,
+ "superseded_by": null,
+ "challenge": null,
+ "deliberate": "likely",
+ "holding_up": "strained",
+ "strain": "Decision 0004 saves routes as GPX, which is metric, so every save and load now converts miles back and forth."
+}
