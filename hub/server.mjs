@@ -13,12 +13,16 @@ import { decodeDataUrl, MAX_BYTES } from './lib/attachments.mjs';
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents } from './lib/relaunch.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, pageBuild } from './lib/relaunch.mjs';
 import { randomUUID } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Changes with every start, so a page waiting through a restart knows when the new hub is up.
 const BOOT = randomUUID();
+// The hub's version, and a fingerprint of the page's own files: an open page that reconnects to a hub whose page
+// files differ reloads itself, so a restart onto new code never leaves the old page running.
+const VERSION = JSON.parse(readFileSync(join(here, 'package.json'), 'utf8')).version;
+const BUILD = pageBuild(join(here, 'public'));
 const args = process.argv.slice(2);
 const flag = (name, dflt) => { const i = args.indexOf(name); if (i < 0) return dflt; const v = args[i + 1]; args.splice(i, 2); return v; };
 const port = Number(flag('--port', process.env.CRUX_HUB_PORT || 4747));
@@ -91,7 +95,7 @@ async function body(req, limit = 1e6) {
 }
 
 const routes = {
-  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents }),
+  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed }),
   // Restart from the hub's own menu: answer first, then hand over to a fresh hub started the same way (M010).
   'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },
   // The off switch for decision 21: false sends every permission request to you.
@@ -194,7 +198,7 @@ const server = createServer(async (req, res) => {
     // Pages ask this to know the hub is running, so they can show a link back to it (they may be opened as files).
     if (url.pathname === '/api/ping') {
       res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'cache-control': 'no-store' });
-      return res.end(JSON.stringify({ hub: true, boot: BOOT }));
+      return res.end(JSON.stringify({ hub: true, boot: BOOT, version: VERSION, build: BUILD }));
     }
 
     // The all-projects page, with its links pointed at the hub instead of files.
@@ -254,10 +258,12 @@ server.on('listening', () => {
 });
 server.listen(port, '127.0.0.1');
 
-function stopAgents() { for (const p of hub.projects.values()) for (const a of p.agents.values()) a.close(); }
+// The hub is going down: agents' turns are cut, not finished, so they stay marked busy and resume at the next
+// start (M014).
+function stopAgents() { hub.stopping = true; for (const p of hub.projects.values()) for (const a of p.agents.values()) a.close(); }
 
 // Stop taking requests, close the pages' live streams (they reconnect to the new hub) and the agents (they resume
-// on their next message, as after any restart), start the new hub detached with no window, then leave.
+// on their own when the new hub starts, M014), start the new hub detached with no window, then leave.
 let restarting = false;
 function restart() {
   if (restarting) return;
@@ -268,7 +274,7 @@ function restart() {
   clients.clear();
   stopAgents();
   try { startDetached(launchSpec({ port })); }
-  catch (e) { console.error(`Could not start the new hub: ${e.message}`); restarting = false; server.listen(port, '127.0.0.1'); return; }
+  catch (e) { console.error(`Could not start the new hub: ${e.message}`); restarting = false; hub.stopping = false; server.listen(port, '127.0.0.1'); return; }
   setTimeout(() => process.exit(0), 300);
 }
 

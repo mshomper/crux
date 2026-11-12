@@ -122,12 +122,6 @@
 .hud-read-r .hud-needs{pointer-events:auto}
 @container hud (max-width:979px){.hud-read{display:none}}
 
-.hud-bar{position:relative;display:block;height:4px;border-radius:2px;background:rgba(255,255,255,.08);--ctx:0%;--mark:60%}
-.hud-bar i{position:absolute;left:0;top:0;bottom:0;width:var(--ctx);border-radius:2px;background:var(--hud-cyan);box-shadow:0 0 8px rgba(111,227,255,.7);transition:width .6s}
-.hud-bar b{position:absolute;left:var(--mark);top:-3px;bottom:-3px;width:1.5px;background:var(--hud-amber);box-shadow:0 0 6px rgba(243,185,85,.8)}
-.hud-bar[data-level="near"] i{background:var(--hud-amber);box-shadow:0 0 8px rgba(243,185,85,.7)}
-.hud-bar[data-level="over"] i{background:var(--hud-red);box-shadow:0 0 8px rgba(242,114,122,.8)}
-.hud-bar.big{height:6px;border-radius:3px}
 
 .hud-needs{font:inherit;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;cursor:pointer;
   color:var(--hud-dim);background:rgba(111,227,255,.05);border:1px solid var(--hud-line)}
@@ -216,7 +210,7 @@
 @container hud (max-width:560px){
   .hud[data-tele="tray"] .hud-tele{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);height:200px;gap:8px}
   .hud[data-tele="tray"] .tele-holder{padding:10px 14px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 12px;align-items:center}
-  .hud[data-tele="tray"] .th-k,.hud[data-tele="tray"] .hud-bar.big,.hud[data-tele="tray"] .th-stats{display:none}
+  .hud[data-tele="tray"] .th-k,.hud[data-tele="tray"] .th-stats{display:none}
   .hud[data-tele="tray"] .th-big{grid-row:1/3;grid-column:1;margin:0}
   .hud[data-tele="tray"] .th-big b{font-size:34px}
   .hud[data-tele="tray"] .th-big span{display:none}

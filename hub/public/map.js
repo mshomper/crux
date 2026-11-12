@@ -1,7 +1,7 @@
 // Crux hub live map (decision 0017): an always-on strip over the conversation that zooms into
 // the centre of the screen as the full map when you engage it.
 //   centre   - the orchestrator role as a particle core; its ring is the holder's context used,
-//              with the handoff threshold marked; the swarm re-forms at each handoff
+//              (no context meter: M013 moves context into the particles); the swarm re-forms at each handoff
 //   stations - workers, plus You and the Board; red when something needs you
 //   pulses   - messages, summaries, board posts, picks and approvals flying along the edges
 // Driven by the hub's SSE events. With prefers-reduced-motion it draws a still map.
@@ -84,7 +84,6 @@ export class LiveMap {
         <div class="hud-read hud-read-l" aria-hidden="true">
           <span class="k">Orchestrator</span>
           <span class="v" data-r="gen"></span>
-          <span class="hud-bar"><i></i><b></b></span>
           <span class="v dim" data-r="ctx"></span>
         </div>
         <div class="hud-read hud-read-r">
@@ -113,7 +112,6 @@ export class LiveMap {
     this.holderEl = q('.tele-holder');
     this.r = Object.fromEntries([...this.slot.querySelectorAll('[data-r]')].map(el => [el.dataset.r, el]));
     this.needsEls = [...this.slot.querySelectorAll('[data-needs]')];
-    this.barEl = q('.hud-bar');
 
     this.panel.addEventListener('click', e => {
       const st = e.target.closest('.hs');
@@ -250,11 +248,9 @@ export class LiveMap {
   syncText(core, needs) {
     const st = core.state === 'writing' ? 'writing handoff' : core.state;
     this.decode(this.r.gen, core.state === 'vacant' ? 'NO HOLDER' : `GEN ${pad2(core.generation)} · ${st.toUpperCase()}`);
-    this.decode(this.r.ctx, core.ctx == null ? `HANDOFF AT ${core.retireAt}%` : `${core.ctx}% · HANDOFF ${core.retireAt}%`);
+    // Context as a number only: no meter, arc or threshold mark (Matt, 2026-11-11; M013 moves it into the particles).
+    this.decode(this.r.ctx, core.ctx == null ? 'CONTEXT --' : `CONTEXT ${core.ctx}%`);
     this.r.proj.textContent = this.model.project ? `// ${this.model.project.name}` : '';
-    this.barEl.style.setProperty('--ctx', `${core.ctx ?? 0}%`);
-    this.barEl.style.setProperty('--mark', `${core.retireAt}%`);
-    this.barEl.dataset.level = core.ctx == null ? '' : core.ctx >= core.retireAt ? 'over' : core.ctx >= core.retireAt * 0.8 ? 'near' : '';
     for (const el of this.needsEls) {
       const html = needs ? `${svg('alert')}<span>${el.classList.contains('big') ? 'Needs you' : 'Needs you'}</span><b>${needs}</b>` : `<span>All clear</span>`;
       if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
@@ -263,12 +259,11 @@ export class LiveMap {
     }
     const workers = this.workers.filter(w => w.kind === 'worker');
     const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;
-    const lvl = this.barEl.dataset.level;
+    const lvl = core.ctx == null ? '' : core.ctx >= core.retireAt ? 'over' : core.ctx >= core.retireAt * 0.8 ? 'near' : '';
     const holder = `
       <div class="th-k">Orchestrator role</div>
       <div class="th-name"><span>${esc(core.holder || 'No holder')}</span><span class="th-state ${esc(st)}">${esc(st)}</span></div>
-      <div class="th-big ${lvl}"><b>${core.ctx ?? '--'}</b><span>% of context<br>hands off at ${core.retireAt}%</span></div>
-      <div class="hud-bar big" data-level="${lvl}" style="--ctx:${core.ctx ?? 0}%;--mark:${core.retireAt}%"><i></i><b></b></div>
+      <div class="th-big ${lvl}"><b>${core.ctx ?? '--'}</b><span>% of context</span></div>
       <div class="th-act">${core.activity ? `<span class="caret">&gt;</span> ${esc(core.activity)}` : core.state === 'vacant' ? 'Starts when you send a message' : `Generation ${core.generation}`}</div>
       <div class="th-stats"><span><b>${busy}</b>working</span><span><b>${workers.length - busy}</b>resting</span><span class="${needs ? 'hot' : ''}"><b>${needs}</b>need you</span>${this.hidden ? `<span><b>+${this.hidden}</b>off map</span>` : ''}</div>`;
     if (this.holderEl.dataset.html !== holder) { this.holderEl.dataset.html = holder; this.holderEl.innerHTML = holder; }

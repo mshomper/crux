@@ -13,6 +13,12 @@ const say = s => console.log(`[restart ${port}] ${s}`);
 
 if (!Number.isInteger(port) || port <= 0 || port > 65535) { say('Give a port number, like --port 4747.'); process.exit(1); }
 
+// M014: say who will be resumed (agents working now), and afterwards who the new hub is resuming.
+const state = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/api/state`, { signal: AbortSignal.timeout(5000) }); return r.ok ? await r.json() : null; } catch { return null; } };
+const before = await state();
+const busy = (before?.projects || []).flatMap(p => p.agents.filter(a => ['working', 'starting'].includes(a.state)).map(a => `${a.name} (${p.name})`));
+if (before) say(busy.length ? `Working now, so resumed after the restart: ${busy.join(', ')}` : 'No agent is working, so none needs resuming.');
+
 const pids = await pidsOnPort(port);
 for (const pid of pids) say(`${await stopTree(pid) ? 'Stopped' : 'Could not stop'} process ${pid}`);
 if (pids.length && !await waitFor(async () => !(await pidsOnPort(port)).length, { timeoutMs: 10000 })) say('The port is still taken; trying anyway.');
@@ -23,4 +29,7 @@ startDetached(spec);
 const boot = await waitFor(() => ping(port), { timeoutMs: 45000, everyMs: 400 });
 if (!boot) { say(`The hub did not answer. Its log: ${logFile(port)}`); process.exit(1); }
 say('The hub is back.');
+const after = await state();
+const resumed = after?.resumed || [];
+if (after) say(resumed.length ? `Resuming, a few seconds apart: ${resumed.map(r => `${r.agent} (${r.project}, ${r.why === 'working' ? 'was working' : 'had an unread message'})`).join(', ')}` : 'Nothing to resume.');
 if (open) openApp(`http://localhost:${port}/`);

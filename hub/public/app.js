@@ -40,7 +40,11 @@ async function api(path, body) {
 }
 
 async function load() {
-  const { projects, retireAt, models, settings, boot } = await api('/api/state');
+  const { projects, retireAt, models, settings, boot, version, build } = await api('/api/state');
+  // The hub now serves different page files (a restart onto new code): reload, so the new page runs (M014+).
+  if (S.build && build && build !== S.build) return reloadForUpdate(version);
+  S.build ||= build;
+  S.version ||= version;
   S.boot = boot;
   map.retireAt = retireAt;
   S.settings = settings || {};
@@ -99,15 +103,43 @@ function setLink(up) {
 }
 
 // ---------- restart (M010): the hub menu's Restart, then wait for the new hub and reconnect ----------
-function working() { return S.projects.flatMap(p => p.agents.filter(a => ['working', 'starting'].includes(a.state))); }
+function working() { return S.projects.flatMap(p => p.agents.filter(a => ['working', 'starting'].includes(a.state)).map(a => ({ ...a, project: p.name }))); }
+
+// A hub with new page files: keep what you were doing (view, board, the half-typed message), reload, then say so.
+function reloadForUpdate(version) {
+  try {
+    sessionStorage.setItem('crux-hub:updated', version || 'a new version');
+    sessionStorage.setItem('crux-hub:resume-view', JSON.stringify({ board: !$('#board').hidden, compose: $('#input').value, filter: $('#board-filter').value }));
+  } catch { }
+  location.reload();
+  return new Promise(() => { });   // nothing more happens on this page
+}
+function afterUpdate() {
+  let updated = null, view = null;
+  try {
+    updated = sessionStorage.getItem('crux-hub:updated');
+    view = JSON.parse(sessionStorage.getItem('crux-hub:resume-view') || 'null');
+    sessionStorage.removeItem('crux-hub:updated'); sessionStorage.removeItem('crux-hub:resume-view');
+  } catch { }
+  if (view) {
+    if (view.compose) { $('#input').value = view.compose; autosize(); }
+    if (view.filter) $('#board-filter').value = view.filter;
+    if (view.board) { $('#board').hidden = false; render(); }
+  }
+  if (updated) toast(`Updated to ${updated}`, 'info');
+}
 function renderHubMenu() {
   const el = $('#hub-menu');
   $('#hub-menu-btn').setAttribute('aria-expanded', String(!!S.hubMenu));
   if (!S.hubMenu) { el.hidden = true; return; }
+  // M014: who will be resumed, by name (with the project when there are several).
   const busy = working();
+  const multi = S.projects.length > 1;
+  const names = busy.map(a => `<b>${esc(a.name)}</b>${multi ? ` <span class="faint">(${esc(a.project)})</span>` : ''}`);
+  const list = names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
   el.innerHTML = S.hubMenu === 'confirm'
     ? `<div class="hm-confirm"><b>Restart the hub now?</b>
-        <p class="faint">${busy.length ? `${busy.length === 1 ? `${esc(busy[0].name)} is` : `${busy.length} agents are`} working; ${busy.length === 1 ? 'it stops' : 'they stop'} and pick${busy.length === 1 ? 's' : ''} up again on the next message.` : 'Agents pick up where they left off on their next message.'} The page reconnects by itself.</p>
+        <p class="faint">${busy.length ? `${list} ${busy.length === 1 ? 'is' : 'are'} working; ${busy.length === 1 ? 'it resumes' : 'they resume'} on ${busy.length === 1 ? 'its' : 'their'} own after the restart${busy.length > 1 ? ', a few seconds apart' : ''}.` : 'No agent is working, so none needs resuming; resting agents wake on their next message.'} The page reconnects by itself.</p>
         <div class="row"><button class="btn primary" data-restart-go>${icon('restart')}Restart</button><button class="btn ghost" data-hub-menu-close>Cancel</button></div></div>`
     : `<button class="hm-item" role="menuitem" data-restart>${icon('restart')}<span><b>Restart hub</b><span class="faint">Stops and starts the server; agents resume</span></span></button>`;
   el.hidden = false;
@@ -727,9 +759,10 @@ function hubConfirm({ k = 'Confirm', title, body = '', ok = 'OK' }) {
 }
 $('#confirm').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close('cancel'); });   // a click outside
 let toastTimer;
-function toast(msg) {
+function toast(msg, tone = 'warn') {
   const el = $('#toast');
   el.textContent = msg; el.hidden = false;
+  el.classList.toggle('info', tone === 'info');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.hidden = true; }, 6000);
 }
@@ -1091,5 +1124,5 @@ function startView() {
   if (p && needsCount(p)) { S.thread = 'needs'; S.justSwitched = true; store.set('thread', 'needs'); $('#app').classList.remove('show-side'); render(); }
   else $('#app').classList.add('show-side');
 }
-load().then(() => { startView(); phone.openFromLocation(); phone.viewChanged(); connect(); })
+load().then(() => { startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); })
   .catch(() => { if (phoneStart) $('#app').classList.add('show-side'); connect(); });
