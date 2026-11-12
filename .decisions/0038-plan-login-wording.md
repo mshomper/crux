@@ -1,9 +1,13 @@
 # 0038 How should the public page present running the Hub on a Claude plan login?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: research
 - Builds on: 0001, 0036
+
+## Decision
+
+**B: API key is the documented way.** The page and README tell strangers to run the Hub with their own Anthropic API key. Plan login stays in the code as Matt's personal setup and is not advertised. The API-key switch already exists.
 
 ## Context
 
@@ -20,7 +24,7 @@ Write to Anthropic and ask for approval to offer plan login in the Hub. The page
 - Con: Holds the Hub part of the page, or needs B's wording in the meantime anyway
 - Effort: One email from Matt; unknown wait
 
-### B: API key is the documented way (recommended)
+### B: API key is the documented way (chosen) (recommended)
 
 The page and README tell strangers to run the Hub with their own Anthropic API key. Plan login stays in the code as Matt's personal setup and is not advertised. The API-key switch already exists.
 - Pro: Matches Anthropic's stated rule as written
