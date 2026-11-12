@@ -64,7 +64,15 @@ try {
   const h = opt.view ? H : Math.min(dim.h, 16000);
   const shot = await S('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !opt.view, clip: { x: 0, y: 0, width: W, height: h, scale: 1 } });
   await mkdir(dirname(out), { recursive: true });
-  await writeFile(out,Buffer.from(shot.data, 'base64'));
+  // --slice N: a tall page as several pictures of N CSS pixels each (name-1.png, name-2.png, ...)
+  const step = Number(opt.slice) || 0;
+  if (step && !opt.view && dim.h > step) {
+    for (let y = 0, n = 1; y < dim.h; y += step, n++) {
+      const part = await S('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y, width: W, height: Math.min(step, dim.h - y), scale: 1 } });
+      await writeFile(out.replace(/\.png$/, `-${n}.png`), Buffer.from(part.data, 'base64'));
+    }
+    console.log(`sliced: page height ${dim.h}, ${Math.ceil(dim.h / step)} parts`);
+  } else await writeFile(out, Buffer.from(shot.data, 'base64'));
   console.log(`${out}  ${W}x${h} @${dpr}x  page scrollWidth ${dim.sw} / clientWidth ${dim.cw}${dim.sw > dim.cw ? '  SIDEWAYS SCROLL' : ''}`);
   const errs = events.filter(e => e.method === 'Runtime.exceptionThrown').map(e => e.params.exceptionDetails.exception?.description || e.params.exceptionDetails.text);
   if (errs.length) console.log('page errors:\n' + errs.join('\n'));

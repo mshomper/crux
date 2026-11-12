@@ -1,4 +1,4 @@
-// Look A's hero: the Hub's own live core (copied from hub/public, unchanged) with three worker stations.
+// The hero: the Hub's own live core (js/core is copied from hub/public, unchanged) with three worker stations.
 // Under prefers-reduced-motion it draws one still frame and stops.
 import { ReservoirCore, stream } from './core/map-core.js';
 import { createRenderer } from './core/map-gl.js';
@@ -98,6 +98,6 @@ class HeroCore {
 }
 
 const el = document.querySelector('.hero-core');
-if (el && document.documentElement.dataset.look === 'a') {
+if (el) {
   try { new HeroCore(el); } catch (e) { console.error(e); el.classList.add('no-core'); }
 }
