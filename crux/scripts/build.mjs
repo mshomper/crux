@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs';
 import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { rollup } from './rollup.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -19,23 +20,39 @@ const fill = (t, data) => t.replace('/*{{DATA}}*/', () => safeJson(data));
 const isRecord = d => typeof d?.id === 'number' && !!d.title && Array.isArray(d.options);
 const mtime = f => { try { return statSync(f).mtimeMs; } catch { return -1; } };
 
+// How many pages in the folder git still tracks: 0 or more, or null when git is missing or the folder is not in a repo.
+export function trackedPages(dir) {
+  try {
+    const out = String(execFileSync('git', ['ls-files', '--', '*.html'], { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000, windowsHide: true }));
+    return out.split('\n').filter(Boolean).length;
+  } catch { return null; }
+}
+
 // A .decisions folder ignores its generated pages. Adds the line to an existing .gitignore, never rewrites the others.
-// Only for folders named .decisions, so a folder like example/demo-decisions keeps its committed pages.
+// Only for folders named .decisions, so a folder like example/demo-decisions keeps its committed pages. A folder whose
+// pages git still tracks is left alone (an ignore line does not untrack them): it says so in one line.
+// Returns true if it wrote the line, 'tracked' if it left the folder alone, else false.
 export function ensureGitignore(dir) {
   if (basename(resolve(dir)) !== '.decisions') return false;
   const file = join(dir, '.gitignore');
   if (pagesLocal(dir)) return false;
+  if (trackedPages(dir) > 0) {
+    console.log(`Pages in ${dir} are still committed, so no .gitignore was added. To keep them local (decision 41): git rm --cached "*.html" in that folder, then build again.`);
+    return 'tracked';
+  }
   const cur = existsSync(file) ? readFileSync(file, 'utf8') : '';
   const head = cur ? cur + (cur.endsWith('\n') ? '' : '\n') : '# Pages are built locally from the .json records (Crux decision 41)\n';
   writeFileSync(file, head + '*.html\n');
   return true;
 }
 
-// True when a record's page is missing or older than its .json, or index.html is missing or older than the newest .json.
+// True when a record's page is missing or older than its .json, or index.html is missing, older than the newest .json,
+// or lists a different set of records (one was added or deleted). Template or script changes do not count.
 export function pagesStale(dir) {
   let files;
   try { files = readdirSync(dir).filter(f => f.endsWith('.json')); } catch { return false; }
   let newest = -1;
+  const paged = new Set();
   for (const f of files) {
     const t = mtime(join(dir, f));
     const page = mtime(join(dir, f.replace(/\.json$/, '.html')));
@@ -47,8 +64,15 @@ export function pagesStale(dir) {
     }
     if (page < t) return true;
     newest = Math.max(newest, t);
+    paged.add(f.replace(/\.json$/, '.html'));
   }
-  return newest >= 0 && mtime(join(dir, 'index.html')) < newest;
+  const index = join(dir, 'index.html');
+  if (newest < 0) return false;
+  if (mtime(index) < newest) return true;
+  // The board embeds each record's page name ("_file"); compare that list with the records on disk.
+  let listed;
+  try { listed = new Set([...readFileSync(index, 'utf8').matchAll(/"_file":"([\w.-]+\.html)"/g)].map(m => m[1])); } catch { return true; }
+  return listed.size !== paged.size || [...paged].some(p => !listed.has(p));
 }
 
 // True when the folder's .gitignore keeps its pages out of git (decision 41 is in place there).
@@ -56,10 +80,11 @@ export function pagesLocal(dir) {
   try { return /^\*\.html\s*$/m.test(readFileSync(join(dir, '.gitignore'), 'utf8')); } catch { return false; }
 }
 
-// The refresh the hub and the roll-up run before they link to a page. Only where the pages are local, so a repo that
-// still commits its pages never sees a change in git. Returns true if it rebuilt; throws if the build fails.
+// The refresh the hub and the roll-up run before they link to a page. Only where the pages are local (ignored and not
+// tracked; without git, the .gitignore alone decides), so a repo that still commits its pages never sees a change in
+// git. git is asked only once a folder is stale. Returns true if it rebuilt; throws if the build fails.
 export function refreshPages(dir) {
-  if (!pagesLocal(dir) || !pagesStale(dir)) return false;
+  if (!pagesLocal(dir) || !pagesStale(dir) || trackedPages(dir) > 0) return false;
   build(dir, { pagesOnly: true });
   return true;
 }

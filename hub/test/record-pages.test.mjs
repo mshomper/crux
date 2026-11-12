@@ -59,6 +59,38 @@ test('refreshPages rebuilds missing or stale pages where they are local, and lea
   assert.equal(pagesStale(d), false, 'a .json that is not a record never counts as a missing page');
 });
 
+test('index.html is rebuilt when a record is deleted or added, even if every page is newer than its record', t => {
+  const d = decisionsIn(temp(t), [record(1), record(2), record(3)]);
+  ensureGitignore(d);
+  refreshPages(d);
+  rmSync(join(d, '0003-d3.json'));
+  assert.equal(pagesStale(d), true, 'a deleted record');
+  refreshPages(d);
+  assert.doesNotMatch(readFileSync(join(d, 'index.html'), 'utf8'), /0003-d3\.html/);
+  assert.equal(pagesStale(d), false);
+  writeFileSync(join(d, '0003-d3.json'), JSON.stringify(record(3)));
+  age(join(d, '0003-d3.json'), 120);   // an added record whose old page is still on disk, all older than index.html
+  assert.equal(pagesStale(d), true, 'an added record');
+});
+
+test('a repo that still commits its pages is left alone: no .gitignore, no refresh, one line saying so', t => {
+  const root = temp(t);
+  git(root, 'init', '-q', '-b', 'main');
+  const d = decisionsIn(root, [record(1)]);
+  writeFileSync(join(d, '0001-d1.html'), 'old page');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=T', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'seed');
+  const said = []; const log = console.log; console.log = s => said.push(s);
+  try { assert.equal(ensureGitignore(d), 'tracked'); } finally { console.log = log; }
+  assert.equal(existsSync(join(d, '.gitignore')), false);
+  assert.equal(said.length, 1); assert.match(said[0], /still committed/);
+  writeFileSync(join(d, '.gitignore'), '*.html\n');   // ignored by hand, but the pages are still tracked
+  age(join(d, '0001-d1.html'), 60);
+  assert.equal(refreshPages(d), false);
+  assert.equal(readFileSync(join(d, '0001-d1.html'), 'utf8'), 'old page', 'the tracked page is not rewritten');
+  git(root, 'rm', '-q', '--cached', '.decisions/0001-d1.html');
+  assert.equal(refreshPages(d), true, 'once untracked, the refresh runs');
+});
+
 test('the hub rebuilds stale pages on load and before it serves one; a page it cannot build falls back to the .md', t => {
   const root = temp(t);
   const dir = join(root, 'proj');
