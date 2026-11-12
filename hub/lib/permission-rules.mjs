@@ -169,14 +169,15 @@ class Check {
     }
     // Reading docs is allowed (R004) but the hub cannot tell a docs page from any other address.
     if (tool === 'WebFetch') return this.unsure(`Reads a web page (${String(input.url || '').slice(0, 80)})`);
-    // Matt's claude.ai connectors (Gmail, Calendar, Drive, ...): anything that sends, shares, changes or deletes is a
-    // hard stop in every mode; reading goes to the orchestrator (a code project rarely needs Matt's mail); a tool not on
+    // The user's claude.ai connectors (Gmail, Calendar, Drive, ...): anything that sends, shares, changes or deletes is a
+    // hard stop in every mode; reading goes to the orchestrator (a code project rarely needs the user's mail); a tool not on
     // the read list is a hard stop by default.
     const conn = connectorTool(tool);
     if (conn) {
-      if (conn.kind === 'read') return this.unsure(`Reads Matt's ${conn.service} (${conn.name}): only if the task clearly needs it`, true);
-      if (conn.kind === 'draft') return this.unsure(`Writes a draft in Matt's ${conn.service} (${conn.name}); nothing is sent`, true);
-      return this.stop(`Acts in Matt's ${conn.service} (${conn.name}): sends, shares, changes or deletes, or is not a known read`);
+      // {{who}} is the user's name from the profile: the hub personalizes these lines (Memory.personalize).
+      if (conn.kind === 'read') return this.unsure(`Reads {{who}}'s ${conn.service} (${conn.name}): only if the task clearly needs it`, true);
+      if (conn.kind === 'draft') return this.unsure(`Writes a draft in {{who}}'s ${conn.service} (${conn.name}); nothing is sent`, true);
+      return this.stop(`Acts in {{who}}'s ${conn.service} (${conn.name}): sends, shares, changes or deletes, or is not a known read`);
     }
     if (tool.startsWith('mcp__crux__') || KNOWN_TOOLS.has(tool)) return;
     this.unsure(`A tool the hub does not know (${tool})`);
@@ -852,10 +853,10 @@ export function defaultRules(projectDir, tmp = tmpdir()) {
     entryId: DEFAULT_RULES_ID, isDefault: true, ts: 'default', from: 'the Crux hub (built in, from R005 on the crux board)',
     title: 'Default agent permission rules (built in)',
     body: [
-      `These are the hub's built-in default rules, used because this project's board has no permission rules entry. Matt may replace them with an entry of his own at any time.`,
+      `These are the hub's built-in default rules, used because this project's board has no permission rules entry. {{Who}} may replace them with a rules entry on the board at any time.`,
       `AUTO MODE. The hub allows at once, with no prompt: anything whose effects stay inside the project folder (${dir}), an agent's own worktree (${join(dir, '.claude', 'worktrees')}\\...) or a temp folder the agent made under ${tmp}. That covers reading, searching, editing, creating and deleting files there; build, test, lint and running scripts and node; running installed programs by any path; local git, including read-only commands like merge-base and merge-tree; fetch, pull and ls-remote from the repo's own GitHub remote; git push of a feature branch; gh pr create, list, view and checks; starting and stopping test hubs on ports other than 4747; reading files anywhere except secrets.`,
-      `HARD STOPS, always to Matt: the git merge subcommand into main or shared branches, and gh pr merge, unless Matt asks for that merge in chat; pushing to main or master; force-push; deleting branches (local or remote); history rewrites of pushed commits; package installs or dependency changes; writes, deletes or moves outside the project folder, worktree or own temp folder (including ~/.claude and ~/crux); network access other than GitHub and reading docs; stopping or restarting the hub on port 4747; secrets (~/.ssh, .env files, ~/.crux-hub keys, credential stores).`,
-      `UNCLEAR requests (including commands the hub can't read in full) come to the orchestrator (answer_permission), which allows them if they are contained and part of the task, and otherwise escalates; Matt gets them after 2 minutes. When unsure, escalate.`
+      `HARD STOPS, always to {{who}}: the git merge subcommand into main or shared branches, and gh pr merge, unless {{who}} asks for that merge in chat; pushing to main or master; force-push; deleting branches (local or remote); history rewrites of pushed commits; package installs or dependency changes; writes, deletes or moves outside the project folder, worktree or own temp folder (including ~/.claude and ~/crux); network access other than GitHub and reading docs; stopping or restarting the hub on port 4747; secrets (~/.ssh, .env files, ~/.crux-hub keys, credential stores).`,
+      `UNCLEAR requests (including commands the hub can't read in full) come to the orchestrator (answer_permission), which allows them if they are contained and part of the task, and otherwise escalates; {{who}} gets them after 2 minutes. When unsure, escalate.`
     ].join('\n')
   };
 }

@@ -43,7 +43,7 @@ test('Auto with no rules entry: unclear requests go to the orchestrator under th
   const prompt = orch.options().systemPrompt.append;
   assert.match(prompt, /built-in defaults/);
   assert.ok(prompt.includes(dir), 'the defaults name this project\'s own folder');
-  assert.match(prompt, /HARD STOPS, always to Matt/);
+  assert.match(prompt, /HARD STOPS, always to the user:/, 'no profile here, so no name');
   assert.match(prompt, /draft a rules entry/);
 });
 

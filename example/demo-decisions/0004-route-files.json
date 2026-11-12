@@ -1,0 +1,126 @@
+{
+ "id": 4,
+ "slug": "route-files",
+ "title": "How are planned routes saved and shared?",
+ "date": "2026-11-01",
+ "mode": "full",
+ "deep": true,
+ "lenses": [
+  "data-model",
+  "ui"
+ ],
+ "status": "decided",
+ "context": "Hikers want to save a planned route, send it to friends, and load it on their GPS watch.",
+ "depends_on": [
+  1
+ ],
+ "conflicts": [
+  2
+ ],
+ "options": [
+  {
+   "key": "A",
+   "name": "In the page link",
+   "summary": "Encode the route in the web address.",
+   "pros": [
+    "Share by link"
+   ],
+   "cons": [
+    "Long links for long routes",
+    "Watches cannot read it"
+   ],
+   "assumptions": [
+    "Routes stay under a few hundred points"
+   ],
+   "risks": [
+    "Some chat apps cut long links short"
+   ]
+  },
+  {
+   "key": "B",
+   "name": "GPX file",
+   "summary": "Save the route as a standard GPX file that watches and other apps read.",
+   "pros": [
+    "Loads on most GPS watches",
+    "No size limit, works offline"
+   ],
+   "cons": [
+    "One more file to manage"
+   ],
+   "assumptions": [
+    "Users are fine sending a file"
+   ],
+   "risks": [
+    "Notes the planner adds (rest stops, water) need GPX extensions that some apps ignore"
+   ],
+   "estimates": [
+    {
+     "what": "Effort",
+     "value": "two days",
+     "basis": "save, load and the notes extension"
+    }
+   ]
+  }
+ ],
+ "criteria": [],
+ "recommended": "B",
+ "recommendation": "Getting the route onto a watch is the main reason to save it, and only a GPX file does that.",
+ "confidence": "strong",
+ "evidence": [
+  {
+   "claim": "GPX is the common exchange format for routes and tracks across GPS devices and hiking apps.",
+   "options": [
+    "B"
+   ],
+   "judgment": true
+  }
+ ],
+ "chosen": "B",
+ "reason": "Friends load routes on their watches, so the file has to be GPX.",
+ "decided_on": "2026-11-01",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "route file format",
+   "value": "GPX 1.1"
+  },
+  {
+   "key": "distance unit",
+   "value": "kilometres"
+  }
+ ],
+ "brief": {
+  "files": [
+   {
+    "path": "src/routes/save-gpx.js",
+    "change": "new: write the current route as a GPX 1.1 file, notes in an extension"
+   },
+   {
+    "path": "src/routes/load-gpx.js",
+    "change": "new: read a GPX route or track, keep unknown parts, apply to the map"
+   },
+   {
+    "path": "src/ui/toolbar.js",
+    "change": "add save and load buttons with drawn icons"
+   }
+  ],
+  "steps": [
+   "Write save, with distances in kilometres and elevation in metres",
+   "Write load, keeping anything it does not understand",
+   "Add the toolbar buttons",
+   "Round-trip test on three real routes and one watch"
+  ],
+  "done_when": [
+   "Saving then loading reproduces the route exactly",
+   "A saved route opens on a GPS watch and in one other hiking app"
+  ],
+  "validation": [
+   "Round-trip comparison of every point and note on three routes"
+  ],
+  "avoid": [
+   "Inventing a format of our own",
+   "Adding a settings toggle for this"
+  ]
+ }
+}

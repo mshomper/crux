@@ -214,7 +214,7 @@ export class Hub {
     for (const a of p.agents.values()) a.questionsLeft = a.predecessor && p.agents.get(a.predecessor)?.state !== 'retired' ? 3 : 0;
   }
 
-  notice(p, thread, text) { p.log.append('notice', { thread, text }); }
+  notice(p, thread, text) { p.log.append('notice', { thread, text: this.memory.personalize(text) }); }
 
   // ---------- agents ----------
   createAgent(p, { name, role, task = '', goal = '', predecessor = null, handoffEntry = null, settings = {} }) {
@@ -530,7 +530,9 @@ export class Hub {
   routeFor(p, agent, toolName, input) {
     const rules = this.rulesFor(p);
     agent.tempDirs ||= new Set();
-    const { route, reasons, unsure, tempMade } = classify({ tool: toolName, input, projectDir: p.dir, agent: agent.name, madeTemp: agent.tempDirs });
+    const c = classify({ tool: toolName, input, projectDir: p.dir, agent: agent.name, madeTemp: agent.tempDirs });
+    const { route, tempMade } = c;
+    const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
     if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
     if (route === 'allow' && this.permissionMode(p) === 'auto') return { allow: true };
