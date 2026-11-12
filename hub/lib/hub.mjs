@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
+import { DecisionsDesk } from './decisions-desk.mjs';
 import { Agent } from './agent.mjs';
 import { Memory, VISUAL_TYPES } from './memory.mjs';
 import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
@@ -22,7 +23,9 @@ export class Project {
     this.dir = resolve(dir);
     this.name = basename(this.dir);
     this.log = new EventLog(this.dir);
-    this.board = new Board(this.dir, this.log);
+    // Decision 35: picks and drafts land in a standing worktree on docs/decisions, never in this folder.
+    this.desk = new DecisionsDesk({ projectDir: this.dir });
+    this.board = new Board(this.dir, this.log, { desk: this.desk });
     this.attachments = new Attachments(this.dir);
     this.agents = new Map();
     this.generation = 0;
@@ -92,6 +95,7 @@ export class Hub {
     this.projects.set(p.name, p);
     this.restore(p);
     p.log.on(ev => this.emit({ ...ev, project: p.name, logged: true }));
+    p.desk.notice = text => this.notice(p, 'orchestrator', text);
     return p;
   }
 
@@ -371,11 +375,14 @@ export class Hub {
     const privateNotes = norm(join(this.memory.profileDir, 'private.md'));
     const readsPrivate = (file && file === privateNotes) || /private\.md/i.test(String(input.command || input.pattern || ''));
     if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input)) return { behavior: 'allow', updatedInput: input };
-    const decisions = norm(join(p.dir, '.decisions')) + '/';
+    // Decision 35: the orchestrator writes records in the decisions worktree, never in the main folder's .decisions.
+    const records = p.desk.usable() ? p.desk.decisionsDir : join(p.dir, '.decisions');
+    const decisions = norm(records) + '/';
     if (['Write', 'Edit', 'MultiEdit'].includes(toolName) && agent.role === 'orchestrator') {
-      return file.startsWith(decisions)
-        ? { behavior: 'allow', updatedInput: input }
-        : { behavior: 'deny', message: 'The orchestrator only writes Crux decision records (.decisions/). Send other file changes to a worker with message_agent or start_worker.' };
+      if (file.startsWith(decisions)) { p.desk.usable() && p.desk.ensure(); return { behavior: 'allow', updatedInput: input }; }
+      return file.startsWith(norm(join(p.dir, '.decisions')) + '/')
+        ? { behavior: 'deny', message: `Decision records go in the decisions worktree, not the main folder: write it as ${join(records, file.split('/').pop())}. The hub commits it to the docs/decisions branch when your turn ends.` }
+        : { behavior: 'deny', message: `The orchestrator only writes Crux decision records (${records}). Send other file changes to a worker with message_agent or start_worker.` };
     }
     const cmd = String(input.command || '').trim();
     if (/^(Bash|PowerShell)$/.test(toolName) && /^node\s+("[^"]*[\\/]crux[\\/]scripts[\\/](build|rollup)\.mjs"|\S*[\\/]crux[\\/]scripts[\\/](build|rollup)\.mjs)(\s+("[^"]*"|[\w.\\/:-]+))?$/.test(cmd)) {
@@ -557,6 +564,11 @@ export class Hub {
       return;
     }
     if (agent.retiring === 'overlap') return;
+    // Decision 35: drafts the orchestrator wrote into the decisions worktree are committed and pushed now.
+    if (agent.role === 'orchestrator') {
+      try { p.desk.commitPending(`Record drafts from ${agent.name}`); }
+      catch (e) { this.notice(p, 'orchestrator', `Could not commit the decision drafts: ${e.message.split('\n')[0]}`); }
+    }
     if (agent.predecessor && !agent.tookOver) { // the successor's first turn is over: the overlap ends
       agent.tookOver = true;
       const old = p.agents.get(agent.predecessor);
