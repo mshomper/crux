@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { refreshPages } from '../../crux/scripts/build.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BUILD = resolve(here, '../../crux/scripts/build.mjs');
@@ -43,8 +44,26 @@ export class Board {
 
   decision(id) { return this.decisions().find(d => d.id === Number(id)); }
 
-  // A decision page to serve: the worktree's copy when it has one, else the main folder's.
-  pageFile(name) { return this.desk?.page(name) || join(this.decisionsDir, name); }
+  // Decision 41: the pages are built locally, not pulled from git, so after a pull they can be missing or older than
+  // their records. Rebuild them (pages only, never the .md or anything git tracks) wherever the board reads records.
+  freshPages() {
+    const dirs = [this.decisionsDir];
+    if (this.desk?.ready()) dirs.push(this.desk.decisionsDir);
+    for (const d of dirs) {
+      if (!existsSync(d)) continue;
+      try { refreshPages(d); } catch (e) { console.warn('Crux page refresh failed:', e.message); }
+    }
+  }
+
+  // A decision page to serve: the worktree's copy when it has one, else the main folder's. Stale pages are rebuilt
+  // first; if a page still cannot be had, its .md record is served instead.
+  pageFile(name) {
+    this.freshPages();
+    const file = this.desk?.page(name) || join(this.decisionsDir, name);
+    if (existsSync(file) || name === 'index.html') return file;
+    const md = name.replace(/\.html$/, '.md');
+    return this.desk?.page(md) || (existsSync(join(this.decisionsDir, md)) ? join(this.decisionsDir, md) : file);
+  }
 
   // Writes only the user's fields (status, chosen, reason, decided_on), then rebuilds the pages: through the desk's
   // worktree and branch when the project is a git repo (never into the main folder), else in place.

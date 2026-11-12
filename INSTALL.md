@@ -171,7 +171,7 @@ By default it scans `~/Documents/GitHub`. To scan other folders, or skip some, c
   0004-route-files.md         short readable record that later sessions read
 ```
 
-Pages open in any browser, offline. Commit the folder so the records travel with the code.
+Pages open in any browser, offline. Commit the `.json` and `.md` records so they travel with the code. The pages and `index.html` are rebuilt from the records, so they stay local: the build script writes a `.gitignore` inside `.decisions` that ignores `*.html`. After a pull, run the build to bring the pages up to date (the hub and the all-projects page do this on their own).
 
 ## How the parts fit
 

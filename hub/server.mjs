@@ -15,6 +15,7 @@ import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings } from './lib/settings.mjs';
 import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, pageBuild } from './lib/relaunch.mjs';
 import { randomUUID } from 'node:crypto';
+import { refreshPages } from '../crux/scripts/build.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Changes with every start, so a page waiting through a restart knows when the new hub is up.
@@ -70,7 +71,7 @@ function hubUrl(fileUrl) {
 }
 
 // ---------- http ----------
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.webmanifest': 'application/manifest+json' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.webmanifest': 'application/manifest+json', '.md': 'text/plain; charset=utf-8' };
 const clients = new Set();
 hub.on(ev => { const line = `data: ${JSON.stringify(ev)}\n\n`; for (const res of clients) res.write(line); });
 
@@ -218,7 +219,13 @@ const server = createServer(async (req, res) => {
       const rel = decodeURIComponent(f[2]);
       const file = root && normalize(join(root, rel));
       if (!file || !file.startsWith(root + (root.endsWith('\\') ? '' : '\\')) && !file.startsWith(root + '/')) return send(res, 403, { error: 'Forbidden' });
-      if (!/[\\/]\.decisions[\\/][\w.-]+\.html$/.test(file)) return send(res, 403, { error: 'Only Crux pages are served here' });
+      if (!/[\\/]\.decisions[\\/][\w.-]+\.(html|md)$/.test(file)) return send(res, 403, { error: 'Only Crux pages are served here' });
+      // Decision 41: pages are built locally; rebuild a folder's stale ones first, and serve the .md if a page is missing.
+      if (file.endsWith('.html')) {
+        try { refreshPages(dirname(file)); } catch (e) { console.warn('Crux page refresh failed:', e.message); }
+        const md = file.replace(/\.html$/, '.md');
+        if (!existsSync(file) && existsSync(md)) return serveFile(res, md);
+      }
       return serveFile(res, file);
     }
 

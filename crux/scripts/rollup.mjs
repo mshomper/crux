@@ -4,10 +4,11 @@
 // Folders scanned: "roots" in ~/crux/config.json, else ~/Documents/GitHub.
 // Folders skipped: "ignore" in the same file (folder names, or full paths).
 // Output: ~/crux/index.html and ~/crux/conventions.md
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { refreshPages } from './build.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tpl = join(here, '..', 'template');
@@ -58,11 +59,15 @@ export function rollup({ quiet = false } = {}) {
   const today = new Date();
   const all = [];
   for (const { dir: d, project, branch } of found) {
+    // Decision 41: pages are not in git, so after a pull they may be missing or older than their records. Rebuild
+    // them (pages only) before linking; if that is not possible, link the .md record instead.
+    try { refreshPages(d); } catch (e) { if (!quiet) console.log(`Roll-up: could not rebuild the pages in ${d} (${e.message}); linking the .md records.`); }
     for (const f of readdirSync(d).filter(f => f.endsWith('.json'))) {
       try {
         const x = JSON.parse(readFileSync(join(d, f), 'utf8'));
         if (typeof x.id !== 'number' || !x.title) continue;
-        const page = join(d, f.replace(/\.json$/, '.html'));
+        const html = join(d, f.replace(/\.json$/, '.html')), md = join(d, f.replace(/\.json$/, '.md'));
+        const page = existsSync(html) || !existsSync(md) ? html : md;
         const ageDays = x.date ? Math.floor((today - new Date(x.date)) / 864e5) : 0;
         all.push({
           project, branch, slug: x.slug || f.replace(/\.json$/, ''), id: x.id, title: x.title, status: x.status, date: x.date, decided_on: x.decided_on,
@@ -121,5 +126,7 @@ export function rollup({ quiet = false } = {}) {
   for (const c of conflicts) console.log(`- Conflict on "${c.key}": ${c.entries.map(e => `${e.project} says "${e.value}"`).join(' vs ')}`);
 }
 
+// The skill folder is usually a link, so compare real paths: Node gives import.meta.url as the resolved one.
+const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
 const same = (x, y) => process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
-if (process.argv[1] && same(resolve(process.argv[1]), fileURLToPath(import.meta.url))) rollup();
+if (process.argv[1] && same(real(process.argv[1]), real(fileURLToPath(import.meta.url)))) rollup();
