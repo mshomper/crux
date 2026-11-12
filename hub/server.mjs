@@ -12,8 +12,9 @@ import { checkRequest, checkAttachmentRead, extraHosts } from './lib/access.mjs'
 import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs';
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
-import { HubSettings } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, pageBuild } from './lib/relaunch.mjs';
+import { HubSettings, projectKey } from './lib/settings.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild } from './lib/relaunch.mjs';
+import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, addressOf, cleanLabel, makeAlert, dropUnbackedTrusted, makeRestartHub } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
 
@@ -31,6 +32,11 @@ const retireAt = Number(flag('--retire-at', 60));
 // Test hubs (--no-agents, or hub data in a temp folder) log messages but start no real agents.
 const noAgents = testHubWithoutAgents({ args, env: process.env });
 if (args.includes('--no-agents')) args.splice(args.indexOf('--no-agents'), 1);
+// Decision 47: --test-pair starts a test hub with one fake paired device. The live hub never starts with it.
+const testPair = args.includes('--test-pair');
+if (testPair) args.splice(args.indexOf('--test-pair'), 1);
+const pairError = testPairError({ wanted: testPair, noAgents, port, env: process.env });
+if (pairError) { console.error(pairError); process.exit(1); }
 
 // A test hub never falls back to ~/crux/hub.json or the current folder: that loads real projects.
 const folderError = testHubFolderError({ noAgents, folders: args });
@@ -59,6 +65,27 @@ const decisionOpen = (project, id) => ['open', 'found'].includes(decisionStatus(
 hub.on(ev => { if (ev.logged) push.handle(ev, { approvals: hub.approvals, decisionOpen, decisionStatus, events: name => hub.project(name).log.events }); });
 const hosts = extraHosts();
 
+// The write guard (decision 47 B): paired devices, their passkeys, and alerts on any change to those or to the push
+// devices. The pairing code goes to this process's own output only: its window, or hub-<port>.log after a restart.
+const guard = new Guard({ port });
+const alert = makeAlert({ hub, push });
+push.onDropped = subs => { for (const s of subs) alert({ title: `Notifications stopped: ${s.label || 'a device'}`, note: `${s.label || 'A device'} stopped getting the hub's notifications: its browser dropped the subscription.` }); };
+if (testPair) guard.testPair();
+const CODE_WHERE = process.stdout.isTTY ? 'window' : process.env.CRUX_HUB_RESTARTED === '1' ? 'log' : 'output';
+// A project left at Trusted with no raise from a paired device drops to Auto now, with a note and a push.
+dropUnbackedTrusted({ hub, guard, push });
+// restart_hub, the orchestrator's own way to restart (no HTTP; its curl to /api/restart is a hard stop).
+hub.restartHub = makeRestartHub({ hub, push, restart: () => restart(), bootAt: hub.bootAt });
+// After a settings change: a raise to Trusted keeps its signed step-up; a lower level lets it go.
+const AFTER = {
+  'POST /api/settings': ({ project }, { stepUp }) => {
+    if (!project) return;
+    const p = hub.project(project), key = projectKey(p.dir);
+    if (hub.permissionMode(p) !== 'trusted') guard.clearRaise(key);
+    else if (stepUp?.ok && scopeHas(stepUp.proof.scope, 'trusted')) guard.recordRaise(key, stepUp.proof);
+  }
+};
+
 // The folders the Crux roll-up scans (same rule as crux/scripts/rollup.mjs): every project's Crux pages under
 // them are served at /files/..., so the all-projects page, boards and decision pages all open from the hub.
 const crux = process.env.CRUX_HOME || join(homedir(), 'crux');
@@ -79,8 +106,8 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const clients = new Set();
 hub.on(ev => { const line = `data: ${JSON.stringify(ev)}\n\n`; for (const res of clients) res.write(line); });
 
-function send(res, code, body, type = 'application/json') {
-  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store' });
+function send(res, code, body, type = 'application/json', extra = {}) {
+  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', ...extra });
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
 function serveFile(res, file) {
@@ -171,14 +198,59 @@ const routes = {
   // Phone notifications
   'GET /api/push/key': async () => ({ publicKey: (await push.keys()).publicKey }),
   'POST /api/push/status': ({ endpoint }) => ({ subscribed: push.has(endpoint), devices: push.subs.length }),
-  'POST /api/push/subscribe': ({ subscription, label }) => ({ devices: push.subscribe(subscription, label) }),
-  'POST /api/push/unsubscribe': ({ endpoint }) => ({ removed: push.unsubscribe(endpoint) }),
+  // Adding a push device needs Windows Hello or Face ID (decision 47); any change to the list is told everywhere,
+  // before a removal so the device leaving hears it too.
+  'POST /api/push/subscribe': async ({ subscription, label }, { device }) => {
+    const fresh = !push.has(subscription?.endpoint);
+    const devices = push.subscribe(subscription, label);
+    if (fresh) await alert({ title: `Notifications on: ${cleanLabel(label)}`, note: `${cleanLabel(label)} now gets the hub's notifications (added from ${device.label}, confirmed with its passkey).` });
+    return { devices };
+  },
+  'POST /api/push/unsubscribe': async ({ endpoint }, { device }) => {
+    const s = push.subs.find(x => x.endpoint === endpoint);
+    if (s) await alert({ title: `Notifications off: ${s.label || 'a device'}`, note: `${s.label || 'A device'} no longer gets the hub's notifications (turned off from ${device.label}).` });
+    return { removed: push.unsubscribe(endpoint) };
+  },
+  'POST /api/push/remove': async ({ id }, { device }) => {
+    const s = push.byId(id);
+    if (!s) throw new GuardError('That device does not get notifications.', 404);
+    await alert({ title: `Notifications off: ${s.label || 'a device'}`, note: `${s.label || 'A device'} no longer gets the hub's notifications (removed from ${device.label}).` });
+    return { removed: push.unsubscribe(s.endpoint) };
+  },
   'POST /api/push/test': async () => ({ sent: await push.send({ kind: 'test', title: 'Crux Hub', body: 'Notifications reach this device.', card: '', url: '/' }) }),
   // Where an open hub page is and whether you are using it, so cards you are looking at do not buzz your phone.
   'POST /api/presence': ({ client, ...info }) => { push.presence(String(client || ''), info); return { ok: true }; },
   'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId }),
   // Mark a memo done, or back to active, from the board panel: a new event in the log, never an edit.
-  'POST /api/entry-status': ({ project, id, status }) => ({ entryId: hub.project(project).board.setEntryStatus(String(id || ''), status === 'active' ? 'active' : 'done', 'you').entryId })
+  'POST /api/entry-status': ({ project, id, status }) => ({ entryId: hub.project(project).board.setEntryStatus(String(id || ''), status === 'active' ? 'active' : 'done', 'you').entryId }),
+
+  // ---------- decision 47: pairing, step-up and the device list ----------
+  // Whether this device is paired, and where the pairing code is printed. Never the code itself.
+  'GET /api/auth/status': (_, { req }) => ({ ...guard.status(req.headers), codeWhere: CODE_WHERE, log: `hub-${port}.log` }),
+  'GET /api/devices': (_, { req }) => ({ devices: guard.list(req.headers), push: push.list() }),
+  // The three steps open to a device with no cookie: print a new code (in the hub's own output), check a code and get
+  // the passkey options, and hand in the new passkey (which sets the cookie).
+  'POST /api/pair/code': () => guard.askForCode(),
+  'POST /api/pair/options': ({ code, label, startOver }, { req }) => guard.pairOptions({ headers: req.headers, code, label, startOver: startOver === true }),
+  'POST /api/pair/finish': async ({ credential }, ctx) => {
+    const r = guard.pairFinish({ headers: ctx.req.headers, credential });
+    ctx.headers['set-cookie'] = r.cookie;
+    const d = r.device;
+    await alert(r.startOver
+      ? { title: 'Every device was unpaired', note: `Every paired device was unpaired (${r.removed.map(x => x.label).join(', ') || 'none'}) with the code from the hub's window, and ${d.label} (${d.rpId}) paired in their place. If this was not you, stop the hub and check who can reach this PC.` }
+      : { title: `New device paired: ${d.label}`, note: `${d.label} (${d.rpId}) was paired with the hub, using ${r.via}. If this was not you, unpair it under Devices in the hub menu.` });
+    return { ok: true, device: { id: d.id, label: d.label } };
+  },
+  // A paired device, after its step-up: a one-time code to type on the new device.
+  'POST /api/pair/issue': (_, { device }) => guard.issueCode(device),
+  'POST /api/auth/challenge': ({ purpose, scope }, { req, device }) => guard.challenge({ headers: req.headers, device, purpose, scope }),
+  'POST /api/devices/remove': async ({ id }, ctx) => {
+    const d = guard.remove(id);
+    const you = d === ctx.device;
+    if (you) ctx.headers['set-cookie'] = guard.clearCookie(addressOf(ctx.req.headers, port).secure);
+    await alert({ title: `Device unpaired: ${d.label}`, note: `${d.label} (${d.rpId || 'test'}) was unpaired from the hub, with its passkey, from ${you ? 'itself' : ctx.device.label}.` });
+    return { removed: d.id, you };
+  }
 };
 
 const server = createServer(async (req, res) => {
@@ -198,8 +270,26 @@ const server = createServer(async (req, res) => {
       req.on('close', () => { clients.delete(res); clearInterval(ping); });
       return;
     }
-    const route = routes[`${req.method} ${url.pathname}`];
-    if (route) return send(res, 200, await route(req.method === 'POST' ? await body(req, BODY_LIMIT[url.pathname]) : Object.fromEntries(url.searchParams)));
+    const key = `${req.method} ${url.pathname}`;
+    const route = routes[key];
+    if (route) {
+      // Decision 47: every change needs a paired device's cookie (checked before the body is read), except the three
+      // steps of pairing. The few big changes also need a fresh step-up, made for exactly that change.
+      const ctx = { req, device: null, stepUp: null, headers: {} };
+      if (req.method === 'POST' && !OPEN_POSTS.has(url.pathname)) {
+        ctx.device = guard.deviceFor(req.headers);
+        if (!ctx.device) return send(res, 401, { error: NOT_PAIRED, pair: true });
+      }
+      const input = req.method === 'POST' ? await body(req, BODY_LIMIT[url.pathname]) : Object.fromEntries(url.searchParams);
+      const need = ctx.device ? stepUpNeed(key, input, hub) : null;
+      if (need) {
+        ctx.stepUp = guard.verifyStepUp({ headers: req.headers, device: ctx.device, stepUp: input.stepUp, need });
+        if (!ctx.stepUp.ok) return send(res, 403, { error: ctx.stepUp.error, stepUp: need });
+      }
+      const out = await route(input, ctx);
+      AFTER[key]?.(input, ctx);
+      return send(res, 200, out, 'application/json', ctx.headers);
+    }
 
     // Attachments in threads: /att/<project>/<hash>.<ext>, for the hub's own page only (decision 23). Images show;
     // PDFs and text files always download, as PDF or plain text, never as a page in the hub's origin.
@@ -271,9 +361,11 @@ const server = createServer(async (req, res) => {
     const pub = join(here, 'public');
     const file = normalize(join(pub, url.pathname === '/' ? 'index.html' : url.pathname));
     if (!file.startsWith(pub)) return send(res, 403, { error: 'Forbidden' });
+    // A test hub started with --test-pair hands its fake device's cookie to whoever opens the page.
+    if (guard.testToken && (url.pathname === '/' || url.pathname === '/index.html') && !guard.deviceFor(req.headers)) res.setHeader('set-cookie', guard.cookie(guard.testToken, addressOf(req.headers, port).secure));
     serveFile(res, file);
   } catch (e) {
-    send(res, 400, { error: e.message });
+    if (!res.headersSent) send(res, e instanceof GuardError ? e.status : 400, { error: e.message });
   }
 });
 
@@ -288,10 +380,16 @@ server.on('error', e => {
   process.exit(1);
 });
 server.on('listening', () => {
-  console.log(`Crux hub: http://localhost:${port}  (phone: tailscale serve --bg ${port}, see README)`);
+  // A test hub is shown at 127.0.0.1: the live hub's device cookie belongs to localhost, and browsers send a host's
+  // cookies to every port on it, so a test hub opened at 127.0.0.1 never receives it (decision 47).
+  console.log(port === 4747 ? `Crux hub: http://localhost:${port}  (phone: tailscale serve --bg ${port}, see README)` : `Crux hub: http://127.0.0.1:${port}  (a test hub; passkeys need http://localhost:${port})`);
   console.log(`Projects: ${[...hub.projects.values()].map(p => p.name).join(', ')}`);
   console.log(`Orchestrator hands off at ${hub.retireAt}% context (hub default; projects may set their own).`);
   saveLaunch(launchSpec({ port }));   // so the restart script can start it the same way
+  // Decision 47: with no device paired yet, the one-time pairing code, here in the hub's own output only.
+  if (guard.testToken) console.log('Test hub: one fake device is paired (--test-pair); the page gets its cookie.');
+  else if (!guard.paired().length) guard.printCode('at start, no device is paired yet');
+  else console.log(`Paired devices: ${guard.paired().map(d => `${d.label} (${d.rpId})`).join(', ')}. To pair another, use Devices in the hub menu on one of them, or "Print a new code" on the new device.`);
 });
 server.listen(port, '127.0.0.1');
 

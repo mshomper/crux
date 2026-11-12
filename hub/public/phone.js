@@ -15,7 +15,9 @@ function keyBytes(b64) {
   return Uint8Array.from(s, c => c.charCodeAt(0));
 }
 
-export function initPhone({ button, view, openCard }) {
+// post: the page's guarded POST (decision 47: an unpaired device is asked to pair, adding a push device asks for Face
+// ID or Windows Hello). The status check and presence reports use the quiet one above.
+export function initPhone({ button, view, openCard, post: act = post }) {
   let reg = null;
   if ('serviceWorker' in navigator && isSecureContext) {
     navigator.serviceWorker.register('/sw.js').then(r => { reg = r; return refresh(); }).catch(() => { });
@@ -46,7 +48,7 @@ export function initPhone({ button, view, openCard }) {
       const sub = await current();
       if (sub && button.classList.contains('on')) {
         if (!confirm('Turn off notifications on this device?')) return;
-        await post('/api/push/unsubscribe', { endpoint: sub.endpoint });
+        await act('/api/push/unsubscribe', { endpoint: sub.endpoint });
         await sub.unsubscribe();
         return refresh();
       }
@@ -54,10 +56,10 @@ export function initPhone({ button, view, openCard }) {
       if (await Notification.requestPermission() !== 'granted') return alert('Notifications are blocked for the hub. Allow them in the phone settings for Crux, then tap the bell again.');
       const { publicKey } = await fetch('/api/push/key').then(r => r.json());
       const fresh = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
-      await post('/api/push/subscribe', { subscription: fresh.toJSON(), label: ios ? 'iPhone' : (/Android/.test(navigator.userAgent) ? 'Android' : 'Browser') });
+      await act('/api/push/subscribe', { subscription: fresh.toJSON(), label: ios ? 'iPhone' : (/Android/.test(navigator.userAgent) ? 'Android' : 'Browser') });
       await refresh();
-      await post('/api/push/test', {});
-    } catch (e) { alert(e.message); }
+      await act('/api/push/test', {});
+    } catch (e) { if (!/^Not changed|not paired/.test(e.message)) alert(e.message); }
   });
 
   // ---------- presence: so a card you are already looking at does not buzz your phone ----------
@@ -80,7 +82,7 @@ export function initPhone({ button, view, openCard }) {
   function fromUrl(href) {
     const u = new URL(href, location.href);
     const card = u.searchParams.get('card');
-    if (card) openCard(u.searchParams.get('project'), card);
+    if (card) openCard(u.searchParams.get('project'), card, { undo: u.searchParams.get('undo') === '1' });
     if (u.search && location.search) history.replaceState(null, '', location.pathname);
   }
 

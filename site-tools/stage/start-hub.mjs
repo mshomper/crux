@@ -8,5 +8,6 @@ import { dirs, env, server, worktree, HUB_PORT } from './paths.mjs';
 
 if (!existsSync(dirs.project)) { console.error('Nothing staged yet: run node site-tools/stage/stage.mjs first.'); process.exit(1); }
 if (HUB_PORT === 4747) { console.error('Never port 4747.'); process.exit(1); }
-const child = spawn(process.execPath, [server, '--port', String(HUB_PORT), '--no-agents', dirs.project], { cwd: worktree, env: { ...process.env, ...env }, stdio: 'inherit', windowsHide: true });
+// --test-pair (decision 47): the page counts as a paired device, so the screenshots show the hub, not "Pair this device".
+const child = spawn(process.execPath, [server, '--port', String(HUB_PORT), '--no-agents', '--test-pair', dirs.project], { cwd: worktree, env: { ...process.env, ...env }, stdio: 'inherit', windowsHide: true });
 child.on('exit', code => process.exit(code ?? 0));

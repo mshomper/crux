@@ -14,7 +14,9 @@ self.addEventListener('push', e => {
       tag: d.card || undefined, // the same card never stacks twice
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
-      data: { url: d.url || '/' }
+      data: { url: d.url || '/' },
+      // Decision 47: a raise to Trusted carries Undo where the phone shows actions (iPhone does not: the thread has it).
+      ...(Array.isArray(d.actions) && d.actions.includes('undo') ? { actions: [{ action: 'undo', title: 'Undo' }] } : {})
     });
   })());
 });
@@ -28,7 +30,9 @@ async function closeCards(tags) {
 // Tapping opens the card: reuse an open hub window if there is one, else open the hub at the card.
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const url = new URL(e.notification.data?.url || '/', self.location.origin).href;
+  const u = new URL(e.notification.data?.url || '/', self.location.origin);
+  if (e.action === 'undo') u.searchParams.set('undo', '1');   // the page asks first, then lowers (with its cookie)
+  const url = u.href;
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const win = wins.find(w => new URL(w.url).origin === self.location.origin);

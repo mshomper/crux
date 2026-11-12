@@ -19,6 +19,7 @@ import { SideResizer } from './side-width.js';
 import { routeSwitch } from './route-switch.js';
 import { picturesButton, installPictures } from './pictures.js';
 import { levelChip, LEVELS as LEVEL_INFO, SettingsCards } from './project-settings.js';
+import { GuardUI } from './guard.js';
 installPictures();   // decision 43: the pictures button on decision cards opens a gallery
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
@@ -69,12 +70,20 @@ const usageUI = new UsageUI($('#hud'), {
 });
 
 // ---------- data ----------
+// Decision 47: every change goes through the guard (guard.js): an unpaired device gets "Pair this device", and a big
+// change asks "Confirm it's you" before it is sent again. Reads stay plain.
+const guardUI = new GuardUI({
+  toast: (m, tone) => toast(m, tone), reload: () => load().catch(() => { }),
+  changed: paired => { $('#pair-btn').hidden = paired !== false; }
+});
 async function api(path, body) {
-  const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  if (body) return guardUI.post(path, body);
+  const res = await fetch(path);
   const json = await res.json();
   if (!res.ok) throw new Error(json.error || res.statusText);
   return json;
 }
+$('#pair-btn').addEventListener('click', () => guardUI.openPair());
 
 async function load() {
   const { projects, retireAt, models, settings, boot, version, build, usage, bootAt } = await api('/api/state');
@@ -192,6 +201,7 @@ function renderHubMenu() {
         <p class="faint">${busy.length ? `${list} ${busy.length === 1 ? 'is' : 'are'} working; ${busy.length === 1 ? 'it resumes' : 'they resume'} on ${busy.length === 1 ? 'its' : 'their'} own after the restart${busy.length > 1 ? ', a few seconds apart' : ''}.` : 'No agent is working, so none needs resuming; resting agents wake on their next message.'} The page reconnects by itself.</p>
         <div class="row"><button class="btn primary" data-restart-go>${icon('restart')}Restart</button><button class="btn ghost" data-hub-menu-close>Cancel</button></div></div>`
     : `<button class="hm-item" role="menuitem" data-hub-settings>${icon('hub')}<span><b>Whole hub</b><span class="faint">Who answers requests, the wait, handoff defaults</span></span></button>
+       <button class="hm-item" role="menuitem" data-devices>${icon('key')}<span><b>Devices</b><span class="faint">${guardUI.paired ? 'Paired devices, passkeys and notifications' : 'This device is not paired: pair it'}</span></span></button>
        <button class="hm-item" role="menuitem" data-restart>${icon('restart')}<span><b>Restart hub</b><span class="faint">Stops and starts the server; agents resume</span></span></button>
        <button class="hm-item" role="menuitem" data-phone-check>${icon('pulse')}<span><b>${phoneCheck.on ? 'Hide phone check' : 'Phone check'}</b><span class="faint">${phoneCheck.on ? 'Turns the screen numbers off' : 'Live screen numbers, for a screenshot'}</span></span></button>`;
   el.hidden = false;
@@ -237,6 +247,7 @@ $('#rs-close').addEventListener('click', () => { $('#restarting').hidden = true;
 $('#hub-menu-btn').addEventListener('click', () => { S.hubMenu = S.hubMenu ? null : 'menu'; renderHubMenu(); $('#hub-menu .hm-item')?.focus(); });
 $('#hub-menu').addEventListener('click', e => {
   if (e.target.closest('[data-hub-settings]')) { closeHubMenu(); settingsCards.openHub(); }
+  else if (e.target.closest('[data-devices]')) { closeHubMenu(); guardUI.paired ? guardUI.openDevices() : guardUI.openPair(); }
   else if (e.target.closest('[data-restart]')) { S.hubMenu = 'confirm'; renderHubMenu(); $('#hub-menu [data-restart-go]')?.focus(); }
   else if (e.target.closest('[data-restart-go]')) act(restartHub);
   else if (e.target.closest('[data-phone-check]')) { phoneCheck.toggle(); closeHubMenu(); }
@@ -754,6 +765,7 @@ function feedFor(t) {
         case 'permission_answer': return permLine(ev);
         case 'approval_escalated': return `<div class="notice">Permission request sent to you: ${esc(ev.reason)}</div>`;
         case 'handoff_qa': return '';
+        case 'project_settings': return levelUndo(p, ev);
         default: return '';
       }
     }).join('');
@@ -762,6 +774,26 @@ function feedFor(t) {
       ? `<div class="empty"><h2>Talk to the orchestrator</h2><p>It reads the memory board, starts agents, answers their questions and brings decisions to you. Say what you want done on ${esc(p.name)}.</p></div>`
       : `<div class="empty"><p>No messages yet.</p></div>`);
   }
+}
+
+// Decision 47: the latest raise to Trusted, while the project is still Trusted, carries an Undo (back to the level it
+// was raised from). The notice beside it says what changed; lowering needs only this device's cookie.
+function levelUndo(p, ev) {
+  if (ev.permissionMode !== 'trusted' || !ev.raised || p.permissionMode !== 'trusted') return '';
+  const last = p.events.findLast(e => e.type === 'project_settings' && e.permissionMode);
+  if (last !== ev) return '';
+  const back = (LEVEL_INFO[ev.was] || LEVEL_INFO.auto).word;
+  return `<div class="notice">Raised to Trusted at ${timeOf(ev.ts)}. Not you?<button class="btn ghost level-undo" data-level-undo="${esc(ev.id)}" title="Lower ${esc(p.name)} back to ${esc(back)}">${icon('undo')}Undo: back to ${esc(back)}</button></div>`;
+}
+function undoLevel(p, id, ask = true) {
+  const ev = p?.events.find(e => e.id === id && e.type === 'project_settings');
+  if (!ev || p.permissionMode !== 'trusted') return toast(`${p?.name || 'The project'} is not at Trusted now.`, 'info');
+  const back = ['standard', 'auto'].includes(ev.was) ? ev.was : 'auto';
+  return act(async () => {
+    if (ask && !await hubConfirm({ k: 'Undo', title: `Lower ${p.name} back to ${LEVEL_INFO[back].word}?`, body: 'Installs and the open web come back to you; everything else stays as it is.', ok: `Back to ${LEVEL_INFO[back].word}` })) return;
+    await api('/api/settings', { project: p.name, permissionMode: back });
+    await load();
+  });
 }
 
 // Quick replies built from what is really open (M008 9): "all" when several decisions have a recommendation,
@@ -925,13 +957,20 @@ function openThreadIn(p, t) {
 // card can be drawn twice (in Needs you and in its own thread): a column already on screen that holds it is used
 // (Needs you first), so the layout does not change; otherwise Needs you (or the card's thread) opens by the usual
 // rule. The lock-on goes to the copy in that one column only.
-function openCard(project, card) {
+function openCard(project, card, { undo = false } = {}) {
   switchProject(project);
+  const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];
+  if (kind === 'devices') return guardUI.openDevices();   // decision 47: a change to the devices or push devices
   const p = proj();
   if (!p) return;
-  const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];
-  // A level raised to Trusted (push.mjs): the notice is in the project's orchestrator thread.
-  if (kind === 'level') { $('#app').classList.remove('show-side'); return openThreadIn(p, 'orchestrator'); }
+  // A level raised to Trusted or dropped at start, or the hub restarting (push.mjs, guard.mjs): the notice is in the
+  // project's orchestrator thread. Undo on the notification lowers the level again (after a confirm).
+  if (kind === 'level' || kind === 'notice') {
+    $('#app').classList.remove('show-side');
+    openThreadIn(p, 'orchestrator');
+    if (kind === 'level' && undo) undoLevel(p, id);
+    return;
+  }
   const waiting = kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
     : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
       : openQuestions(p).some(e => e.id === id);
@@ -957,7 +996,7 @@ function lockOn(el) {
 }
 // Phone alerts skip a card you are looking at (lib/push.mjs). With columns, "looking at" is the column that has the
 // keyboard: the server takes one viewed thread, and a column you are not using may well go unread.
-const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: cols.kb }), openCard });
+const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: cols.kb }), openCard, post: (path, body) => guardUI.post(path, body) });
 
 // ---------- the columns (decision 39 A): what each conversation draws and does comes from here ----------
 const cols = new Columns({
@@ -1117,6 +1156,7 @@ document.addEventListener('click', e => {
   if (sa && !sa.disabled) return sendAnswers(sa.dataset.sendAnswers, projectOf(sa));
   const ls = e.target.closest('[data-lesson]');
   if (ls) return act(() => api('/api/lessons', { project: projectOf(ls).name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
+  const lu = e.target.closest('[data-level-undo]'); if (lu) return undoLevel(proj(), lu.dataset.levelUndo);
   const ap = e.target.closest('[data-approve]'); if (ap) return act(() => api('/api/approval', { id: ap.dataset.approve, allow: true, always: 'always' in ap.dataset }));
   const dn = e.target.closest('[data-deny]'); if (dn) return act(() => api('/api/approval', { id: dn.dataset.deny, allow: false }));
 });
@@ -1290,6 +1330,8 @@ const openUsage = new URLSearchParams(location.search).get('usagepanel');   // r
 const openSettings = new URLSearchParams(location.search).get('settings');
 load().then(() => {
   startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); bootReadout();
+  // Decision 47: an unpaired device sees "Pair this device" once the page has drawn (it has an exit; reading works).
+  guardUI.check().then(st => { if (st && !st.paired) guardUI.openPair(); });
   if (openUsage !== null) { if (openUsage === 'session') usageUI.range = 'session'; usageUI.open(); }
   if (openSettings === 'hub') settingsCards.openHub();
   else if (openSettings !== null && proj()) settingsCards.openProject(proj(), { alwaysOpen: openSettings === 'always' });

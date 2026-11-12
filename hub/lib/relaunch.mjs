@@ -34,6 +34,19 @@ export function testHubFolderError({ noAgents, folders = [] }) {
     : '';
 }
 
+// --test-pair (decision 47): a test hub may start with one fake paired device, so screenshots and tests can make
+// changes. Never the live hub: only on a port other than 4747, with --no-agents (or data in temp) and no real agents,
+// and with its data folder (CRUX_HUB_DATA) inside the system temp folder. Returns the message to print, or ''.
+export function testPairError({ wanted, noAgents, port, env = process.env, tmp = tmpdir() }) {
+  if (!wanted) return '';
+  const norm = s => resolve(String(s)).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+  const tempData = !!env.CRUX_HUB_DATA && (norm(env.CRUX_HUB_DATA) + '/').startsWith(norm(tmp) + '/');
+  if (Number(port) === DEFAULT_PORT || !Number.isInteger(Number(port))) return '--test-pair refused: never on port 4747, the live hub.';
+  if (!noAgents) return '--test-pair refused: only on a test hub with no agents (--no-agents, and CRUX_HUB_AGENTS not 1).';
+  if (!tempData) return '--test-pair refused: the hub\'s data folder (CRUX_HUB_DATA) must be inside the temp folder.';
+  return '';
+}
+
 // A short fingerprint of the page's files (every file under public/, names and contents). It changes whenever
 // any page file does, so an open page can tell that it is out of date.
 export function pageBuild(dir) {

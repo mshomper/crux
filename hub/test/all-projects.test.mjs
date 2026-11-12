@@ -246,7 +246,7 @@ test('switching project from All projects or a notification goes through openPro
   const sw = /function switchProject\([\s\S]*?\n\}/.exec(APP)[0];
   assert.match(sw, /openProject\(\);/);
   assert.match(/function openThreadIn\([\s\S]*?\n\}/.exec(APP)[0], /switchProject\(p\.name\)/);
-  assert.match(/function openCard\([\s\S]*?\n\}/.exec(APP)[0], /^function openCard\(project, card\) \{\s*switchProject\(project\);/);
+  assert.match(/function openCard\([\s\S]*?\n\}/.exec(APP)[0], /^function openCard\(project, card(, [^)]*)?\) \{\s*switchProject\(project\);/);
   const op = /function openProject\(\) \{[\s\S]*?\n\}/.exec(APP)[0];
   assert.match(op, /S\.projMenu = false; closeHubMenu\(\);/, 'menus close');
   assert.match(op, /classList\.remove\('show-side'\)/, 'the phone list makes way');

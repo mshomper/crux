@@ -1,0 +1,85 @@
+/* Decision 47 B: "Pair this device", "Confirm it's you" and Devices (guard.js). They reuse the settings card's glass
+   plate (.pset in project-settings.css: header, body, footer, full screen on a phone) and add a scanning glyph, the
+   two-step track, the code box and the device rows. Amber marks only for warnings; nothing scrolls sideways. */
+.gset{left:max(16px,calc(50% - 230px));top:max(24px,10vh);width:min(460px,calc(100vw - 32px))}
+@media (min-width:721px){ .gset{width:min(460px,calc(100vw - 32px))} }
+.gconf{top:max(40px,16vh);width:min(420px,calc(100vw - 32px))}
+.g-body{display:grid;gap:14px;align-content:start}
+
+/* the glyph: a hexagon plate with a slow ring and a scan line (still under reduced motion) */
+.g-hero{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:center}
+.g-glyph{position:relative;width:66px;height:66px;display:grid;place-items:center;flex:none;color:var(--hud-ice);
+  clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%);background:radial-gradient(circle at 50% 40%,rgba(111,227,255,.22),rgba(111,227,255,.05) 70%)}
+.g-glyph > .icon{width:34px;height:34px;stroke-width:1.6;filter:drop-shadow(0 0 6px rgba(111,227,255,.55))}
+.g-ring{position:absolute;inset:7px;border-radius:50%;border:1px dashed rgba(111,227,255,.45)}
+.g-glyph.live .g-ring{animation:g-spin 9s linear infinite}
+.g-scan{position:absolute;left:14%;right:14%;top:50%;height:1px;background:linear-gradient(90deg,transparent,var(--hud-cyan),transparent);opacity:0}
+.g-glyph.live .g-scan{animation:g-scan 2.4s ease-in-out infinite}
+.g-done .g-glyph{color:var(--good);background:radial-gradient(circle at 50% 40%,rgba(98,214,140,.22),rgba(98,214,140,.04) 70%)}
+@keyframes g-spin{to{transform:rotate(360deg)}}
+@keyframes g-scan{0%{top:22%;opacity:0}15%{opacity:.9}85%{opacity:.9}100%{top:78%;opacity:0}}
+.g-lead{margin:0 0 4px;font:700 16px/1.3 var(--font);color:var(--text)}
+.g-sub{margin:0;font-size:13px;line-height:1.45;color:var(--muted)}
+
+/* the two steps */
+.g-steps{display:flex;align-items:center;gap:8px;margin:0;padding:0;list-style:none;font:600 10.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.g-steps li{display:flex;align-items:center;gap:7px}
+.g-steps .g-steps-line{flex:1;height:1px;background:linear-gradient(90deg,var(--hud-line),transparent)}
+.g-hex{width:22px;height:20px;display:grid;place-items:center;clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%);background:rgba(111,227,255,.1);color:var(--hud-dim);letter-spacing:0}
+.g-steps li.on{color:var(--hud-ice)}
+.g-steps li.on .g-hex{background:var(--hud-cyan);color:#06141b}
+.g-steps li.done .g-hex{background:rgba(98,214,140,.25);color:var(--good)}
+
+/* fields */
+.g-field{display:grid;gap:6px;margin:0}
+.g-cap{display:flex;align-items:center;gap:6px;font:600 10.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--hud-label)}
+.g-cap .icon{width:14px;height:14px;color:var(--hud-dim)}
+.g-field input{width:100%;box-sizing:border-box;margin:0;font:600 15px/1.2 var(--font);color:var(--text);background:var(--hud-deep);border:1px solid var(--hud-edge);border-radius:2px;padding:10px 12px}
+.g-field input.g-code{font:700 24px/1 var(--mono);letter-spacing:.28em;text-align:center;color:var(--hud-ice);padding:12px 10px;text-transform:uppercase}
+.g-field input.g-code::placeholder{color:rgba(150,232,255,.22)}
+.g-field input:focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.22),0 0 18px -6px rgba(111,227,255,.5)}
+.g-hint{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:-4px 0 0;font:500 11.5px/1.45 var(--mono);letter-spacing:.02em;color:var(--faint)}
+.g-warn{display:flex;gap:8px;align-items:flex-start;margin:0;font-size:13px;line-height:1.4;color:var(--muted)}
+.g-warn .icon{width:15px;height:15px;margin-top:2px;flex:none;color:var(--hud-amber,#f3b955);filter:drop-shadow(0 0 4px rgba(243,185,85,.5))}
+
+/* buttons */
+.g-big{justify-content:center;min-height:46px;font-size:14.5px;gap:9px}
+.g-big .icon{width:19px;height:19px}
+.g-wide{justify-content:center;width:100%}
+.g-fold{border:1px dashed var(--hud-line);border-radius:2px;background:rgba(18,26,37,.45)}
+.g-fold summary{display:flex;align-items:center;gap:8px;padding:10px 12px;list-style:none;cursor:pointer;font:600 10.5px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--hud-dim)}
+.g-fold summary::-webkit-details-marker{display:none}
+.g-fold summary .icon{width:14px;height:14px}
+.g-fold[open] .ps-chev{transform:rotate(90deg)}
+.g-fold summary:focus-visible{outline:none;box-shadow:inset 0 0 0 1px var(--hud-cyan)}
+.g-fold p{margin:0 12px 10px;font-size:12.5px;line-height:1.45;color:var(--muted)}
+.g-fold .btn{margin:0 12px 12px;width:calc(100% - 24px)}
+
+/* the device lists */
+.g-list{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.g-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--hud-line);border-radius:2px;background:rgba(18,26,37,.6)}
+.g-row.you{border-color:var(--hud-edge2)}
+.g-row-ic{width:32px;height:28px;display:grid;place-items:center;clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%);background:rgba(111,227,255,.1);color:var(--hud-ice)}
+.g-row-ic .icon{width:16px;height:16px}
+.g-row-t{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;min-width:0}
+.g-row-t b{font-size:13.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.g-row-s{flex-basis:100%;font:500 11px/1.35 var(--mono);color:var(--faint);overflow-wrap:anywhere}
+.g-chip{font:600 9.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--hud-cyan);border:1px solid var(--hud-edge2);border-radius:2px;padding:3px 6px}
+.g-none{font-size:12.5px;padding:4px 2px}
+.g-issued{display:grid;gap:8px;padding:12px;border:1px solid var(--hud-cyan);border-radius:2px;background:linear-gradient(160deg,rgba(111,227,255,.12),rgba(111,227,255,.03))}
+.g-code-big{font:700 30px/1 var(--mono);letter-spacing:.3em;color:var(--hud-ice);text-align:center;text-shadow:0 0 14px rgba(111,227,255,.5)}
+
+/* the side head's mark when this device is not paired */
+.pair-btn{position:relative;color:var(--hud-amber,#f3b955)}
+.pair-btn::after{content:"";position:absolute;right:5px;top:5px;width:6px;height:6px;border-radius:50%;background:var(--hud-amber,#f3b955);box-shadow:0 0 6px rgba(243,185,85,.8)}
+.notice .level-undo{margin-left:8px}
+
+@media (max-width:720px){
+  .pset.gset{width:100%;max-width:none}
+  .g-body{gap:16px}
+  .g-field input{min-height:46px;font-size:16px}
+  .g-field input.g-code{font-size:26px}
+  .g-rm{width:44px;height:44px}
+  .pset.gset .ps-foot .btn{justify-content:center;min-height:46px}
+}
+@media (prefers-reduced-motion:reduce){ .g-glyph.live .g-ring,.g-glyph.live .g-scan{animation:none} .g-glyph.live .g-scan{opacity:.6;top:50%} }

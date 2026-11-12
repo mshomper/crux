@@ -101,6 +101,11 @@ export function cruxTools(hub, project, agent) {
         },
         async ({ request_id, answer, reason }) => out(hub.answerPermission(project, agent, request_id.trim(), answer, reason))),
 
+      // Decision 47: the orchestrator's own way to restart the hub (after a merge), through the hub process, not HTTP.
+      tool('restart_hub', t('Restart the hub, for example after merging a pull request, so it runs the new code. Goes through the hub itself (a POST to /api/restart is a hard stop). {{Who}} gets a one-line notification. Your turn stops; you are asked to carry on once the new hub is up.'),
+        { reason: z.string().min(1).max(200).describe('One plain line, e.g. "merged #53 (decision 46)".') },
+        async ({ reason }) => out(await restartHub(hub, project, agent, reason))),
+
       tool('message_agent','Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },
         async ({ to, text: msg }) => { hub.orchestratorToWorker(project, agent, to, msg); return out(`Sent to ${to}.`); }),
@@ -158,6 +163,13 @@ export function settingsChanges({ model, effort, type } = {}) {
   return changes;
 }
 
+// restart_hub's reply. The server sets hub.restartHub (lib/guard.mjs makeRestartHub); a hub with no server cannot.
+export async function restartHub(hub, project, agent, reason) {
+  if (agent?.role !== 'orchestrator') return 'Only the orchestrator can restart the hub.';
+  if (typeof hub.restartHub !== 'function') return 'This hub cannot restart itself (it is not running as a server).';
+  try { return await hub.restartHub(project, agent, reason); } catch (e) { return `Not restarted: ${e.message}`; }
+}
+
 // mark_entry_done's reply: what was marked, or the plain reason it was refused (the board throws it).
 export function markEntryDone(board, id, from, note = '') {
   try {
@@ -170,5 +182,6 @@ export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
   if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'answer_permission', 'mark_entry_done');
+  if (agent.role === 'orchestrator') names.push('restart_hub');   // decision 47
   return names.map(n => `mcp__crux__${n}`);
 }
