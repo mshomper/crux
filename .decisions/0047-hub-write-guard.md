@@ -1,10 +1,14 @@
 # 0047 How does the hub know a change really comes from you?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: architecture
 - Builds on: 0019, 0021, 0034, 0045
 - Settles: local tool write authentication = paired-device cookie (passkey pairing) for every write that acts as the human; passkey step-up for permission raises, connectors, new push devices and pairing; pushes on any change to those lists; OS isolation parked
+
+## Decision
+
+**B: Paired devices, plus Face ID or Hello for big changes.** Pair each device once with a passkey (Windows Hello on the PC, Face ID in the iPhone home-screen app). It gets a device cookie that scripts can't send with a request. Every write that acts as you (answers, picks, messages, settings) needs that cookie: no taps day to day. The few big changes (raise to Trusted, connectors on, hub-wide permission settings, adding a push device, pairing a device) also ask for Face ID or Hello. Changes to the passkey or push-device list always send a push. Keeps A.
 
 ## Context
 
@@ -20,7 +24,7 @@ Keep today's push on any raise to Trusted, and add an undo button on it. At star
 - Con: Prevents nothing: approvals, picks and messages stay open to any script
 - Effort: Small
 
-### B: Paired devices, plus Face ID or Hello for big changes (recommended)
+### B: Paired devices, plus Face ID or Hello for big changes (chosen) (recommended)
 
 Pair each device once with a passkey (Windows Hello on the PC, Face ID in the iPhone home-screen app). It gets a device cookie that scripts can't send with a request. Every write that acts as you (answers, picks, messages, settings) needs that cookie: no taps day to day. The few big changes (raise to Trusted, connectors on, hub-wide permission settings, adding a push device, pairing a device) also ask for Face ID or Hello. Changes to the passkey or push-device list always send a push. Keeps A.
 - Pro: Closes the self-approval and fake-message holes at the API
