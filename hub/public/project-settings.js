@@ -30,6 +30,7 @@ export const LEVELS = {
     word: 'Trusted', icon: 'sh3', sub: 'For your own projects: Auto, plus installs and the open web.',
     ok: ['Everything Auto allows', 'Installing packages into the project (npm, pip and the like)', 'Reading and downloading from any website into the project'],
     you: [MERGE_LINE, 'Installing software system-wide (winget, npm -g)', 'Sending anything to a website'],
+    warn: 'Installing a package runs its own setup scripts on this computer.',
     note: 'Set only here, never from a file in the repo: a repo you clone cannot give itself Trusted.'
   }
 };
@@ -42,7 +43,7 @@ export const ALWAYS = ['Force push', 'Rewriting pushed history', 'Deleting branc
 
 // The three handoff numbers: label, unit, help and the range the hub accepts (lib/settings.mjs HANDOFF_NUMBERS).
 export const NUMBERS = [
-  { k: 'retireAt', icon: 'gauge', label: 'Hand off at', unit: '% context', min: 10, max: 95,
+  { k: 'retireAt', icon: 'gauge', label: 'Hand off at', unit: '% context', min: 1, max: 100,
     tip: 'The orchestrator writes a handoff and a fresh one takes over when it has used this much of its context (decision 10).' },
   { k: 'idleHandoffMin', icon: 'clock', label: 'Or after idle for', unit: 'minutes', min: 0, max: 1440,
     tip: 'An orchestrator that has had nothing to do for this long hands off on its own. 0 means never (decision 37).' },
@@ -79,6 +80,7 @@ function plate(k, on) {
     ${on ? `<div class="ps-lv-body">
       <div class="ps-cap">Runs on its own</div><ul class="ps-list">${list(L.ok, 'ok', 'check')}</ul>
       <div class="ps-cap">Comes to you</div><ul class="ps-list">${list(L.you, 'you', 'hand')}</ul>
+      ${L.warn ? `<p class="ps-lv-warn">${ic('warn')}<span>${esc(L.warn)}</span></p>` : ''}
     </div>` : ''}
   </div>`;
 }
@@ -172,6 +174,9 @@ export class SettingsCards {
     this.el.className = 'pset';
     this.el.setAttribute('aria-labelledby', 'ps-title');
     document.body.append(this.el);
+    // A click outside closes only when the press also started outside: dragging out of a number box (selecting its
+    // text) ends on the backdrop, and must not close the card and lose the typing.
+    this.el.addEventListener('pointerdown', e => { this.downOutside = e.target === this.el; });
     this.el.addEventListener('click', e => this.click(e));
     this.el.addEventListener('input', e => this.input(e));
     this.el.addEventListener('keydown', e => this.key(e));
@@ -222,7 +227,7 @@ export class SettingsCards {
   close() { if (this.el.open) this.el.close(); }
 
   click(e) {
-    if (e.target === this.el) return this.close();   // a click outside the card (on the backdrop)
+    if (e.target === this.el) { const out = this.downOutside; this.downOutside = false; return out ? this.close() : undefined; }   // the backdrop
     if (e.target.closest('[data-ps-close]')) return this.close();
     if (e.target.closest('[data-ps-done]')) return this.done();
     const lv = e.target.closest('[data-ps-level]');

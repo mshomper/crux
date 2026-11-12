@@ -15,7 +15,7 @@ export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 
 export const HANDOFF_NUMBERS = {
   idleHandoffMin: { min: 0, max: 24 * 60 },
   idleFloorPct: { min: 0, max: 100 },
-  retireAt: { min: 10, max: 95 }
+  retireAt: { min: 1, max: 100 }   // what --retire-at accepted before it became a saved setting
 };
 // Permission levels (decisions 34 and 45). 'standard' is shown as Ask. Trusted is set only from the hub page.
 export const LEVELS = ['standard', 'auto', 'trusted'];
@@ -82,8 +82,14 @@ function pick(o = {}) {
   const t = Number(o.permissionTimeoutSec);
   if (o.permissionTimeoutSec != null && o.permissionTimeoutSec !== '' && Number.isFinite(t) && t >= 10 && t <= 3600) out.permissionTimeoutSec = t;
   for (const [n, range] of Object.entries(HANDOFF_NUMBERS)) {
+    if (o[n] == null || o[n] === '') continue;
     const v = Number(o[n]);
-    if (o[n] != null && o[n] !== '' && Number.isFinite(v) && v >= range.min && v <= range.max) out[n] = v;
+    if (Number.isFinite(v) && v >= range.min && v <= range.max) out[n] = v;
+    // retireAt (once the --retire-at flag): never silently back to 60. Out of range keeps the nearest allowed value.
+    else if (n === 'retireAt' && Number.isFinite(v)) {
+      out[n] = Math.min(range.max, Math.max(range.min, v));
+      console.warn(`Hub settings: retireAt ${v} is outside ${range.min} to ${range.max}; using ${out[n]}.`);
+    } else if (n === 'retireAt') console.warn(`Hub settings: retireAt "${o[n]}" is not a number; keeping ${SETTING_DEFAULTS.retireAt} unless a saved value says otherwise.`);
   }
   return out;
 }
