@@ -1,0 +1,52 @@
+# 0047 How does the hub know a change really comes from you?
+
+- Status: open
+- Date: 2026-11-12
+- Lenses: architecture
+- Builds on: 0019, 0021, 0034, 0045
+- Settles: local tool write authentication = paired-device cookie (passkey pairing) for every write that acts as the human; passkey step-up for permission raises, connectors, new push devices and pairing; pushes on any change to those lists; OS isolation parked
+
+## Context
+
+The hub's API on 127.0.0.1:4747 trusts any local caller that sends browser-like headers, and a script can fake those. Agents run as the same Windows user, so a script one writes could answer its own Allow cards (hard stops included), send a message that reads as from Matt, pick a decision, add its own 'phone' to receive every push, or raise a project to Trusted. The permission checker only catches typed commands: five review rounds on PR #51 kept finding bypasses, and a node script gets past it anyway. Research (guard-research, 2026-11-12) found that nothing inside the hub stops a determined same-user process outright: it can edit ~/.crux-hub/settings.json or the hub's own code, or attach a debugger to it. Only running agents under a separate Windows account closes that, at high cost (Node can't start a process as another user on Windows; the Claude Code sandbox doesn't run on native Windows). What an in-hub guard does buy (Claude's judgement): no single request or command can act as Matt, slips and prompt injections fail, and a real attempt has to be several plainly deliberate steps. Tailscale identity headers, a second port or a named pipe were ruled out: all are open to a local process. No option needs a new dependency. Builds on decisions 19 (push), 21, 34 and 45, and C001.
+
+## Options
+
+### A: Detect and undo only
+
+Keep today's push on any raise to Trusted, and add an undo button on it. At start, a Trusted level with no recorded change from the page drops back to Auto, with a push.
+- Pro: No extra taps
+- Pro: Smallest build (about 50 lines)
+- Con: Prevents nothing: approvals, picks and messages stay open to any script
+- Effort: Small
+
+### B: Paired devices, plus Face ID or Hello for big changes (recommended)
+
+Pair each device once with a passkey (Windows Hello on the PC, Face ID in the iPhone home-screen app). It gets a device cookie that scripts can't send with a request. Every write that acts as you (answers, picks, messages, settings) needs that cookie: no taps day to day. The few big changes (raise to Trusted, connectors on, hub-wide permission settings, adding a push device, pairing a device) also ask for Face ID or Hello. Changes to the passkey or push-device list always send a push. Keeps A.
+- Pro: Closes the self-approval and fake-message holes at the API
+- Pro: Big changes need your face or finger, which no script can supply
+- Pro: No new dependency; works on the phone
+- Con: A same-user process can still steal a browser cookie with effort, edit the settings file or the hub code: stops slips and injections, not a determined attacker
+- Con: Pairing once per device and browser; a lost passkey needs a reset path
+- Con: Largest build of the in-hub options (about 400 to 600 lines)
+- Effort: Medium
+
+### C: Face ID or Hello for big changes only
+
+Only the big changes ask for a passkey; answers, picks and messages stay as they are today. Keeps A.
+- Pro: Fewer moving parts than B
+- Pro: Protects the Trusted raise and new push devices
+- Con: A script can still answer its own Allow cards and send messages as you
+- Effort: Small to medium
+
+### D: Agents under their own Windows account (park)
+
+Run agents as a separate Windows user so they can't touch the hub's files, memory or code. Still needs B or C on top, since the local port is shared. Park until the move to the always-on box (M018).
+- Pro: The only option that stops a determined process
+- Con: Large setup: an agent-host service, its own Claude and GitHub logins, folder rights on every repo
+- Con: Node can't do it on Windows without extra native pieces
+- Effort: Large
+
+## Recommendation
+
+B (lean). B closes the holes that matter most day to day (a script approving its own hard stops or speaking as you) at no extra taps, and asks for Face ID only on the rare big changes. Park D with M018 as its trigger. Restarts stay open to the orchestrator for now (merges need them), and get a push. Lean, not strong: no in-hub guard stops a determined same-user process.
