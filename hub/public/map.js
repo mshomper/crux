@@ -218,16 +218,22 @@ export class LiveMap {
         el = document.createElement('button');
         el.type = 'button';
         el.dataset.id = s.id;
-        el.innerHTML = `<span class="hs-body">${svg(s.kind === 'worker' ? 'agent' : s.kind)}</span><span class="hs-label"><b></b><i></i></span>`;
+        el.innerHTML = `<span class="hs-body">${svg(s.kind === 'worker' ? 'agent' : s.kind)}<span class="hs-badge" hidden></span></span><span class="hs-label"><b></b><i></i></span>`;
         this.stationsEl.append(el);
         this.stationEls.set(s.id, el);
       }
       const sub = s.kind === 'ghost' ? 'handing over'
         : s.kind === 'worker' ? (s.needs ? 'needs you' : s.handoff === 'writing' ? 'writing handoff' : s.handoff === 'overlap' ? 'handing over' : s.activity || s.state) : s.sub;
-      const cls = `hs ${s.kind} ${s.state || ''} ${s.handoff ? 'handoff' : ''} ${s.needs ? 'needs' : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}`;
+      // Decision 31 and M008 8: only You turns fully red. A worker that is waiting on you keeps its model hue
+      // and wears a red badge with how many things wait.
+      const asking = s.kind === 'worker' && s.needs;
+      const cls = `hs ${s.kind} ${s.state || ''} ${s.handoff ? 'handoff' : ''} ${s.needs ? (asking ? 'asks' : 'needs') : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}`;
       // The station body takes its model's hue too (decision 20).
       const hue = s.kind === 'worker' ? hueOf(s.model) : null;
-      const full = hue && !s.needs && !s.handoff && s.state !== 'error' ? `${cls} mh` : cls;   // red and handoff gold win
+      const full = hue && !s.handoff && s.state !== 'error' ? `${cls} mh` : cls;   // handoff gold and the error amber win
+      const badge = el.querySelector('.hs-badge');
+      const n = asking ? Math.max(1, s.asks || 0) : 0;
+      if (badge && badge.textContent !== String(n || '')) { badge.textContent = n ? String(n) : ''; badge.hidden = !n; }
       if (el.className !== full) el.className = full;
       if ((el.style.getPropertyValue('--mh') || null) !== hue) hue ? el.style.setProperty('--mh', hue) : el.style.removeProperty('--mh');
       el.dataset.thread = s.thread;

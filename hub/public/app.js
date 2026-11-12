@@ -4,6 +4,7 @@ import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
 import { enterAction, insertLineBreak } from './composer-keys.js';
+import { boardView, groupBoard, SECTIONS } from './board.js';
 const EFFORT_SHORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'x-high', max: 'max' };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -23,7 +24,8 @@ const S = {
   open: new Set(), // expanded messages, answered approvals and task lines
   activity: {},
   pending: new Set(),
-  drafts: store.get('drafts', {})   // answers typed in Needs you, by "<summary id>:<question place>"
+  drafts: store.get('drafts', {}),   // answers typed in Needs you, by "<summary id>:<question place>"
+  boardOpen: store.get('board-open', {})   // board sections you opened or closed, by key
 };
 
 const proj = () => S.projects.find(p => p.name === S.current) || S.projects[0];
@@ -83,7 +85,17 @@ function connect() {
     render();
   };
   // Lost the hub: try again every two seconds. During a restart the restart view does the reconnecting.
-  es.onerror = () => { es.close(); if (!S.restarting) setTimeout(() => { if (!S.restarting) { connect(); load().catch(() => { }); } }, 2000); };
+  es.onopen = () => setLink(true);
+  es.onerror = () => { es.close(); setLink(false); if (!S.restarting) setTimeout(() => { if (!S.restarting) { connect(); load().catch(() => { }); } }, 2000); };
+}
+
+// M008 3: when the live link drops, an amber light says so and the cards dim, since they may be out of date.
+// Shown after a moment, so a quick reconnect does not flicker.
+let linkTimer;
+function setLink(up) {
+  clearTimeout(linkTimer);
+  if (up) { $('#link').hidden = true; $('#app').classList.remove('link-lost'); return; }
+  linkTimer = setTimeout(() => { if (S.restarting) return; $('#link').hidden = false; $('#app').classList.add('link-lost'); }, 1500);
 }
 
 // ---------- restart (M010): the hub menu's Restart, then wait for the new hub and reconnect ----------
@@ -216,8 +228,8 @@ function questionCard(ev) {
         <button class="btn ghost icon-only qx" data-dismiss="${esc(ev.id)}" data-index="${q.i}" aria-label="Dismiss this question" title="Dismiss this question: it leaves Needs you, and ${esc(ev.from)} is not told">${icon('x')}</button></div>
     </div>`;
   }).join('');
-  return `<article class="card question" data-card="question:${esc(ev.id)}">
-    <div class="card-head">${icon('inbox')}<h3>${esc(ev.from)} asks</h3><span class="time">${timeOf(ev.ts)}</span></div>
+  return `<article class="card question" data-card="question:${esc(ev.id)}" tabindex="0">
+    <div class="card-head">${icon('inbox')}<h3>${esc(ev.from)} asks</h3><span class="keys">Enter to answer</span><span class="time">${timeOf(ev.ts)}</span></div>
     ${vis.map(v => visualEl(p, v, true)).join('')}
     <div class="qrows">${rows}</div>
     ${ev.byPicks ? `<p class="faint q-done">${ev.byPicks === 1 ? 'One more question was' : `${ev.byPicks} more questions were`} answered by your picks.</p>` : ''}
@@ -361,7 +373,7 @@ function decisionCard(p, d) {
   const opts = (d.options || []).map(o => `
     <button class="opt ${o.key === d.recommended ? 'rec' : ''} ${o.key === d.chosen ? 'chosen' : ''}" data-pick="${d.id}" data-choice="${o.key}" ${open ? '' : 'disabled'}>
       <span class="key">${esc(o.key)}</span>
-      <span class="oname">${esc(o.name)}${o.key === d.recommended ? `<span class="chip open">${icon('star')}recommended${d.confidence ? ' · ' + esc(d.confidence) : ''}</span>` : ''}</span>
+      <span class="oname">${esc(o.name)}${o.key === d.recommended ? `<span class="chip rec">${icon('star')}recommended${d.confidence ? ' · ' + esc(d.confidence) : ''}</span>` : ''}</span>
       <span class="osum">${esc(o.summary || '')}</span>
     </button>`).join('');
   const foot = open
@@ -369,8 +381,9 @@ function decisionCard(p, d) {
     : found
       ? `<button class="btn good" data-pick="${d.id}" data-choice="confirm">${icon('check')}Confirm</button><button class="btn" data-pick="${d.id}" data-choice="reject">${icon('x')}Reject</button>`
       : `<span class="chip ${esc(d.status)}">${esc(d.status)}${d.chosen ? ' · ' + esc(d.chosen) : ''}</span>`;
-  return `<article class="card decision ${open || found ? '' : 'done'}" data-card="decision:${d.id}">
-    <div class="card-head"><h3>D${pad(d.id)} · ${esc(d.title)}</h3><span class="chip ${esc(d.status)}">${esc(d.status)}</span></div>
+  const keys = open ? (d.options || []).map(o => o.key).join(' ') : found ? 'Y confirm · N reject' : '';
+  return `<article class="card decision ${open || found ? '' : 'done'}" data-card="decision:${d.id}" ${open || found ? 'tabindex="0"' : ''}>
+    <div class="card-head"><h3>D${pad(d.id)} · ${esc(d.title)}</h3>${keys ? `<span class="keys">${open ? `Keys ${esc(keys)}` : keys}</span>` : ''}<span class="chip ${esc(d.status)}">${esc(d.status)}</span></div>
     ${d.context ? `<p class="ctx">${esc(d.context)}</p>` : ''}
     ${found ? '' : `<div class="options">${opts}</div>`}
     <div class="foot">${foot}<span class="spacer"></span><a href="/p/${encodeURIComponent(p.name)}/${esc(d.page)}" target="_blank" rel="noopener" class="row">${icon('page')}Full page</a></div>
@@ -397,14 +410,15 @@ function approvalCard(ev) {
     : ev.routedTo && live ? `<p class="route-note">${icon('orch')}With ${esc(ev.routedTo)} for now; answering it here overrides it.</p>` : '';
   const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
   const raw = `<pre>${esc(input)}</pre>`;
-  return `<article class="card approval ${live ? '' : 'answered'}" data-card="approval:${esc(ev.approval)}" ${live ? '' : `data-expand="${esc(ev.approval)}"`}>
-    <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}</h3></div>
+  return `<article class="card approval ${live ? '' : 'answered'}" data-card="approval:${esc(ev.approval)}" ${live ? 'tabindex="0"' : `data-expand="${esc(ev.approval)}"`}>
+    <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}</h3>${live ? '<span class="keys">A allow · D deny</span>' : ''}</div>
     ${tags ? `<div class="tags">${tags}</div>` : ''}
     ${routeNote}
     ${why ? `<p class="muted why">Why: ${esc(why)}</p>` : (!plain && ev.description ? `<p class="muted">${esc(ev.description)}</p>` : '')}
     ${plain ? `<div class="raw">${fold('cmd:' + ev.approval, raw, String(input).length > 120 || String(input).includes('\n'))}</div>` : raw}
     <div class="row">${live
-      ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button>${ev.always ? `<button class="btn" data-approve="${ev.approval}" data-always title="Saved to this project's Claude Code settings, where you can remove it">${icon('check')}Always allow</button>` : ''}<button class="btn" data-deny="${ev.approval}">${icon('x')}Deny</button>${ev.always ? `<span class="faint always-rule">Always: ${esc(ev.always.join('; '))}</span>` : ''}`
+      // M008 10: Allow and Deny side by side; Always allow is a quieter text button that says which rule it saves.
+      ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button><button class="btn deny" data-deny="${ev.approval}">${icon('x')}Deny</button>${ev.always ? `<button class="always-btn" data-approve="${ev.approval}" data-always title="Allows this now, and saves the rule to this project's Claude Code settings (.claude/settings.local.json), where you can remove it">Always allow <span class="always-rule">${esc(ev.always.join('; '))}</span></button>` : ''}`
       : `<span class="chip">${esc(result ? result.how : 'expired')}</span>`}</div>
   </article>`;
 }
@@ -533,6 +547,9 @@ function renderFeed() {
   const feed = $('#feed');
   if (!p) { feed.innerHTML = `<div class="empty"><h2>No projects</h2><p>Start the hub with a project folder: <code>node server.mjs C:/path/to/project</code></p></div>`; return; }
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+  // A card you are answering from the keyboard keeps its focus through the redraw (M008 14).
+  const focusedCard = document.activeElement?.matches?.('#feed .card[data-card]') ? document.activeElement.dataset.card : null;
+  if (focusedCard) queueMicrotask(() => [...feed.querySelectorAll('.card[data-card]')].find(c => c.dataset.card === focusedCard)?.focus({ preventScroll: true }));
 
   if (S.thread === 'needs') {
     // A reply box being typed in keeps its focus and cursor through the redraw.
@@ -548,6 +565,11 @@ function renderFeed() {
     if (withRec.length > 1) html += `<div class="batch"><strong>${withRec.length} decisions have a recommendation.</strong><button class="btn primary" data-take-all>${icon('check')}Take all ${withRec.length}</button><span class="faint">or reply "all but 4A"</span></div>`;
     const ls = pendingLessons(p);
     const routed = withOrchestrator(p);
+    // The count bar (M008 1): what is waiting, by kind; each count jumps to its first card.
+    const nq = qs.reduce((n, q) => n + q.open.length, 0);
+    const kinds = [['approval', aps.length, 'permission', 'permissions'], ['question', nq, 'question', 'questions'], ['lessons', ls.length ? 1 : 0, 'lesson card', 'lesson cards'], ['decision', ds.length, 'decision', 'decisions']].filter(k => k[1]);
+    const total = aps.length + qs.length + (ls.length ? 1 : 0) + ds.length;
+    if (total) html = `<div class="countbar" role="navigation" aria-label="Waiting for you"><span class="cb-total"><b>${total}</b> waiting</span>${kinds.map(([k, n, one, many]) => `<button class="cb-chip" data-jump="${k}" title="Go to the first ${one}">${n} ${n === 1 ? one : many}</button>`).join('')}</div>` + html;
     html += aps.map(approvalCard).join('') + qs.map(questionCard).join('') + (ls.length ? lessonsCard(ls) : '') + ds.map(d => decisionCard(p, d)).join('');
     // Requests the orchestrator is answering: not yours to act on, shown so you can watch or step in.
     if (routed.length) html += `<div class="side-label routed-label">With the orchestrator</div>` + routed.map(approvalCard).join('');
@@ -577,8 +599,26 @@ function renderFeed() {
     S.seen[key(p.name, S.thread)] = evs.length;
     store.set('seen', S.seen);
   }
-  if (atBottom || S.justSwitched) feed.scrollTop = feed.scrollHeight;
+  // Needs you reads from the top: it opens there and stays where you are as cards come and go (M008 1).
+  // Conversations open at their latest message and follow new ones while you are at the bottom.
+  if (S.thread === 'needs') { if (S.justSwitched) feed.scrollTop = 0; }
+  else if (atBottom || S.justSwitched) feed.scrollTop = feed.scrollHeight;
   S.justSwitched = false;
+}
+
+// Quick replies built from what is really open (M008 9): "all" when several decisions have a recommendation,
+// then each open decision's recommended pick ("42A"). A chip adds its words to the box; Enter sends.
+function quickReplies(p) {
+  const rec = openDecisions(p).filter(d => d.status === 'open' && d.recommended);
+  return [...(rec.length > 1 ? [{ text: 'all', tip: `Take all ${rec.length} recommendations` }] : []),
+    ...rec.slice(0, 6).map(d => ({ text: `${d.id}${d.recommended}`, tip: `D${pad(d.id)}: take ${d.recommended}, ${d.options.find(o => o.key === d.recommended)?.name || ''}` }))];
+}
+function renderQuick(p, t, retired) {
+  const el = $('#quick');
+  const chips = p && !retired && (t === 'needs' || t === 'orchestrator') ? quickReplies(p) : [];
+  const html = chips.map(c => `<button type="button" class="qchip" data-quick-text="${esc(c.text)}" title="${esc(c.tip)}">${esc(c.text)}</button>`).join('');
+  if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = chips.length ? `<span class="hud-k">Quick</span>${html}` : ''; }
+  el.hidden = !chips.length;
 }
 
 function renderHead() {
@@ -615,38 +655,55 @@ function renderHead() {
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#attach').disabled = !!retired;
-  // The new-line hint only where there is a real keyboard and room for it.
-  const keys = matchMedia('(min-width: 721px) and (pointer: fine)').matches ? ' Alt+Enter for a new line.' : '';
+  // The hint fits its box (M008 9): on a phone just who you are writing to; the quick-reply chips above the
+  // box show the short picks. The new-line hint only where there is a real keyboard and room for it.
+  const narrow = matchMedia('(max-width: 720px)').matches;
+  const keys = !narrow && matchMedia('(pointer: fine)').matches ? ' Alt+Enter for a new line.' : '';
   $('#input').placeholder = retired ? 'This agent has retired.' : t === 'needs' || t === 'orchestrator'
-    ? `Message the orchestrator. Short replies like "all" or "4A 7B" pick decisions.${keys}`
-    : `Message ${t} directly.${keys}`;
+    ? (narrow ? 'Message the orchestrator' : `Message the orchestrator. Short replies like "all" or "4A 7B" pick decisions.${keys}`)
+    : (narrow ? `Message ${t}` : `Message ${t} directly.${keys}`);
+  renderQuick(p, t, retired);
   const act = p && S.activity[key(p.name, t === 'needs' ? 'orchestrator' : t)];
   $('#activity').textContent = act || '';
   $('#activity').classList.toggle('on', !!act);
 }
 
+// The board panel (M008 B): sections with counts that open and close, what waits for you open by default,
+// one filter over everything. Only the section list scrolls, with a slim HUD scrollbar. Grouping is in board.js.
 function renderBoard() {
   const p = proj();
   if ($('#board').hidden || !p) return;
-  const ds = p.board.decisions, es = p.board.entries;
-  const group = (label, items) => items.length ? `<h3>${label}</h3>${items.join('')}` : '';
-  const dItem = d => `<a class="bitem" href="/p/${encodeURIComponent(p.name)}/${esc(d.page)}" target="_blank" rel="noopener">
-    <div class="bt"><span>D${pad(d.id)}</span><span>${esc(d.title)}</span></div>
-    <div class="bs">${d.chosen ? `Picked ${esc(d.chosen)}: ${esc(d.options.find(o => o.key === d.chosen)?.name || '')}` : esc(d.status)}</div></a>`;
-  const eItem = e => `<div class="bitem"><details><summary><div class="bt"><span>${esc(e.entryId)}</span><span>${esc(e.title)}</span></div>
-    <div class="bs">${esc(e.summary || '')} <span class="faint">· ${esc(e.from)}</span></div></summary><div class="bbody">${esc(e.body || '')}</div></details></div>`;
-  const live = es.filter(e => e.status === 'active');
-  const handoff = live.filter(e => e.kind === 'handoff').at(-1);
-  $('#board-body').innerHTML = (ds.length ? `<a class="bitem board-page" href="/p/${encodeURIComponent(p.name)}/index.html" target="_blank" rel="noopener"><div class="bt"><span>${icon('page')}</span><span>Open this project's Crux board</span></div></a>` : '') +
-    group('Waiting for your call', ds.filter(d => d.status === 'open' || d.status === 'found').map(dItem)) +
-    group('Requirements', live.filter(e => e.kind === 'requirement').map(eItem)) +
-    group('Decided', ds.filter(d => d.status === 'decided').map(dItem)) +
-    group('Conventions', live.filter(e => e.kind === 'convention').map(eItem)) +
-    group('Memos', live.filter(e => e.kind === 'memo').map(eItem)) +
-    group('Latest handoff', handoff ? [eItem(handoff)] : []) +
-    group('Parked', ds.filter(d => d.status === 'parked').map(dItem)) +
-    group('History', ds.filter(d => ['superseded', 'rejected'].includes(d.status)).map(dItem)) ||
-    `<p class="faint">The board is empty. Decisions from Crux and entries your agents post will collect here.</p>`;
+  const filter = $('#board-filter').value;
+  const view = boardView(p.board, { filter, open: S.boardOpen });
+  const total = groupBoard(p.board).reduce((n, s) => n + s.items.length, 0);
+  const shown = view.reduce((n, s) => n + s.items.length, 0);
+  $('#board-total').textContent = filter.trim() ? `${shown} of ${total}` : `${total} item${total === 1 ? '' : 's'}`;
+  const page = d => `/p/${encodeURIComponent(p.name)}/${esc(d.page)}`;
+  const item = it => {
+    if (it.type === 'decision') {
+      const d = it.d, waiting = d.status === 'open' || d.status === 'found';
+      const line = d.chosen ? `Picked ${esc(d.chosen)}: ${esc(d.options.find(o => o.key === d.chosen)?.name || '')}`
+        : waiting ? `${d.status === 'found' ? 'Found in the code: confirm or reject' : `Open${d.recommended ? ` · recommended ${esc(d.recommended)}` : ''}`}` : esc(d.status);
+      return `<a class="bitem ${waiting ? 'hot' : ''}" href="${page(d)}" target="_blank" rel="noopener" title="Open the decision page in a new tab">
+        <span class="bid">${it.id}</span><span class="bt">${esc(it.title)}</span><span class="bs">${line}</span></a>`;
+    }
+    const e = it.e, k = `entry:${e.entryId}`, open = S.open.has(k);
+    return `<div class="bitem entry ${open ? 'open' : ''}"><button class="bhead" data-expand="${esc(k)}" aria-expanded="${open}">
+        <span class="bid">${esc(e.entryId)}</span><span class="bt">${esc(e.title)}</span>
+        <span class="bs">${esc(e.summary || '')}<span class="faint"> · ${esc(e.from)}${e.status !== 'active' ? ` · ${esc(e.status)}` : ''}</span></span></button>
+      ${open ? `<div class="bbody">${esc(e.body || '')}</div>` : ''}</div>`;
+  };
+  const html = view.map(s => `<section class="bsec ${s.isOpen ? 'open' : ''} ${s.hot ? 'hot' : ''}" data-sec="${s.key}">
+      <button class="bsec-head" data-board-sec="${s.key}" aria-expanded="${s.isOpen}" ${filter.trim() ? 'disabled' : ''}>${icon('chevron')}<span class="bsec-k">${esc(s.label)}</span>
+        <span class="bsec-n">${filter.trim() && s.items.length !== s.total ? `${s.items.length}/${s.total}` : s.total}</span></button>
+      ${s.isOpen ? `${s.note ? `<p class="bsec-note faint">${esc(s.note)}</p>` : ''}<div class="bsec-items">${s.items.map(item).join('')}</div>` : ''}
+    </section>`).join('');
+  const empty = filter.trim() ? `<p class="board-empty faint">Nothing on the board matches “${esc(filter.trim())}”.</p>`
+    : `<p class="board-empty faint">The board is empty. Decisions from Crux and entries your agents post collect here.</p>`;
+  const foot = p.board.decisions.length ? `<a class="board-page" href="/p/${encodeURIComponent(p.name)}/index.html" target="_blank" rel="noopener">${icon('page')}Full Crux board for ${esc(p.name)}${icon('external')}</a>` : '';
+  const out = (html || empty) + foot;
+  const body = $('#board-body');
+  if (body.dataset.html !== out) { body.dataset.html = out; body.innerHTML = out; }
 }
 
 function render() {
@@ -657,7 +714,26 @@ function render() {
 }
 
 // ---------- actions ----------
-async function act(fn) { try { await fn(); } catch (e) { alert(e.message); } }
+async function act(fn) { try { await fn(); } catch (e) { toast(e.message); } }
+
+// Hub-styled pop-ups (M008 3) instead of the browser's: a confirm with a way out, and a short message.
+function hubConfirm({ k = 'Confirm', title, body = '', ok = 'OK' }) {
+  const d = $('#confirm');
+  $('#confirm-k').textContent = k; $('#confirm-title').textContent = title; $('#confirm-body').textContent = body; $('#confirm-ok').textContent = ok;
+  d.returnValue = '';
+  d.showModal();
+  $('#confirm-ok').focus();
+  return new Promise(res => d.addEventListener('close', () => res(d.returnValue === 'ok'), { once: true }));
+}
+$('#confirm').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close('cancel'); });   // a click outside
+let toastTimer;
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg; el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 6000);
+}
+$('#toast').addEventListener('click', () => { $('#toast').hidden = true; });
 
 function selectThread(t) {
   S.thread = t; S.justSwitched = true; S.mmenu = null; store.set('thread', t);
@@ -685,7 +761,14 @@ function openCard(project, card) {
   render();
   phone.viewChanged();
   const el = [...document.querySelectorAll('[data-card]')].find(x => x.dataset.card === card);
-  if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 2400); }
+  if (el) { el.scrollIntoView({ block: 'center' }); lockOn(el); }
+}
+// A brief cyan lock-on around a card you were sent to.
+function lockOn(el) {
+  el.classList.remove('flash');
+  void el.offsetWidth;   // restart the animation
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 2400);
 }
 const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: S.thread }), openCard });
 
@@ -699,7 +782,8 @@ addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (S.mmenu) return closeModelMenu();
   if (S.hubMenu) { closeHubMenu(); return $('#hub-menu-btn').focus(); }
-  if (S.projMenu) { S.projMenu = false; renderProjects(); $('[data-proj-toggle]')?.focus(); }
+  if (S.projMenu) { S.projMenu = false; renderProjects(); return $('[data-proj-toggle]')?.focus(); }
+  if (!$('#board').hidden && !document.querySelector('dialog[open]')) setBoard(false);   // Escape closes the board too
 });
 addEventListener('resize', () => { placeModelMenu(); autosize(); });
 $('#feed').addEventListener('scroll', () => placeModelMenu(), { passive: true });
@@ -735,6 +819,19 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-take-all]')) {
     const picks = openDecisions(proj()).filter(d => d.status === 'open' && d.recommended).map(d => ({ id: d.id, choice: d.recommended }));
     return act(() => api('/api/pick', { project: proj().name, picks }).then(load));
+  }
+  const jump = e.target.closest('[data-jump]');
+  if (jump) {
+    const el = document.querySelector(`#feed .card.${CSS.escape(jump.dataset.jump)}`);
+    if (el) { el.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); lockOn(el); }
+    return;
+  }
+  const bs = e.target.closest('[data-board-sec]');
+  if (bs && !bs.disabled) {
+    const k = bs.dataset.boardSec, def = !!SECTIONS.find(s => s.key === k)?.open;
+    S.boardOpen[k] = !(S.boardOpen[k] ?? def);
+    store.set('board-open', S.boardOpen);
+    return renderBoard();
   }
   const dq = e.target.closest('[data-dismiss]');
   if (dq) return act(() => api('/api/dismiss', { project: proj().name, question: dq.dataset.dismiss, ...('index' in dq.dataset ? { index: Number(dq.dataset.index) } : {}) }));
@@ -785,6 +882,13 @@ function addImages(files) {
 function clearTray() { for (const t of tray.splice(0)) URL.revokeObjectURL(t.url); renderTray(); }
 const asDataUrl = f => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => fail(new Error('Could not read the image.')); r.readAsDataURL(f); });
 
+$('#quick').addEventListener('click', e => {
+  const c = e.target.closest('[data-quick-text]'); if (!c) return;
+  const box = $('#input'), words = box.value.trim().split(/\s+/).filter(Boolean);
+  const w = c.dataset.quickText;
+  box.value = (w === 'all' ? ['all'] : words.includes(w) ? words.filter(x => x !== w) : [...words.filter(x => x !== 'all'), w]).join(' ');
+  autosize(); box.focus();
+});
 $('#attach').addEventListener('click', () => $('#file-pick').click());
 $('#file-pick').addEventListener('change', e => { addImages([...e.target.files]); e.target.value = ''; });
 $('#tray').addEventListener('click', e => {
@@ -842,7 +946,7 @@ async function copyImage(btn) {
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob(btn.dataset.copyImg) })]);
     btn.classList.add('done'); btn.title = 'Copied';
     setTimeout(() => { btn.classList.remove('done'); btn.title = 'Copy image'; }, 1600);
-  } catch (e) { alert(e.message || 'Could not copy the image.'); }
+  } catch (e) { toast(e.message || 'Could not copy the image.'); }
 }
 document.addEventListener('click', e => {
   const cp = e.target.closest('[data-copy-img]'); if (cp) { e.preventDefault(); return copyImage(cp); }
@@ -872,6 +976,27 @@ $('#composer').addEventListener('submit', e => {
     finally { S.sending = false; }
   });
 });
+// Answering from the keyboard (M008 14), on a focused card: arrow keys (or J and K) move between cards; a
+// decision's option letter picks it, Y and N confirm or reject a found one; A allows and D denies a permission
+// request; Enter goes to a question's first reply box.
+$('#feed').addEventListener('keydown', e => {
+  const card = e.target;
+  if (!card.matches?.('.card[data-card]') || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const cards = [...$('#feed').querySelectorAll('.card[tabindex]')];
+  const move = d => { e.preventDefault(); const next = cards[cards.indexOf(card) + d]; if (next) { next.focus(); next.scrollIntoView({ block: 'nearest' }); } };
+  if (k === 'ArrowDown' || k === 'j') return move(1);
+  if (k === 'ArrowUp' || k === 'k') return move(-1);
+  const kind = card.dataset.card.split(':')[0];
+  const press = sel => { const b = card.querySelector(sel); if (b && !b.disabled) { e.preventDefault(); b.click(); } };
+  if (kind === 'decision' && /^[a-z]$/.test(k)) {
+    if (card.querySelector('[data-choice="confirm"]')) return k === 'y' ? press('[data-choice="confirm"]') : k === 'n' ? press('[data-choice="reject"]') : undefined;
+    return press(`.opt[data-choice="${k.toUpperCase()}"]`);
+  }
+  if (kind === 'approval') return k === 'a' ? press('.btn[data-approve]:not([data-always])') : k === 'd' ? press('[data-deny]') : undefined;
+  if (kind === 'question' && k === 'Enter') { e.preventDefault(); card.querySelector('.qbox')?.focus(); }
+});
+
 // Reply boxes in Needs you: the same keys as the composer; Enter sends the card's filled answers together.
 $('#feed').addEventListener('input', e => { if (e.target.matches('.qbox')) draftChanged(e.target); });
 $('#feed').addEventListener('keydown', e => {
@@ -904,18 +1029,26 @@ $('#route-perms').addEventListener('click', () => act(async () => {
   const { settings } = await api('/api/settings', { routePermissions: !on });
   S.settings = settings; render();
 }));
-$('#open-board').addEventListener('click', () => { $('#board').hidden = !$('#board').hidden; render(); });
-$('#close-board').addEventListener('click', () => { $('#board').hidden = true; render(); });
+function setBoard(open) {
+  $('#board').hidden = !open;
+  render();
+  if (open && !matchMedia('(pointer: coarse)').matches) $('#board-filter').focus({ preventScroll: true });
+  if (!open) $('#open-board').focus({ preventScroll: true });
+}
+$('#open-board').addEventListener('click', () => setBoard($('#board').hidden));
+$('#close-board').addEventListener('click', () => setBoard(false));
+$('#board-filter').addEventListener('input', () => renderBoard());
+$('#board-filter').addEventListener('keydown', e => { if (e.key === 'Escape' && e.target.value) { e.stopPropagation(); e.target.value = ''; renderBoard(); } });
 $('#back').addEventListener('click', () => $('#app').classList.add('show-side'));
-$('#retire-finished').addEventListener('click', () => {
+$('#retire-finished').addEventListener('click', async () => {
   const t = S.thread;
-  if (confirm(`Retire ${t}? Use this when its job is done: it stops and moves to Retired, with no replacement.`))
-    act(async () => { const r = await api('/api/retire-finished', { project: proj().name, agent: t }); if (!/retired\.$/.test(r.result)) alert(r.result); });
+  if (await hubConfirm({ k: 'Retire', title: `Retire ${t}?`, body: 'Use this when its job is done: it stops and moves to Retired, with no replacement.', ok: 'Retire' }))
+    act(async () => { const r = await api('/api/retire-finished', { project: proj().name, agent: t }); if (!/retired\.$/.test(r.result)) toast(r.result); });
 });
-$('#retire').addEventListener('click', () => {
+$('#retire').addEventListener('click', async () => {
   const t = S.thread, orch = t === 'orchestrator';
-  if (confirm(orch ? 'Hand the orchestrator role to a new agent? The current one writes a handoff first, and the new one can ask it questions before it retires.'
-    : `Hand ${t}'s task to a fresh agent? It writes a handoff first, and the new one can ask it questions before it retires.`))
+  if (await hubConfirm({ k: 'Hand off', title: orch ? 'Hand the orchestrator role to a new agent?' : `Hand ${t}'s task to a fresh agent?`,
+    body: `${orch ? 'The current holder' : 'It'} writes a handoff first, and the new one can ask it questions before it retires.`, ok: 'Hand off' }))
     act(() => api('/api/retire', { project: proj().name, agent: orch ? undefined : t }));
 });
 // New agent: a type fills in its model and effort; either can then be changed.
@@ -949,5 +1082,14 @@ $('#agent-form').addEventListener('submit', e => {
   e.target.reset();
 });
 
-if (matchMedia('(max-width: 720px)').matches) $('#app').classList.add('show-side');
-load().then(() => { phone.openFromLocation(); phone.viewChanged(); connect(); });
+// Decision 32: on a phone the hub opens on Needs you when something waits, else on the thread list; Back shows
+// the list. A notification tap opens its card instead (openFromLocation).
+const phoneStart = matchMedia('(max-width: 720px)').matches;
+function startView() {
+  if (!phoneStart || new URLSearchParams(location.search).has('card')) return;
+  const p = proj();
+  if (p && needsCount(p)) { S.thread = 'needs'; S.justSwitched = true; store.set('thread', 'needs'); $('#app').classList.remove('show-side'); render(); }
+  else $('#app').classList.add('show-side');
+}
+load().then(() => { startView(); phone.openFromLocation(); phone.viewChanged(); connect(); })
+  .catch(() => { if (phoneStart) $('#app').classList.add('show-side'); connect(); });
