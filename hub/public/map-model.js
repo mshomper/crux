@@ -131,7 +131,7 @@ export class MapModel {
       // what the core's glass shows without words (M013): the model's hue, effort as energy, Auto or Ask in the field
       model: h ? h.model || h.modelSeen || null : null,
       effort: h?.effort || null,
-      mode: this.project?.permissionMode === 'auto' ? 'auto' : 'ask'
+      mode: this.project?.permissionMode === 'trusted' ? 'trusted' : this.project?.permissionMode === 'auto' ? 'auto' : 'ask'
     };
   }
 

@@ -18,6 +18,7 @@ import { retiredView, RETIRED_RECENT_DAYS } from './retired-list.js';
 import { SideResizer } from './side-width.js';
 import { routeSwitch } from './route-switch.js';
 import { picturesButton, installPictures } from './pictures.js';
+import { levelChip, LEVELS as LEVEL_INFO, SettingsCards } from './project-settings.js';
 installPictures();   // decision 43: the pictures button on decision cards opens a gallery
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
@@ -190,7 +191,8 @@ function renderHubMenu() {
     ? `<div class="hm-confirm"><b>Restart the hub now?</b>
         <p class="faint">${busy.length ? `${list} ${busy.length === 1 ? 'is' : 'are'} working; ${busy.length === 1 ? 'it resumes' : 'they resume'} on ${busy.length === 1 ? 'its' : 'their'} own after the restart${busy.length > 1 ? ', a few seconds apart' : ''}.` : 'No agent is working, so none needs resuming; resting agents wake on their next message.'} The page reconnects by itself.</p>
         <div class="row"><button class="btn primary" data-restart-go>${icon('restart')}Restart</button><button class="btn ghost" data-hub-menu-close>Cancel</button></div></div>`
-    : `<button class="hm-item" role="menuitem" data-restart>${icon('restart')}<span><b>Restart hub</b><span class="faint">Stops and starts the server; agents resume</span></span></button>
+    : `<button class="hm-item" role="menuitem" data-hub-settings>${icon('hub')}<span><b>Whole hub</b><span class="faint">Who answers requests, the wait, handoff defaults</span></span></button>
+       <button class="hm-item" role="menuitem" data-restart>${icon('restart')}<span><b>Restart hub</b><span class="faint">Stops and starts the server; agents resume</span></span></button>
        <button class="hm-item" role="menuitem" data-phone-check>${icon('pulse')}<span><b>${phoneCheck.on ? 'Hide phone check' : 'Phone check'}</b><span class="faint">${phoneCheck.on ? 'Turns the screen numbers off' : 'Live screen numbers, for a screenshot'}</span></span></button>`;
   el.hidden = false;
 }
@@ -232,9 +234,10 @@ function showRestarting(title, sub, warn = false, done = false) {
   el.hidden = false;
 }
 $('#rs-close').addEventListener('click', () => { $('#restarting').hidden = true; });
-$('#hub-menu-btn').addEventListener('click', () => { S.hubMenu = S.hubMenu ? null : 'menu'; renderHubMenu(); $('#hub-menu [data-restart]')?.focus(); });
+$('#hub-menu-btn').addEventListener('click', () => { S.hubMenu = S.hubMenu ? null : 'menu'; renderHubMenu(); $('#hub-menu .hm-item')?.focus(); });
 $('#hub-menu').addEventListener('click', e => {
-  if (e.target.closest('[data-restart]')) { S.hubMenu = 'confirm'; renderHubMenu(); $('#hub-menu [data-restart-go]')?.focus(); }
+  if (e.target.closest('[data-hub-settings]')) { closeHubMenu(); settingsCards.openHub(); }
+  else if (e.target.closest('[data-restart]')) { S.hubMenu = 'confirm'; renderHubMenu(); $('#hub-menu [data-restart-go]')?.focus(); }
   else if (e.target.closest('[data-restart-go]')) act(restartHub);
   else if (e.target.closest('[data-phone-check]')) { phoneCheck.toggle(); closeHubMenu(); }
   else if (e.target.closest('[data-hub-menu-close]')) closeHubMenu();
@@ -389,9 +392,10 @@ function renderProjects() {
   const menu = multi && S.projMenu ? `<div class="proj-menu" role="listbox" aria-label="Projects">${S.projects.map(p => {
     const k = needsCount(p);
     return `<button role="option" aria-selected="${p === cur}" data-project="${esc(p.name)}" class="pitem ${p === cur ? 'on' : ''}" title="${esc(p.dir)}">
-      <span class="pname">${esc(p.name)}</span><span class="pmode">${modeWord(p)}</span><span class="pcount ${k ? 'hot' : ''}">${k ? `${k} waiting` : 'All clear'}</span></button>`;
+      <span class="pname">${esc(p.name)}</span><span class="pmode ${esc(p.permissionMode)}">${modeWord(p)}</span><span class="pcount ${k ? 'hot' : ''}">${k ? `${k} waiting` : 'All clear'}</span></button>`;
   }).join('')}</div>` : '';
-  $('#projects').innerHTML = `<div class="proj-switch"><div class="proj-row">${head}${modeSwitch(cur)}${connSwitch(cur)}</div>${menu}</div>`;
+  // Decision 44 B: the level chip replaces the Ask/Auto and connector switches; it opens the project's settings card.
+  $('#projects').innerHTML = `<div class="proj-switch"><div class="proj-row">${head}${levelChip(cur)}</div>${menu}</div>`;
 }
 
 // Decision 21's switch, one for the whole hub, under the hub's name (route-switch.js); amber mark when off.
@@ -401,24 +405,14 @@ function renderHubSwitches() {
     <i class="mode-knob"></i>${icon('shield')}<span class="rw">${esc(r.word)}</span>${r.warn ? `<span class="amber-mark">${icon('warn')}</span>` : ''}</button>`;
 }
 
-// Which permission rules apply here (decision 34): Auto lets contained work run and asks only about the rest;
-// Ask sends everything that is not a plain read through the orchestrator or to you.
-const modeWord = p => p.permissionMode === 'auto' ? 'Auto' : 'Ask';
-function modeSwitch(p) {
-  const auto = p.permissionMode === 'auto';
-  const tip = auto
-    ? `Auto: work that stays in ${p.name} or a temp folder runs without asking. Hard stops still come to you. Click to switch to Ask.`
-    : `Ask: anything beyond reading goes to the orchestrator or to you. Click to switch to Auto.`;
-  return `<button class="mode-switch ${auto ? 'auto' : ''}" role="switch" aria-checked="${auto}" data-mode-toggle title="${esc(tip)}" aria-label="${esc(tip)}"><i class="mode-knob"></i>${modeWord(p)}</button>`;
-}
-// Your claude.ai connectors (mail, calendar, drive) for this project's agents: off unless you turn them on.
-function connSwitch(p) {
-  const on = !!p.connectors;
-  const tip = on
-    ? `Connectors on: agents in ${p.name} can see your mail, calendar and drive tools. Reads go to the orchestrator; sends, shares, changes and deletes always come to you. Click to turn them off.`
-    : `Connectors off: agents in ${p.name} cannot see your mail, calendar or drive. Click to turn them on.`;
-  return `<button class="mode-switch conn ${on ? 'auto' : ''}" role="switch" aria-checked="${on}" data-conn-toggle title="${esc(tip)}" aria-label="${esc(tip)}"><i class="mode-knob"></i>${icon('plug')}</button>`;
-}
+// Which permission level applies here (decisions 34 and 45): Ask, Auto or Trusted, set on the project's settings
+// card (project-settings.js), which also holds connectors and the handoff numbers (decision 44 B).
+const modeWord = p => (LEVEL_INFO[p.permissionMode] || LEVEL_INFO.standard).word;
+const settingsCards = new SettingsCards({
+  api, reload: () => load(), toast: m => toast(m),
+  hubSettings: () => S.settings || {},
+  sideRect: () => $('#side')?.getBoundingClientRect()
+});
 
 function lastLine(p, t) {
   const ev = threadEvents(p, t).filter(e => ['message', 'summary', 'notice', 'pick'].includes(e.type)).at(-1);
@@ -711,7 +705,7 @@ function agentRow(p, a) {
     <span class="ava${hue ? ' ring' : ''}"${hue ? ` style="--mh:${hue}"` : ''}>${robot(a, { size: 24, needs: n > 0 })}</span>
     <span class="ha-l1"><b class="ha-name">${esc(name)}</b><span class="dot ${esc(a.state)}" title="${esc(a.state)}"></span><span class="chip ${esc(a.state)}">${esc(a.state)}</span>${modelChip(a, { mini: true })}</span>
     <span class="ha-l2">${esc(lastLine(p, a.thread) || goalOf(a))}</span>
-    ${AP.contextRing(a, { hue, retireAt: S.retireAt || 60 })}${n ? `<span class="colbadge" title="${n} waiting for your call">${n}</span>` : ''}</button>`;
+    ${AP.contextRing(a, { hue, retireAt: p.retireAt || S.retireAt || 60 })}${n ? `<span class="colbadge" title="${n} waiting for your call">${n}</span>` : ''}</button>`;
 }
 function hubFeed() {
   const v = hub();
@@ -864,6 +858,7 @@ function render() {
   // Decision 42: the strip's Needs you counter counts every project and opens All projects (more than one project).
   // The You station's popover lists every project's permission requests then (each answered by its id).
   const v = hub();
+  map.retireAt = proj()?.retireAt || S.retireAt;   // decision 44 B: each project's own handoff mark
   map.update(proj(), pendingForYou(proj()), { total: v.total, projects: v.projects, approvals: v.groups.flatMap(g => g.waiting.approvals.map(ev => ({ ...ev, project: g.name }))) });
   usageUI.draw();
 }
@@ -935,6 +930,8 @@ function openCard(project, card) {
   const p = proj();
   if (!p) return;
   const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];
+  // A level raised to Trusted (push.mjs): the notice is in the project's orchestrator thread.
+  if (kind === 'level') { $('#app').classList.remove('show-side'); return openThreadIn(p, 'orchestrator'); }
   const waiting = kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
     : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
       : openQuestions(p).some(e => e.id === id);
@@ -1070,14 +1067,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-retired-older]')) { S.retiredOlder = !S.retiredOlder; return renderThreads(); }
   if (e.target.closest('[data-proj-toggle]')) { S.projMenu = !S.projMenu; return renderProjects(); }
   if (e.target.closest('[data-route-toggle]')) return toggleRouting();
-  if (e.target.closest('[data-conn-toggle]')) {
-    const p = proj();
-    return act(async () => { await api('/api/settings', { project: p.name, connectors: !p.connectors }); await load(); });
-  }
-  if (e.target.closest('[data-mode-toggle]')) {
-    const p = proj();
-    return act(async () => { await api('/api/settings', { project: p.name, permissionMode: p.permissionMode === 'auto' ? 'standard' : 'auto' }); await load(); });
-  }
+  if (e.target.closest('[data-settings-open]')) { S.projMenu = false; renderProjects(); return settingsCards.openProject(proj()); }
   // A project opens on its orchestrator's chat (Matt, 2026-11-11), unless threads are pinned there: switching projects
   // never changes pins, so those columns come back as they were (columns.js).
   const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return openProject(); }
@@ -1295,5 +1285,13 @@ function startView() {
 }
 // ?usagepanel opens the usage panel on load (for screenshots and click-tests); ?usagepanel=session starts on the session totals.
 const openUsage = new URLSearchParams(location.search).get('usagepanel');   // read first: opening a card rewrites the address
-load().then(() => { startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); bootReadout(); if (openUsage !== null) { if (openUsage === 'session') usageUI.range = 'session'; usageUI.open(); } })
+// ?settings opens the current project's settings card on load, ?settings=always with the always-to-you list open,
+// ?settings=hub the Whole hub panel (decision 44 B; for screenshots and click-tests).
+const openSettings = new URLSearchParams(location.search).get('settings');
+load().then(() => {
+  startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); bootReadout();
+  if (openUsage !== null) { if (openUsage === 'session') usageUI.range = 'session'; usageUI.open(); }
+  if (openSettings === 'hub') settingsCards.openHub();
+  else if (openSettings !== null && proj()) settingsCards.openProject(proj(), { alwaysOpen: openSettings === 'always' });
+})
   .catch(() => { if (phoneStart) $('#app').classList.add('show-side'); connect(); });

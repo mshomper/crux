@@ -7,7 +7,12 @@
 //   goes to the human instead.
 // - 'allow': contained work the hub could read in full: everything stays inside the project folder (which holds the
 //   agents' worktrees, .claude/worktrees/...) or the system temp folder, plus feature-branch pushes and PRs.
-//   classify({ tool, input, projectDir }) -> { route: 'allow' | 'unsure' | 'human', reasons: [hard stops], unsure: [why] }
+//   classify({ tool, input, projectDir, level }) -> { route: 'allow' | 'unsure' | 'human', reasons: [hard stops], unsure: [why] }
+// level (decision 45): 'standard' (Ask) and 'auto' are judged alike here (the hub decides what Ask sends on);
+// 'trusted' also allows installing packages into the project and reading or downloading from any website into it.
+// The fixed stops are the same at every level: force push, rewriting pushed history, deleting branches, pushing to
+// main, writes outside the project or temp folder, secrets, the live hub, system-wide installers, outward connector
+// actions, and merges (see THE MERGE RULE below).
 import { resolve, isAbsolute, join, basename } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -40,6 +45,149 @@ const DELETE = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'remove-item', 'ri'
 const KILL = new Set(['kill', 'pkill', 'killall', 'taskkill', 'stop-process', 'spps']);
 const INSTALL = new Set(['npx', 'pnpx', 'bunx', 'pip', 'pip3', 'pipx', 'conda', 'winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'gem',
   'install-module', 'install-package', 'install-script', 'update-module']);
+// ---------- addresses on this machine (review of PR #51) ----------
+// A web address aimed at this machine, read the way curl and browsers read it (new URL normalizes 127.1,
+// 2130706433, 0x7f.1, LOCALHOST, [0:0::1] and ports like 04747): { live } where live means it could be the hub on
+// 4747 (that port however written, no port at all, or a local-looking address that will not parse). null for any
+// other address, and for words that are not addresses.
+const LOCAL_WORD = /^(localhost\.?|[\w-]+\.localhost\.?|\[[0-9a-f:.]+\])(:\d*)?([/?#]\S*)?$|^(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+)){0,3}(:\d+([/?#]\S*)?|[/?#]\S*)$/i;
+const LOCAL_HINT = /localhost|\b127\.|\[[0-9a-f:.]*\]|0\.0\.0\.0/i;
+export function localAddress(word) {
+  const s = String(word || '');
+  const schemed = /^[a-z][\w+.-]*:\/\//i.test(s);
+  if (schemed ? !/^(https?|wss?|ftp):\/\//i.test(s) : !LOCAL_WORD.test(s)) return null;
+  let u;
+  try { u = new URL(schemed ? s : `http://${s}`); } catch { return LOCAL_HINT.test(s) ? { live: true } : null; }
+  const h = u.hostname.toLowerCase();
+  const local = h === '0.0.0.0' || /^127\./.test(h) || /(^|\.)localhost\.?$/.test(h) || h === '[::1]' || h === '[::]'
+    || /^\[::ffff:(7f[0-9a-f]{2}:[0-9a-f]{1,4}|0:0)\]$/.test(h);
+  if (!local) return null;
+  return { live: u.port === '' || Number(u.port) === 4747 };
+}
+
+// ---------- one flag reader (review of PR #51) ----------
+// How a program's options are spelled must never decide whether a check sees them. readFlags understands short flags
+// combined and attached (-sSLo FILE, -oFILE, -dDATA, -qO-), long flags with =value or a separate value
+// (--post-data=x, --output FILE), and PowerShell parameters by any unique prefix, with a value after a space or a
+// colon (-OutF x, -Me POST, -Body:x). Each flag comes back under the name the spec gives it; anything the spec does
+// not know is listed in unknown, so the caller can stop rather than guess.
+//   spec: { short: { o: 'out' }, long: { output: 'out' }, valued: ['out'], whole: { '-nv': 'ok' } }
+//      or { ps: { OutFile: 'out', Method: 'method' }, valued: [...] }
+//   -> { flags: [{ name, value, raw, key }], positional: [words], unknown: [raw flags] }
+//   key: the option's own name (its letter, its long name, or the full PowerShell parameter name), for allow-lists.
+export function readFlags(args, { short = {}, long = {}, valued = [], whole = {}, ps = null } = {}) {
+  const V = new Set(valued), out = { flags: [], positional: [], unknown: [] };
+  const add = (name, value, raw, key) => out.flags.push({ name, value, raw, key });
+  for (let i = 0; i < args.length; i++) {
+    const a = String(args[i]);
+    if (a === '--') { out.positional.push(...args.slice(i + 1)); break; }
+    if (ps) {
+      const m = /^-([A-Za-z][\w-]*?)(?::(.*))?$/s.exec(a);
+      if (!m) { out.positional.push(a); continue; }
+      const key = m[1].toLowerCase(), names = Object.keys(ps);
+      const exact = names.find(n => n.toLowerCase() === key);
+      const hits = names.filter(n => n.toLowerCase().startsWith(key));
+      const name = exact || (hits.length === 1 ? hits[0] : null);
+      if (!name) { out.unknown.push(a); continue; }
+      add(ps[name], V.has(ps[name]) ? (m[2] ?? args[++i]) : (m[2] ?? true), a, name);
+      continue;
+    }
+    if (whole[a]) { add(whole[a], true, a, a); continue; }
+    if (/^--[^-]/.test(a)) {
+      const k = a.slice(2).split('=')[0], eq = a.includes('=') ? a.slice(a.indexOf('=') + 1) : undefined;
+      const name = long[k];
+      if (!name) { out.unknown.push(a); continue; }
+      add(name, V.has(name) ? (eq ?? args[++i]) : (eq ?? true), a, k);   // a switch given =x keeps x (--global=true)
+      continue;
+    }
+    if (/^-[^-]/.test(a)) {
+      for (let j = 1; j < a.length; j++) {
+        const name = short[a[j]];
+        if (!name) { out.unknown.push(`-${a[j]}`); continue; }
+        if (V.has(name)) { const rest = a.slice(j + 1); add(name, rest !== '' ? rest : args[++i], a, a[j]); break; }
+        add(name, true, a, a[j]);
+      }
+      continue;
+    }
+    out.positional.push(a);   // a lone "-" (standard input or output) included
+  }
+  return out;
+}
+const flagSpec = (pairs, valued) => {   // 'o output:out' -> short o and long --output, both named out
+  const short = {}, long = {};
+  for (const [names, name] of Object.entries(pairs)) for (const n of names.split(' ')) (n.length === 1 ? short : long)[n] = name;
+  return { short, long, valued };
+};
+// curl, wget and Invoke-WebRequest / Invoke-RestMethod: what each option means for the checks.
+//   out: writes that file; outdir: saves into that folder; remote: saves under the address's own name; send: sends
+//   data; method: an HTTP method; creds: passes credentials; header: a request header; config: reads its options from
+//   a file or a command (it could set anything); input: reads addresses from a file; ok / okv: harmless.
+const CURL_FLAGS = flagSpec({
+  'o output': 'out', 'output-dir': 'outdir', 'D dump-header trace trace-ascii stderr': 'out', 'O remote-name remote-name-all': 'remote',
+  'J remote-header-name': 'remote', 'd data data-raw data-binary data-urlencode data-ascii json F form form-string T upload-file': 'send',
+  'X request': 'method', 'u user b cookie c cookie-jar n netrc netrc-file netrc-optional oauth2-bearer E cert key U proxy-user proxy-header': 'creds',
+  'H header': 'header', 'K config variable': 'config',
+  // Where the request really goes: a proxy, --connect-to (the address after the last two colons), --resolve, --url.
+  'x proxy preproxy socks4 socks4a socks5 socks5-hostname': 'proxy', 'connect-to': 'connectto', resolve: 'resolve', url: 'url',
+  's silent S show-error L location f fail fail-with-body k insecure v verbose i include I head G get # progress-bar N no-buffer compressed g globoff 4 6 R remote-time create-dirs http1.0 http1.1 http2 q no-progress-meter ssl-no-revoke Z parallel location-trusted': 'ok',
+  'A user-agent e referer m max-time connect-timeout retry retry-delay retry-max-time r range w write-out C continue-at limit-rate z time-cond max-filesize max-redirs': 'okv'
+}, ['out', 'outdir', 'send', 'method', 'creds', 'header', 'config', 'proxy', 'connectto', 'resolve', 'url', 'okv']);
+const WGET_FLAGS = { ...flagSpec({
+  'O output-document': 'doc', 'o output-file a append-output save-cookies': 'out', 'P directory-prefix': 'outdir',
+  'post-data post-file body-data body-file': 'send', method: 'method',
+  'user password http-user http-password ask-password load-cookies': 'creds', header: 'header',
+  'e execute config': 'config', 'i input-file': 'input',
+  'q quiet v verbose no-verbose c continue N timestamping r recursive k convert-links p page-requisites S server-response spider x force-directories no-check-certificate show-progress m mirror content-disposition no-clobber no-parent no-directories b background': 'ok',
+  'U user-agent T timeout t tries w wait limit-rate l level max-redirect Q quota A accept R reject D domains progress': 'okv'
+}, ['doc', 'out', 'outdir', 'send', 'method', 'creds', 'header', 'config', 'input', 'okv']), whole: { '-nv': 'ok', '-nc': 'ok', '-nd': 'ok', '-np': 'ok', '-nH': 'ok' } };
+const IWR_FLAGS = {
+  ps: { Uri: 'url', OutFile: 'out', Method: 'method', CustomMethod: 'method', Body: 'send', InFile: 'send', Form: 'send', Credential: 'creds', ProxyCredential: 'creds',
+    UseDefaultCredentials: 'creds', ProxyUseDefaultCredentials: 'creds', Token: 'creds', Authentication: 'creds', Certificate: 'creds', CertificateThumbprint: 'creds',
+    WebSession: 'creds', SessionVariable: 'creds', Headers: 'header', UseBasicParsing: 'ok', UserAgent: 'okv', TimeoutSec: 'okv', MaximumRedirection: 'okv',
+    MaximumRetryCount: 'okv', RetryIntervalSec: 'okv', ContentType: 'okv', PassThru: 'ok', SkipCertificateCheck: 'ok', Proxy: 'proxy', Resume: 'ok',
+    ErrorAction: 'okv', Verbose: 'ok', DisableKeepAlive: 'ok', TransferEncoding: 'okv', SkipHeaderValidation: 'ok', SkipHttpErrorCheck: 'ok', NoProxy: 'ok' },
+  valued: ['url', 'out', 'method', 'send', 'creds', 'header', 'proxy', 'okv']
+};
+// Environment settings that send a program's web requests somewhere else.
+const PROXY_VARS = /^(https?_proxy|all_proxy|ftp_proxy|socks_proxy|socks5_proxy)$/i;
+// Environment settings that make curl or wget read a settings file the hub cannot see (like -K): a stop in front of
+// a website download at Trusted.
+const CONFIG_HOME_VARS = /^(curl_home|home|xdg_config_home|appdata|userprofile|wgetrc|systemwgetrc|homedrive|homepath)$/i;
+// Requests to this machine (any port) pass only with options on these short lists (fourth review of PR #51): every
+// option is first resolved against the program's full list (so -Me is Method, never a shortened something else), then
+// its own name must be here. -X / -d / --json and -Method / -Body change things, so only towards a test hub's port.
+const LOCAL_OK = {
+  curl: new Set('s silent S show-error f fail fail-with-body L location i include I head N no-buffer m max-time connect-timeout retry w write-out A user-agent b cookie u user H header o output X request d data data-raw data-binary data-urlencode json G get compressed http1.0 http1.1 http2'.split(' ')),
+  wget: new Set('q quiet S server-response T timeout t tries header O output-document post-data body-data method -nv no-verbose'.split(' ')),
+  iwr: new Set(['Uri', 'Method', 'Body', 'ContentType', 'Headers', 'UseBasicParsing', 'TimeoutSec', 'OutFile', 'ErrorAction'])
+};
+// The only environment settings allowed in front of a request to this machine (VAR=value, export, $env:).
+const LOCAL_ENV_OK = new Set(['crux_hub_data', 'crux_home', 'no_color']);
+// pip install / uninstall / download / wheel. place: a folder it writes to (must be inside); target: --target and the
+// like (also a place); machine: installs for the user or the machine, or into another Python.
+const PIP_FLAGS = (() => {
+  const s = flagSpec({
+    'user prefix root break-system-packages python': 'machine', 'src cache-dir log e editable': 'place',
+    'r requirement c constraint i index-url extra-index-url f find-links no-binary only-binary platform python-version implementation abi progress-bar trusted-host timeout retries proxy exists-action global-option config-settings C report': 'okv',
+    'U upgrade q quiet v verbose I ignore-installed no-deps pre no-cache-dir force-reinstall require-hashes no-build-isolation disable-pip-version-check no-index no-warn-script-location no-compile y yes upgrade-strategy': 'ok'
+  }, ['machine', 'place', 'okv']);
+  for (const k of ['t', 'target', 'd', 'dest', 'w', 'wheel-dir']) (k.length === 1 ? s.short : s.long)[k] = 'target';
+  s.valued.push('target');
+  return s;
+})();
+const webFlags = head => head === 'curl' ? CURL_FLAGS : head === 'wget' ? WGET_FLAGS : IWR_FLAGS;
+// Programs that run a script handed to them, on a pipe or as a file (download-and-run, review of PR #51).
+const INTERPRETERS = new Set(['node', 'nodejs', 'python', 'python3', 'py', 'sh', 'bash', 'zsh', 'dash', 'pwsh', 'powershell', 'iex', 'invoke-expression',
+  'cmd', 'perl', 'ruby', 'deno', 'bun', 'source', '.']);
+const DOWNLOADERS = new Set([...['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod', 'start-bitstransfer']]);
+// A download written anywhere in a command's text, not only as its first word: the downloaders by name, and
+// PowerShell's download cradles (Net.WebClient, DownloadString / DownloadFile / DownloadData, HttpClient, WebRequest).
+const DOWNLOAD_TEXT = /(^|[^\w-])(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|start-bitstransfer)(?![\w-])|net\.webclient|\.download(string|file|data)(async|taskasync)?\s*\(|httpclient|\.getstring(async)?\s*\(|\[(system\.)?net\.(http)?webrequest\]/i;
+
+// Installers that put software on the whole machine: a stop at every level, Trusted included (decision 45).
+const SYSTEM_WIDE = new Set(['winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'conda', 'pipx', 'gem', 'install-module', 'install-package', 'install-script', 'update-module']);
+// Programs that read or download from a web address: Trusted lets them read and save into the project (decision 45).
+const WEB_READ = new Set(['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod']);
 const INDIRECT = new Set(['sudo', 'runas', 'su', 'doas', 'bash', 'sh', 'zsh', 'cmd', 'powershell', 'pwsh', 'wsl', 'start', 'start-process',
   'saps', 'invoke-expression', 'iex', 'invoke-command', 'icm', 'invoke-item', 'ii', 'eval', 'exec', 'source', '.', 'xargs', 'env',
   'printenv', 'set', 'get-credential', 'get-secret']);
@@ -73,15 +221,32 @@ const okValue = v => !/[`*?<>|;&\n[\]]|\$\(|\.\./.test(v) && !/[{}]/.test(v.repl
 // Properties read off the result of a read-only cmdlet: (Get-Item x).LinkType, (Invoke-WebRequest ...).Content
 const PROPERTY = /^(\.(content|statuscode|statusdescription|linktype|target|length|count|name|fullname|exists|attributes|lastwritetime|creationtime|extension|basename|headers|rawcontent|mode))+$/i;
 
+// ---------- THE MERGE RULE (decision 45 B) ----------
+// Matt, 2026-11-12: "install packages, open web, merge after a review with owner permission". In every project,
+// Trusted included, merging a code pull request (gh pr merge) or merging into a branch (git merge) needs the owner's
+// yes on that specific merge: the hub sends it to the owner as a card, and once the owner says yes the orchestrator
+// does the merge. Trusted does not remove that. This one function is where that rule lives; to let a level merge
+// without a card, return false for it here (and say so on the settings card, public/project-settings.js).
+export const MERGE_RULE = 'Merges: the orchestrator merges after a review, once you say yes.';
+export function mergeNeedsOwner({ level = 'auto' } = {}) {   // eslint-disable-line no-unused-vars
+  return true;
+}
+
 // agent: the asking agent's name; madeTemp: temp folders it created earlier (full paths). Both decide which temp
 // folders count as its own for deletes (R005). The result's tempMade lists temp folders this request would create.
-export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [] }) {
+// level: the project's permission level (decision 45); only 'trusted' changes what is allowed here.
+export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], level = 'auto' }) {
   const c = new Check(projectDir, tmp, home);
+  c.level = level;
+  c.trusted = level === 'trusted';
   c.agent = String(agent || '').toLowerCase();
   c.madeTemp = new Set([...madeTemp].map(norm));
   c.tempMade = new Set();
   c.fresh = new Set();   // temp folders $(mktemp) makes in this very command: its own, but not worth remembering by name
   c.envSet = new Map();  // environment settings the command makes for what follows (export X=, $env:X =)
+  c.downloaded = new Set();   // files this command downloads: running one later in it is a stop
+  c.cmdText = String(input.command || '');   // the whole command, for checks that look at all of it ($PSDefaultParameterValues)
+  c.assigned = new Set();     // every shell variable the command assigns, exported or not (see envNames)
   const out = classifyWith(c, tool, input);
   return { ...out, tempMade: [...c.tempMade] };
 }
@@ -150,7 +315,7 @@ class Check {
     if (SECRET.test(n)) this.stop(`Touches secrets or credentials: ${p}`);
     if (write && w === 'inside') {
       const rel = norm(resolve(cwd, String(p))).slice(norm(this.projectDir).length + 1);
-      if (DEP_FILES.test(rel)) this.stop(`Changes dependencies (${basename(rel)})`);
+      if (DEP_FILES.test(rel) && !this.trusted) this.stop(`Changes dependencies (${basename(rel)})`);   // Trusted: the project's own packages
       if (/^\.git(\/|$)/.test(rel)) this.stop('Writes inside .git (history)');
       if (/^\.crux(\/|$)/.test(rel)) this.stop("Writes the hub's own log (.crux)");
       if (/(^|\/)\.claude\/settings/.test(rel)) this.stop("Changes Claude Code's permission settings");
@@ -170,8 +335,8 @@ class Check {
       if (!f) return this.unsure('No file named');
       return void this.path(f, cwd, { write: true });
     }
-    // Reading docs is allowed (R004) but the hub cannot tell a docs page from any other address.
-    if (tool === 'WebFetch') return this.unsure(`Reads a web page (${String(input.url || '').slice(0, 80)})`);
+    // Reading docs is allowed (R004) but the hub cannot tell a docs page from any other address. Trusted: any website.
+    if (tool === 'WebFetch') return this.trusted ? undefined : this.unsure(`Reads a web page (${String(input.url || '').slice(0, 80)})`);
     // The user's claude.ai connectors (Gmail, Calendar, Drive, ...): anything that sends, shares, changes or deletes is a
     // hard stop in every mode; reading goes to the orchestrator (a code project rarely needs the user's mail); a tool not on
     // the read list is a hard stop by default.
@@ -217,7 +382,65 @@ class Check {
     if (/`/.test(s.replace(/'[^']*'/g, ''))) this.unsure(ps ? 'Backtick escapes the hub cannot read' : 'Command substitution (backticks)');
     if (/\$\(|<\(|>\(/.test(s.replace(/'[^']*'/g, ''))) this.unsure('Command substitution the hub cannot read');
     let cwd = this.projectDir;
-    for (const part of splitParts(s, ps)) cwd = this.part(part, cwd, ps);
+    const parts = splitParts(s, ps, true);
+    this.pipeRuns(parts, s, ps);
+    for (const part of parts) cwd = this.part(part.text, cwd, ps);
+  }
+
+  // The head (program name) of one part of a command, as pipeRuns and the substitution check read it.
+  headOf(text) {
+    const w = tokens(text).map(t => t.text);
+    let k = 0; while (k < w.length - 1 && /^\w+=/.test(w[k])) k++;
+    // A PowerShell assignment: $s = irm URL, $s =irm URL, $s=irm URL: the program is what comes after the =.
+    if (/^\$[\w:]+$/.test(w[k] || '') && w[k + 1] === '=') k += 2;
+    else if (/^\$[\w:]+$/.test(w[k] || '') && /^=./.test(w[k + 1] || '')) { w[k + 1] = w[k + 1].slice(1); k += 1; }
+    else if (/^\$[\w:]+=./.test(w[k] || '')) w[k] = w[k].slice(w[k].indexOf('=') + 1);
+    const first = w[k] || '';
+    return { head: (this.pathLike(first) ? basename(first.replace(/\\/g, '/')) : first).toLowerCase().replace(/\.(exe|cmd|bat)$/, ''), args: w.slice(k + 1) };
+  }
+
+  // Download-and-run (review of PR #51), at every level: a download piped into a program that runs what it is given
+  // (curl URL | sh, | node, | python3, iwr URL | iex) is a stop. A download from this machine piped into a program
+  // that only reads it as data (curl localhost:4791/api/state | node -e "...") is fine. Anything else piped into a
+  // program that takes its script from the pipe is not counted as contained. (Running a file the same command
+  // downloaded is caught in simple().)
+  // s: the whole command (heredocs already taken out), for the substitution check.
+  pipeRuns(parts, s = '', ps = false) {
+    let fetched = null;   // 'web' or 'local' once a download has been seen earlier in the command
+    const heads = parts.map(p => this.headOf(p.text).head);
+    // A download anywhere in the command: a downloader as a program, or a PowerShell download cradle anywhere in the
+    // text ((New-Object Net.WebClient).DownloadString(...), HttpClient, irm inside a script block).
+    const downloads = heads.some(h => DOWNLOADERS.has(h)) || DOWNLOAD_TEXT.test(s);
+    // iex / Invoke-Expression, a script block made from text, or Invoke-Command -ScriptBlock, with a download
+    // anywhere in the same command: iex (iwr URL), $s = irm URL; iex $s, & ([scriptblock]::Create((irm URL))).
+    const runsText = heads.some(h => /^(iex|invoke-expression)$/.test(h)) || /\[scriptblock\]::create/i.test(s)
+      || (heads.some(h => /^(invoke-command|icm)$/.test(h)) && /\s-s(c(r(i(p(t(b(l(o(c(k)?)?)?)?)?)?)?)?)?)?\b/i.test(s));
+    if (runsText && downloads) this.stop('Runs what it downloads (iex or a script block with a download in the same command)');
+    // (New-Object Net.WebClient).DownloadFile(URL, 'a.ps1'): that file counts as downloaded.
+    for (const m of s.matchAll(/\.DownloadFile(?:Async|TaskAsync)?\s*\(\s*['"][^'"]*['"]\s*,\s*['"]([^'"]+)['"]/gi)) {
+      const p = this.abs(m[1], this.projectDir); if (typeof p === 'string') this.downloaded?.add(norm(p));
+    }
+    // A command or process substitution that downloads, feeding a program that runs scripts:
+    // sh -c "$(curl URL)", bash <(curl URL), source <(curl URL), . <(curl URL), node -e "$(curl URL)".
+    const fetchingSub = substitutions(s).some(inner => DOWNLOAD_TEXT.test(inner) || splitParts(inner, ps).some(p => DOWNLOADERS.has(this.headOf(p).head)));
+    if (fetchingSub && heads.some(h => INTERPRETERS.has(h) || /^(eval|exec|xargs)$/.test(h))) this.stop('Runs what it downloads (a download inside a command substitution)');
+    for (const { text, op } of parts) {
+      const { head, args } = this.headOf(text);
+      if (DOWNLOADERS.has(head)) {
+        const urls = args.filter(x => /^[a-z]+:\/\/|^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(x) || localAddress(x));
+        const web = !urls.length || urls.some(u => !localAddress(u));
+        fetched = fetched === 'web' || web ? 'web' : 'local';
+      }
+      // A download piped into a program that writes it to a file (| tee a.sh, | Out-File a.ps1): that file counts
+      // as downloaded, so running it later in the command is caught.
+      if (fetched && op === '|' && /^(tee|tee-object|out-file|set-content|sc|add-content|ac)$/.test(head)) {
+        for (const a of args.filter(x => !x.startsWith('-'))) { const p = this.abs(a, this.projectDir); if (typeof p === 'string') this.downloaded?.add(norm(p)); }
+      }
+      if (op !== '|' || !INTERPRETERS.has(head)) continue;
+      const script = stdinScript(head, args);
+      if (fetched === 'web' || (fetched && script)) this.stop(`Runs what it downloads (a download piped into ${head})`);
+      else if (script) this.unsure(`Runs a script fed to ${head} through a pipe`, true);
+    }
   }
 
   // Command substitutions whose output the hub knows, replaced by that value before the words are judged (R005):
@@ -274,7 +497,7 @@ class Check {
 
   // One simple command. Returns the working folder for the next one (only cd changes it).
   part(raw, cwd, ps) {
-    const words = tokens(raw);
+    const words = tokens(raw, ps);
     if (!words.length) return cwd;
     if (this.defineVars(words, ps, cwd)) return cwd;
     const sets = this.bind(words);
@@ -316,7 +539,11 @@ class Check {
     const set = (key, vals) => {
       if (vals.length === 1 && vals[0] === 'SHORTCUT') { this.vars.delete(key); return true; }   // a COM object, not text
       const ok = vals.length && vals.every(v => v != null && okValue(v));
-      if (!ok) { this.vars.delete(key); (this.localVars ||= new Set()).add(key); return false; }   // known only at run time
+      if (!ok) {   // known only at run time; an environment setting is still noted by name (its value unknown)
+        this.vars.delete(key); (this.localVars ||= new Set()).add(key);
+        if (key.startsWith('env:') || exported) this.envSet.set(key.replace(/^env:/, ''), null);
+        return false;
+      }
       if (vals.some(v => SECRET.test(norm(v)))) this.stop(`Touches secrets or credentials: ${vals.join(' ')}`);
       if (/(^|:)\w*port\w*$/.test(key) && vals.includes('4747')) this.stop("Sets a port to the hub's own 4747");
       this.vars.set(key, vals);
@@ -351,11 +578,18 @@ class Check {
           if (a && b && /^\$\{?env:(temp|tmp)\}?$|^[a-z]:[\\/]/i.test(a) && !/\$/.test(b)) { val = `${a}\\${b}`; joined = true; }
         }
         if (val != null && (last.quoted || joined || /^\d+$/.test(val))) pairs = [[`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase(), val]];
-        else if (m[3] !== undefined || words[1]?.text === '=' || /^=/.test(words[1]?.text || '')) { this.vars.delete(`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase()); return false; }
+        else if (m[3] !== undefined || words[1]?.text === '=' || /^=/.test(words[1]?.text || '')) {
+          this.vars.delete(`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase());
+          if (m[1]) this.envSet.set(m[2].toLowerCase(), null);   // $env:X = <something not literal>: still an environment setting
+          return false;
+        }
       }
     } else {
       const ws = t0 === 'export' ? words.slice(1) : words;
       if (ws.length && ws.every(w => /^[A-Za-z_]\w*=/.test(w.text))) pairs = ws.map(w => [w.text.split('=')[0].toLowerCase(), w.text.slice(w.text.indexOf('=') + 1)]);
+      // Exported or not, a shell assignment counts as an environment setting for curl and wget: HOME, USERPROFILE and
+      // APPDATA are already in the environment, so HOME=. changes what the next curl reads (fifth review of PR #51).
+      if (pairs) for (const [k] of pairs) this.assigned.add(k);
     }
     if (!pairs) return false;
     if (SECRET_VAR.test(pairs.map(p => p[0]).join(' ')) && pairs.some(p => /\$/.test(p[1]))) { for (const w of words) this.word(w, cwd); return false; }
@@ -368,7 +602,7 @@ class Check {
   // One simple command, its variables already filled in.
   simple(words, cwd, ps) {
     // redirections: > file, >> file, 2> file, < file (2>&1 needs no check)
-    const keep = [];
+    const keep = [], wrote = [];
     for (let i = 0; i < words.length; i++) {
       const w = words[i];
       if (!w.op) { keep.push(w); continue; }
@@ -377,8 +611,13 @@ class Check {
       if (!target) { this.unsure('A redirection with no file'); continue; }
       this.word(target, cwd);
       if (!/^\$null$/i.test(target.text)) this.path(target.text, cwd, { write: !w.text.startsWith('<') });
+      if (!w.text.startsWith('<')) wrote.push(target.text);
     }
     words = keep;
+    // What a download writes through > or >> counts as downloaded: running it later in this command is a stop.
+    if (wrote.length && words.length && DOWNLOADERS.has(basename(String(words.find(x => !/^\w+=/.test(x.text))?.text || '').replace(/\\/g, '/')).toLowerCase().replace(/\.(exe|cmd|bat)$/, ''))) {
+      for (const t of wrote) { const a = this.abs(t, cwd); if (typeof a === 'string' && !['null', 'outside'].includes(a)) this.downloaded?.add(norm(a)); }
+    }
     // VAR=value cmd: judged by the command after it; the value is checked like any word (secrets, variables), and
     // the program sees it (see envAway and node: a test hub's data and profile folders).
     this.envNow = new Map();
@@ -404,9 +643,16 @@ class Check {
     const first = words[0].text;
     const head = (this.pathLike(first) ? basename(first.replace(/\\/g, '/')) : first).toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
     const args = words.slice(1).map(w => w.text);
+    // Running a file this same command just downloaded (curl ... -o a.sh && sh a.sh; ; node a.js; ./a.sh): a stop.
+    if (this.downloaded?.size) {
+      const got = x => { const a = this.abs(x, cwd); return typeof a === 'string' && this.downloaded.has(norm(a)); };
+      if (got(first) || ((INTERPRETERS.has(head) || /^(start|start-process|saps|invoke-item|ii|call)$/.test(head)) && args.some(got))) {
+        this.stop(`Runs a file this command just downloaded (${words.map(w => w.text).join(' ').slice(0, 80)})`);
+      }
+    }
     this.ps = ps;
     // Every word after the program: variables, addresses and secrets (paths are judged by what the program does).
-    this.urlsHere = []; this.localUrls = [];
+    this.urlsHere = []; this.localUrls = []; this.fileUrls = [];
     // The script after powershell -Command is read as PowerShell on its own (see run), so its words are not checked here.
     const psAt = /^(powershell|pwsh)$/.test(head) ? args.findIndex(a => /^-(c|command)$/i.test(a)) : -1;
     for (const w of (psAt >= 0 ? words.slice(1, psAt + 2 - 1) : words.slice(1))) this.word(w, cwd);
@@ -414,7 +660,9 @@ class Check {
     // An address is a network call, except a PR's own text, GitHub for git, and this machine (localhost).
     const github = this.urlsHere.every(u => /^(https:\/\/|git@)github\.com[/:]/i.test(u));
     const allowsAddress = (head === 'gh' && args[0] === 'pr' && args[1] === 'create') || (head === 'git' && github && args.some(a => /^(clone|fetch|pull|ls-remote)$/.test(a)));
-    if (this.urlsHere.length && !allowsAddress) this.stop(`Reaches the network (${this.urlsHere[0].slice(0, 80)})`);
+    // Trusted (decision 45): an address is no stop by itself; what the program does with it is judged below
+    // (sending data, pushing, ssh and the like stay stops). Anything that reaches git or gh keeps its own checks.
+    if (this.urlsHere.length && !allowsAddress && !(this.trusted && head !== 'gh')) this.stop(`Reaches the network (${this.urlsHere[0].slice(0, 80)})`);
     if (['cd', 'pushd', 'set-location', 'sl', 'push-location', 'chdir'].includes(head)) {
       const to = args.find(a => !a.startsWith('-'));
       if (!to) return this.home;
@@ -487,15 +735,60 @@ class Check {
     const outsideHere = this.where(cwd, cwd) === 'outside';
     // A request to this machine: reading (GET) is fine anywhere, the hub on 4747 included. Sending data to the
     // hub on 4747 changes it: a hard stop. Sending data to a test hub is left to the orchestrator.
+    // A downloader pointed at a file on this computer (curl file:///c/Users/me/.ssh/id_rsa -o k.txt) copies it: a stop.
+    if (DOWNLOADERS.has(head) && this.fileUrls?.length) return this.stop(`Reads a file on this computer through a file:// address (${this.fileUrls[0].slice(0, 80)})`);
+    // PowerShell's $PSDefaultParameterValues can give Invoke-RestMethod an address or a method no word shows.
+    if (DOWNLOADERS.has(head) && /\$PSDefaultParameterValues/i.test(this.cmdText || '')) return this.stop(`${head} in a command that sets $PSDefaultParameterValues (hidden options)`);
+    // Requests to this machine (any port) pass on an allow-list (fourth review of PR #51): every option on LOCAL_OK, no
+    // environment setting in front but LOCAL_ENV_OK, and the target taken only from the addresses themselves (curl and
+    // wget: their positional words; iwr / irm: -Uri or the first positional word). To the hub on 4747, or to this
+    // machine with no port, only a plain GET; changes only towards a test hub's port.
     if (/^(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)$/.test(head) && !this.urlsHere.length && this.localUrls.length) {
-      const sends = args.some(a => /^(-X|--request|-d|--data(-\w+)?|-F|--form|--json|-T|--upload-file|-Method|-Body|--post-data|--post-file)$/i.test(a) || /^-X(POST|PUT|PATCH|DELETE)$/i.test(a))
-        && !args.some((a, i) => /^(-X|--request|-Method)$/i.test(args[i - 1] || '') && /^(GET|HEAD)$/i.test(a));
-      if (sends && this.localUrls.some(u => /:4747\b/.test(u) || !/:\d+/.test(u))) return this.stop('Sends a change to the hub on port 4747 (or to localhost with no port named)');
-      // Sending to a test hub (any other port on this machine) is contained.
-      const out = args.findIndex(a => /^(-o|--output|-OutFile)$/i.test(a));
-      if (out >= 0 && args[out + 1]) this.path(args[out + 1], cwd, { write: true });
+      const fam = head === 'curl' ? 'curl' : head === 'wget' ? 'wget' : 'iwr';
+      const r = readFlags(args, webFlags(fam));
+      const why = m => this.stop(`${head} to this machine ${m}`);
+      if (args.some(openHashtable)) return why('with a hashtable whose braces do not close');
+      const envBad = this.envNames(head).find(k => !LOCAL_ENV_OK.has(k));
+      if (envBad) return why(`with ${envBad.toUpperCase()} set in front (only ${[...LOCAL_ENV_OK].map(k => k.toUpperCase()).join(', ')} may be)`);
+      if (r.unknown.length) return why(`with an option the hub cannot check (${r.unknown[0]})`);
+      const off = r.flags.find(f => !LOCAL_OK[fam].has(f.key));
+      if (off) return why(`with an option outside the short safe list (${off.raw})`);
+      const vals = n => r.flags.filter(f => f.name === n).map(f => f.value);
+      if (r.flags.some(f => f.value === undefined)) return why('with an option that has nothing after it');
+      if (fam === 'curl' && vals('header').some(h => typeof h !== 'string' || h.startsWith('@'))) return why('with headers read from a file (-H @file)');
+      const wOut = fam === 'curl' && writeOutFile(r);
+      if (wOut) return why(`with -w writing to a file or read from one (${wOut})`);
+      let targets;
+      if (fam === 'iwr') {
+        const uris = [...vals('url'), ...r.positional.slice(0, 1)];
+        if (r.positional.length > 1 || r.positional.some(p => /^@/.test(p))) return why(`with words the hub cannot place (${r.positional.slice(1).join(' ') || r.positional[0]})`);
+        if (uris.length !== 1 || typeof uris[0] !== 'string') return why('without exactly one -Uri');
+        targets = uris;
+      } else targets = r.positional;
+      if (!targets.length) return why('without an address');
+      // A target off this machine is the network (Auto) or a website download (Trusted).
+      const away = targets.find(a => !localAddress(a));
+      if (away && !this.trusted) return this.stop(`Reaches the network (${String(away).slice(0, 80)})`);
+      if (away) return this.webRead(head, args, cwd);
+      const methods = vals('method');
+      const sends = vals('send').length > 0 || methods.some(m => typeof m !== 'string' || !/^(GET|HEAD)$/i.test(m));
+      const live = targets.some(u => localAddress(u)?.live !== false);   // port 4747 as a number, no port, or unreadable
+      if (live && sends) return this.stop('Sends a change to the hub on port 4747 (or to this machine with no port named)');
+      const saves = [...vals('out'), ...vals('doc')];
+      // A test hub (any other port on this machine) is contained: only where it saves is checked.
+      const intoHere = fam === 'wget' && !vals('doc').length;
+      r.saves = saves; r.dirs = []; r.intoHere = intoHere;
+      for (const o of [...r.saves, ...r.dirs]) {
+        if (o === true || o == null) { this.stop(`${head} saves to a file the hub cannot read`); continue; }
+        if (o === '-' || /^(\/dev\/null|nul|\$null)$/i.test(o)) continue;
+        this.path(o, cwd, { write: true });
+        const a = this.abs(o, cwd); if (typeof a === 'string') this.downloaded?.add(norm(a));
+      }
+      if (r.intoHere) this.path(cwd, cwd, { write: true });
       return;
     }
+    if (this.trusted && WEB_READ.has(head)) return this.webRead(head, args, cwd);
+    if (this.trusted && /^(ping|nslookup|test-netconnection|tnc)$/.test(head)) return;   // only looks an address up
     if (NETWORK.has(head)) return this.stop(`Reaches the network (${head})`);
     // Programs that write: a target outside the project folder or a temp folder is a hard stop.
     const recursive = args.some(a => /^(-recurse|--recursive|-[rf]*r[rf]*)$/i.test(a));
@@ -509,7 +802,9 @@ class Check {
       return;
     }
     if (KILL.has(head)) return this.kill(head, args, cwd);
-    if (INSTALL.has(head)) return this.stop(`Installs software (${head})`);
+    if (/^(pip3?)$/.test(head)) return this.pip(words[0].text, args, cwd);
+    if (INSTALL.has(head)) return this.stop(SYSTEM_WIDE.has(head) ? `Installs software system-wide (${head})` : `Installs software (${head})`);
+    if (head === 'uv' || head === 'poetry') return this.pyProject(head, args, cwd);
     if (/^(env|printenv|set|get-credential|get-secret)$/.test(head)) return this.stop(`Reads environment variables or credentials (${head})`);
     if (INDIRECT.has(head)) return this.unsure(`Runs commands the hub cannot read (${head})`);
     // R004: deleting inside the project folder or a temp folder is contained; anywhere else is a hard stop.
@@ -539,10 +834,14 @@ class Check {
     // outside, the orchestrator decides.
     const away = outsideHere || positional.some(a => this.outside(a, cwd)) || [...this.env().values()].some(v => this.outside(v, cwd));
     if (head === 'node') { this.node(args, cwd); if (away) this.unsure('Runs node with a path outside the project folder', true); return; }
-    if (/^(python3?|py)$/.test(head)) { this.python(args); if (away) this.unsure('Runs python with a path outside the project folder', true); return; }
-    if (/^(npm|pnpm|yarn|bun)$/.test(head)) { this.npm(args, cwd); if (away) this.unsure('Runs npm outside the project folder', true); return; }
+    if (/^(python3?|py)$/.test(head)) { this.python(args, words[0].text, cwd); if (away) this.unsure('Runs python with a path outside the project folder', true); return; }
+    if (/^(npm|pnpm|yarn|bun)$/.test(head)) { this.npm(args, cwd, head); if (away) this.unsure('Runs npm outside the project folder', true); return; }
     if (head === 'cargo' || head === 'go' || head === 'dotnet') {
-      if (/^(install|add|get)$/.test(args[0] || '')) return this.stop(`Installs software (${head} ${args[0]})`);
+      // Trusted: adding a package to this project (cargo add, go get, dotnet add package). cargo install and go
+      // install put programs on the whole machine: system-wide, a stop at every level.
+      const local = (head === 'cargo' && args[0] === 'add') || (head === 'go' && args[0] === 'get') || (head === 'dotnet' && args[0] === 'add');
+      if (local && this.trusted && ['inside', 'tmp'].includes(this.where(cwd, cwd))) return;
+      if (/^(install|add|get)$/.test(args[0] || '')) return this.stop(`Installs software${local ? '' : ' system-wide'} (${head} ${args[0]})`);
       if (!/^(build|test|run|vet|fmt|check|clippy)$/.test(args[0] || '')) this.unsure(`Not sure what this does (${head} ${args[0] || ''})`.trim());
       return;
     }
@@ -564,8 +863,13 @@ class Check {
   items(list) { return this.ps ? list.flatMap(t => t.split(',')).filter(Boolean) : list; }
   // Environment settings the next program sees: export X= and $env:X = earlier in the command, X=v in front of it.
   env() { return new Map([...(this.envSet || []), ...(this.envNow || [])]); }
+  // The names of every environment setting a downloader may see: env() plus, for curl and wget, every shell
+  // assignment earlier in the command (HOME=.; curl ...), exported or not.
+  envNames(head) { return [...new Set([...this.env().keys(), ...(/^(curl|wget)$/.test(head) ? this.assigned || [] : [])])]; }
 
   word(w, cwd) {
+    // A PowerShell hashtable (one word, as written): every word inside it is checked like any other.
+    if (w.hashtable) { for (const x of tokens(w.text.replace(/^@\{|\}$/g, ' ').replace(/[;=]/g, ' '))) this.word(x, cwd); return; }
     const t = w.text;
     if (w.vars) {
       // Every variable named in the word: $X, ${X}, $env:X, %X%.
@@ -581,14 +885,20 @@ class Check {
       }
       if (/\$\?/.test(t)) { /* exit status: fine */ }
     }
-    // Addresses: this machine (localhost) and local files are not the network.
-    const url = /(?:^|=)((?:https?|ftp|wss?|file):\/\/\S+|(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/\S*)?)/i.exec(t)?.[1];
-    if (url || /^[\w.-]+@[\w.-]+:/.test(t)) {
-      const u = url || t;
-      if (/^file:\/\//i.test(u)) return;
-      if (/^(?:https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(u)) { this.localUrls?.push(u); return; }
-      this.urlsHere?.push(u); return;
+    // Addresses: this machine (localhost in any spelling, localAddress) and local files are not the network. A file://
+    // address is checked for secrets like any path, and remembered: a downloader given one is a stop (run()).
+    const url = /(?:^|=)((?:https?|ftp|wss?|file):\/\/\S+)/i.exec(t)?.[1];
+    const bare = t.includes('=') ? t.slice(t.indexOf('=') + 1) : t;
+    if (url && /^file:/i.test(url)) {
+      let p = url.replace(/^file:\/\/(localhost)?/i, '');
+      try { p = decodeURIComponent(p); } catch { }
+      if (SECRET.test(norm(p))) this.stop(`Touches secrets or credentials: ${url}`);
+      this.fileUrls?.push(url);
+      return;
     }
+    if (url) { (localAddress(url) ? this.localUrls : this.urlsHere)?.push(url); return; }
+    if (localAddress(bare)) { this.localUrls?.push(bare); return; }
+    if (/^[\w.-]+@[\w.-]+:/.test(t)) { this.urlsHere?.push(t); return; }
     const v = /^--?[\w-]+=(.+)$/.exec(t)?.[1] ?? (t.startsWith('-') ? null : t);
     if (v == null) return;
     if (SECRET.test(norm(v))) this.stop(`Touches secrets or credentials: ${v}`);
@@ -610,7 +920,7 @@ class Check {
     const [sub, ...rest] = a;
     const flag = (...fs) => rest.some(x => fs.includes(x));
     if (!sub) return;
-    if (sub === 'merge') return this.stop('Merges branches (git merge)');
+    if (sub === 'merge') return this.merge('Merges branches (git merge)');
     // In a repo outside the project folder (git -C ../other, or after cd ..), only reading is fine.
     if (this.where(cwd, cwd) === 'outside' && !GIT_READ.has(sub) && sub !== 'branch' || (sub === 'branch' && this.where(cwd, cwd) === 'outside' && rest.some(x => !x.startsWith('-')))) {
       return this.stop(`Changes a git repo outside the project folder (git ${sub})`);
@@ -620,7 +930,9 @@ class Check {
     if (GIT_HISTORY.has(sub)) return this.stop(`Rewrites history (git ${sub})`);
     if (GIT_FETCH.has(sub)) {
       const pos = rest.filter(x => !x.startsWith('-'));
-      if (pos[0] && !/^[\w.-]+$/.test(pos[0]) && !/^(https:\/\/|git@)github\.com[/:]/i.test(pos[0])) return this.stop(`Fetches from an address the hub cannot check (${pos[0]})`);
+      // Trusted: downloading from any https address into the project is fine too (decision 45).
+      const web = this.trusted && /^https:\/\/[\w.-]+\//i.test(pos[0] || '');
+      if (pos[0] && !web && !/^[\w.-]+$/.test(pos[0]) && !/^(https:\/\/|git@)github\.com[/:]/i.test(pos[0])) return this.stop(`Fetches from an address the hub cannot check (${pos[0]})`);
       if (sub === 'clone' && pos[1] && this.outside(pos[1], cwd)) return this.stop(`Clones outside the project folder (${pos[1]})`);
       return;
     }
@@ -754,7 +1066,7 @@ class Check {
   gh(args) {
     const [a, b] = args;
     if (a === 'pr' && /^(create|list|view|status|diff|checks)$/.test(b || '')) return;
-    if (a === 'pr' && b === 'merge') return this.stop('Merges a pull request (gh pr merge)');
+    if (a === 'pr' && b === 'merge') return this.merge('Merges a pull request (gh pr merge)');
     if (a === 'auth' || a === 'secret' || a === 'api') return this.stop(`Touches GitHub credentials or calls its API directly (gh ${a})`);
     this.unsure(`Not sure what this does (gh ${[a, b].filter(Boolean).join(' ')})`);
   }
@@ -774,19 +1086,173 @@ class Check {
     }
   }
 
-  python(args) {
+  // A merge comes to the owner as a card unless THE MERGE RULE (top of this file) says otherwise for this level.
+  merge(why) { if (mergeNeedsOwner({ level: this.level })) this.stop(why); }
+
+  // exe: the program as written (a project's .venv/Scripts/python is that project's own Python).
+  python(args, exe = 'python', cwd = this.projectDir) {
     if (args[0] === '-c') return this.script(args[1] || '');
     if (args[0] === '-m') {
-      if (/^(pip|ensurepip)$/.test(args[1] || '')) return this.stop('Installs software (pip)');
+      if (args[1] === 'pip') return this.pip(exe, args.slice(2), cwd);
+      if (args[1] === 'ensurepip') return this.stop('Installs software (pip)');
+      // Trusted: a virtual environment made inside the project (python -m venv .venv) is where its packages go.
+      if (args[1] === 'venv' && this.trusted) {
+        const to = args.slice(2).filter(x => !x.startsWith('-'));
+        if (to.length && to.every(t => ['inside', 'tmp'].includes(this.where(t, cwd)))) return;
+      }
       if (!/^(unittest|pytest|py_compile|compileall)$/.test(args[1] || '')) return this.unsure(`Not sure what this does (python -m ${args[1] || ''})`);
     }
   }
 
-  npm(args, cwd) {
-    const a = args.filter((x, i) => !/^--?(prefix|C|workspace|w)$/.test(x) && !/^--?(prefix|C|workspace|w)$/.test(args[i - 1] || ''));
-    const sub = a[0] || '';
-    if (NPM_INSTALL.has(sub)) return this.stop(`Installs or changes packages (npm ${sub})`);
-    if (NPM_NET.has(sub)) return this.stop(`Reaches the npm registry (npm ${sub})`);
+  // pip (decision 45): a stop at Ask and Auto. Trusted allows it into the project only: a pip that belongs to a
+  // virtual environment inside the project or temp folder, or --target into the project. The machine's own pip, and
+  // --user, --prefix or --root, install for the whole machine or the user: a stop at every level.
+  pip(exe, args, cwd) {
+    const sub = args.find(x => !x.startsWith('-')) || '';
+    if (!this.trusted) return this.stop('Installs software (pip)');
+    if (/^(list|show|freeze|check|help)$/.test(sub) || (args.length === 1 && /^(--version|-V)$/.test(args[0]))) return;
+    if (!/^(install|uninstall|download|wheel)$/.test(sub)) return this.unsure(`Not sure what this does (pip ${sub})`, true);
+    const r = readFlags(args, PIP_FLAGS);
+    if (r.unknown.length) return this.stop(`pip with an option the hub cannot check (${r.unknown[0]})`);
+    const vals = n => r.flags.filter(f => f.name === n).map(f => f.value);
+    if (vals('machine').length) return this.stop('Installs Python packages for the whole machine or user (pip --user, --prefix, --root, --python)');
+    const places = [...vals('place'), ...vals('target')];
+    for (const t of places) {
+      if (typeof t !== 'string' || !['inside', 'tmp'].includes(this.where(t, cwd))) return this.stop(`Installs Python packages outside the project (${t === true || t == null ? 'a folder the hub cannot read' : t})`);
+      this.path(t, cwd, { write: true });
+    }
+    if (vals('target').length) return;   // --target, --dest or --wheel-dir into the project: the machine's Python is untouched
+    const own = this.pathLike(exe) && ['inside', 'tmp'].includes(this.where(exe, cwd));
+    if (own) return;
+    if (/^(download|wheel)$/.test(sub) && ['inside', 'tmp'].includes(this.where(cwd, cwd))) return;   // files into the folder it runs in
+    this.stop(`Installs Python packages for the whole machine (pip outside a virtual environment in the project): use the project's .venv`);
+  }
+
+  // uv and poetry manage a project's own packages (pyproject.toml and its virtual environment): Trusted only, and
+  // only inside the project. uv tool, uv pip --system and poetry self install for the whole machine.
+  pyProject(head, args, cwd) {
+    // The subcommand is the first word that is not the value of a folder option given before it (poetry -C ../x add).
+    const sub = args.find((x, i) => !x.startsWith('-') && !/^(-C|-P|--directory|--project|--cache-dir|--python|-p|--config-file)$/.test(args[i - 1] || '')) || '';
+    const local = head === 'uv' ? /^(add|remove|sync|lock|venv|init|pip|tree)$/.test(sub) : /^(add|remove|install|update|lock|init|show|check)$/.test(sub);
+    if (head === 'uv' && sub === 'run') return this.unsure('Runs a program through uv', true);
+    if ((head === 'uv' && sub === 'tool') || (head === 'poetry' && sub === 'self') || args.some(x => /^--system$/.test(x))) return this.stop(`Installs software system-wide (${head} ${sub})`);
+    if (!local) return this.unsure(`Not sure what this does (${head} ${sub})`.trim());
+    if (!this.trusted) return this.stop(`Installs or changes packages (${head} ${sub})`);
+    if (!['inside', 'tmp'].includes(this.where(cwd, cwd))) return this.stop(`Installs packages outside the project (${head} ${sub})`);
+    // Every folder it is pointed at, however written (--target x, --target=x, -C x), and the folder uv venv and uv init
+    // make, must be inside the project or temp. uv pip --python picks another interpreter (the machine's, unless it is
+    // a path inside the project): a stop.
+    const places = [];
+    const PLACE = /^(--target|--prefix|--root|--directory|--project|--cache-dir|--venv|-C|-t|--python|-p)(?:=(.*))?$/;
+    args.forEach((x, i) => {
+      const m = PLACE.exec(x);
+      if (m) places.push({ flag: m[1], v: m[2] ?? args[i + 1] });
+      else if (/^-[Ct]./.test(x)) places.push({ flag: x.slice(0, 2), v: x.slice(2) });
+    });
+    const uvPip = head === 'uv' && sub === 'pip';
+    for (const { flag, v } of places) {
+      if (/^(--python|-p)$/.test(flag) && !(uvPip || head === 'poetry')) continue;   // uv venv --python 3.12: a version
+      if (typeof v !== 'string' || (/^(--python|-p)$/.test(flag) && !this.pathLike(v)) || !['inside', 'tmp'].includes(this.where(v, cwd))) {
+        return this.stop(`Installs packages outside the project (${head} ${sub} ${flag} ${v ?? ''})`.trim());
+      }
+    }
+    if (head === 'uv' && /^(venv|init)$/.test(sub)) {
+      const at = args.slice(args.indexOf(sub) + 1);
+      const pos = at.filter((x, i) => !x.startsWith('-') && !/^(--python|-p|--prompt|--name|--build-backend|--vcs|--author-from|--description)$/.test(at[i - 1] || ''));
+      for (const p of pos) if (!['inside', 'tmp'].includes(this.where(p, cwd))) return this.stop(`Makes a folder outside the project (${head} ${sub} ${p})`);
+    }
+  }
+
+  // Trusted (decision 45): reading or downloading from a website, saved only into the project or a temp folder.
+  // Sending anything (a form, a file, a POST) or passing credentials is not reading: a stop.
+  webRead(head, args, cwd) {
+    // curl and wget read settings files found through the environment (CURL_HOME/.curlrc, HOME, XDG_CONFIG_HOME,
+    // APPDATA, USERPROFILE, WGETRC): set in front of them, that is -K by another name.
+    const home = (head === 'curl' || head === 'wget') && this.envNames(head).find(k => CONFIG_HOME_VARS.test(k));
+    if (home) return this.stop(`${head} with ${home.toUpperCase()} set in front: it reads a settings file the hub cannot check`);
+    const r = this.webFlags(head, args);
+    if (r.unknown.length) return this.stop(`${head} with an option the hub cannot check (${r.unknown[0]})`);
+    if (r.config) return this.stop(`${head} reads its options from a file or command the hub cannot check (${r.config})`);
+    if (r.sends) return this.stop(`Sends data to a website (${head})`);
+    if (r.creds) return this.stop(`Passes credentials to a website (${head})`);
+    for (const f of r.inputs) if (!['inside', 'tmp'].includes(this.where(f, cwd))) return this.stop(`${head} reads its addresses from a file outside the project (${f})`);
+    // Where it saves: every file and folder it names, and the folder it runs in when it saves under the address's
+    // own name (wget with no -O, curl -O). Remembered, so running the file later in this command is caught.
+    for (const o of r.saves) {
+      if (o === true || o == null) return this.stop(`${head} saves to a file the hub cannot read`);
+      if (o === '-' || /^(\/dev\/null|nul|\$null)$/i.test(o)) continue;
+      this.path(o, cwd, { write: true });
+      const a = this.abs(o, cwd);
+      if (typeof a === 'string' && !['null', 'outside'].includes(a)) this.downloaded?.add(norm(a));
+    }
+    if (r.intoHere) {
+      const dir = r.dirs.length ? r.dirs.at(-1) : cwd;
+      this.path(dir, cwd, { write: true });
+      for (const u of r.urls) {
+        const name = /^[a-z]+:\/\/[^/]+\/(?:[^?#]*\/)?([^/?#]+)/i.exec(u)?.[1];
+        const a = name && this.abs(join(String(this.abs(dir, cwd)), decodeURIComponent(name)), cwd);
+        if (typeof a === 'string') this.downloaded?.add(norm(a));
+      }
+    }
+  }
+  // What a curl, wget or Invoke-WebRequest command does, read through readFlags whatever the spelling:
+  // { unknown, config, sends, creds, inputs, saves: [files], dirs: [folders], intoHere, urls }.
+  webFlags(head, args) {
+    const fam = head === 'curl' ? 'curl' : head === 'wget' ? 'wget' : 'iwr';
+    const r = readFlags(args, webFlags(fam));
+    // PowerShell splatting (iwr @p): the options sit in a variable the hub cannot read. A hashtable that does not
+    // close could swallow what follows it.
+    if (fam === 'iwr') for (const p of r.positional) if (/^@\w/.test(p)) r.unknown.push(p);
+    for (const a of args) if (openHashtable(a)) r.unknown.push(String(a).slice(0, 40));
+    const vals = n => r.flags.filter(f => f.name === n).map(f => f.value);
+    const methods = vals('method');
+    const out = {
+      unknown: r.unknown,
+      config: vals('config')[0] ?? null,
+      sends: vals('send').length > 0 || methods.some(m => typeof m !== 'string' || !/^(GET|HEAD)$/i.test(m)),
+      creds: vals('creds').length > 0 || vals('header').some(h => typeof h !== 'string' || /authorization|cookie|token|api[-_]?key|secret|password/i.test(h)),
+      inputs: vals('input').map(String),
+      saves: [...vals('out'), ...vals('doc')],
+      dirs: vals('outdir'),
+      urls: [...r.positional, ...vals('url')].map(String).filter(u => /^[a-z]+:\/\//i.test(u))
+    };
+    if (out.config === true) out.config = '?';
+    // curl -H @file reads its headers from a file, like --config: the hub cannot see what it sends. -w @file reads its
+    // format from a file, and -w '%output{file}' writes to any file: the same.
+    if (fam === 'curl' && !out.config) { const h = vals('header').find(v => typeof v === 'string' && v.startsWith('@')); if (h) out.config = `-H ${h}`; }
+    if (fam === 'curl' && !out.config) { const w = writeOutFile(r); if (w) out.config = `-w ${w}`; }
+    if (out.dirs.some(d => typeof d !== 'string')) out.saves.push(true);   // a folder option with nothing after it
+    // wget saves under the address's name unless -O names the file; curl only with -O (into --output-dir when given).
+    out.intoHere = fam === 'wget' ? !vals('doc').length : fam === 'curl' ? vals('remote').length > 0 : false;
+    // Every address the request is aimed at (named, --url, -Uri, -Uri:x), and every place it may really go instead:
+    // proxies (options and the http_proxy / all_proxy family in the environment), --connect-to and --resolve.
+    const strs = l => l.filter(v => typeof v === 'string');
+    out.addrs = strs([...r.positional, ...vals('url')]);
+    out.routes = [];
+    const bad = l => l.some(v => typeof v !== 'string');
+    if (bad(vals('url')) || bad(vals('proxy')) || bad(vals('connectto')) || bad(vals('resolve'))) out.unknown.push('an address option with nothing after it');
+    out.routes.push(...strs(vals('proxy')));
+    for (const v of strs(vals('connectto'))) {   // HOST1:PORT1:HOST2:PORT2, HOST2 empty meaning HOST1
+      const f = splitHostFields(v);
+      if (f.length !== 4) { out.unknown.push(`--connect-to ${v}`); continue; }
+      out.routes.push(`${f[2] || f[0]}:${f[3]}`);
+    }
+    for (const v of strs(vals('resolve'))) {     // [+]HOST:PORT:ADDR[,ADDR]...
+      const f = splitHostFields(v.replace(/^\+/, ''));
+      if (f.length < 3) { out.unknown.push(`--resolve ${v}`); continue; }
+      for (const a of f.slice(2).join(':').split(',')) out.routes.push(`${/:/.test(a) && !a.startsWith('[') ? `[${a}]` : a}:${f[1]}`);
+    }
+    for (const [k, v] of this.env()) if (PROXY_VARS.test(k) && v) out.routes.push(String(v));
+    return out;
+  }
+
+  npm(args, cwd, tool = 'npm') {
+    const a = args.filter((x, i) => !/^--?(prefix|C|workspace|w|dir|cwd)$/.test(x) && !/^--?(prefix|C|workspace|w|dir|cwd)$/.test(args[i - 1] || ''));
+    const sub = a[0] || (tool === 'yarn' ? 'install' : '');   // a bare yarn installs
+    if (tool === 'yarn' && sub === 'global') return this.stop(`Installs software system-wide (yarn global ${a[1] || ''})`.trim());
+    if (this.trusted && (NPM_INSTALL.has(sub) || NPM_NET.has(sub))) return this.npmTrusted(tool, sub, a, args, cwd);
+    if (NPM_INSTALL.has(sub)) return this.stop(`Installs or changes packages (${tool} ${sub})`);
+    if (NPM_NET.has(sub)) return this.stop(`Reaches the npm registry (${tool} ${sub})`);
     if (sub === 'config') return /^(get|list|ls)$/.test(a[1] || '') ? undefined : this.stop('Changes npm settings');
     if (!NPM_OK.has(sub)) return this.unsure(`Not sure what this does (npm ${sub})`);
     // "npm start" in a folder whose start script is the hub would start it on port 4747 unless a port is given.
@@ -795,6 +1261,36 @@ class Check {
       let start = '';
       try { start = JSON.parse(readFileSync(join(pre >= 0 ? resolve(cwd, args[pre + 1]) : cwd, 'package.json'), 'utf8')).scripts?.start || ''; } catch { }
       if (/server\.mjs/.test(start)) { this.hubPort(a); this.hubData(cwd, true); }
+    }
+  }
+
+  // Trusted (decision 45): installing, updating and removing the project's own packages, and reading the registry.
+  // Global installs (-g, --global, yarn global), installs into a folder outside the project, and commands that
+  // download and run a package (npx, npm exec, create, dlx), link it machine-wide, or publish or log in stay stops.
+  npmTrusted(tool, sub, a, args, cwd) {
+    // Global in any spelling: -g, -gD, --global, --global=true, --location=global or user (only --location=project is
+    // fine), yarn global, or npm settings passed through the environment (npm_config_global=true, npm_config_prefix=...).
+    const globalFlag = args.some((x, i) => (/^-[A-Za-z]+$/.test(x) && x.includes('g'))
+      || /^--global/i.test(x) || (/^--location/i.test(x) && !/^--location=project$/i.test(x) && !(x === '--location' && args[i + 1] === 'project')));
+    const npmEnv = [...this.env().keys()].find(k => /^npm_config_/i.test(k));
+    if (globalFlag || (tool === 'yarn' && sub === 'global')) return this.stop(`Installs software system-wide (${tool} ${sub}: global)`);
+    if (npmEnv) return this.stop(`Changes npm's settings through the environment (${npmEnv.toUpperCase()}), which can install outside the project`);
+    if (/^(publish|unpublish|deprecate|login|logout|adduser|token|owner|access)$/.test(sub)) return this.stop(`Publishes or signs in to the npm registry (${tool} ${sub})`);
+    if (/^(exec|x|dlx|create|link|ln|unlink)$/.test(sub)) return this.stop(`Downloads and runs a package, or links one machine-wide (${tool} ${sub})`);
+    if (/^(view|info|outdated|search|audit)$/.test(sub) && !(sub === 'audit' && a[1] === 'fix')) return;   // reads the registry
+    // Where the packages land: every --prefix / -C / --dir / --cwd / --modules-folder / --global-dir given (with a
+    // space, =, or attached), else the folder it runs in. All of them must be inside the project or temp.
+    const places = [];
+    args.forEach((x, i) => {
+      const m = /^--?(prefix|C|dir|cwd|modules-folder|global-dir|global-folder|store-dir|cache|cache-folder|virtual-store-dir)(?:=(.*))?$/.exec(x);
+      if (m) places.push(m[2] ?? args[i + 1]);
+      else if (/^-C./.test(x)) places.push(x.slice(2));
+    });
+    for (const at of places.length ? places : [cwd]) {
+      const target = at == null ? null : this.abs(at, cwd);
+      if (typeof target !== 'string' || ['null', 'outside'].includes(target) || !['inside', 'tmp'].includes(this.where(target, cwd))) {
+        return this.stop(`Installs packages outside the project (${tool} ${sub}${places.length ? ` in ${at}` : ''})`);
+      }
     }
   }
 
@@ -845,6 +1341,80 @@ class Check {
   }
 }
 
+// curl -w / --write-out given a format read from a file (@file) or one that writes to a file (%output{...}): the
+// offending value, else null.
+function writeOutFile(r) {
+  const w = r.flags.find(f => (f.key === 'w' || f.key === 'write-out') && (typeof f.value !== 'string' || f.value.startsWith('@') || /%output/i.test(f.value)));
+  return w ? String(w.value ?? '(nothing)').slice(0, 60) : null;
+}
+
+// The index of the } that closes the { at s[open], counting braces outside quotes only ('{' and "{" are text);
+// -1 when it never closes.
+function hashtableEnd(s, open) {
+  let depth = 0, q = null;
+  for (let j = open; j < s.length; j++) {
+    const d = s[j];
+    if (q) { if (d === q && !(q === '"' && s[j - 1] === '`')) q = null; continue; }
+    if (d === "'" || d === '"') { q = d; continue; }
+    if (d === '{') depth++;
+    else if (d === '}' && --depth === 0) return j;
+  }
+  return -1;
+}
+// True when a word written as a PowerShell hashtable (@{...}) does not close.
+const openHashtable = w => String(w).startsWith('@{') && hashtableEnd(String(w), 1) < 0;
+
+// "localhost:4791:[::1]:4747" -> ['localhost', '4791', '[::1]', '4747']: colon-separated fields, brackets kept whole.
+function splitHostFields(v) {
+  const out = []; let cur = '', br = false;
+  for (const c of String(v)) {
+    if (c === '[') br = true; else if (c === ']') br = false;
+    if (c === ':' && !br) { out.push(cur); cur = ''; } else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+// The text inside every command or process substitution in s: $( ... ), <( ... ), >( ... ) and `...`, nested ones
+// included, skipping single-quoted text (which the shell leaves alone).
+export function substitutions(s) {
+  const out = [];
+  s = String(s || '');
+  let dq = false;   // inside "...", a single quote is only a character
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '"' && s[i - 1] !== '\\') { dq = !dq; continue; }
+    if (s[i] === "'" && !dq) { const j = s.indexOf("'", i + 1); if (j < 0) break; i = j; continue; }
+    if (s[i] === '`') { const j = s.indexOf('`', i + 1); if (j < 0) break; out.push(s.slice(i + 1, j)); i = j; continue; }
+    if (/[$<>]/.test(s[i]) && s[i + 1] === '(') {
+      let depth = 0, j = i + 1;
+      for (; j < s.length; j++) { if (s[j] === '(') depth++; else if (s[j] === ')' && --depth === 0) break; }
+      const inner = s.slice(i + 2, j);
+      out.push(inner, ...substitutions(inner));
+      i = j;
+    }
+  }
+  return out;
+}
+
+// True when a program fed by a pipe takes its script from that pipe (no script file, no inline script): node,
+// node -, python, sh, bash -s, pwsh -Command -, cmd without /c, iex always.
+function stdinScript(head, args) {
+  const has = re => args.some(a => re.test(a));
+  const file = args.find(a => !a.startsWith('-') && !(head === 'cmd' && a.startsWith('/')));
+  if (/^(iex|invoke-expression)$/.test(head)) return true;
+  if (head === 'source' || head === '.') return !args.length || has(/^(-|\/dev\/stdin)$/);
+  if (/^(node|nodejs|deno|bun)$/.test(head)) return args.includes('-') || (!has(/^(-e|-p|--eval|--print)$/) && !file);
+  if (/^(python3?|py)$/.test(head)) return args.includes('-') || (!has(/^-[a-zA-Z]*[cm]$/) && !file);
+  if (/^(sh|bash|zsh|dash)$/.test(head)) return has(/^-[a-z]*s[a-z]*$/) || args.includes('-') || (!has(/^-[a-z]*c[a-z]*$/) && !file);
+  if (/^(pwsh|powershell)$/.test(head)) {
+    const i = args.findIndex(a => /^-(c|command|f|file|e|encodedcommand)$/i.test(a));
+    return i < 0 || args[i + 1] === '-' || args[i + 1] == null;
+  }
+  if (head === 'cmd') return !has(/^\/\/?[ck]$/i);
+  if (/^(perl|ruby)$/.test(head)) return args.includes('-') || (!has(/^-[a-zA-Z]*e$/) && !file);
+  return false;
+}
+
 // The value of `name` when the script sets it exactly once to path.join(os.tmpdir(), 'a', 'b'), else null.
 function tmpJoin(code, name, tmp) {
   const id = name.replace(/\$/g, '\\$');
@@ -857,34 +1427,51 @@ function tmpJoin(code, name, tmp) {
 }
 
 // Split at ; && || | & newlines and PowerShell { } ( ) blocks, never inside quotes.
-export function splitParts(s, ps = false) {
-  const out = []; let cur = '', q = null;
+// withOps: each part comes back as { text, op } where op is the separator just before it ('|' for a pipe).
+export function splitParts(s, ps = false, withOps = false) {
+  const out = []; let cur = '', q = null, op = '', nextOp = '', ht = 0;
   const prev = i => s[i - 1] ?? ' ';
+  const push = () => { out.push({ text: cur.trim(), op }); cur = ''; };
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (q) { cur += c; if (c === q && (q === "'" || prev(i) !== '\\')) q = null; continue; }
     if (c === '"' || c === "'") { q = c; cur += c; continue; }
+    // A PowerShell hashtable @{ a = 1; b = 2 } is one value: its ; and } do not end the command, so the options
+    // after it (-Method Post) stay with the command they belong to.
+    if (ps && c === '{' && prev(i) === '@') { ht++; cur += c; continue; }
+    if (ht > 0) { if (c === '}') ht--; cur += c; continue; }
     if (c === '\\' && !ps && s[i + 1] === '\n') { i++; continue; } // line continuation
     const brace = (c === '{' && /[\s|(;]/.test(prev(i))) || (c === '}' && /[\s|);]|^$/.test(s[i + 1] ?? '')) || c === '(' && /[\s|;=]/.test(prev(i)) || c === ')';
     if (c === '\n' || c === '\r' || c === ';' || c === '|' || c === '&' || brace) {
       if (c === '&' && /[<>]/.test(prev(i))) { cur += c; continue; } // 2>&1
-      out.push(cur); cur = '';
-      if ((c === '|' || c === '&') && s[i + 1] === c) i++;
+      nextOp = (c === '|' || c === '&') && s[i + 1] === c ? c + c : c;
+      if (cur.trim()) { push(); op = nextOp; }
+      else if (!out.length || op === '' || nextOp === '|') op = nextOp === '|' ? '|' : op || nextOp;   // "(iwr x).Content | iex": the pipe still counts
+      if (nextOp.length === 2) i++;
       continue;
     }
     cur += c;
   }
-  out.push(cur);
-  return out.map(x => x.trim()).filter(Boolean);
+  if (cur.trim()) push();
+  return withOps ? out : out.map(x => x.text);
 }
 
 // Words with quotes removed. quoted: any quotes; vars: a $ or %VAR% outside single quotes (it would expand).
-export function tokens(part) {
+// ps: a PowerShell hashtable @{ a = 'b'; c = '{' } is one word, kept as written (quotes and all); its braces are
+// counted with quotes respected, and one that does not close is marked unbalanced.
+export function tokens(part, ps = false) {
   const out = []; let cur = null;
   const push = () => { if (cur) out.push(cur); cur = null; };
   for (let i = 0; i < part.length; i++) {
     const c = part[i];
     if (/\s/.test(c)) { push(); continue; }
+    if (ps && !cur && c === '@' && part[i + 1] === '{') {
+      const end = hashtableEnd(part, i + 1);
+      const text = part.slice(i, end < 0 ? part.length : end + 1);
+      out.push({ text, quoted: true, vars: /\$/.test(text), hashtable: true, unbalanced: end < 0 });
+      i = end < 0 ? part.length : end;
+      continue;
+    }
     if (c === '>' || c === '<') {   // a redirection is its own word, even when written hard against a file name
       let op = c;
       if (cur && !cur.quoted && /^\d$/.test(cur.text)) { op = cur.text + c; cur = null; } else push();
@@ -950,14 +1537,16 @@ export function touchesSecrets(tool, input = {}) {
 // The hub's built-in rules for a project in Auto mode whose board has no rules entry yet: R005's text, with this
 // project's own folders. The orchestrator is told it is working from these, and is asked to draft a real entry.
 export const DEFAULT_RULES_ID = 'the hub\'s default rules';
-export function defaultRules(projectDir, tmp = tmpdir()) {
+export function defaultRules(projectDir, tmp = tmpdir(), level = 'auto') {
   const dir = resolve(projectDir);
+  const trusted = level === 'trusted' ? [`TRUSTED (set by {{who}} on the hub page, decision 45). On top of Auto, the hub also allows at once: installing, updating and removing packages into this project (npm, pnpm, yarn, bun, pip into the project's own virtual environment, uv, poetry, cargo add, go get), and reading or downloading from any website into the project or a temp folder. Still hard stops: global or system-wide installs (npm -g, winget, choco, pip outside a project virtual environment), npx and other download-and-run commands, sending data to websites, and every stop below. Merges: the orchestrator merges after a review, once {{who}} says yes to that merge (the hub sends each merge as a card).`] : [];
   return {
     entryId: DEFAULT_RULES_ID, isDefault: true, ts: 'default', from: 'the Crux hub (built in, from R005 on the crux board)',
     title: 'Default agent permission rules (built in)',
     body: [
       `These are the hub's built-in default rules, used because this project's board has no permission rules entry. {{Who}} may replace them with a rules entry on the board at any time.`,
       `AUTO MODE. The hub allows at once, with no prompt: anything whose effects stay inside the project folder (${dir}), an agent's own worktree (${join(dir, '.claude', 'worktrees')}\\...) or a temp folder the agent made under ${tmp}. That covers reading, searching, editing, creating and deleting files there; build, test, lint and running scripts and node; running installed programs by any path; local git, including read-only commands like merge-base and merge-tree; fetch, pull and ls-remote from the repo's own GitHub remote; git push of a feature branch; gh pr create, list, view and checks; starting and stopping test hubs on ports other than 4747; reading files anywhere except secrets.`,
+      ...trusted,
       `HARD STOPS, always to {{who}}: the git merge subcommand into main or shared branches, and gh pr merge, unless {{who}} asks for that merge in chat; pushing to main or master; force-push; deleting branches (local or remote); history rewrites of pushed commits; package installs or dependency changes; writes, deletes or moves outside the project folder, worktree or own temp folder (including ~/.claude and ~/crux); network access other than GitHub and reading docs; stopping or restarting the hub on port 4747; secrets (~/.ssh, .env files, ~/.crux-hub keys, credential stores).`,
       `UNCLEAR requests (including commands the hub can't read in full) come to the orchestrator (answer_permission), which allows them if they are contained and part of the task, and otherwise escalates; {{who}} gets them after 2 minutes. When unsure, escalate.`
     ].join('\n')

@@ -12,7 +12,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool } from './permission-rules.mjs';
-import { HubSettings } from './settings.mjs';
+import { HubSettings, HANDOFF_NUMBERS } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
@@ -53,10 +53,11 @@ export const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000, RESUME_GAP_MS = 4000;
 export class Hub {
   // defaults: { orchestrator: { type, model, effort }, worker: {...} } from ~/crux/hub.json (decision 20).
   // agentHome: the folder whose .claude/agents holds the all-projects types (your home folder).
-  // settings: HubSettings (routePermissions, permissionTimeoutSec), from ~/.crux-hub/settings.json.
+  // settings: HubSettings (routePermissions, permissionTimeoutSec, the handoff defaults, and per project the level,
+  // connectors and handoff numbers), from ~/.crux-hub/settings.json. The --retire-at start flag is only its
+  // starting value for retireAt (server.mjs); a change in the page wins (decision 44 B).
   // noAgents: a test hub; messages are logged but no real agent starts (see relaunch.mjs, testHubWithoutAgents).
-  constructor({ projects, retireAt = 60, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false }) {
-    this.retireAt = retireAt;
+  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false }) {
     this.noAgents = !!noAgents;
     this.memory = memory;
     this.settings = settings;
@@ -533,17 +534,18 @@ export class Hub {
   routeFor(p, agent, toolName, input) {
     const rules = this.rulesFor(p);
     agent.tempDirs ||= new Set();
-    const c = classify({ tool: toolName, input, projectDir: p.dir, agent: agent.name, madeTemp: agent.tempDirs });
+    const level = this.permissionMode(p);
+    const c = classify({ tool: toolName, input, projectDir: p.dir, agent: agent.name, madeTemp: agent.tempDirs, level });
     const { route, tempMade } = c;
     const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
     if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
-    if (route === 'allow' && this.permissionMode(p) === 'auto') return { allow: true };
+    if (route === 'allow' && this.autoLike(p)) return { allow: true };
     // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,
     // they are allowed and logged in its thread for Matt to audit.
     // Never a connector or any other MCP server's tool (plugin servers can reach mail and calendar too): the
     // orchestrator's own requests for those come to Matt as a card.
-    if (route === 'unsure' && agent.role === 'orchestrator' && this.permissionMode(p) === 'auto' && !connectorTool(toolName) && !/^mcp__(?!crux__)/.test(toolName)) return { allow: true, logged: unsure };
+    if (route === 'unsure' && agent.role === 'orchestrator' && this.autoLike(p) && !connectorTool(toolName) && !/^mcp__(?!crux__)/.test(toolName)) return { allow: true, logged: unsure };
     if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
     // A resting orchestrator (asleep since a restart, or between turns) is woken by the request, so the card does not
@@ -553,26 +555,68 @@ export class Hub {
     return { to: orch.name, stops: [], rules: rules.entryId, unsure };
   }
 
-  // Per project: "auto" or "standard" (shown as Auto and Ask). The switch in the page, kept in hub settings by project
-  // folder, wins; then the repo's committed .crux-hub.json ({ "permissions": "auto" }) as the starting value; else standard.
+  // Per project: "standard", "auto" or "trusted" (shown as Ask, Auto and Trusted; decisions 34 and 45). The level set
+  // in the page, kept in hub settings by project folder, wins; then the repo's committed .crux-hub.json
+  // ({ "permissions": "auto" }) as the starting value; else standard. Trusted is set only from the hub page: a repo
+  // file that asks for "trusted" gets Auto, so a cloned repo cannot trust itself.
   permissionMode(p) {
     const set = this.settings.project?.(p.dir)?.permissionMode;
-    if (set) return set === 'auto' ? 'auto' : 'standard';
-    try { return JSON.parse(readFileSync(join(p.dir, '.crux-hub.json'), 'utf8')).permissions === 'auto' ? 'auto' : 'standard'; } catch { return 'standard'; }
+    if (set) return ['auto', 'trusted'].includes(set) ? set : 'standard';
+    try { return ['auto', 'trusted'].includes(JSON.parse(readFileSync(join(p.dir, '.crux-hub.json'), 'utf8')).permissions) ? 'auto' : 'standard'; } catch { return 'standard'; }
   }
+  // Auto and Trusted both let contained work run without asking; Trusted allows a little more (permission-rules.mjs).
+  autoLike(p) { return this.permissionMode(p) !== 'standard'; }
 
   setPermissionMode(p, mode, by = 'you') {
-    mode = mode === 'auto' ? 'auto' : 'standard';
+    mode = ['auto', 'trusted'].includes(mode) ? mode : 'standard';
     const was = this.permissionMode(p);
     this.settings.setProject(p.dir, { permissionMode: mode });
     if (mode === was) return mode;
-    p.log.append('project_settings', { permissionMode: mode, by, thread: 'orchestrator' });
-    this.notice(p, 'orchestrator', mode === 'auto'
-      ? `${by === 'you' ? 'You' : by} switched ${p.name} to Auto: work that stays in the project or a temp folder runs without asking; unclear requests go to the orchestrator, hard stops to you.`
-      : `${by === 'you' ? 'You' : by} switched ${p.name} to Ask: anything beyond reading goes to the orchestrator first, hard stops to you.`);
-    if (mode === 'auto') this.rulesHint(p);
+    // Raised or lowered, and where from: the hub page (the settings card, by = 'you') or something else. The words
+    // never claim a person did it; a raise to Trusted also goes to the owner's phone (push.mjs), so a raise nobody
+    // made on purpose is seen at once.
+    const rank = { standard: 0, auto: 1, trusted: 2 };
+    const raised = rank[mode] > rank[was];
+    p.log.append('project_settings', { permissionMode: mode, was, raised, by, thread: 'orchestrator' });
+    const word = { standard: 'Ask', auto: 'Auto', trusted: 'Trusted' }[mode];
+    const how = `The level of ${p.name} was ${raised ? 'raised' : 'lowered'} to ${word} ${by === 'you' ? 'from the hub page' : `by ${by}`}`;
+    this.notice(p, 'orchestrator', {
+      auto: `${how}: work that stays in the project or a temp folder runs without asking; unclear requests go to the orchestrator, hard stops to you.`,
+      trusted: `${how}: as Auto, plus installing packages into the project and reading or downloading from any website into it. Merges still need your yes on each one; the fixed stops (force push, history, branch deletion, pushing to main, writes outside, secrets, the live hub, system-wide installs, connector sends) still come to you.`,
+      standard: `${how}: anything beyond reading goes to the orchestrator first, hard stops to you.`
+    }[mode]);
+    if (mode !== 'standard') this.rulesHint(p);
     return mode;
   }
+
+  // ---------- handoff numbers per project (decision 44 B; amends 10 and 37) ----------
+  // Each project may set its own idle window, idle floor and context threshold; empty means the hub default.
+  handoffNumbers(p) {
+    return Object.fromEntries(Object.keys(HANDOFF_NUMBERS).map(k => [k, this.settings.projectNumber?.(p.dir, k) ?? this.settings.get(k)]));
+  }
+  // The project's own values only (null where it uses the hub default), for the settings card.
+  ownHandoffNumbers(p) {
+    const own = this.settings.project?.(p.dir) || {};
+    return Object.fromEntries(Object.keys(HANDOFF_NUMBERS).map(k => [k, typeof own[k] === 'number' ? own[k] : null]));
+  }
+  retireAtFor(p) { return Number(this.handoffNumbers(p).retireAt) || this.retireAt; }
+
+  // changes: any of idleHandoffMin, idleFloorPct, retireAt (null or '' = back to the hub default). Noted in the
+  // project's orchestrator thread when something changed.
+  setHandoffNumbers(p, changes, by = 'you') {
+    const pick = Object.fromEntries(Object.keys(HANDOFF_NUMBERS).filter(k => k in (changes || {})).map(k => [k, changes[k]]));
+    if (!Object.keys(pick).length) return this.handoffNumbers(p);
+    const before = JSON.stringify(this.ownHandoffNumbers(p));
+    this.settings.setProject(p.dir, pick);
+    const own = this.ownHandoffNumbers(p);
+    if (JSON.stringify(own) === before) return this.handoffNumbers(p);
+    const n = this.handoffNumbers(p);
+    p.log.append('project_settings', { handoff: own, by, thread: 'orchestrator' });
+    const mark = k => own[k] == null ? ' (hub default)' : '';
+    this.notice(p, 'orchestrator', `${by === 'you' ? 'You' : by} changed ${p.name}'s handoff numbers: the orchestrator hands off at ${n.retireAt}% of its context${mark('retireAt')}, ${n.idleHandoffMin > 0 ? `or after ${n.idleHandoffMin} minutes idle${mark('idleHandoffMin')} when above ${n.idleFloorPct}%${mark('idleFloorPct')}` : `and never for being idle${mark('idleHandoffMin')}`}.`);
+    return n;
+  }
+  get retireAt() { return Number(this.settings.get('retireAt')) || 60; }
 
   // Matt's claude.ai connectors in this project's agents: off unless turned on. The switch in the page wins; then the
   // repo's .crux-hub.json ({ "connectors": true }); else off.
@@ -602,12 +646,12 @@ export class Hub {
   // The rules the orchestrator answers under: the board's entry; in Auto mode with no entry, the hub's built-in
   // defaults (R005's text with this project's folders); in Ask mode with no entry, none (everything comes to you).
   rulesFor(p) {
-    return rulesEntry(p.board) || (this.permissionMode(p) === 'auto' ? defaultRules(p.dir) : null);
+    return rulesEntry(p.board) || (this.autoLike(p) ? defaultRules(p.dir, undefined, this.permissionMode(p)) : null);
   }
 
   // Once per project: in Auto with no rules entry, suggest the orchestrator draft one for Matt.
   rulesHint(p) {
-    if (rulesEntry(p.board) || this.permissionMode(p) !== 'auto' || p.log.ofType('rules_hint').length) return false;
+    if (rulesEntry(p.board) || !this.autoLike(p) || p.log.ofType('rules_hint').length) return false;
     p.log.append('rules_hint', { thread: 'orchestrator' });
     this.notice(p, 'orchestrator', `${p.name} has no permission rules entry on its board, so the orchestrator answers unclear requests under the hub's built-in defaults (the crux rules, with this project's folders). Orchestrator: draft a rules entry for {{who}} to approve.`);
     return true;
@@ -722,7 +766,7 @@ export class Hub {
       agent.restartWhenIdle = false;
       agent.close();
     }
-    if (agent.contextPct != null && agent.contextPct >= this.retireAt) {
+    if (agent.contextPct != null && agent.contextPct >= this.retireAtFor(p)) {
       this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role === 'orchestrator' ? 'the role' : 'its task'} on.`);
       this.retire(p, agent, { reason: 'threshold' });
     }
@@ -773,12 +817,14 @@ export class Hub {
   }
 
   // Decision 37 B: an orchestrator idle for the idle window (minutes) above the floor (percent of context) hands off,
-  // so the next message reaches a fresh holder instead of a cold re-read of a long context. Both are hub settings.
+  // so the next message reaches a fresh holder instead of a cold re-read of a long context. Both are read per project,
+  // falling back to the hub defaults (decision 44 B).
   idleCheck(now = Date.now()) {
-    const windowMin = Number(this.settings.get('idleHandoffMin')), floor = Number(this.settings.get('idleFloorPct'));
-    if (!(windowMin > 0)) return [];
     const done = [];
     for (const p of this.projects.values()) {
+      const n = this.handoffNumbers(p);
+      const windowMin = Number(n.idleHandoffMin), floor = Number(n.idleFloorPct);
+      if (!(windowMin > 0)) continue;
       const o = p.orchestrator();
       if (!o || o.retiring || o.capture || !o.sessionId || ['working', 'starting', 'error'].includes(o.state)) continue;
       if (o.contextPct == null || o.contextPct < floor) continue;
@@ -959,7 +1005,11 @@ export class Hub {
       pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id),
       permissionRules: this.rulesFor(p)?.entryId || null,
       permissionMode: this.permissionMode(p),
-      connectors: this.connectorsOn(p)
+      connectors: this.connectorsOn(p),
+      // Decision 44 B: the handoff numbers in force here, and the project's own (null = the hub default).
+      handoff: this.handoffNumbers(p),
+      ownHandoff: this.ownHandoffNumbers(p),
+      retireAt: this.retireAtFor(p)
     }));
   }
 }

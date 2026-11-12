@@ -45,9 +45,10 @@ if (existsSync(cfg)) {
 if (!projects.length) projects = (hubCfg.projects || []).map(p => resolve(p));
 if (!projects.length) projects = [process.cwd()];
 
-// Hub settings (decision 21: routePermissions, permissionTimeoutSec) start from hub.json and are saved in ~/.crux-hub.
-const settings = new HubSettings({ initial: hubCfg });
-const hub = new Hub({ projects, retireAt, defaults: hubCfg.defaults, settings, noAgents });
+// Hub settings (decision 21: routePermissions, permissionTimeoutSec; decision 44 B: the handoff defaults) start from
+// hub.json and the --retire-at flag, and are saved in ~/.crux-hub; a change made in the page wins from then on.
+const settings = new HubSettings({ initial: { ...hubCfg, retireAt } });
+const hub = new Hub({ projects, defaults: hubCfg.defaults, settings, noAgents });
 if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
 hub.usage.start();   // decision 36: the plan meters, asked of any live agent every few minutes
 
@@ -104,14 +105,24 @@ const routes = {
   // Restart from the hub's own menu: answer first, then hand over to a fresh hub started the same way (M010).
   'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },
   // The off switch for decision 21: false sends every permission request to you.
-  // Per repo (decision 34): { project, permissionMode: 'auto' | 'standard' }.
-  // Decision 37: { idleHandoffMin, idleFloorPct }, the idle handoff's window (0 = off) and context floor.
-  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, idleHandoffMin, idleFloorPct }) => {
-    if (idleHandoffMin != null || idleFloorPct != null) hub.settings.set({ idleHandoffMin, idleFloorPct });
-    if (project && permissionMode) hub.setPermissionMode(hub.project(project), permissionMode);
-    if (project && typeof connectors === 'boolean') hub.setConnectors(hub.project(project), connectors);   // Matt's claude.ai connectors
+  // Whole hub (decision 44 B): { permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt } (the hub defaults).
+  // Per project, with { project }: { permissionMode: 'standard' | 'auto' | 'trusted', connectors, handoff:
+  // { idleHandoffMin, idleFloorPct, retireAt } } where null means "use the hub default" (decisions 34, 44, 45).
+  // Trusted is set only here, from the hub page (same-origin JSON, C001), never from a repo's .crux-hub.json.
+  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra }) => {
     const p = project ? hub.project(project) : null;
-    return { settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(), permissionMode: p ? hub.permissionMode(p) : undefined, connectors: p ? hub.connectorsOn(p) : undefined };
+    if (!p) {
+      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra }).filter(([, v]) => v != null));
+      if (Object.keys(hubWide).length) hub.settings.set(hubWide);
+    }
+    if (p && permissionMode) hub.setPermissionMode(p, permissionMode);
+    if (p && typeof connectors === 'boolean') hub.setConnectors(p, connectors);   // Matt's claude.ai connectors
+    if (p && handoff && typeof handoff === 'object') hub.setHandoffNumbers(p, handoff);
+    return {
+      settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(),
+      permissionMode: p ? hub.permissionMode(p) : undefined, connectors: p ? hub.connectorsOn(p) : undefined,
+      handoff: p ? hub.handoffNumbers(p) : undefined, ownHandoff: p ? hub.ownHandoffNumbers(p) : undefined
+    };
   },
 
   // One file from the composer (an image, a PDF or a text file), as a data URL. Stored by content hash; returns
@@ -171,9 +182,12 @@ const routes = {
 };
 
 const server = createServer(async (req, res) => {
+  // A full address in the request line (GET http://localhost:4791/... as a proxy is sent) is never one of the hub's
+  // pages: refused, so no proxy trick can reach it (review of PR #51).
+  if (!String(req.url || '').startsWith('/')) return send(res, 400, { error: 'Requests must name a path on this hub' });
   const url = new URL(req.url, 'http://localhost');
-  // Only this machine and the tailnet address get in, and only the hub's own pages may change anything.
-  const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts });
+  // Only this machine (on this hub's own port) and the tailnet address get in, and only the hub's own pages may change anything.
+  const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts, port });
   if (refused) return send(res, 403, { error: refused });
   try {
     if (url.pathname === '/api/stream') {
@@ -276,7 +290,7 @@ server.on('error', e => {
 server.on('listening', () => {
   console.log(`Crux hub: http://localhost:${port}  (phone: tailscale serve --bg ${port}, see README)`);
   console.log(`Projects: ${[...hub.projects.values()].map(p => p.name).join(', ')}`);
-  console.log(`Orchestrator hands off at ${retireAt}% context.`);
+  console.log(`Orchestrator hands off at ${hub.retireAt}% context (hub default; projects may set their own).`);
   saveLaunch(launchSpec({ port }));   // so the restart script can start it the same way
 });
 server.listen(port, '127.0.0.1');
