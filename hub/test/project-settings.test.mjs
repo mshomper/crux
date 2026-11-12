@@ -255,9 +255,9 @@ test('Done sends only what changed; bad numbers are caught before anything is sa
   const r = projectChanges(p, { level: 'trusted', connectors: true, nums: { retireAt: '50', idleHandoffMin: '', idleFloorPct: '' } });
   assert.deepEqual(r.body, { permissionMode: 'trusted', connectors: true, handoff: { retireAt: 50, idleHandoffMin: null } });
   assert.deepEqual(projectChanges(p, { ...same, nums: { retireAt: '101', idleHandoffMin: 'x', idleFloorPct: '' } }).errors, { retireAt: 'Between 1 and 100', idleHandoffMin: 'Whole numbers only' });
-  const s = { routePermissions: true, permissionTimeoutSec: 120, retireAt: 60, idleHandoffMin: 60, idleFloorPct: 25 };
-  assert.deepEqual(hubChanges(s, { route: false, nums: { permissionTimeoutSec: '90', retireAt: '60', idleHandoffMin: '60', idleFloorPct: '25' } }).body, { permissionTimeoutSec: 90, routePermissions: false });
-  assert.deepEqual(hubChanges(s, { route: true, nums: { permissionTimeoutSec: '', retireAt: '60', idleHandoffMin: '60', idleFloorPct: '25' } }).errors, { permissionTimeoutSec: 'Needs a number' });
+  const s = { routePermissions: true, permissionTimeoutSec: 120, retireAt: 60, idleHandoffMin: 60, idleFloorPct: 25, workerHandoffFloorPct: 35 };
+  assert.deepEqual(hubChanges(s, { route: false, nums: { permissionTimeoutSec: '90', retireAt: '60', idleHandoffMin: '60', idleFloorPct: '25', workerHandoffFloorPct: '35' } }).body, { permissionTimeoutSec: 90, routePermissions: false });
+  assert.deepEqual(hubChanges(s, { route: true, nums: { permissionTimeoutSec: '', retireAt: '60', idleHandoffMin: '60', idleFloorPct: '25', workerHandoffFloorPct: '35' } }).errors, { permissionTimeoutSec: 'Needs a number' });
   assert.deepEqual(readNumber(' 0 ', NUMBERS.find(f => f.k === 'idleHandoffMin')), { value: 0 }, '0 = never is allowed');
 });
 

@@ -3,7 +3,8 @@
 //   projectCard(p, hub, d)  the card: level (what it allows, the always-to-you list folding open on request), the
 //                           three handoff numbers (empty = the hub default, shown under each) and connectors
 //   hubPanel(s, d)          the Whole hub panel from the three-dots menu: who answers requests, the wait before a
-//                           request comes to you, and the hub defaults for the three handoff numbers
+//                           request comes to you, the hub defaults for the three handoff numbers, and the floor from
+//                           which the orchestrator may hand a worker on (decision 46 A)
 //   SettingsCards           the two pop-ups: changes are kept in a draft and saved with Done; the X, Escape or a
 //                           click outside close without changing anything. Saved as same-origin JSON (C001).
 // Plain functions return HTML strings, so they can be tested without a browser.
@@ -50,8 +51,13 @@ export const NUMBERS = [
   { k: 'idleFloorPct', icon: 'floor', label: 'Only when above', unit: '% context', min: 0, max: 100,
     tip: 'An idle orchestrator that has used less of its context than this keeps going: a fresh one would not save much (decision 37).' }
 ];
+// Hub-wide only (decision 46 A): no box on the project card.
+export const WORKER_FLOOR = { k: 'workerHandoffFloorPct', icon: 'handoff', label: 'From', unit: '% context', min: 0, max: 100,
+  tip: 'The orchestrator may hand a worker\'s task to a fresh agent once the worker has used this much of its context, at the end of a turn, and says why. Below it, never. Every agent still hands off by itself at its project\'s hand-off mark; in a project whose mark is at or below this number, that is the only handoff (decision 46).' };
 export const TIMEOUT = { k: 'permissionTimeoutSec', icon: 'clock', label: 'Comes to you after', unit: 'seconds', min: 10, max: 3600,
   tip: 'How long the orchestrator has to answer a worker\'s request before the card comes to you.' };
+// Every box in the Whole hub panel.
+export const HUB_FIELDS = [TIMEOUT, ...NUMBERS, WORKER_FLOOR];
 
 // A typed value: '' (use the default, when allowed), a whole number in range, or an error in plain words.
 export function readNumber(text, f, { allowEmpty = true } = {}) {
@@ -135,8 +141,10 @@ export function hubPanel(d) {
       <div class="ps-row"><span class="ps-num-l"><span class="ps-num-label">${ic('shield')}<span>The orchestrator answers first</span></span>${help('Workers\' routine permission requests go to the orchestrator, which answers within the board\'s rules; risky ones always come to you. Off: every request comes to you.')}</span>
         ${seg(d.route, 'route')}</div>
       <div class="ps-nums">${numRow(TIMEOUT, d.nums[TIMEOUT.k], null, d.errors?.[TIMEOUT.k], 'h')}</div></section>
-    <section class="ps-sec ps-last"><h3 class="ps-sec-head">Handoff defaults for every project ${help('A project can set its own numbers on its settings card; an empty box there uses these.')}</h3>
+    <section class="ps-sec"><h3 class="ps-sec-head">Handoff defaults for every project ${help('A project can set its own numbers on its settings card; an empty box there uses these.')}</h3>
       <div class="ps-nums">${NUMBERS.map(f => numRow(f, d.nums[f.k], null, d.errors?.[f.k], 'h')).join('')}</div></section>
+    <section class="ps-sec ps-last"><h3 class="ps-sec-head">When the orchestrator may hand a worker on</h3>
+      <div class="ps-nums">${numRow(WORKER_FLOOR, d.nums[WORKER_FLOOR.k], null, d.errors?.[WORKER_FLOOR.k], 'h')}</div></section>
   </div>
   ${foot('Saved on this computer when you press Done. Numbers a project set for itself stay as they are.')}`;
 }
@@ -157,7 +165,7 @@ export function projectChanges(p, d) {
 }
 export function hubChanges(settings, d) {
   const errors = {}, body = {};
-  for (const f of [TIMEOUT, ...NUMBERS]) {
+  for (const f of HUB_FIELDS) {
     const r = readNumber(d.nums[f.k], f, { allowEmpty: false });
     if (r.error) { errors[f.k] = r.error; continue; }
     if (r.value !== settings[f.k]) body[f.k] = r.value;
@@ -197,7 +205,7 @@ export class SettingsCards {
   openHub() {
     const s = this.host.hubSettings();
     this.kind = 'hub';
-    this.d = { route: s.routePermissions !== false, nums: Object.fromEntries([TIMEOUT, ...NUMBERS].map(f => [f.k, String(s[f.k] ?? '')])), errors: {} };
+    this.d = { route: s.routePermissions !== false, nums: Object.fromEntries(HUB_FIELDS.map(f => [f.k, String(s[f.k] ?? '')])), errors: {} };
     this.show();
   }
   show() {
