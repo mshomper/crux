@@ -106,6 +106,29 @@ test('after the PR merges, the branch catches up with main by fast-forward and s
   assert.equal(git(dir, 'status', '--porcelain'), '');
 });
 
+test('merged with a merge commit, as GitHub does: the next pick fast-forwards and its PR holds only new picks', async () => {
+  const { hub, p, gh, bare, root } = setup();
+  await hub.pickMany(p, [{ id: 1, choice: 'A' }])[0]._landed.published;
+  // Elsewhere, someone merges the PR with a merge commit (main also gained another commit first).
+  const other = join(root, 'other');
+  git(root, 'clone', '-q', bare, other);
+  for (const [k, v] of [['user.name', 'Merger'], ['user.email', 'm@example.com']]) git(other, 'config', k, v);
+  writeFileSync(join(other, 'README.md'), 'x'); git(other, 'add', '.'); git(other, 'commit', '-q', '-m', 'unrelated work on main');
+  git(other, 'fetch', '-q', 'origin');
+  git(other, 'merge', '--no-ff', '-q', '-m', 'Merge pull request #1 from docs/decisions', 'origin/docs/decisions');
+  git(other, 'push', '-q', 'origin', 'main');
+  gh.open = false;
+  const before = gh.calls.filter(c => c[1] === 'create').length;
+  await hub.pickMany(p, [{ id: 2, choice: 'B' }])[0]._landed.published;
+  assert.equal(git(bare, 'merge-base', '--is-ancestor', 'main', 'docs/decisions') === '', true, 'docs/decisions now sits on top of main (fast-forward, no force)');
+  assert.equal(git(bare, 'rev-list', '--count', 'main..docs/decisions'), '1', 'only the new pick is unmerged');
+  const create = gh.calls.filter(c => c[1] === 'create');
+  assert.equal(create.length, before + 1, 'a fresh PR');
+  const body = create.at(-1)[create.at(-1).indexOf('--body') + 1];
+  assert.match(body, /D0002 B/);
+  assert.doesNotMatch(body, /D0001/, 'no already-merged picks in it');
+});
+
 test('offline or no gh: the commit stays, a notice says so once, and the next pick retries', async () => {
   const { hub, p, gh, bare, dir } = setup();
   git(dir, 'remote', 'set-url', 'origin', join(dir, '..', 'nowhere.git'));
