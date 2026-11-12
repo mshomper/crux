@@ -45,6 +45,26 @@ const DELETE = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'remove-item', 'ri'
 const KILL = new Set(['kill', 'pkill', 'killall', 'taskkill', 'stop-process', 'spps']);
 const INSTALL = new Set(['npx', 'pnpx', 'bunx', 'pip', 'pip3', 'pipx', 'conda', 'winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'gem',
   'install-module', 'install-package', 'install-script', 'update-module']);
+// ---------- addresses on this machine (review of PR #51) ----------
+// A web address aimed at this machine, read the way curl and browsers read it (new URL normalizes 127.1,
+// 2130706433, 0x7f.1, LOCALHOST, [0:0::1] and ports like 04747): { live } where live means it could be the hub on
+// 4747 (that port however written, no port at all, or a local-looking address that will not parse). null for any
+// other address, and for words that are not addresses.
+const LOCAL_WORD = /^(localhost\.?|[\w-]+\.localhost\.?|\[[0-9a-f:.]+\])(:\d*)?([/?#]\S*)?$|^(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+)){0,3}(:\d+([/?#]\S*)?|[/?#]\S*)$/i;
+const LOCAL_HINT = /localhost|\b127\.|\[[0-9a-f:.]*\]|0\.0\.0\.0/i;
+export function localAddress(word) {
+  const s = String(word || '');
+  const schemed = /^[a-z][\w+.-]*:\/\//i.test(s);
+  if (schemed ? !/^(https?|wss?|ftp):\/\//i.test(s) : !LOCAL_WORD.test(s)) return null;
+  let u;
+  try { u = new URL(schemed ? s : `http://${s}`); } catch { return LOCAL_HINT.test(s) ? { live: true } : null; }
+  const h = u.hostname.toLowerCase();
+  const local = h === '0.0.0.0' || /^127\./.test(h) || /(^|\.)localhost\.?$/.test(h) || h === '[::1]' || h === '[::]'
+    || /^\[::ffff:(7f[0-9a-f]{2}:[0-9a-f]{1,4}|0:0)\]$/.test(h);
+  if (!local) return null;
+  return { live: u.port === '' || Number(u.port) === 4747 };
+}
+
 // ---------- one flag reader (review of PR #51) ----------
 // How a program's options are spelled must never decide whether a check sees them. readFlags understands short flags
 // combined and attached (-sSLo FILE, -oFILE, -dDATA, -qO-), long flags with =value or a separate value
@@ -340,8 +360,20 @@ class Check {
     if (/\$\(|<\(|>\(/.test(s.replace(/'[^']*'/g, ''))) this.unsure('Command substitution the hub cannot read');
     let cwd = this.projectDir;
     const parts = splitParts(s, ps, true);
-    this.pipeRuns(parts);
+    this.pipeRuns(parts, s, ps);
     for (const part of parts) cwd = this.part(part.text, cwd, ps);
+  }
+
+  // The head (program name) of one part of a command, as pipeRuns and the substitution check read it.
+  headOf(text) {
+    const w = tokens(text).map(t => t.text);
+    let k = 0; while (k < w.length - 1 && /^\w+=/.test(w[k])) k++;
+    // A PowerShell assignment: $s = irm URL, $s =irm URL, $s=irm URL: the program is what comes after the =.
+    if (/^\$[\w:]+$/.test(w[k] || '') && w[k + 1] === '=') k += 2;
+    else if (/^\$[\w:]+$/.test(w[k] || '') && /^=./.test(w[k + 1] || '')) { w[k + 1] = w[k + 1].slice(1); k += 1; }
+    else if (/^\$[\w:]+=./.test(w[k] || '')) w[k] = w[k].slice(w[k].indexOf('=') + 1);
+    const first = w[k] || '';
+    return { head: (this.pathLike(first) ? basename(first.replace(/\\/g, '/')) : first).toLowerCase().replace(/\.(exe|cmd|bat)$/, ''), args: w.slice(k + 1) };
   }
 
   // Download-and-run (review of PR #51), at every level: a download piped into a program that runs what it is given
@@ -349,20 +381,32 @@ class Check {
   // that only reads it as data (curl localhost:4791/api/state | node -e "...") is fine. Anything else piped into a
   // program that takes its script from the pipe is not counted as contained. (Running a file the same command
   // downloaded is caught in simple().)
-  pipeRuns(parts) {
+  // s: the whole command (heredocs already taken out), for the substitution check.
+  pipeRuns(parts, s = '', ps = false) {
     let fetched = null;   // 'web' or 'local' once a download has been seen earlier in the command
+    const heads = parts.map(p => this.headOf(p.text).head);
+    // iex / Invoke-Expression (or a script block made from text) with a download anywhere in the same command:
+    // iex (iwr URL), Invoke-Expression (Invoke-RestMethod URL), $s = irm URL; iex $s.
+    if (heads.some(h => /^(iex|invoke-expression)$/.test(h)) && heads.some(h => DOWNLOADERS.has(h))) this.stop('Runs what it downloads (iex with a download in the same command)');
+    if (/\[scriptblock\]::create/i.test(s) && heads.some(h => DOWNLOADERS.has(h))) this.stop('Runs what it downloads (a script block made from a download)');
+    // A command or process substitution that downloads, feeding a program that runs scripts:
+    // sh -c "$(curl URL)", bash <(curl URL), source <(curl URL), . <(curl URL), node -e "$(curl URL)".
+    const fetchingSub = substitutions(s).some(inner => splitParts(inner, ps).some(p => DOWNLOADERS.has(this.headOf(p).head)));
+    if (fetchingSub && heads.some(h => INTERPRETERS.has(h) || /^(eval|exec|xargs)$/.test(h))) this.stop('Runs what it downloads (a download inside a command substitution)');
     for (const { text, op } of parts) {
-      const w = tokens(text).map(t => t.text);
-      let k = 0; while (k < w.length - 1 && /^\w+=/.test(w[k])) k++;
-      const first = w[k] || '';
-      const head = (this.pathLike(first) ? basename(first.replace(/\\/g, '/')) : first).toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
+      const { head, args } = this.headOf(text);
       if (DOWNLOADERS.has(head)) {
-        const urls = w.slice(k + 1).filter(x => /^[a-z]+:\/\/|^[\w.-]+\.[a-z]{2,}(\/|$)|^(localhost|127\.0\.0\.1|\[::1\])/i.test(x));
-        const web = !urls.length || urls.some(u => !/^(?:[a-z]+:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(u));
+        const urls = args.filter(x => /^[a-z]+:\/\/|^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(x) || localAddress(x));
+        const web = !urls.length || urls.some(u => !localAddress(u));
         fetched = fetched === 'web' || web ? 'web' : 'local';
       }
+      // A download piped into a program that writes it to a file (| tee a.sh, | Out-File a.ps1): that file counts
+      // as downloaded, so running it later in the command is caught.
+      if (fetched && op === '|' && /^(tee|tee-object|out-file|set-content|sc|add-content|ac)$/.test(head)) {
+        for (const a of args.filter(x => !x.startsWith('-'))) { const p = this.abs(a, this.projectDir); if (typeof p === 'string') this.downloaded?.add(norm(p)); }
+      }
       if (op !== '|' || !INTERPRETERS.has(head)) continue;
-      const script = stdinScript(head, w.slice(k + 1));
+      const script = stdinScript(head, args);
       if (fetched === 'web' || (fetched && script)) this.stop(`Runs what it downloads (a download piped into ${head})`);
       else if (script) this.unsure(`Runs a script fed to ${head} through a pipe`, true);
     }
@@ -516,7 +560,7 @@ class Check {
   // One simple command, its variables already filled in.
   simple(words, cwd, ps) {
     // redirections: > file, >> file, 2> file, < file (2>&1 needs no check)
-    const keep = [];
+    const keep = [], wrote = [];
     for (let i = 0; i < words.length; i++) {
       const w = words[i];
       if (!w.op) { keep.push(w); continue; }
@@ -525,8 +569,13 @@ class Check {
       if (!target) { this.unsure('A redirection with no file'); continue; }
       this.word(target, cwd);
       if (!/^\$null$/i.test(target.text)) this.path(target.text, cwd, { write: !w.text.startsWith('<') });
+      if (!w.text.startsWith('<')) wrote.push(target.text);
     }
     words = keep;
+    // What a download writes through > or >> counts as downloaded: running it later in this command is a stop.
+    if (wrote.length && words.length && DOWNLOADERS.has(basename(String(words.find(x => !/^\w+=/.test(x.text))?.text || '').replace(/\\/g, '/')).toLowerCase().replace(/\.(exe|cmd|bat)$/, ''))) {
+      for (const t of wrote) { const a = this.abs(t, cwd); if (typeof a === 'string' && !['null', 'outside'].includes(a)) this.downloaded?.add(norm(a)); }
+    }
     // VAR=value cmd: judged by the command after it; the value is checked like any word (secrets, variables), and
     // the program sees it (see envAway and node: a test hub's data and profile folders).
     this.envNow = new Map();
@@ -561,7 +610,7 @@ class Check {
     }
     this.ps = ps;
     // Every word after the program: variables, addresses and secrets (paths are judged by what the program does).
-    this.urlsHere = []; this.localUrls = [];
+    this.urlsHere = []; this.localUrls = []; this.fileUrls = [];
     // The script after powershell -Command is read as PowerShell on its own (see run), so its words are not checked here.
     const psAt = /^(powershell|pwsh)$/.test(head) ? args.findIndex(a => /^-(c|command)$/i.test(a)) : -1;
     for (const w of (psAt >= 0 ? words.slice(1, psAt + 2 - 1) : words.slice(1))) this.word(w, cwd);
@@ -644,12 +693,14 @@ class Check {
     const outsideHere = this.where(cwd, cwd) === 'outside';
     // A request to this machine: reading (GET) is fine anywhere, the hub on 4747 included. Sending data to the
     // hub on 4747 changes it: a hard stop. Sending data to a test hub is left to the orchestrator.
+    // A downloader pointed at a file on this computer (curl file:///c/Users/me/.ssh/id_rsa -o k.txt) copies it: a stop.
+    if (DOWNLOADERS.has(head) && this.fileUrls?.length) return this.stop(`Reads a file on this computer through a file:// address (${this.fileUrls[0].slice(0, 80)})`);
     // Read through readFlags, so no spelling (-sd, -d'{..}', -sXPOST, -Me POST, -Meth Post) slips past: to the hub on
     // 4747, or to this machine with no port named, only a plain GET is fine; anything the hub cannot read in full is a
     // stop there, at every level.
     if (/^(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)$/.test(head) && !this.urlsHere.length && this.localUrls.length) {
       const r = this.webFlags(head, args);
-      const live = this.localUrls.some(u => /:4747(?!\d)/.test(u) || !/:\d+/.test(u.replace(/^[a-z]+:\/\//i, '').replace(/^\[::1\]/, '')));
+      const live = this.localUrls.some(u => localAddress(u)?.live !== false);   // port 4747 as a number, no port, or unreadable
       if (live && (r.unknown.length || r.config || r.sends || r.inputs.length)) {
         return this.stop(`Sends a change to the hub on port 4747 (or to localhost with no port named), or uses an option the hub cannot check${r.unknown.length ? ` (${r.unknown[0]})` : ''}`);
       }
@@ -756,14 +807,20 @@ class Check {
       }
       if (/\$\?/.test(t)) { /* exit status: fine */ }
     }
-    // Addresses: this machine (localhost) and local files are not the network.
-    const url = /(?:^|=)((?:https?|ftp|wss?|file):\/\/\S+|(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/\S*)?)/i.exec(t)?.[1];
-    if (url || /^[\w.-]+@[\w.-]+:/.test(t)) {
-      const u = url || t;
-      if (/^file:\/\//i.test(u)) return;
-      if (/^(?:https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(u)) { this.localUrls?.push(u); return; }
-      this.urlsHere?.push(u); return;
+    // Addresses: this machine (localhost in any spelling, localAddress) and local files are not the network. A file://
+    // address is checked for secrets like any path, and remembered: a downloader given one is a stop (run()).
+    const url = /(?:^|=)((?:https?|ftp|wss?|file):\/\/\S+)/i.exec(t)?.[1];
+    const bare = t.includes('=') ? t.slice(t.indexOf('=') + 1) : t;
+    if (url && /^file:/i.test(url)) {
+      let p = url.replace(/^file:\/\/(localhost)?/i, '');
+      try { p = decodeURIComponent(p); } catch { }
+      if (SECRET.test(norm(p))) this.stop(`Touches secrets or credentials: ${url}`);
+      this.fileUrls?.push(url);
+      return;
     }
+    if (url) { (localAddress(url) ? this.localUrls : this.urlsHere)?.push(url); return; }
+    if (localAddress(bare)) { this.localUrls?.push(bare); return; }
+    if (/^[\w.-]+@[\w.-]+:/.test(t)) { this.urlsHere?.push(t); return; }
     const v = /^--?[\w-]+=(.+)$/.exec(t)?.[1] ?? (t.startsWith('-') ? null : t);
     if (v == null) return;
     if (SECRET.test(norm(v))) this.stop(`Touches secrets or credentials: ${v}`);
@@ -1061,6 +1118,8 @@ class Check {
   webFlags(head, args) {
     const fam = head === 'curl' ? 'curl' : head === 'wget' ? 'wget' : 'iwr';
     const r = readFlags(args, webFlags(fam));
+    // PowerShell splatting (iwr @p): the options sit in a variable the hub cannot read.
+    if (fam === 'iwr') for (const p of r.positional) if (/^@\w/.test(p)) r.unknown.push(p);
     const vals = n => r.flags.filter(f => f.name === n).map(f => f.value);
     const methods = vals('method');
     const out = {
@@ -1074,6 +1133,8 @@ class Check {
       urls: [...r.positional, ...vals('url')].map(String).filter(u => /^[a-z]+:\/\//i.test(u))
     };
     if (out.config === true) out.config = '?';
+    // curl -H @file reads its headers from a file, like --config: the hub cannot see what it sends.
+    if (fam === 'curl' && !out.config) { const h = vals('header').find(v => typeof v === 'string' && v.startsWith('@')); if (h) out.config = `-H ${h}`; }
     if (out.dirs.some(d => typeof d !== 'string')) out.saves.push(true);   // a folder option with nothing after it
     // wget saves under the address's name unless -O names the file; curl only with -O (into --output-dir when given).
     out.intoHere = fam === 'wget' ? !vals('doc').length : fam === 'curl' ? vals('remote').length > 0 : false;
@@ -1173,6 +1234,27 @@ class Check {
     if (!targets.length) return this.unsure('An inline script that deletes files the hub cannot name');
     this.deletes(targets, this.projectDir, `an inline script deletes ${targets.join(', ')}`);
   }
+}
+
+// The text inside every command or process substitution in s: $( ... ), <( ... ), >( ... ) and `...`, nested ones
+// included, skipping single-quoted text (which the shell leaves alone).
+export function substitutions(s) {
+  const out = [];
+  s = String(s || '');
+  let dq = false;   // inside "...", a single quote is only a character
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '"' && s[i - 1] !== '\\') { dq = !dq; continue; }
+    if (s[i] === "'" && !dq) { const j = s.indexOf("'", i + 1); if (j < 0) break; i = j; continue; }
+    if (s[i] === '`') { const j = s.indexOf('`', i + 1); if (j < 0) break; out.push(s.slice(i + 1, j)); i = j; continue; }
+    if (/[$<>]/.test(s[i]) && s[i + 1] === '(') {
+      let depth = 0, j = i + 1;
+      for (; j < s.length; j++) { if (s[j] === '(') depth++; else if (s[j] === ')' && --depth === 0) break; }
+      const inner = s.slice(i + 2, j);
+      out.push(inner, ...substitutions(inner));
+      i = j;
+    }
+  }
+  return out;
 }
 
 // True when a program fed by a pipe takes its script from that pipe (no script file, no inline script): node,

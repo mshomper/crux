@@ -9,11 +9,14 @@
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
+// A port written any way but plainly (localhost:04747, :0, :99999, :abc) is no browser's; such a Host is refused ('').
 export function hostName(hostHeader) {
   const h = String(hostHeader || '').trim().toLowerCase();
   if (!h) return '';
+  const port = h.startsWith('[') ? h.slice(h.indexOf(']') + 1) : (/:[^:]*$/.exec(h)?.[0] ?? '');
+  if (port && !(/^:[1-9]\d{0,4}$/.test(port) && Number(port.slice(1)) <= 65535)) return '';
   if (h.startsWith('[')) return h.slice(0, h.indexOf(']') + 1); // [::1]:4747
-  return h.replace(/:\d+$/, '').replace(/\.$/, '');
+  return h.slice(0, h.length - port.length).replace(/\.$/, '');
 }
 
 export function allowedHost(name, extra = []) {
