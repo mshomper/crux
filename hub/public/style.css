@@ -250,19 +250,39 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .qchip{flex:none;font:600 12px/1 var(--mono);letter-spacing:.04em;padding:7px 11px;border-radius:999px;color:var(--hud-ice);background:rgba(111,227,255,.06);border:1px solid var(--hud-line);cursor:pointer}
 .qchip:hover{border-color:var(--hud-dim);background:rgba(111,227,255,.12)}
 .qchip:focus-visible{outline:2px solid var(--hud-cyan);outline-offset:2px}
-/* Images waiting to be sent (decision 23) */
-.tray{display:flex;gap:8px;flex-wrap:wrap;align-self:flex-start;max-width:100%;padding:8px;border:1px solid var(--hud-line);border-radius:12px;background:linear-gradient(180deg,rgba(111,227,255,.05),rgba(111,227,255,0))}
-.tthumb{position:relative;width:72px;height:72px;border-radius:9px;overflow:hidden;border:1px solid var(--hud-faint);background:var(--bg);box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 14px rgba(111,227,255,.12)}
+/* Files waiting to be sent (decision 23): images in one row of thumbnails that shrink to fit, documents as file
+   chips in an even grid below them. Nothing wraps inside a chip and nothing scrolls sideways. */
+.tray{display:flex;flex-direction:column;gap:8px;align-self:flex-start;max-width:100%;min-width:0;padding:8px;border:1px solid var(--hud-line);border-radius:12px;background:linear-gradient(180deg,rgba(111,227,255,.05),rgba(111,227,255,0))}
+.tray.has-docs{align-self:stretch}
+.tshots{display:flex;gap:8px;min-width:0}
+.tthumb{position:relative;flex:0 1 72px;min-width:0;max-width:72px;aspect-ratio:1;border-radius:9px;overflow:hidden;border:1px solid var(--hud-faint);background:var(--bg);box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 14px rgba(111,227,255,.12)}
 .tthumb img{width:100%;height:100%;object-fit:cover;display:block}
-.tthumb .tsize{position:absolute;left:0;right:0;bottom:0;font:10.5px/1 var(--mono);color:var(--hud-ice);background:linear-gradient(0deg,rgba(6,11,18,.92),rgba(6,11,18,0));padding:10px 5px 4px;letter-spacing:.02em}
-.tthumb .tx{position:absolute;top:3px;right:3px;width:22px;height:22px;display:grid;place-items:center;border-radius:50%;border:1px solid var(--hud-faint);background:rgba(6,11,18,.85);color:var(--hud-ice);cursor:pointer;padding:0}
-.tthumb .tx .icon{width:13px;height:13px}
-.tthumb .tx:hover{border-color:var(--hud-red);color:var(--hud-red)}
-.tthumb.busy::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(111,227,255,.25),transparent);animation:tscan 1s linear infinite}
+.tthumb .tsize{position:absolute;left:0;right:0;bottom:0;font:10.5px/1 var(--mono);color:var(--hud-ice);background:linear-gradient(0deg,rgba(6,11,18,.92),rgba(6,11,18,0));padding:10px 5px 4px;letter-spacing:.02em;white-space:nowrap;overflow:hidden}
+.tray .tx{width:22px;height:22px;display:grid;place-items:center;flex:none;border-radius:50%;border:1px solid var(--hud-faint);background:rgba(6,11,18,.85);color:var(--hud-ice);cursor:pointer;padding:0}
+.tthumb .tx{position:absolute;top:3px;right:3px}
+.tray .tx .icon{width:13px;height:13px}
+.tray .tx:hover{border-color:var(--hud-red);color:var(--hud-red)}
+.tthumb.busy::after,.fchip.busy::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(111,227,255,.25),transparent);animation:tscan 1s linear infinite}
 @keyframes tscan{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+/* A document: drawn file icon, the name cut in the middle when long, kind and size */
+.fchips{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,200px),1fr));gap:6px;min-width:0}
+.fchip{position:relative;display:flex;align-items:center;gap:8px;min-width:0;height:44px;padding:0 7px 0 8px;border:1px solid var(--hud-faint);border-radius:9px;overflow:hidden;background:rgba(111,227,255,.045);color:var(--text);text-decoration:none;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.fchip .ficon{width:22px;height:22px;stroke-width:1.5;color:var(--hud-ice)}
+.fchip.pdf .ficon{color:var(--hud-cyan)}
+.fmeta{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
+.fname{display:flex;min-width:0;font-size:12.5px;line-height:1.2;white-space:nowrap}
+.fhead{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ftail{flex:none}
+.fsize{font:10.5px/1 var(--mono);color:var(--muted);letter-spacing:.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+a.fchip{cursor:pointer}
+a.fchip:hover,a.fchip:focus-visible{border-color:var(--hud-cyan);box-shadow:0 0 16px rgba(111,227,255,.22);outline:none}
+a.fchip:hover .ficon{color:var(--hud-cyan)}
+/* in a sent message: chips keep a readable width and sit on the message's side */
+.fchips.sent{grid-template-columns:repeat(auto-fit,minmax(150px,230px));width:100%;max-width:min(680px,92%)}
+.msg.you .fchips.sent{justify-content:end}
 .attach-error{font-size:12.5px;color:var(--hud-amber);padding:0 4px}
 .drop-veil{position:fixed;inset:0;z-index:50;display:grid;place-items:center;background:rgba(6,11,18,.72);pointer-events:none}
-.drop-veil > div{display:flex;gap:10px;align-items:center;padding:18px 26px;border:1px dashed var(--hud-cyan);border-radius:14px;color:var(--hud-ice);font-size:15px;box-shadow:0 0 30px rgba(111,227,255,.25)}
+.drop-veil > div{display:flex;gap:10px;align-items:center;max-width:calc(100vw - 32px);padding:18px 26px;border:1px dashed var(--hud-cyan);border-radius:14px;color:var(--hud-ice);font-size:15px;box-shadow:0 0 30px rgba(111,227,255,.25)}
 .drop-veil .icon{color:var(--hud-cyan);width:22px;height:22px}
 /* Images in messages */
 .shots{display:flex;gap:6px;flex-wrap:wrap;max-width:min(680px,92%)}
@@ -629,7 +649,10 @@ button.mchip:focus-visible{outline:2px solid var(--mh);outline-offset:2px}
   .more{min-height:44px;padding:0 12px 0 0}
   .decision .foot a{min-height:44px;align-items:center}
   .segopt > span{min-height:44px}
-  .tthumb .tx{width:30px;height:30px}
+  .tray .tx{width:30px;height:30px}
+  .fchip{height:48px}
+  .fchips{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}   /* two chips a row on a phone */
+  .fchips.sent{grid-template-columns:repeat(auto-fit,minmax(140px,165px))}
   .board-filter input{min-height:44px}
   /* Needs you with one thumb: the main answer buttons fill the width, low in the card */
   .card.approval .row .btn{flex:1 1 0}

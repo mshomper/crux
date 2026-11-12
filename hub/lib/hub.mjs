@@ -321,11 +321,12 @@ export class Hub {
   }
 
   // ---------- messages ----------
-  // ids: attachment ids the page uploaded first (decision 23). The event keeps only id, type and size.
+  // ids: attachments the page uploaded first (decision 23), as ids or { id, name }. The event keeps only id, type,
+  // size and the cleaned original name (display text).
   // extra: more fields for the message event (answers: the summary questions it answers, from Needs you).
   fromYou(p, thread, text, ids = [], extra = {}) {
-    if (ids.length > MAX_PER_MESSAGE) throw new Error(`Up to ${MAX_PER_MESSAGE} images per message.`);
-    const attachments = ids.map(id => p.attachments.ref(id));
+    if (ids.length > MAX_PER_MESSAGE) throw new Error(`Up to ${MAX_PER_MESSAGE} attachments per message.`);
+    const attachments = ids.map(x => x && typeof x === 'object' ? p.attachments.ref(String(x.id || ''), x.name) : p.attachments.ref(String(x)));
     const a = thread === 'orchestrator' ? null : p.agents.get(thread);
     if (thread !== 'orchestrator' && (!a || a.state === 'retired')) throw new Error(`No active agent ${thread}`);
     p.log.append('message', { thread, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
@@ -426,7 +427,7 @@ export class Hub {
     const ext = extname(String(path)).toLowerCase();
     if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext) && existsSync(path) && statSync(path).isFile()) {
       if (statSync(path).size > 8 * 1024 * 1024) throw new Error('Visuals must be under 8 MB');
-      const attachment = p.attachments.save(readFileSync(path), 'That visual');
+      const attachment = p.attachments.save(readFileSync(path), undefined, { imageOnly: true, label: 'That visual' });
       return p.log.append('visual', { thread: agent.thread, from: agent.name, visual: attachment.id, kind: 'image', attachment, caption });
     }
     if (!VISUAL_TYPES[ext]) throw new Error(`Visuals must be one of ${Object.keys(VISUAL_TYPES).join(', ')}`);

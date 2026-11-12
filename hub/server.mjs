@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
 import { parseQuickPicks } from './lib/quick.mjs';
 import { checkRequest, checkAttachmentRead, extraHosts } from './lib/access.mjs';
-import { decodeDataUrl, MAX_BYTES } from './lib/attachments.mjs';
+import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs';
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings } from './lib/settings.mjs';
@@ -82,13 +82,13 @@ function serveFile(res, file) {
   if (!existsSync(file) || !statSync(file).isFile()) return send(res, 404, { error: 'Not found' });
   send(res, 200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream');
 }
-// Uploads carry an image as base64 text (about 4/3 of its size); everything else stays small.
-const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_BYTES * 4 / 3) + 64 * 1024 };
+// Uploads carry a file as base64 text (about 4/3 of its size); everything else stays small.
+const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_UPLOAD * 4 / 3) + 64 * 1024 };
 async function body(req, limit = 1e6) {
   const parts = []; let n = 0;
   for await (const c of req) {
     n += c.length;
-    if (n > limit) throw new Error(limit > 1e6 ? `Images must be ${MAX_BYTES / 1024 / 1024} MB or less.` : 'Too large');
+    if (n > limit) throw new Error(limit > 1e6 ? `Attachments must be ${MAX_UPLOAD / 1024 / 1024} MB or less (images 10 MB).` : 'Too large');
     parts.push(c);
   }
   const s = Buffer.concat(parts).toString('utf8');
@@ -110,17 +110,19 @@ const routes = {
     return { settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(), permissionMode: p ? hub.permissionMode(p) : undefined, connectors: p ? hub.connectorsOn(p) : undefined };
   },
 
-  // One image from the composer, as a data URL. Stored by content hash; returns { id, type, size } (decision 23).
+  // One file from the composer (an image, a PDF or a text file), as a data URL. Stored by content hash; returns
+  // { id, type, size, name? } (decision 23). The name is display text only, never part of the stored path.
   'POST /api/attach': ({ project, data, name }) => {
     const { buf } = decodeDataUrl(data);
-    return hub.project(project).attachments.save(buf, name ? `"${String(name).slice(0, 80)}"` : undefined);
+    return hub.project(project).attachments.save(buf, name == null ? undefined : String(name).slice(0, 1000));
   },
 
   'POST /api/send': ({ project, thread, text, attachments }) => {
     const p = hub.project(project);
     text = String(text || '').trim();
-    const ids = Array.isArray(attachments) ? attachments.map(String) : [];
-    if (ids.length) { hub.fromYou(p, thread, text, ids); return { ok: true }; }   // images never count as decision picks
+    // Each attachment as an id, or { id, name } with the original file name for display.
+    const ids = Array.isArray(attachments) ? attachments.map(a => a && typeof a === 'object' ? { id: String(a.id || ''), name: a.name == null ? undefined : String(a.name).slice(0, 1000) } : String(a)) : [];
+    if (ids.length) { hub.fromYou(p, thread, text, ids); return { ok: true }; }   // attachments never count as decision picks
     if (!text) throw new Error('Empty message');
     if (/^\/(login|logout)\b/i.test(text)) {
       p.log.append('message', { thread, from: 'you', text });
@@ -179,20 +181,15 @@ const server = createServer(async (req, res) => {
     const route = routes[`${req.method} ${url.pathname}`];
     if (route) return send(res, 200, await route(req.method === 'POST' ? await body(req, BODY_LIMIT[url.pathname]) : Object.fromEntries(url.searchParams)));
 
-    // Images in threads: /att/<project>/<hash>.<ext>, for the hub's own page only (decision 23).
-    const at = /^\/att\/([^/]+)\/([a-f0-9]{32}\.(?:png|jpg|gif|webp))$/.exec(url.pathname);
+    // Attachments in threads: /att/<project>/<hash>.<ext>, for the hub's own page only (decision 23). Images show;
+    // PDFs and text files always download, as PDF or plain text, never as a page in the hub's origin.
+    const at = /^\/att\/([^/]+)\/([a-f0-9]{32}\.[a-z]{3,4})$/.exec(url.pathname);
     if (at) {
       const no = checkAttachmentRead(req.headers, { extra: hosts });
       if (no) return send(res, 403, { error: no });
       const store = hub.project(decodeURIComponent(at[1])).attachments;
       if (!store.has(at[2])) return send(res, 404, { error: 'Not found' });
-      res.writeHead(200, {
-        'content-type': TYPES['.' + (at[2].endsWith('.jpg') ? 'jpg' : at[2].split('.').pop())],
-        'cache-control': 'private, max-age=31536000, immutable',   // the name is the content's hash
-        'cross-origin-resource-policy': 'same-origin',
-        'x-content-type-options': 'nosniff',
-        'content-security-policy': "default-src 'none'; sandbox"
-      });
+      res.writeHead(200, servedHeaders(at[2]));
       return res.end(store.read(at[2]));
     }
 

@@ -8,6 +8,7 @@ import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js'
 import { enterAction, insertLineBreak, replyHint, filterHint } from './composer-keys.js';
 import { Columns } from './columns.js';
 import { growBox } from './conversation.js';
+import { IMG_TYPES, fileChip, plainName } from './files.js';
 import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
 import { UsageUI } from './usage-ui.js';
@@ -591,7 +592,9 @@ function messageEl(p, ev, t) {
   const body = you ? `<p>${String(ev.text || '').split('\n').map(l => /^> /.test(l) ? `<span class="yq">${esc(l.slice(2))}</span>` : esc(l)).join('<br>').replace(/<\/span><br>/g, '</span>')}</p>` : md(ev.text);
   // A brief that started a worker says what it was started as.
   const runs = 'model' in ev || 'effort' in ev ? modelChip({ type: ev.agentType, model: ev.model, effort: ev.effort, modelSeen: t !== 'orchestrator' && p.agents.find(a => a.thread === ev.thread)?.modelSeen }, { mini: true }) : '';
-  const shots = ev.attachments?.length ? shotsEl(p, ev.attachments) : '';
+  // Images as thumbnails; PDFs and text files as file chips that download on click.
+  const imgs = (ev.attachments || []).filter(a => IMG_TYPES[a.type]), docs = (ev.attachments || []).filter(a => !IMG_TYPES[a.type]);
+  const shots = (imgs.length ? shotsEl(p, imgs) : '') + (docs.length ? `<div class="fchips sent">${docs.map(a => fileChip({ name: a.name, size: a.size, type: a.type, href: attSrc(p, a.id) })).join('')}</div>` : '');
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
     <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}</span>
     ${shots}${ev.text || !shots ? `<div class="bubble">${fold(ev.id, body, isTall(ev.text, relay ? 240 : 900))}</div>` : ''}</div>`;
@@ -899,10 +902,15 @@ const cols = new Columns({
     // Pins and columns changed: redraw; a rail click also puts the keyboard in the column it opened.
     changed: (fromRail = false) => { render(); phone.viewChanged(); if (fromRail) focusIfDesk(cols.kbConv()?.input); },
     action: (name, c) => columnAction(name, c),
-    // A message from a column: images first, then the text. Needs you writes to the orchestrator.
+    // A message from a column: its files first (images, PDFs, text), then the text. Needs you writes to the
+    // orchestrator. Each file's original name goes along as display text; a pasted screenshot's "image.png" does not.
     send: async (t, text, files) => {
       const project = proj().name, attachments = [];
-      for (const f of files) attachments.push((await api('/api/attach', { project, data: await asDataUrl(f), name: f.name })).id);
+      for (const f of files) {
+        const name = plainName(f.name);
+        const r = await api('/api/attach', { project, data: await asDataUrl(f), ...(name ? { name } : {}) });
+        attachments.push(r.name ? { id: r.id, name: r.name } : r.id);
+      }
       return api('/api/send', { project, thread: t === 'needs' ? 'orchestrator' : t, text, ...(attachments.length ? { attachments } : {}) });
     },
     // After a message from Needs you the orchestrator's chat opens, as before, unless Needs you is pinned (it stays).
@@ -1033,14 +1041,15 @@ document.addEventListener('click', e => {
   const dn = e.target.closest('[data-deny]'); if (dn) return act(() => api('/api/approval', { id: dn.dataset.deny, allow: false }));
 });
 
-// ---------- images in the composer (decision 23) ----------
-// Paste, drop or pick; each column keeps its own tray (conversation.js). They upload when you send.
-const asDataUrl = f => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => fail(new Error('Could not read the image.')); r.readAsDataURL(f); });
-// Drag and drop anywhere on the page: the images go to the column they are dropped on, else the keyboard column.
+// ---------- files in the composer (decision 23) ----------
+// Images, PDFs and text files: paste, drop or pick; each column keeps its own tray (conversation.js). They upload
+// when you send.
+const asDataUrl = f => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => fail(new Error(`Could not read ${plainName(f.name) ? `"${f.name}"` : 'the file'}.`)); r.readAsDataURL(f); });
+// Drag and drop anywhere on the page: the files go to the column they are dropped on, else the keyboard column.
 let dragDepth = 0;
 const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
 const dropTarget = e => { const c = cols.convAt(e.target) || cols.kbConv(); return c && !c.input.disabled ? c : null; };
-// The drop veil shows only when the keyboard column's box can take images (not in a retired agent's thread).
+// The drop veil shows only when the keyboard column's box can take files (not in a retired agent's thread).
 addEventListener('dragenter', e => { if (!hasFiles(e) || !cols.kbConv() || cols.kbConv().input.disabled) return; e.preventDefault(); dragDepth++; $('#drop-veil').hidden = false; });
 addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
 addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $('#drop-veil').hidden = true; } });
@@ -1048,7 +1057,7 @@ addEventListener('drop', e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; $('#drop-veil').hidden = true;
   const c = dropTarget(e);
-  if (c) { c.addImages([...e.dataTransfer.files]); c.input.focus(); }
+  if (c) { c.addFiles([...e.dataTransfer.files]); c.input.focus(); }
 });
 
 // ---------- the larger view: copy and download ----------

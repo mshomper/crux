@@ -74,15 +74,15 @@
         <div class="tray" hidden></div>
         <div class="attach-error" role="alert" hidden></div>
         <div class="compose-row">
-          <button type="button" class="btn ghost icon-only attach" aria-label="Attach images" title="Attach images: PNG, JPEG, GIF or WebP, up to 10 MB each. You can also paste or drop them."><svg class="icon"><use href="#i-clip"/></svg></button>
-          <input type="file" class="c-file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+          <button type="button" class="btn ghost icon-only attach" aria-label="Attach files" title="Attach images, PDFs or text files (CSV, Markdown, JSON, code). Images up to 10 MB, PDFs and text up to 25 MB, 6 per message. You can also paste or drop them."><svg class="icon"><use href="#i-clip"/></svg></button>
+          <input type="file" class="c-file" multiple hidden>
           <textarea class="c-input" rows="1" placeholder="Message" enterkeyhint="send" aria-label="Message"></textarea>
           <button class="btn primary icon-only c-send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
         </div>
       </form>
     </section>
   </template>
-  <div id="drop-veil" class="drop-veil" hidden><div><svg class="icon"><use href="#i-image"/></svg>Drop images to attach</div></div>
+  <div id="drop-veil" class="drop-veil" hidden><div><svg class="icon"><use href="#i-clip"/></svg><span>Drop images, PDFs or text files to attach</span></div></div>
 
   <aside class="board" id="board" hidden>
     <header class="board-head">
@@ -177,6 +177,8 @@
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></symbol>
     <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.3v.2"/></symbol>
     <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><path d="M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/></symbol>
+    <symbol id="i-file-text" viewBox="0 0 24 24"><path d="M6.5 3h7.5l4.5 4.5V21h-12z"/><path d="M14 3v4.5h4.5"/><path d="M9 11.5h6.5M9 14.5h6.5M9 17.5h4"/></symbol>
+    <symbol id="i-file-pdf" viewBox="0 0 24 24"><path d="M6.5 3h7.5l4.5 4.5V21h-12z"/><path d="M14 3v4.5h4.5"/><rect x="8.5" y="11.5" width="7.5" height="6" rx="1"/><path d="M10.5 14.5h3.5"/></symbol>
     <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3.5h6l-1 5.5 3.5 3.5v2h-11v-2L10 9z"/><path d="M12 14.5V21"/></symbol>
   </defs>
 </svg>

@@ -92,8 +92,9 @@ test('two columns never share typed text, images or the sending flag', async () 
   assert.notEqual(rf, om);
   typeInto(rf, 'for route-finder');
   assert.equal(om.input.value, '');
-  rf.addImages([new File(['png'], 'loop.png', { type: 'image/png' })]);
-  assert.equal(rf.compose.tray.length, 1);
+  rf.addFiles([new File(['png'], 'loop.png', { type: 'image/png' }), new File(['a,b\n1,2\n'], 'loads.csv', { type: 'text/csv' })]);
+  assert.equal(rf.compose.tray.length, 2);
+  assert.ok(rf.trayEl.querySelector('.tthumb') && rf.trayEl.querySelector('.fchip'), 'a thumbnail and a file chip in this column\'s tray');
   assert.equal(om.compose.tray.length, 0);
   assert.equal(om.trayEl.hidden, true);
   // one column sending does not hold up the other
@@ -102,7 +103,7 @@ test('two columns never share typed text, images or the sending flag', async () 
   assert.equal(om.sending, false);
   typeInto(om, 'for offline-maps');
   om.submit();
-  assert.deepEqual(h.log.sends.map(s => [s.t, s.text, s.files]), [['route-finder', 'for route-finder', 1], ['offline-maps', 'for offline-maps', 0]]);
+  assert.deepEqual(h.log.sends.map(s => [s.t, s.text, s.files]), [['route-finder', 'for route-finder', 2], ['offline-maps', 'for offline-maps', 0]]);
   for (const s of h.log.sends) s.ok({});
   await Promise.all(h.log.acts);
   assert.deepEqual([rf.sending, om.sending, rf.input.value, om.input.value, rf.compose.tray.length], [false, false, '', '', 0]);

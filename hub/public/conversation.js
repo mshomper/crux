@@ -3,14 +3,12 @@
 // It owns its page parts, its scroll position, its redraw cache, its sending flag, and the typed text and images of
 // its thread (kept by the columns, so a draft stays with its thread). What to draw comes from app.js (host).
 import { enterAction, insertLineBreak, composerHint } from './composer-keys.js';
+import { esc, sizeOf, checkFile, fileChip, MAX_FILES, ACCEPT } from './files.js';
 
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const icon = id => `<svg class="icon"><use href="#i-${id}"/></svg>`;
-const sizeOf = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 
-// Images in the message box (decision 23): paste, drop or pick; they upload when you send.
-const IMG_TYPES = { 'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/gif': 'GIF', 'image/webp': 'WebP' };
-const MAX_IMG = 10 * 1024 * 1024, MAX_IMGS = 6;
+// Files in the message box (decision 23): images, PDFs and text files; paste, drop or pick. They upload when you
+// send. Images show as thumbnails, documents as file chips (files.js).
 
 // The list is redrawn only when what it shows changed. Live updates (an agent's activity line, its state) arrive
 // many times a minute; rebuilding every message and image for each made the list jump while you typed (phone pass 2).
@@ -50,6 +48,7 @@ export class Conversation {
     this.feed = q('.feed'); this.activity = q('.activity');
     this.form = q('.composer'); this.quick = q('.quick'); this.trayEl = q('.tray'); this.errEl = q('.attach-error');
     this.input = q('.c-input'); this.attachBtn = q('.attach'); this.file = q('.c-file');
+    this.file.setAttribute('accept', ACCEPT);
     this.sending = false;
     this.justOpened = true;     // the first draw scrolls to the latest message (Needs you: to the top)
     this.atBottom = true;       // following the latest message
@@ -78,7 +77,7 @@ export class Conversation {
       const files = [...(e.clipboardData?.files || [])];
       if (!files.length) return;
       if (!e.clipboardData.types.includes('text/plain')) e.preventDefault();   // a bare screenshot: no file name text
-      this.addImages(files);
+      this.addFiles(files);
     });
     // Quick replies add their words to the box; Enter sends.
     this.quick.addEventListener('click', e => {
@@ -90,11 +89,11 @@ export class Conversation {
       this.autosize(); host.focusBox(box);
     });
     this.attachBtn.addEventListener('click', () => this.file.click());
-    this.file.addEventListener('change', e => { this.addImages([...e.target.files]); e.target.value = ''; });
+    this.file.addEventListener('change', e => { this.addFiles([...e.target.files]); e.target.value = ''; });
     this.trayEl.addEventListener('click', e => {
       const x = e.target.closest('[data-untray]'); if (!x) return;
       const [t] = this.compose.tray.splice(Number(x.dataset.untray), 1);
-      if (t) URL.revokeObjectURL(t.url);
+      if (t?.url) URL.revokeObjectURL(t.url);
       this.renderTray(); host.focusBox(this.input);
     });
     this.feed.addEventListener('scroll', () => {
@@ -192,31 +191,37 @@ export class Conversation {
 
   findCard(card) { return [...this.feed.querySelectorAll('[data-card]')].find(x => x.dataset.card === card) || null; }
 
-  // ---------- images ----------
+  // ---------- attachments ----------
   attachError(msg) {
     this.errEl.textContent = msg; this.errEl.hidden = !msg;
     clearTimeout(this.errTimer);
     if (msg) this.errTimer = setTimeout(() => { this.errEl.hidden = true; }, 7000);
   }
+  // Images in one row of thumbnails that shrink to fit; documents as file chips in an even grid below them.
   renderTray(busy = false) {
     const tray = this.compose.tray;
     this.trayEl.hidden = !tray.length;
-    this.trayEl.innerHTML = tray.map((t, i) => `<div class="tthumb ${busy ? 'busy' : ''}"><img src="${t.url}" alt="${esc(t.file.name || 'Pasted image')}"><span class="tsize">${sizeOf(t.file.size)}</span>
-      ${busy ? '' : `<button type="button" class="tx" data-untray="${i}" aria-label="Remove image" title="Remove">${icon('x')}</button>`}</div>`).join('');
+    const thumbs = [], chips = [];
+    tray.forEach((t, i) => {
+      if (t.kind === 'image') thumbs.push(`<div class="tthumb ${busy ? 'busy' : ''}"><img src="${t.url}" alt="${esc(t.file.name || 'Pasted image')}"><span class="tsize">${sizeOf(t.file.size)}</span>
+      ${busy ? '' : `<button type="button" class="tx" data-untray="${i}" aria-label="Remove image" title="Remove">${icon('x')}</button>`}</div>`);
+      else chips.push(fileChip({ name: t.file.name, size: t.file.size, type: t.kind === 'pdf' ? 'application/pdf' : 'text/plain', remove: i, busy }));
+    });
+    this.trayEl.classList.toggle('has-docs', chips.length > 0);
+    this.trayEl.innerHTML = (thumbs.length ? `<div class="tshots">${thumbs.join('')}</div>` : '') + (chips.length ? `<div class="fchips">${chips.join('')}</div>` : '');
   }
-  addImages(files) {
+  addFiles(files) {
     const errs = [], tray = this.compose.tray;
     for (const f of files) {
-      const name = f.name && !/^image\.\w+$/.test(f.name) ? `"${f.name}"` : 'That image';
-      if (!IMG_TYPES[f.type]) { errs.push(`${name} is not a PNG, JPEG, GIF or WebP image.`); continue; }
-      if (f.size > MAX_IMG) { errs.push(`${name} is ${(f.size / 1048576).toFixed(1)} MB; images must be 10 MB or less.`); continue; }
-      if (tray.length >= MAX_IMGS) { errs.push(`Up to ${MAX_IMGS} images per message.`); break; }
-      tray.push({ file: f, url: URL.createObjectURL(f) });
+      const c = checkFile(f);
+      if (c.error) { errs.push(c.error); continue; }
+      if (tray.length >= MAX_FILES) { errs.push(`Up to ${MAX_FILES} attachments per message.`); break; }
+      tray.push({ file: f, kind: c.kind, url: c.kind === 'image' ? URL.createObjectURL(f) : '' });
     }
     this.attachError(errs.join(' '));
     this.renderTray();
   }
-  clearTray() { for (const t of this.compose.tray.splice(0)) URL.revokeObjectURL(t.url); this.renderTray(); }
+  clearTray() { for (const t of this.compose.tray.splice(0)) if (t.url) URL.revokeObjectURL(t.url); this.renderTray(); }
 
   // ---------- sending ----------
   submit() {
