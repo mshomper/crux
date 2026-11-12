@@ -62,6 +62,8 @@ The notification keys and the list of subscribed phones are kept in `~/.crux-hub
 
 Each agent shows its model as a colour (Opus violet, Sonnet cyan, Haiku pink, Fable copper) on its icon, its thread header and its live-map station, and its effort as five pips (hollow when it uses the default). Click the chip in a thread's header to change model, effort or type. Model and effort switch at once on a running agent; a new type takes effect when the agent is next free, and it keeps its conversation.
 
+The live map's centre is the orchestrator role, drawn as a glass sphere of liquid light with nothing written on it. The liquid level is context used (a full sphere means the handoff is due; it turns gold over the last stretch and pulses gold when due), its colour is the model, and how hard it is stirred is effort and state. A red flare on the rim means something in the orchestrator's thread waits on you; a spark off the glass is a permission answer (green allowed, amber denied, red sent to you); loose motes around it mean Auto, the same motes held on two hoops mean Ask; streams of its particles run to workers that are working. Point at the sphere (or tap it) for the exact numbers. With reduced motion it is a still sphere at the right level. `/lab/core-lab.html` shows every state side by side (`?live` animates it).
+
 Agent types are Claude Code's own agent files, so the same types work in plain Claude Code: `~/.claude/agents/*.md` for every project, `<project>/.claude/agents/*.md` for one project (that one wins on a name clash).
 
 ```markdown

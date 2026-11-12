@@ -82,6 +82,7 @@ export function coreBudget(light) {
 
 const KEYS = ['fill', 'heat', 'due', 'gold', 'swirl', 'speed', 'energy', 'bright', 'flare', 'ask', 'hr', 'hg', 'hb'];
 const SPARK = 10;   // floats per spark: x, y, vx, vy, age, life, type, r, g, b
+export const SPARK_COLOR = { allowed: COLORS.good, denied: COLORS.amber, escalated: COLORS.red };
 
 export class ReservoirCore {
   constructor({ light = false, seed = 11 } = {}) {
@@ -176,9 +177,9 @@ export class ReservoirCore {
   }
 
   // A permission answer: a burst of sparks off the glass at `angle` (screen angle, toward whoever asked).
-  // kind: 'allowed' (green) or 'escalated' (red: it went to Matt).
+  // kind: 'allowed' (green), 'denied' (amber) or 'escalated' (red: it went to Matt, decision 31).
   spark(kind = 'allowed', angle = -0.6) {
-    const c = kind === 'allowed' ? COLORS.good : COLORS.red, L = this.light;
+    const c = SPARK_COLOR[kind] || COLORS.good, L = this.light;
     const ca = Math.cos(angle), sa = Math.sin(angle);
     const emit = (x, y, vx, vy, life, type) => {
       if (this.nsp >= this.budget.sparks) return;
@@ -316,6 +317,7 @@ export class ReservoirCore {
     this.cx = cx; this.cy = cy; this.r = r; this.out = out; this.o = o;
     this.cyw = Math.cos(this.yaw); this.syw = Math.sin(this.yaw);
     this.sizeK = clamp(r / 64, 0.48, 1.12);
+    this.dens = clamp(0.42 + r / 100, 0.55, 1);   // a small sphere packs the same particles tighter: dim them so it does not wash out
     this.body();
     this.dt = 0;
     this.field();
@@ -335,7 +337,7 @@ export class ReservoirCore {
     out[k] = this.cx + sx * this.r; out[k + 1] = this.cy + sy * this.r;
     out[k + 2] = size * persp * lens * this.sizeK;
     out[k + 3] = cr + (1 - cr) * f; out[k + 4] = cg + (1 - cg) * f; out[k + 5] = cb + (1 - cb) * f;
-    out[k + 6] = a * this.P.bright * clamp(1.1 - z2 * 0.34, 0.35, 1.5) * (1 + 0.45 * r2 * r2) * (1 + f * 0.6);
+    out[k + 6] = a * this.dens * this.P.bright * clamp(1.1 - z2 * 0.34, 0.35, 1.5) * (1 + 0.45 * r2 * r2) * (1 + f * 0.6);
     this.o++;
   }
 

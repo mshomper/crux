@@ -126,8 +126,23 @@ export class MapModel {
       ctx: h?.contextPct ?? null,
       retireAt: this.retireAt,
       needs,
-      activity: h ? this.activityOf(h.name) : ''
+      waiting: this.needsByThread().get('orchestrator') || 0,
+      activity: h ? this.activityOf(h.name) : '',
+      // what the core's glass shows without words (M013): the model's hue, effort as energy, Auto or Ask in the field
+      model: h ? h.model || h.modelSeen || null : null,
+      effort: h?.effort || null,
+      mode: this.project?.permissionMode === 'auto' ? 'auto' : 'ask'
     };
+  }
+
+  // A permission answer the core shows as a spark toward whoever asked (decision 21). Null for other events.
+  //   allowed   - the orchestrator (or the hub, in Auto mode) let it run
+  //   denied    - the orchestrator said no
+  //   escalated - it went to Matt
+  sparkFor(ev) {
+    if (ev.type !== 'permission_answer') return null;
+    const kind = ev.answer === 'allow' ? 'allowed' : ev.answer === 'deny' ? 'denied' : 'escalated';
+    return { kind, to: ev.worker ? this.stationId(ev.worker) : null };
   }
 
   // ---------- events ----------
@@ -155,6 +170,7 @@ export class MapModel {
     }
     if (ev.type === 'agent_state' && !['working', 'starting'].includes(ev.state)) this.activity.delete(ev.agent);
     out.pulses = this.pulsesFor(ev);
+    out.spark = this.sparkFor(ev);
     if (ev.type === 'agent_created' && ev.role === 'orchestrator') out.core = 'handoff';
     // An orchestrator retiring with no successor empties the core; after a handoff the core already moved on.
     if (ev.type === 'agent_retired' && /^orchestrator-/.test(ev.agent) && !this.project?.agents.some(a => a.role === 'orchestrator' && a.name !== ev.agent && a.state !== 'retired')) out.core = 'retire';
