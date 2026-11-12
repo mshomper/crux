@@ -648,6 +648,10 @@ const CONNECTOR_READS = {
   Google_Drive: ['search_files', 'read_file_content', 'get_file_metadata', 'get_file_permissions', 'list_recent_files', 'list_shared_drives', 'get_shared_drive_metadata', 'download_file_content']
 };
 const CONNECTOR_DRAFTS = { Gmail: ['create_draft', 'update_draft'] };
+// The claude.ai connector servers known today, disallowed by name when a project has connectors off (a server-level
+// spec removes every tool of that server). New ones are kept out by disableClaudeAiConnectors, and stopped here anyway.
+export const CONNECTOR_SERVERS = ['Gmail', 'Google_Calendar', 'Google_Drive', 'Claude_Docs', 'Three_js_3D_Viewer', 'Slack', 'Notion', 'Linear', 'Atlassian', 'Asana', 'Canva', 'Figma']
+  .map(s => `mcp__claude_ai_${s}`);
 
 // { service, name, kind: 'read' | 'draft' | 'act' } for a claude.ai connector tool, else null.
 export function connectorTool(tool) {

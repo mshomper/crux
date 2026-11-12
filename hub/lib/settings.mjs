@@ -28,9 +28,11 @@ export class HubSettings {
   project(dir) { return this.projects[projectKey(dir)] || null; }
   setProject(dir, changes) {
     const k = projectKey(dir);
-    const mode = changes.permissionMode === 'auto' ? 'auto' : changes.permissionMode === 'standard' ? 'standard' : undefined;
-    if (!mode) return this.project(dir);
-    this.projects[k] = { ...(this.projects[k] || {}), permissionMode: mode };
+    const next = {};
+    if (changes.permissionMode === 'auto' || changes.permissionMode === 'standard') next.permissionMode = changes.permissionMode;
+    if (typeof changes.connectors === 'boolean') next.connectors = changes.connectors;   // claude.ai connectors on or off
+    if (!Object.keys(next).length) return this.project(dir);
+    this.projects[k] = { ...(this.projects[k] || {}), ...next };
     this.save({ projects: this.projects });
     return this.projects[k];
   }

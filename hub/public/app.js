@@ -350,7 +350,7 @@ function renderProjects() {
     return `<button role="option" aria-selected="${p === cur}" data-project="${esc(p.name)}" class="pitem ${p === cur ? 'on' : ''}" title="${esc(p.dir)}">
       <span class="pname">${esc(p.name)}</span><span class="pmode">${modeWord(p)}</span><span class="pcount ${k ? 'hot' : ''}">${k ? `${k} waiting` : 'All clear'}</span></button>`;
   }).join('')}</div>` : '';
-  $('#projects').innerHTML = `<div class="proj-switch"><div class="proj-row">${head}${modeSwitch(cur)}</div>${menu}</div>`;
+  $('#projects').innerHTML = `<div class="proj-switch"><div class="proj-row">${head}${modeSwitch(cur)}${connSwitch(cur)}</div>${menu}</div>`;
 }
 
 // Which permission rules apply here (decision 34): Auto lets contained work run and asks only about the rest;
@@ -362,6 +362,14 @@ function modeSwitch(p) {
     ? `Auto: work that stays in ${p.name} or a temp folder runs without asking. Hard stops still come to you. Click to switch to Ask.`
     : `Ask: anything beyond reading goes to the orchestrator or to you. Click to switch to Auto.`;
   return `<button class="mode-switch ${auto ? 'auto' : ''}" role="switch" aria-checked="${auto}" data-mode-toggle title="${esc(tip)}" aria-label="${esc(tip)}"><i class="mode-knob"></i>${modeWord(p)}</button>`;
+}
+// Your claude.ai connectors (mail, calendar, drive) for this project's agents: off unless you turn them on.
+function connSwitch(p) {
+  const on = !!p.connectors;
+  const tip = on
+    ? `Connectors on: agents in ${p.name} can see your mail, calendar and drive tools. Reads go to the orchestrator; sends, shares, changes and deletes always come to you. Click to turn them off.`
+    : `Connectors off: agents in ${p.name} cannot see your mail, calendar or drive. Click to turn them on.`;
+  return `<button class="mode-switch conn ${on ? 'auto' : ''}" role="switch" aria-checked="${on}" data-conn-toggle title="${esc(tip)}" aria-label="${esc(tip)}"><i class="mode-knob"></i>${icon('plug')}</button>`;
 }
 
 function lastLine(p, t) {
@@ -842,6 +850,10 @@ document.addEventListener('click', e => {
   if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; renderHead(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
   const t = e.target.closest('[data-thread]'); if (t) return selectThread(t.dataset.thread);
   if (e.target.closest('[data-proj-toggle]')) { S.projMenu = !S.projMenu; return renderProjects(); }
+  if (e.target.closest('[data-conn-toggle]')) {
+    const p = proj();
+    return act(async () => { await api('/api/settings', { project: p.name, connectors: !p.connectors }); await load(); });
+  }
   if (e.target.closest('[data-mode-toggle]')) {
     const p = proj();
     return act(async () => { await api('/api/settings', { project: p.name, permissionMode: p.permissionMode === 'auto' ? 'standard' : 'auto' }); await load(); });

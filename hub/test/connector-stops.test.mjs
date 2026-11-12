@@ -94,6 +94,48 @@ test('a worker\'s connector read goes to the orchestrator; the orchestrator\'s o
   assert.equal(last(p, 'approval').agent, orch.name, 'a card for Matt');
   assert.equal(last(p, 'approval').routedTo, null);
   assert.equal(p.log.ofType('permission_answer').length, before, 'not allowed-and-logged');
+  // Plugin MCP servers (e.g. a Gmail plugin) are not claude.ai connectors, but the orchestrator's own calls to them come to Matt too.
+  hub.requestApproval(p, orch, 'mcp__plugin_productivity_gmail__send', { to: 'x' });
+  assert.equal(last(p, 'approval').routedTo, null);
+  assert.equal(p.log.ofType('permission_answer').length, before);
+});
+
+test('connectors are off by default: agents neither connect nor see them; turning them on lifts both', () => {
+  const { hub, p, orch, w } = setup(true);
+  assert.equal(hub.connectorsOn(p), false, 'off by default');
+  for (const a of [orch, w]) {
+    const o = a.options();
+    assert.equal(o.settings?.disableClaudeAiConnectors, true, 'not connected');
+    for (const s of ['mcp__claude_ai_Gmail', 'mcp__claude_ai_Google_Calendar', 'mcp__claude_ai_Google_Drive']) assert.ok(o.disallowedTools.includes(s), s);
+    assert.ok(!o.disallowedTools.some(t => t === 'mcp__*' || t.startsWith('mcp__crux')), 'the board tools stay');
+  }
+  hub.setConnectors(p, true);
+  const on = w.options();
+  assert.equal(on.settings?.disableClaudeAiConnectors, undefined);
+  assert.ok(!on.disallowedTools.some(t => t.startsWith('mcp__claude_ai_')));
+  assert.equal(p.log.ofType('project_settings').at(-1).connectors, true, 'logged');
+  assert.ok(p.log.ofType('notice').some(n => n.thread === 'orchestrator' && /connectors on/.test(n.text)), 'shown in the orchestrator thread');
+  assert.equal(hub.state()[0].connectors, true);
+});
+
+test('connectors: the page beats the repo file, which beats the default (off)', () => {
+  const { hub, p } = setup(false);
+  assert.equal(hub.connectorsOn(p), false);
+  writeFileSync(join(p.dir, '.crux-hub.json'), '{ "connectors": true }');
+  assert.equal(hub.connectorsOn(p), true, 'the file is the starting value');
+  hub.setConnectors(p, false);
+  assert.equal(hub.connectorsOn(p), false, 'the page wins');
+});
+
+test('changing connectors restarts a resting agent now and a busy one when it is free', () => {
+  const { hub, p, orch, w } = setup(true);
+  let closed = 0;
+  orch.close = () => { closed++; };
+  orch.state = 'idle';
+  w.q = {}; w.state = 'working';
+  hub.setConnectors(p, true);
+  assert.equal(closed, 1, 'the resting orchestrator restarts with the new tools');
+  assert.equal(w.restartWhenIdle, true, 'the busy worker restarts when it is free');
 });
 
 test('the prompts say connector content is untrusted and must never trigger a send or share', () => {

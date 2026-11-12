@@ -512,8 +512,9 @@ export class Hub {
     if (route === 'allow' && this.permissionMode(p) === 'auto') return { allow: true };
     // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,
     // they are allowed and logged in its thread for Matt to audit.
-    // Never a connector (Matt's mail, calendar, drive): the orchestrator's own reads of those come to Matt as a card.
-    if (route === 'unsure' && agent.role === 'orchestrator' && this.permissionMode(p) === 'auto' && !connectorTool(toolName)) return { allow: true, logged: unsure };
+    // Never a connector or any other MCP server's tool (plugin servers can reach mail and calendar too): the
+    // orchestrator's own requests for those come to Matt as a card.
+    if (route === 'unsure' && agent.role === 'orchestrator' && this.permissionMode(p) === 'auto' && !connectorTool(toolName) && !/^mcp__(?!crux__)/.test(toolName)) return { allow: true, logged: unsure };
     if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
     const orch = p.orchestrator();
@@ -540,6 +541,31 @@ export class Hub {
       : `${by === 'you' ? 'You' : by} switched ${p.name} to Ask: anything beyond reading goes to the orchestrator first, hard stops to you.`);
     if (mode === 'auto') this.rulesHint(p);
     return mode;
+  }
+
+  // Matt's claude.ai connectors in this project's agents: off unless turned on. The switch in the page wins; then the
+  // repo's .crux-hub.json ({ "connectors": true }); else off.
+  connectorsOn(p) {
+    const set = this.settings.project?.(p.dir)?.connectors;
+    if (typeof set === 'boolean') return set;
+    try { return JSON.parse(readFileSync(join(p.dir, '.crux-hub.json'), 'utf8')).connectors === true; } catch { return false; }
+  }
+
+  // Agents pick the change up on their next start: at once if resting, else when they finish what they are doing.
+  setConnectors(p, on, by = 'you') {
+    on = !!on;
+    const was = this.connectorsOn(p);
+    this.settings.setProject(p.dir, { connectors: on });
+    if (on === was) return on;
+    p.log.append('project_settings', { connectors: on, by, thread: 'orchestrator' });
+    for (const a of p.agents.values()) {
+      if (!a.live || a.state === 'retired') continue;
+      if (a.state === 'idle' && !a.retiring && !a.capture) a.close(); else a.restartWhenIdle = true;
+    }
+    this.notice(p, 'orchestrator', on
+      ? `${by === 'you' ? 'You' : by} turned connectors on for ${p.name}: agents here can see your mail, calendar and drive tools. Reads go to the orchestrator; sends, shares, changes and deletes always come to you.`
+      : `${by === 'you' ? 'You' : by} turned connectors off for ${p.name}: agents here no longer load your mail, calendar or drive tools.`);
+    return on;
   }
 
   // The rules the orchestrator answers under: the board's entry; in Auto mode with no entry, the hub's built-in
@@ -792,7 +818,8 @@ export class Hub {
       pack: this.memory.packName(p.name),
       pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id),
       permissionRules: this.rulesFor(p)?.entryId || null,
-      permissionMode: this.permissionMode(p)
+      permissionMode: this.permissionMode(p),
+      connectors: this.connectorsOn(p)
     }));
   }
 }
