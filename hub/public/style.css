@@ -223,10 +223,10 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .head-actions .btn:hover .icon{color:var(--accent)}
 .head-actions .btn.on{background:var(--accent-bg);color:var(--accent)}
 .head-actions .btn.on .icon{color:var(--accent)}
-.head-actions #retire-finished:hover{background:var(--good-bg);color:var(--good)}
-.head-actions #retire-finished:hover .icon{color:var(--good)}
-.head-actions #retire:hover{background:var(--warn-bg);color:var(--warn)}
-.head-actions #retire:hover .icon{color:var(--warn)}
+.head-actions .c-retire-finished:hover{background:var(--good-bg);color:var(--good)}
+.head-actions .c-retire-finished:hover .icon{color:var(--good)}
+.head-actions .c-retire:hover{background:var(--warn-bg);color:var(--warn)}
+.head-actions .c-retire:hover .icon{color:var(--warn)}
 .head-actions .btn .ext{width:12px;height:12px;margin-left:-2px;opacity:.7}
 .head-actions .btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .task-line{flex:1 1 200px;min-width:0;font:inherit;color:var(--faint);background:none;border:0;padding:0;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -530,7 +530,7 @@ button.mchip:focus-visible{outline:2px solid var(--mh);outline-offset:2px}
   .app,.app.with-board{grid-template-columns:minmax(0,1fr)}
   .side{display:none}
   .app.show-side .side{display:flex}
-  .app.show-side .main{display:none}
+  .app.show-side .cols{display:none}
   .back{display:inline-flex}
   .feed,.composer,.main-head{padding-left:12px;padding-right:12px}
   .board{width:100%;border-left:0;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}

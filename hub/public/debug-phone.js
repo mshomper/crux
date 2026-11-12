@@ -102,7 +102,9 @@ export class PhoneCheck {
 
   sample() {
     const vv = window.visualViewport || { width: innerWidth, height: innerHeight, offsetTop: 0, scale: 1 };
-    const feed = document.getElementById('feed'), box = document.getElementById('input');
+    // the conversation with the keyboard (the only one on a phone; decision 39)
+    const conv = document.querySelector('.conv.kb') || document.querySelector('.conv');
+    const feed = conv?.querySelector('.feed'), box = conv?.querySelector('.c-input');
     const last = feed?.lastElementChild;
     const css = getComputedStyle(document.documentElement);
     return {

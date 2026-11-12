@@ -5,7 +5,9 @@ import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js
 import { robot } from './robots.js';
 import { hudBoot, openPanel, closePanel } from './hud.js';
 import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
-import { enterAction, insertLineBreak, composerHint, replyHint, filterHint } from './composer-keys.js';
+import { enterAction, insertLineBreak, replyHint, filterHint } from './composer-keys.js';
+import { Columns } from './columns.js';
+import { growBox } from './conversation.js';
 import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
 import { UsageUI } from './usage-ui.js';
@@ -31,7 +33,8 @@ const store = {
 const S = {
   projects: [],
   current: store.get('project', null),
-  thread: store.get('thread', 'needs'),
+  // The open threads and which one has the keyboard live in the columns (columns.js, per project); cols.kb is the
+  // thread that used to be "the" current one.
   seen: store.get('seen', {}),
   open: new Set(), // expanded messages, answered approvals and task lines
   activity: {},
@@ -143,7 +146,9 @@ function working() { return S.projects.flatMap(p => p.agents.filter(a => ['worki
 function reloadForUpdate(version) {
   try {
     sessionStorage.setItem('crux-hub:updated', version || 'a new version');
-    sessionStorage.setItem('crux-hub:resume-view', JSON.stringify({ board: !$('#board').hidden, compose: $('#input').value, filter: $('#board-filter').value }));
+    // Every column's half-typed message, by thread (the open columns themselves are kept in local storage).
+    const compose = Object.fromEntries(cols.all().filter(c => c.input.value).map(c => [c.thread, c.input.value]));
+    sessionStorage.setItem('crux-hub:resume-view', JSON.stringify({ board: !$('#board').hidden, compose, filter: $('#board-filter').value }));
   } catch { }
   location.reload();
   return new Promise(() => { });   // nothing more happens on this page
@@ -156,7 +161,9 @@ function afterUpdate() {
     sessionStorage.removeItem('crux-hub:updated'); sessionStorage.removeItem('crux-hub:resume-view');
   } catch { }
   if (view) {
-    if (view.compose) { $('#input').value = view.compose; autosize(); }
+    // A message typed before the update (one box before 0.12, one per column since).
+    const typed = typeof view.compose === 'string' ? { [cols.kb]: view.compose } : view.compose || {};
+    for (const c of cols.all()) if (typed[c.thread]) { c.input.value = c.compose.text = typed[c.thread]; c.autosize(); }
     if (view.filter) $('#board-filter').value = view.filter;
     if (view.board) { $('#board').hidden = false; render(); }
   }
@@ -335,20 +342,7 @@ function draftChanged(box) {
   if (ev && btn) { const n = filledAnswers(ev).length; btn.disabled = !n; btn.querySelector('.qcount').textContent = sendLabel(n, ev.open.length); }
   for (const b of box.closest('.qrow')?.querySelectorAll('.qquick') || []) { const on = box.value === b.dataset.word; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
 }
-// A text box grows and shrinks with its text without the list moving (phone pass 2). Measuring collapses the box
-// for an instant, which can pull the list's scroll position; it is put back before the screen paints. The list
-// only follows when the box really changed height (a line added or removed) and you were at the latest message.
-function growBox(box, max) {
-  const feed = $('#feed');
-  const top = feed.scrollTop, atBottom = feed.scrollHeight - top - feed.clientHeight < 2;
-  const was = box.style.height;
-  box.style.height = 'auto';
-  const h = Math.min(box.scrollHeight + 2, max) + 'px';
-  box.style.height = h;
-  box.style.overflowY = box.scrollHeight > max ? 'auto' : 'hidden';
-  feed.scrollTop = atBottom && h !== was && !feed.contains(box) ? feed.scrollHeight : top;
-  return h !== was;
-}
+// (Text boxes grow with their text without the list moving: growBox, in conversation.js.)
 function threadEvents(p, t) {
   const agentThread = new Map(p.agents.map(a => [a.name, a.thread]));
   return p.events.filter(e => e.thread === t || (e.type === 'entry' && agentThread.get(e.from) === t));
@@ -361,6 +355,15 @@ function timeOf(ts) { const d = new Date(ts); return d.toLocaleTimeString([], { 
 // ---------- render: sidebar ----------
 // Everything in a project that waits for you: decisions, permission cards, questions, profile lessons (one card).
 function needsCount(p) { return openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length + (pendingLessons(p).length ? 1 : 0); }
+// What waits for you in one thread (a column's red count, decision 39): its permission cards and questions, and the
+// open decisions its round summaries asked for. Needs you counts everything.
+function waitingIn(p, t) {
+  if (!p) return 0;
+  if (t === 'needs') return needsCount(p);
+  const open = new Set(openDecisions(p).map(d => d.id));
+  const asked = new Set(p.events.filter(e => e.type === 'summary' && e.thread === t).flatMap(e => (e.decisions_needed || []).map(Number)).filter(id => open.has(id)));
+  return pendingApprovals(p).filter(e => e.thread === t).length + openQuestions(p).filter(q => q.thread === t).length + asked.size;
+}
 // The HUD frame's boot readout (decision 33), once, when the hub opens.
 function bootReadout() {
   const p = proj(), live = p ? p.agents.filter(a => a.state !== 'retired') : [];
@@ -424,13 +427,30 @@ function lastLine(p, t) {
 function unread(p, t) { return threadEvents(p, t).length > (S.seen[key(p.name, t)] || 0); }
 
 // An agent's icon carries a ring in its model's hue (decision 20); no ring until its model is known.
-function threadButton({ id, name, ava, avaClass = '', last, right, agent = null }) {
+// Decision 39: each row also carries a pin (shown on hover or keyboard focus, lit while pinned). The row is a
+// wrapper holding two sibling buttons, the row itself and its pin, so no button sits inside another.
+const avaHtml = ({ ava, avaClass = '', agent = null }) => {
   const hue = agent ? hueOf(modelOf(agent)) : null;
   const ring = hue ? ` ring" style="--mh:${hue}" title="${esc(describe(agent))}` : '';
-  return `<button class="thread ${S.thread === id ? 'on' : ''}" data-thread="${esc(id)}">
-    <span class="ava ${avaClass}${ring}">${agent ? robot(agent) : icon(ava)}</span>
+  return `<span class="ava ${avaClass}${ring}">${agent ? robot(agent) : icon(ava)}</span>`;
+};
+function threadButton({ id, name, ava, avaClass = '', last, right, agent = null }) {
+  const pinned = cols.isPinned(id);
+  const tip = pinned ? `Unpin ${name}: close its column` : `Pin ${name}: open it as a column beside the current one`;
+  return `<div class="thread-row ${pinned ? 'pinned' : ''}"><button class="thread ${cols.kb === id ? 'on' : ''}" data-thread="${esc(id)}">
+    ${avaHtml({ ava, avaClass, agent })}
     <span class="name">${esc(name)}</span>${right}
-    <span class="last">${esc(last)}</span></button>`;
+    <span class="last">${esc(last)}</span></button><button type="button" class="row-pin" data-row-pin="${esc(id)}" aria-pressed="${pinned}" aria-label="${esc(tip)}" title="${esc(tip)}">${icon('pin')}</button></div>`;
+}
+// A thread's avatar as the rail shows it, with its red count; a click shows it in place of the column named.
+function railItem(t, instead) {
+  const p = proj(), n = waitingIn(p, t);
+  const agent = t === 'orchestrator' ? orchestrator(p) : p?.agents.find(a => a.thread === t);
+  const name = t === 'needs' ? 'Needs you' : t === 'orchestrator' ? 'The orchestrator' : t;
+  const where = instead === 'needs' ? 'Needs you' : instead === 'orchestrator' ? 'the orchestrator' : instead;
+  const ava = t === 'needs' ? avaHtml({ ava: 'inbox', avaClass: n ? 'needs' : '' }) : avaHtml({ ava: t === 'orchestrator' ? 'orch' : 'agent', avaClass: t === 'orchestrator' ? 'orch' : '', agent });
+  const tip = `${name}: pinned, folded for lack of room.${n ? ` ${n} waiting for your call.` : ''} Click to show it in place of ${where}.`;
+  return `<button type="button" class="rail-item" data-rail="${esc(t)}" aria-label="${esc(tip)}" title="${esc(tip)}">${ava}${n ? `<span class="colbadge">${n}</span>` : ''}</button>`;
 }
 
 function renderThreads() {
@@ -440,7 +460,8 @@ function renderThreads() {
   const orch = orchestrator(p);
   const workers = p.agents.filter(a => a.role === 'worker');
   const active = workers.filter(a => a.state !== 'retired');
-  const dot = (a, t) => `<span class="dot ${S.thread !== t && unread(p, t) ? 'unread' : a?.state || ''}"></span>`;
+  // A thread on screen in a column is being read: no unread dot for it.
+  const dot = (a, t) => `<span class="dot ${!cols.visible(t) && unread(p, t) ? 'unread' : a?.state || ''}"></span>`;
   let html = threadButton({ id: 'needs', name: 'Needs you', ava: 'inbox', avaClass: needs ? 'needs' : '', last: needs ? `${needs} waiting for your call` : 'Nothing waiting', right: needs ? `<span class="badge">${needs}</span>` : '' });
   html += threadButton({ id: 'orchestrator', name: orch ? `Orchestrator · ${orch.name.replace('orchestrator-', '#')}` : 'Orchestrator', ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator'), agent: orch });
   if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread), agent: a })).join('');
@@ -451,15 +472,16 @@ function renderThreads() {
 // Retired workers (read-only threads): one folded row, "Retired (N)" with N the recent ones; compact rows inside,
 // the older ones behind "Show older (M)" (retired-list.js). The open thread is never hidden: the section opens for it.
 function retiredSection(p, workers) {
-  const rv = retiredView(workers, p.events, { showOlder: S.retiredOlder, current: S.thread });
+  const cur = cols.kb;
+  const rv = retiredView(workers, p.events, { showOlder: S.retiredOlder, current: cur });
   if (!rv.any) return '';
-  if (rv.holdsCurrent && !S.retiredOpen && S.retiredAutoFor !== S.thread) { S.retiredOpen = true; store.set('retired-open', true); }
-  S.retiredAutoFor = rv.holdsCurrent ? S.thread : null;   // once opened for this thread, closing it again is yours
+  if (rv.holdsCurrent && !S.retiredOpen && S.retiredAutoFor !== cur) { S.retiredOpen = true; store.set('retired-open', true); }
+  S.retiredAutoFor = rv.holdsCurrent ? cur : null;   // once opened for this thread, closing it again is yours
   const open = S.retiredOpen;
   const tip = `${open ? 'Fold' : 'Show'} retired agents. They are read-only; older than ${RETIRED_RECENT_DAYS} days sit behind Show older.`;
   const head = `<button class="side-label retired-head ${open ? 'open' : ''} ${!open && rv.holdsCurrent ? 'holds' : ''}" data-retired-toggle aria-expanded="${open}" title="${esc(tip)}">${icon('chevron')}<span class="rk">Retired (${rv.count})</span></button>`;
   if (!open) return head;
-  const row = a => `<button class="thread mini ${S.thread === a.thread ? 'on' : ''}" data-thread="${esc(a.thread)}" title="${esc(a.name)}">
+  const row = a => `<button class="thread mini ${cur === a.thread ? 'on' : ''}" data-thread="${esc(a.thread)}" title="${esc(a.name)}">
     <span class="ava gone">${robot(a, { size: 16, cls: 'calm' })}</span><span class="name">${esc(a.name)}</span></button>`;
   const more = rv.olderCount ? `<button class="thread mini more" data-retired-older aria-expanded="${S.retiredOlder}" title="Retired more than ${RETIRED_RECENT_DAYS} days ago">
     <span class="ava">${icon('chevron')}</span><span class="name">${S.retiredOlder ? 'Hide older' : 'Show older'} (${rv.olderCount})</span></button>` : '';
@@ -554,13 +576,13 @@ function fold(id, html, tall) {
 }
 function isTall(text, limit) { const s = String(text || ''); return s.length > limit || s.split('\n').length > limit / 60; }
 
-function messageEl(p, ev) {
+function messageEl(p, ev, t) {
   const you = ev.from === 'you';
-  const relay = !you && S.thread !== 'orchestrator' && /^orchestrator-/.test(ev.from);
+  const relay = !you && t !== 'orchestrator' && /^orchestrator-/.test(ev.from);
   // Your words as typed; "> " lines (a question quoted by an answer from Needs you) show as a quote.
   const body = you ? `<p>${String(ev.text || '').split('\n').map(l => /^> /.test(l) ? `<span class="yq">${esc(l.slice(2))}</span>` : esc(l)).join('<br>').replace(/<\/span><br>/g, '</span>')}</p>` : md(ev.text);
   // A brief that started a worker says what it was started as.
-  const runs = 'model' in ev || 'effort' in ev ? modelChip({ type: ev.agentType, model: ev.model, effort: ev.effort, modelSeen: S.thread !== 'orchestrator' && p.agents.find(a => a.thread === ev.thread)?.modelSeen }, { mini: true }) : '';
+  const runs = 'model' in ev || 'effort' in ev ? modelChip({ type: ev.agentType, model: ev.model, effort: ev.effort, modelSeen: t !== 'orchestrator' && p.agents.find(a => a.thread === ev.thread)?.modelSeen }, { mini: true }) : '';
   const shots = ev.attachments?.length ? shotsEl(p, ev.attachments) : '';
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
     <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}</span>
@@ -639,37 +661,14 @@ function placeModelMenu() {
   el.style.left = left + 'px';
   el.style.top = (below ? r.bottom + 6 : Math.max(8, r.top - 6 - h)) + 'px';
 }
-function closeModelMenu() { if (!S.mmenu) return; const n = S.mmenu; S.mmenu = null; renderHead(); renderModelMenu(); document.querySelector(`[data-mchip="${CSS.escape(n)}"]`)?.focus(); }
+function closeModelMenu() { if (!S.mmenu) return; const n = S.mmenu; S.mmenu = null; cols.render(); renderModelMenu(); document.querySelector(`[data-mchip="${CSS.escape(n)}"]`)?.focus(); }
 
-// ---------- render: main ----------
-// The list is redrawn only when what it shows changed. Live updates (an agent's activity line, its state) arrive
-// many times a minute; rebuilding every message and image for each made the list jump while you typed (phone pass 2).
-function setFeed(feed, html) {
-  const key = `${S.current}::${S.thread}::${html}`;
-  if (feed._shown === key) { delete feed.dataset.rebuilt; return false; }
-  feed._shown = key;
-  feed.innerHTML = html;
-  feed.dataset.rebuilt = '1';
-  return true;
-}
-function renderFeed() {
+// ---------- render: one conversation (a column; conversation.js draws it, these say what is in it) ----------
+// The list for thread t, as HTML. Seeing a thread's list in a column marks it read.
+function feedFor(t) {
   const p = proj();
-  const feed = $('#feed');
-  if (!p) { setFeed(feed, `<div class="empty"><h2>No projects</h2><p>Start the hub with a project folder: <code>node server.mjs C:/path/to/project</code></p></div>`); return; }
-  const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-  // A card you are answering from the keyboard keeps its focus through the redraw (M008 14).
-  const focusedCard = document.activeElement?.matches?.('#feed .card[data-card]') ? document.activeElement.dataset.card : null;
-  if (focusedCard) queueMicrotask(() => [...feed.querySelectorAll('.card[data-card]')].find(c => c.dataset.card === focusedCard)?.focus({ preventScroll: true }));
-
-  if (S.thread === 'needs') {
-    // A reply box being typed in keeps its focus and cursor through the redraw.
-    const typing = document.activeElement?.matches?.('.qbox') ? { k: document.activeElement.dataset.answer, a: document.activeElement.selectionStart, b: document.activeElement.selectionEnd } : null;
-    queueMicrotask(() => {
-      if (!feed.dataset.rebuilt) return;   // nothing was redrawn: the boxes are the same ones, untouched
-      for (const box of feed.querySelectorAll('.qbox')) if (box.value) growBox(box, 140);
-      const box = typing && [...feed.querySelectorAll('.qbox')].find(x => x.dataset.answer === typing.k);
-      if (box) { box.focus({ preventScroll: true }); box.setSelectionRange(typing.a, typing.b); }
-    });
+  if (!p) return `<div class="empty"><h2>No projects</h2><p>Start the hub with a project folder: <code>node server.mjs C:/path/to/project</code></p></div>`;
+  if (t === 'needs') {
     const ds = openDecisions(p), aps = pendingApprovals(p), qs = openQuestions(p);
     const withRec = ds.filter(d => d.status === 'open' && d.recommended);
     let html = '';
@@ -684,12 +683,12 @@ function renderFeed() {
     html += aps.map(approvalCard).join('') + qs.map(questionCard).join('') + (ls.length ? lessonsCard(ls) : '') + ds.map(d => decisionCard(p, d)).join('');
     // Requests the orchestrator is answering: not yours to act on, shown so you can watch or step in.
     if (routed.length) html += `<div class="side-label routed-label">With the orchestrator</div>` + routed.map(approvalCard).join('');
-    setFeed(feed, html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`);
+    return html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
-    const evs = threadEvents(p, S.thread);
+    const evs = threadEvents(p, t);
     const html = evs.map(ev => {
       switch (ev.type) {
-        case 'message': return messageEl(p, ev);
+        case 'message': return messageEl(p, ev, t);
         case 'summary': return summaryCard(p, ev);
         case 'notice': return `<div class="notice">${esc(ev.text)}</div>`;
         case 'pick': return `<div class="notice">You picked D${pad(ev.decision)} · ${esc(ev.label)}</div>`;
@@ -704,17 +703,11 @@ function renderFeed() {
         default: return '';
       }
     }).join('');
-    setFeed(feed, html || (S.thread === 'orchestrator'
+    if (S.seen[key(p.name, t)] !== evs.length) { S.seen[key(p.name, t)] = evs.length; store.set('seen', S.seen); }
+    return html || (t === 'orchestrator'
       ? `<div class="empty"><h2>Talk to the orchestrator</h2><p>It reads the memory board, starts agents, answers their questions and brings decisions to you. Say what you want done on ${esc(p.name)}.</p></div>`
-      : `<div class="empty"><p>No messages yet.</p></div>`));
-    S.seen[key(p.name, S.thread)] = evs.length;
-    store.set('seen', S.seen);
+      : `<div class="empty"><p>No messages yet.</p></div>`);
   }
-  // Needs you reads from the top: it opens there and stays where you are as cards come and go (M008 1).
-  // Conversations open at their latest message and follow new ones while you are at the bottom.
-  if (S.thread === 'needs') { if (S.justSwitched) feed.scrollTop = 0; }
-  else if (atBottom || S.justSwitched) feed.scrollTop = feed.scrollHeight;
-  S.justSwitched = false;
 }
 
 // Quick replies built from what is really open (M008 9): "all" when several decisions have a recommendation,
@@ -724,17 +717,10 @@ function quickReplies(p) {
   return [...(rec.length > 1 ? [{ text: 'all', tip: `Take all ${rec.length} recommendations` }] : []),
     ...rec.slice(0, 6).map(d => ({ text: `${d.id}${d.recommended}`, tip: `D${pad(d.id)}: take ${d.recommended}, ${d.options.find(o => o.key === d.recommended)?.name || ''}` }))];
 }
-function renderQuick(p, t, retired) {
-  const el = $('#quick');
-  const chips = p && !retired && (t === 'needs' || t === 'orchestrator') ? quickReplies(p) : [];
-  const html = chips.map(c => `<button type="button" class="qchip" data-quick-text="${esc(c.text)}" title="${esc(c.tip)}">${esc(c.text)}</button>`).join('');
-  if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = chips.length ? `<span class="hud-k">Quick</span>${html}` : ''; }
-  el.hidden = !chips.length;
-}
-
-function renderHead() {
+// What a column's header and message box show for thread t: title, the line under it, which buttons apply,
+// whether the box is closed (a retired agent), the working line, the quick picks and the red count.
+function headFor(t) {
   const p = proj();
-  const t = S.thread;
   let title = 'Needs you', sub = '';
   if (p && t === 'orchestrator') {
     const o = orchestrator(p);
@@ -748,22 +734,17 @@ function renderHead() {
   } else if (p) {
     sub = `<span>${esc(p.name)}</span>`;
   }
-  $('#thread-title').textContent = title;
-  $('#thread-sub').innerHTML = sub;
   const a = p?.agents.find(a => a.thread === t && a.state !== 'retired') || p?.agents.find(a => a.thread === t);
-  $('#retire').hidden = !(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring));
-  $('#retire-finished').hidden = !(p && t !== 'orchestrator' && t !== 'needs' && a && a.role === 'worker' && a.state !== 'retired' && !a.retiring);
-  const retired = a && a.state === 'retired' && t !== 'orchestrator';
-  $('#input').disabled = !!retired;
-  $('#attach').disabled = !!retired;
-  // The hint fits its box on one line (M008 9, phone pass): on a phone one word, since the header says who you are
-  // writing to and the quick-reply chips above the box show the short picks (composer-keys.js).
-  $('#input').placeholder = composerHint({ thread: t, retired: !!retired, narrow: phoneMq.matches, fine: fineMq.matches });
-  $('#board-filter').placeholder = filterHint({ narrow: phoneMq.matches });
-  renderQuick(p, t, retired);
-  const act = p && S.activity[key(p.name, t === 'needs' ? 'orchestrator' : t)];
-  $('#activity').textContent = act || '';
-  $('#activity').classList.toggle('on', !!act);
+  const retired = !!(a && a.state === 'retired' && t !== 'orchestrator');
+  return {
+    title, sub, retired,
+    retire: !!(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring)),
+    finish: !!(p && t !== 'orchestrator' && t !== 'needs' && a && a.role === 'worker' && a.state !== 'retired' && !a.retiring),
+    // Quick replies only where a message goes to the orchestrator.
+    chips: p && !retired && (t === 'needs' || t === 'orchestrator') ? quickReplies(p) : [],
+    activity: (p && S.activity[key(p.name, t === 'needs' ? 'orchestrator' : t)]) || '',
+    waiting: waitingIn(p, t)
+  };
 }
 
 // The board panel (M008 B): sections with counts that open and close, what waits for you open by default,
@@ -804,11 +785,13 @@ function renderBoard() {
 }
 
 function render() {
-  renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard(); renderModelMenu();
-  map.update(proj(), pendingForYou(proj()));
-  usageUI.draw();
+  // The board first: whether it is open decides the width the columns share.
   $('#app').classList.toggle('with-board', !$('#board').hidden);
   $('#open-board').classList.toggle('on', !$('#board').hidden);
+  $('#board-filter').placeholder = filterHint({ narrow: phoneMq.matches });
+  renderProjects(); cols.render(); renderThreads(); renderBoard(); renderModelMenu();
+  map.update(proj(), pendingForYou(proj()));
+  usageUI.draw();
 }
 
 // ---------- actions ----------
@@ -834,16 +817,21 @@ function toast(msg, tone = 'warn') {
 }
 $('#toast').addEventListener('click', () => { $('#toast').hidden = true; });
 
+// Open a thread (a row in the list, the map, a card's "Open thread", a new agent): the rule is in pins.js. With
+// nothing pinned it replaces the one conversation, as always; beside pinned columns it opens a new one, up to three.
 function selectThread(t) {
-  S.thread = t; S.justSwitched = true; S.mmenu = null; store.set('thread', t);
+  cols.open(t); S.mmenu = null;
   $('#app').classList.remove('show-side');
   render();
   phone.viewChanged();
-  focusIfDesk($('#input'));   // on a phone, opening a thread does not pop the keyboard up
+  focusIfDesk(cols.kbConv()?.input);   // on a phone, opening a thread does not pop the keyboard up
 }
 
 // Open the card a notification points at (card = "approval:<id>", "decision:<n>" or "question:<event id>").
-// Waiting cards are in Needs you; one already answered is shown in its own thread instead.
+// Waiting cards are in Needs you; one already answered is shown in its own thread instead. With columns the same
+// card can be drawn twice (in Needs you and in its own thread): a column already on screen that holds it is used
+// (Needs you first), so the layout does not change; otherwise Needs you (or the card's thread) opens by the usual
+// rule. The lock-on goes to the copy in that one column only.
 function openCard(project, card) {
   if (project && S.projects.some(p => p.name === project)) { S.current = project; store.set('project', project); }
   const p = proj();
@@ -854,12 +842,15 @@ function openCard(project, card) {
       : openQuestions(p).some(e => e.id === id);
   const ev = kind === 'approval' ? p.events.find(e => e.type === 'approval' && e.approval === id) : kind === 'question' ? p.events.find(e => e.id === id) : null;
   if (kind === 'approval' && ev) S.open.add(id);
-  S.thread = waiting || !ev ? 'needs' : ev.thread;
-  store.set('thread', S.thread);
+  const target = waiting || !ev ? 'needs' : ev.thread;
   $('#app').classList.remove('show-side');
   render();
+  const onScreen = (waiting ? ['needs', ev?.thread] : [target]).filter(Boolean).map(t => cols.visible(t)).find(c => c?.findCard(card));
+  if (onScreen) { cols.focus(onScreen.thread); renderThreads(); }
+  else { cols.open(target); render(); }
   phone.viewChanged();
-  const el = [...document.querySelectorAll('[data-card]')].find(x => x.dataset.card === card);
+  const conv = onScreen || cols.kbConv();
+  const el = conv?.findCard(card);
   if (el) { el.scrollIntoView({ block: 'center' }); lockOn(el); }
 }
 // A brief cyan lock-on around a card you were sent to.
@@ -869,7 +860,36 @@ function lockOn(el) {
   el.classList.add('flash');
   setTimeout(() => el.classList.remove('flash'), 2400);
 }
-const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: S.thread }), openCard });
+// Phone alerts skip a card you are looking at (lib/push.mjs). With columns, "looking at" is the column that has the
+// keyboard: the server takes one viewed thread, and a column you are not using may well go unread.
+const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: cols.kb }), openCard });
+
+// ---------- the columns (decision 39 A): what each conversation draws and does comes from here ----------
+const cols = new Columns({
+  area: $('#cols'), template: $('#conv-tpl'), winActs: $('#win-acts'), store, phoneMq, fineMq,
+  host: {
+    proj, render,
+    startThread: () => store.get('thread', 'needs'),
+    head: headFor, feed: feedFor, railItem,
+    ready: () => !!proj(),
+    act,
+    focusBox: focusIfDesk,
+    scrolled: () => placeModelMenu(),
+    // The keyboard moved to another column: the list's light follows, and the hub hears which thread you look at.
+    kbChanged: () => { renderThreads(); phone.viewChanged(); },
+    // Pins and columns changed: redraw; a rail click also puts the keyboard in the column it opened.
+    changed: (fromRail = false) => { render(); phone.viewChanged(); if (fromRail) focusIfDesk(cols.kbConv()?.input); },
+    action: (name, c) => columnAction(name, c),
+    // A message from a column: images first, then the text. Needs you writes to the orchestrator.
+    send: async (t, text, files) => {
+      const project = proj().name, attachments = [];
+      for (const f of files) attachments.push((await api('/api/attach', { project, data: await asDataUrl(f), name: f.name })).id);
+      return api('/api/send', { project, thread: t === 'needs' ? 'orchestrator' : t, text, ...(attachments.length ? { attachments } : {}) });
+    },
+    // After a message from Needs you the orchestrator's chat opens, as before, unless Needs you is pinned (it stays).
+    sent: (c, r) => { if (r.picked) load(); else if (c.thread === 'needs' && !cols.isPinned('needs')) selectThread('orchestrator'); }
+  }
+});
 // Does the card a phone notification points at still wait for you, in any project? (Tags are card ids.)
 function cardWaiting(tag) {
   const [kind, id] = [tag.slice(0, tag.indexOf(':')), tag.slice(tag.indexOf(':') + 1)];
@@ -892,31 +912,30 @@ addEventListener('keydown', e => {
   if (S.projMenu) { S.projMenu = false; renderProjects(); return $('[data-proj-toggle]')?.focus(); }
   if (!$('#board').hidden && !document.querySelector('dialog[open]')) setBoard(false);   // Escape closes the board too
 });
-addEventListener('resize', () => { placeModelMenu(); autosize(); });
+addEventListener('resize', () => { placeModelMenu(); for (const c of cols.all()) c.autosize(); });
 
 // Phones and tablets: the hub fills the visible part of the screen, so the composer stays above the keyboard
 // (viewport.js). A conversation you were reading at its latest message stays there as the keyboard opens.
-let feedAtBottom = true;
-$('#feed').addEventListener('scroll', () => { const f = $('#feed'); feedAtBottom = f.scrollHeight - f.scrollTop - f.clientHeight < 80; }, { passive: true });
 if (matchMedia('(pointer: coarse)').matches) new ViewportFit(document.documentElement, {
   // Follow only when the visible height or the keyboard changed; Safari nudging the view while you type does not
   // move the list (phone pass 2).
   onChange: (now, was) => {
-    if ((now.height !== was.height || now.keyboard !== was.keyboard) && feedAtBottom && S.thread !== 'needs') $('#feed').scrollTop = $('#feed').scrollHeight;
+    const c = cols.kbConv();
+    if ((now.height !== was.height || now.keyboard !== was.keyboard) && c && c.atBottom && c.thread !== 'needs') c.feed.scrollTop = c.feed.scrollHeight;
     placeModelMenu();
   }
 }).start();
 
 // On a phone the notifications bell lives beside the hub menu above the thread list (set up once), which leaves
-// the conversation header room for the thread's name.
+// the conversation header room for the thread's name. On a desk it sits with the window's buttons in the
+// right-most column's header (columns.js).
 function placeBell() {
   const bell = $('#phone-alerts');
   if (phoneMq.matches) $('.side-head').insertBefore(bell, $('.hub-menu-wrap'));
-  else $('.head-actions').insertBefore(bell, $('#open-board'));
+  else $('#win-acts').insertBefore(bell, $('#open-board'));
 }
 placeBell();
 phoneMq.addEventListener('change', () => { placeBell(); render(); });
-$('#feed').addEventListener('scroll', () => placeModelMenu(), { passive: true });
 
 // A change in the model menu applies at once.
 $('#mmenu').addEventListener('change', e => {
@@ -936,7 +955,10 @@ document.addEventListener('click', e => {
     return render();
   }
   const mc = e.target.closest('[data-mchip]');
-  if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; renderHead(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
+  if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; cols.render(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
+  // The pin on a thread row (decision 39): pin opens it as a column beside the current one; unpin closes its column.
+  const rp = e.target.closest('[data-row-pin]');
+  if (rp) { const id = rp.dataset.rowPin; cols.isPinned(id) ? cols.unpin(id) : cols.pin(id); render(); phone.viewChanged(); return document.querySelector(`[data-row-pin="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); }
   const t = e.target.closest('[data-thread]'); if (t) return selectThread(t.dataset.thread);
   if (e.target.closest('[data-retired-toggle]')) { S.retiredOpen = !S.retiredOpen; store.set('retired-open', S.retiredOpen); return renderThreads(); }
   if (e.target.closest('[data-retired-older]')) { S.retiredOlder = !S.retiredOlder; return renderThreads(); }
@@ -963,7 +985,7 @@ document.addEventListener('click', e => {
   }
   const jump = e.target.closest('[data-jump]');
   if (jump) {
-    const el = document.querySelector(`#feed .card.${CSS.escape(jump.dataset.jump)}`);
+    const el = jump.closest('.feed')?.querySelector(`.card.${CSS.escape(jump.dataset.jump)}`);
     if (el) { el.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); lockOn(el); }
     return;
   }
@@ -991,70 +1013,20 @@ document.addEventListener('click', e => {
 });
 
 // ---------- images in the composer (decision 23) ----------
-// Paste, drop or pick; each shows as a thumbnail with a remove button. They upload when you send.
-const IMG_TYPES = { 'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/gif': 'GIF', 'image/webp': 'WebP' };
-const MAX_IMG = 10 * 1024 * 1024, MAX_IMGS = 6;
-const tray = [];   // { file, url }
-let errTimer;
-function attachError(msg) {
-  const el = $('#attach-error');
-  el.textContent = msg; el.hidden = !msg;
-  clearTimeout(errTimer);
-  if (msg) errTimer = setTimeout(() => { el.hidden = true; }, 7000);
-}
-function renderTray(busy = false) {
-  const el = $('#tray');
-  el.hidden = !tray.length;
-  el.innerHTML = tray.map((t, i) => `<div class="tthumb ${busy ? 'busy' : ''}"><img src="${t.url}" alt="${esc(t.file.name || 'Pasted image')}"><span class="tsize">${sizeOf(t.file.size)}</span>
-    ${busy ? '' : `<button type="button" class="tx" data-untray="${i}" aria-label="Remove image" title="Remove">${icon('x')}</button>`}</div>`).join('');
-}
-function addImages(files) {
-  const errs = [];
-  for (const f of files) {
-    const name = f.name && !/^image\.\w+$/.test(f.name) ? `"${f.name}"` : 'That image';
-    if (!IMG_TYPES[f.type]) { errs.push(`${name} is not a PNG, JPEG, GIF or WebP image.`); continue; }
-    if (f.size > MAX_IMG) { errs.push(`${name} is ${(f.size / 1048576).toFixed(1)} MB; images must be 10 MB or less.`); continue; }
-    if (tray.length >= MAX_IMGS) { errs.push(`Up to ${MAX_IMGS} images per message.`); break; }
-    tray.push({ file: f, url: URL.createObjectURL(f) });
-  }
-  attachError(errs.join(' '));
-  renderTray();
-}
-function clearTray() { for (const t of tray.splice(0)) URL.revokeObjectURL(t.url); renderTray(); }
+// Paste, drop or pick; each column keeps its own tray (conversation.js). They upload when you send.
 const asDataUrl = f => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => fail(new Error('Could not read the image.')); r.readAsDataURL(f); });
-
-$('#quick').addEventListener('click', e => {
-  const c = e.target.closest('[data-quick-text]'); if (!c) return;
-  const box = $('#input'), words = box.value.trim().split(/\s+/).filter(Boolean);
-  const w = c.dataset.quickText;
-  box.value = (w === 'all' ? ['all'] : words.includes(w) ? words.filter(x => x !== w) : [...words.filter(x => x !== 'all'), w]).join(' ');
-  autosize(); focusIfDesk(box);
-});
-$('#attach').addEventListener('click', () => $('#file-pick').click());
-$('#file-pick').addEventListener('change', e => { addImages([...e.target.files]); e.target.value = ''; });
-$('#tray').addEventListener('click', e => {
-  const x = e.target.closest('[data-untray]'); if (!x) return;
-  const [t] = tray.splice(Number(x.dataset.untray), 1);
-  if (t) URL.revokeObjectURL(t.url);
-  renderTray(); focusIfDesk($('#input'));
-});
-$('#input').addEventListener('paste', e => {
-  if ($('#input').disabled) return;
-  const files = [...(e.clipboardData?.files || [])];
-  if (!files.length) return;
-  if (!e.clipboardData.types.includes('text/plain')) e.preventDefault();   // a bare screenshot: no file name text
-  addImages(files);
-});
-// Drag and drop anywhere on the page.
+// Drag and drop anywhere on the page: the images go to the column they are dropped on, else the keyboard column.
 let dragDepth = 0;
 const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
-addEventListener('dragenter', e => { if (!hasFiles(e) || $('#input').disabled) return; e.preventDefault(); dragDepth++; $('#drop-veil').hidden = false; });
+const dropTarget = e => { const c = cols.convAt(e.target) || cols.kbConv(); return c && !c.input.disabled ? c : null; };
+addEventListener('dragenter', e => { if (!hasFiles(e) || !cols.kbConv()) return; e.preventDefault(); dragDepth++; $('#drop-veil').hidden = false; });
 addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
 addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $('#drop-veil').hidden = true; } });
 addEventListener('drop', e => {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; $('#drop-veil').hidden = true;
-  if (!$('#input').disabled) { addImages([...e.dataTransfer.files]); $('#input').focus(); }
+  const c = dropTarget(e);
+  if (c) { c.addImages([...e.dataTransfer.files]); c.input.focus(); }
 });
 
 // ---------- the larger view: copy and download ----------
@@ -1094,37 +1066,15 @@ document.addEventListener('click', e => {
   const v = e.target.closest('[data-view]'); if (v) return openViewer(v.dataset.view, v.dataset.viewName, v.dataset.viewCap);
 });
 
-$('#composer').addEventListener('submit', e => {
-  e.preventDefault();
-  const text = $('#input').value.trim();
-  if ((!text && !tray.length) || !proj() || S.sending) return;
-  const thread = S.thread === 'needs' ? 'orchestrator' : S.thread;
-  const project = proj().name;
-  const files = tray.map(t => t.file);
-  S.sending = true;
-  act(async () => {
-    try {
-      const attachments = [];
-      if (files.length) {
-        renderTray(true);
-        for (const f of files) attachments.push((await api('/api/attach', { project, data: await asDataUrl(f), name: f.name })).id);
-      }
-      const r = await api('/api/send', { project, thread, text, ...(attachments.length ? { attachments } : {}) });
-      $('#input').value = ''; autosize(); clearTray(); attachError('');
-      if (r.picked) load();
-      else if (S.thread === 'needs') selectThread('orchestrator');
-    } catch (err) { renderTray(); throw err; }
-    finally { S.sending = false; }
-  });
-});
-// Answering from the keyboard (M008 14), on a focused card: arrow keys (or J and K) move between cards; a
-// decision's option letter picks it, Y and N confirm or reject a found one; A allows and D denies a permission
+// (Each column's message box sends its own message: conversation.js, with host.send above.)
+// Answering from the keyboard (M008 14), on a focused card: arrow keys (or J and K) move between cards in its list;
+// a decision's option letter picks it, Y and N confirm or reject a found one; A allows and D denies a permission
 // request; Enter goes to a question's first reply box.
-$('#feed').addEventListener('keydown', e => {
+$('#cols').addEventListener('keydown', e => {
   const card = e.target;
-  if (!card.matches?.('.card[data-card]') || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!card.matches?.('.feed .card[data-card]') || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const cards = [...$('#feed').querySelectorAll('.card[tabindex]')];
+  const cards = [...card.closest('.feed').querySelectorAll('.card[tabindex]')];
   const move = d => { e.preventDefault(); const next = cards[cards.indexOf(card) + d]; if (next) { next.focus(); next.scrollIntoView({ block: 'nearest' }); } };
   if (k === 'ArrowDown' || k === 'j') return move(1);
   if (k === 'ArrowUp' || k === 'k') return move(-1);
@@ -1139,8 +1089,8 @@ $('#feed').addEventListener('keydown', e => {
 });
 
 // Reply boxes in Needs you: the same keys as the composer; Enter sends the card's filled answers together.
-$('#feed').addEventListener('input', e => { if (e.target.matches('.qbox')) draftChanged(e.target); });
-$('#feed').addEventListener('keydown', e => {
+$('#cols').addEventListener('input', e => { if (e.target.matches('.qbox')) draftChanged(e.target); });
+$('#cols').addEventListener('keydown', e => {
   if (!e.target.matches('.qbox')) return;
   const what = enterAction(e);
   if (what === 'native') return;
@@ -1148,17 +1098,6 @@ $('#feed').addEventListener('keydown', e => {
   if (what === 'newline') insertLineBreak(e.target);
   else sendAnswers(e.target.dataset.q);
 });
-
-// Enter sends; Alt+Enter and Shift+Enter start a new line (composer-keys.js).
-$('#input').addEventListener('keydown', e => {
-  const what = enterAction(e);
-  if (what === 'native') return;
-  e.preventDefault();
-  if (what === 'newline') insertLineBreak(e.target);
-  else $('#composer').requestSubmit();
-});
-function autosize() { growBox($('#input'), 200); }
-$('#input').addEventListener('input', autosize);
 
 function toggleRouting() {
   return act(async () => {
@@ -1177,18 +1116,22 @@ $('#open-board').addEventListener('click', () => setBoard($('#board').hidden));
 $('#close-board').addEventListener('click', () => setBoard(false));
 $('#board-filter').addEventListener('input', () => renderBoard());
 $('#board-filter').addEventListener('keydown', e => { if (e.key === 'Escape' && e.target.value) { e.stopPropagation(); e.target.value = ''; renderBoard(); } });
-$('#back').addEventListener('click', () => $('#app').classList.add('show-side'));
-$('#retire-finished').addEventListener('click', async () => {
-  const t = S.thread;
-  if (await hubConfirm({ k: 'Retire', title: `Retire ${t}?`, body: 'Use this when its job is done: it stops and moves to Retired, with no replacement.', ok: 'Retire' }))
-    act(async () => { const r = await api('/api/retire-finished', { project: proj().name, agent: t }); if (!/retired\.$/.test(r.result)) toast(r.result); });
-});
-$('#retire').addEventListener('click', async () => {
-  const t = S.thread, orch = t === 'orchestrator';
-  if (await hubConfirm({ k: 'Hand off', title: orch ? 'Hand the orchestrator role to a new agent?' : `Hand ${t}'s task to a fresh agent?`,
-    body: `${orch ? 'The current holder' : 'It'} writes a handoff first, and the new one can ask it questions before it retires.`, ok: 'Hand off' }))
-    act(() => api('/api/retire', { project: proj().name, agent: orch ? undefined : t }));
-});
+// A column header's own buttons (pin and close are handled by the columns): Back on a phone, Retire and Hand off
+// act on that column's thread.
+async function columnAction(name, c) {
+  const t = c.thread;
+  if (name === 'back') return $('#app').classList.add('show-side');
+  if (name === 'retire-finished') {
+    if (await hubConfirm({ k: 'Retire', title: `Retire ${t}?`, body: 'Use this when its job is done: it stops and moves to Retired, with no replacement.', ok: 'Retire' }))
+      act(async () => { const r = await api('/api/retire-finished', { project: proj().name, agent: t }); if (!/retired\.$/.test(r.result)) toast(r.result); });
+  }
+  if (name === 'retire') {
+    const orch = t === 'orchestrator';
+    if (await hubConfirm({ k: 'Hand off', title: orch ? 'Hand the orchestrator role to a new agent?' : `Hand ${t}'s task to a fresh agent?`,
+      body: `${orch ? 'The current holder' : 'It'} writes a handoff first, and the new one can ask it questions before it retires.`, ok: 'Hand off' }))
+      act(() => api('/api/retire', { project: proj().name, agent: orch ? undefined : t }));
+  }
+}
 // New agent: a type fills in its model and effort; either can then be changed.
 function fillAgentPickers(model = '', effort = '') {
   $('#agent-model').innerHTML = modelPicker('model', model);
@@ -1226,7 +1169,7 @@ const phoneStart = matchMedia('(max-width: 720px)').matches;
 function startView() {
   if (!phoneStart || new URLSearchParams(location.search).has('card')) return;
   const p = proj();
-  if (p && needsCount(p)) { S.thread = 'needs'; S.justSwitched = true; store.set('thread', 'needs'); $('#app').classList.remove('show-side'); render(); }
+  if (p && needsCount(p)) { cols.open('needs'); $('#app').classList.remove('show-side'); render(); }
   else $('#app').classList.add('show-side');
 }
 // ?usagepanel opens the usage panel on load (for screenshots and click-tests); ?usagepanel=session starts on the session totals.
