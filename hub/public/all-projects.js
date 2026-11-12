@@ -57,7 +57,7 @@ export function rosterOf(p, pending) {
 export function hubView(projects, pending) {
   const groups = projects.map(p => {
     const w = waiting(p, pending), agents = rosterOf(p, pending);
-    return { p, name: p.name, mode: p.permissionMode === 'auto' ? 'Auto' : 'Ask', waiting: w, count: w.count, agents, working: agents.filter(busy).length };
+    return { p, name: p.name, mode: { auto: 'Auto', trusted: 'Trusted' }[p.permissionMode] || 'Ask', waiting: w, count: w.count, agents, working: agents.filter(busy).length };
   });
   const sum = f => groups.reduce((n, g) => n + f(g), 0);
   const kinds = [

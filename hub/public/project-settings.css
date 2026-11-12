@@ -1,0 +1,133 @@
+/* Decision 44 B: the level chip in the project row, each project's settings card and the Whole hub panel
+   (project-settings.js), in the HUD look of option B's mockup. Red stays "your call" only (decision 31): the
+   always-to-you list. Bad numbers get the small amber mark. Nothing scrolls sideways; on a phone the card fills the
+   screen. */
+
+/* ---------- the level chip (replaces the Ask/Auto switch) ---------- */
+.lvchip{flex:none;display:inline-flex;align-items:center;gap:6px;padding:0 9px;min-height:32px;font:600 10.5px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  border:1px solid var(--hud-edge,var(--line2));border-radius:3px;background:rgba(14,22,32,.8);color:var(--muted);cursor:pointer}
+.lvchip .icon{width:15px;height:15px}
+.lvchip.auto{color:var(--accent);border-color:rgba(142,168,255,.5)}
+.lvchip.trusted{color:var(--hud-cyan);border-color:var(--hud-edge2,rgba(111,227,255,.4))}
+.lvchip:hover{border-color:var(--hud-cyan);box-shadow:0 0 14px -6px var(--hud-cyan)}
+.lvchip:focus-visible{outline:none;box-shadow:0 0 0 2px var(--hud-cyan),0 0 16px rgba(111,227,255,.45)}
+.lvchip .lv-conn{display:inline-grid;place-items:center;margin-left:1px;padding-left:6px;border-left:1px solid var(--hud-line,var(--line))}
+.lvchip .lv-conn .icon{width:13px;height:13px}
+@container (max-width:359px){ .proj-row .lvchip{min-height:30px} }
+.pmode.trusted{color:var(--hud-cyan)}
+
+/* ---------- the pop-up: a glass plate with two cut corners ---------- */
+.pset{position:fixed;inset:auto;left:max(16px,calc(50% - 250px));top:56px;margin:0;padding:0;width:min(500px,calc(100vw - 32px));max-height:calc(100dvh - 72px);
+  border:1px solid var(--hud-edge2,rgba(111,227,255,.4));background:linear-gradient(165deg,#151f2c,#0b1017);color:var(--text);
+  box-shadow:0 30px 80px rgba(0,0,0,.6),0 0 40px -10px rgba(111,227,255,.35);overflow:hidden;
+  clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px))}
+.pset[open]{display:flex;flex-direction:column;animation:ps-in .2s ease-out}
+@media (min-width:721px){ .pset{width:min(500px,calc(100vw - var(--ps-left,300px) - 16px))} .pset.hubp{width:min(460px,calc(100vw - var(--ps-left,300px) - 16px))} }
+.pset.hubp{width:min(460px,calc(100vw - 32px))}
+.pset::backdrop{background:rgba(4,8,13,.62);backdrop-filter:blur(2px)}
+@keyframes ps-in{from{opacity:0;transform:translateY(6px)}}
+.ps-head{flex:none;display:flex;align-items:center;gap:10px;padding:14px 16px 12px;border-bottom:1px solid var(--hud-line);position:relative;color:var(--hud-dim)}
+.ps-head::after{content:"";position:absolute;left:0;bottom:-1px;width:220px;height:1px;background:linear-gradient(90deg,var(--hud-cyan),transparent)}
+.ps-head h2{flex:1;margin:0;min-width:0;font:600 12px/1.3 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--hud-ice);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ps-head h2::before{content:"// ";color:var(--hud-dim)}
+.ps-x{flex:none;width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--hud-edge);border-radius:3px;background:rgba(10,16,24,.8);color:var(--hud-dim);cursor:pointer}
+.ps-x:hover,.ps-x:focus-visible{color:var(--hud-ice);border-color:var(--hud-cyan);outline:none}
+.ps-body{flex:1;overflow-y:auto;overflow-x:hidden;min-height:0;padding:16px}
+.ps-foot{flex:none;display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--hud-line)}
+.ps-note{flex:1;margin:0;min-width:0;font:500 11px/1.45 var(--mono);letter-spacing:.03em;color:var(--faint)}
+.ps-done{flex:none}
+
+/* ---------- sections ---------- */
+.ps-sec{margin-bottom:18px}
+.ps-sec.ps-last{margin-bottom:4px}
+.ps-sec-head{display:flex;align-items:center;gap:8px;margin:0 0 9px;font:600 10.5px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--hud-label)}
+.ps-sec-head::before{content:"";flex:none;width:3px;height:12px;background:var(--hud-cyan);box-shadow:0 0 8px var(--hud-cyan);opacity:.75}
+.ps-sec-head::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--hud-line),transparent)}
+.ps-help{display:inline-grid;place-items:center;flex:none;width:18px;height:18px;color:var(--hud-dim);cursor:help}
+.ps-help .icon{width:14px;height:14px}
+
+/* ---------- level plates ---------- */
+.ps-levels{display:grid;gap:10px}
+.ps-lv{position:relative;display:grid;align-content:start;gap:7px;padding:12px 12px 13px;border:1px solid var(--hud-line);border-radius:2px;background:rgba(111,227,255,.035);cursor:pointer;
+  clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%)}
+.ps-lv::after{content:"";position:absolute;right:0;top:0;width:10px;height:10px;pointer-events:none;
+  background:linear-gradient(to bottom left,transparent calc(50% - .8px),var(--hud-edge2) calc(50% - .8px) calc(50% + .8px),transparent calc(50% + .8px))}
+.ps-lv:hover{border-color:var(--hud-edge2)}
+.ps-lv:focus-visible{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px var(--hud-cyan)}
+.ps-lv.on{border-color:var(--hud-cyan);background:linear-gradient(160deg,rgba(111,227,255,.13),rgba(111,227,255,.03));box-shadow:inset 0 0 26px -12px var(--hud-cyan)}
+.ps-lv.on::after{background:linear-gradient(to bottom left,transparent calc(50% - .8px),var(--hud-cyan) calc(50% - .8px) calc(50% + .8px),transparent calc(50% + .8px))}
+.ps-lv-top{display:flex;align-items:center;gap:10px;min-width:0}
+.ps-hex{width:34px;height:30px;display:grid;place-items:center;flex:none;clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%);background:rgba(111,227,255,.12);color:var(--hud-ice)}
+.ps-hex .icon{width:18px;height:18px}
+.ps-lv.on .ps-hex{background:var(--hud-cyan);color:#06141b}
+.ps-lv-name{font:700 15px/1.2 var(--font);color:var(--text)}
+.ps-mark{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font:600 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--hud-cyan)}
+.ps-mark .icon{width:13px;height:13px}
+.ps-lv-sub{font-size:12.5px;line-height:1.35;color:var(--muted)}
+.ps-lv-body{display:grid;gap:6px}
+.ps-cap{margin-top:3px;font:600 9.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--hud-label)}
+.ps-list{margin:0;padding:0;list-style:none;display:grid;gap:3px;font-size:12.5px;line-height:1.35}
+.ps-list li{display:flex;gap:7px;align-items:flex-start}
+.ps-list li .icon{width:13px;height:13px;margin-top:2px}
+.ps-list .ok .icon{color:var(--good)}
+.ps-list .you{color:var(--muted)}
+.ps-list .you .icon{color:var(--hud-red,#f2727a)}
+
+/* the always-to-you list: folded, opens on request */
+.ps-always{margin-top:10px;border:1px dashed rgba(242,114,122,.38);border-radius:2px;background:rgba(30,16,22,.45)}
+.ps-always summary{display:flex;align-items:center;gap:8px;padding:10px 12px;list-style:none;cursor:pointer;font:600 10.5px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:#f4a5ab}
+.ps-always summary::-webkit-details-marker{display:none}
+.ps-always summary .icon{width:14px;height:14px;color:var(--hud-red,#f2727a)}
+.ps-always summary:focus-visible{outline:none;box-shadow:inset 0 0 0 1px var(--hud-red,#f2727a)}
+.ps-n{color:var(--faint);letter-spacing:.06em}
+.ps-chev{margin-left:auto;transition:transform .15s}
+.ps-always[open] .ps-chev{transform:rotate(90deg)}
+.ps-tags{display:flex;flex-wrap:wrap;gap:5px;padding:0 12px 11px}
+.ps-tag{font-size:12px;padding:3px 8px;border:1px solid rgba(242,114,122,.28);border-radius:3px;color:var(--text);background:rgba(242,114,122,.06)}
+
+/* ---------- number rows: label and box on one line, the hub default under it ---------- */
+.ps-nums{display:grid;gap:10px}
+.ps-num,.ps-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 10px;padding:10px 12px;border:1px solid var(--hud-line);border-radius:2px;background:rgba(18,26,37,.6)}
+.ps-row{margin-bottom:10px}
+.ps-num-l{display:flex;align-items:center;gap:6px;min-width:0}
+.ps-num-label{display:flex;align-items:center;gap:6px;min-width:0;margin:0;font-size:13px;line-height:1.3;color:var(--text)}
+.ps-num-label .icon{width:15px;height:15px;color:var(--hud-dim)}
+.ps-num-in,.ps-row .ps-seg{justify-self:end;display:flex;align-items:center;gap:8px}
+.ps-num-in input{width:76px;margin:0;font:600 16px/1 var(--mono);color:var(--hud-ice);background:var(--hud-deep);border:1px solid var(--hud-edge);border-radius:2px;padding:7px 9px;text-align:right}
+.ps-num-in input::placeholder{color:rgba(150,232,255,.32)}
+.ps-num-in input:focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.22),0 0 18px -6px rgba(111,227,255,.5)}
+.ps-num.bad input{border-color:var(--hud-amber,#f3b955)}
+.ps-unit{min-width:62px;font:500 12px var(--mono);color:var(--muted);white-space:nowrap}
+.ps-under{grid-column:1/-1}
+.ps-dflt{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px 6px;font:500 10.5px/1.3 var(--mono);color:var(--faint)}
+.ps-dflt.diff{color:var(--hud-cyan)}
+.ps-dflt.warn{color:var(--hud-amber,#f3b955)}
+.ps-dflt.warn .icon{width:13px;height:13px;filter:drop-shadow(0 0 4px rgba(243,185,85,.55))}
+.ps-reset{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;font:600 10.5px/1.3 var(--mono);color:var(--hud-cyan);background:none;border:1px solid var(--hud-edge);border-radius:2px;cursor:pointer}
+.ps-reset .icon{width:12px;height:12px}
+.ps-reset:hover,.ps-reset:focus-visible{border-color:var(--hud-cyan);color:var(--hud-ice);outline:none}
+
+/* two-choice segments (connectors, who answers) */
+.ps-seg{display:inline-grid;grid-auto-flow:column;flex:none;border:1px solid var(--hud-edge);border-radius:3px;overflow:hidden}
+.ps-seg button{padding:7px 14px;font:600 12px var(--font);color:var(--muted);background:none;border:0;cursor:pointer}
+.ps-seg button + button{border-left:1px solid var(--hud-edge)}
+.ps-seg button.on{background:rgba(111,227,255,.14);color:var(--hud-ice);box-shadow:inset 0 0 12px -6px var(--hud-cyan)}
+.ps-seg button:focus-visible{outline:none;box-shadow:inset 0 0 0 1px var(--hud-cyan)}
+.ps-conn{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ps-conn p{margin:0;flex:1;min-width:180px;font-size:12.5px;color:var(--muted)}
+
+/* ---------- phone: the card fills the screen; thumb-sized targets ---------- */
+@media (max-width:720px){
+  .pset,.pset.hubp{inset:0;left:0!important;top:0!important;width:100%;max-width:none;height:100%;max-height:none;border:0;clip-path:none;box-shadow:none;background:linear-gradient(180deg,#0d131b,#0a0e14)}
+  .pset::backdrop{background:#0a0e14}
+  .ps-head{padding:calc(10px + env(safe-area-inset-top)) 12px 10px;background:linear-gradient(180deg,#121b27,#0d141d)}
+  .ps-x{width:44px;height:44px}
+  .ps-body{padding:12px}
+  .ps-foot{flex-direction:column;align-items:stretch;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
+  .ps-done{justify-content:center;min-height:46px}
+  .ps-num-in input{min-height:44px}
+  .ps-seg button{min-height:44px;padding:0 16px}
+  .ps-reset{min-height:30px}
+  .lvchip{min-height:44px}
+}
+@media (prefers-reduced-motion:reduce){ .pset[open]{animation:none} .ps-chev{transition:none} }

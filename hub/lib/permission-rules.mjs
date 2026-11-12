@@ -7,7 +7,12 @@
 //   goes to the human instead.
 // - 'allow': contained work the hub could read in full: everything stays inside the project folder (which holds the
 //   agents' worktrees, .claude/worktrees/...) or the system temp folder, plus feature-branch pushes and PRs.
-//   classify({ tool, input, projectDir }) -> { route: 'allow' | 'unsure' | 'human', reasons: [hard stops], unsure: [why] }
+//   classify({ tool, input, projectDir, level }) -> { route: 'allow' | 'unsure' | 'human', reasons: [hard stops], unsure: [why] }
+// level (decision 45): 'standard' (Ask) and 'auto' are judged alike here (the hub decides what Ask sends on);
+// 'trusted' also allows installing packages into the project and reading or downloading from any website into it.
+// The fixed stops are the same at every level: force push, rewriting pushed history, deleting branches, pushing to
+// main, writes outside the project or temp folder, secrets, the live hub, system-wide installers, outward connector
+// actions, and merges (see THE MERGE RULE below).
 import { resolve, isAbsolute, join, basename } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -40,6 +45,10 @@ const DELETE = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'remove-item', 'ri'
 const KILL = new Set(['kill', 'pkill', 'killall', 'taskkill', 'stop-process', 'spps']);
 const INSTALL = new Set(['npx', 'pnpx', 'bunx', 'pip', 'pip3', 'pipx', 'conda', 'winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'gem',
   'install-module', 'install-package', 'install-script', 'update-module']);
+// Installers that put software on the whole machine: a stop at every level, Trusted included (decision 45).
+const SYSTEM_WIDE = new Set(['winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'conda', 'pipx', 'gem', 'install-module', 'install-package', 'install-script', 'update-module']);
+// Programs that read or download from a web address: Trusted lets them read and save into the project (decision 45).
+const WEB_READ = new Set(['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod']);
 const INDIRECT = new Set(['sudo', 'runas', 'su', 'doas', 'bash', 'sh', 'zsh', 'cmd', 'powershell', 'pwsh', 'wsl', 'start', 'start-process',
   'saps', 'invoke-expression', 'iex', 'invoke-command', 'icm', 'invoke-item', 'ii', 'eval', 'exec', 'source', '.', 'xargs', 'env',
   'printenv', 'set', 'get-credential', 'get-secret']);
@@ -73,10 +82,24 @@ const okValue = v => !/[`*?<>|;&\n[\]]|\$\(|\.\./.test(v) && !/[{}]/.test(v.repl
 // Properties read off the result of a read-only cmdlet: (Get-Item x).LinkType, (Invoke-WebRequest ...).Content
 const PROPERTY = /^(\.(content|statuscode|statusdescription|linktype|target|length|count|name|fullname|exists|attributes|lastwritetime|creationtime|extension|basename|headers|rawcontent|mode))+$/i;
 
+// ---------- THE MERGE RULE (decision 45 B) ----------
+// Matt, 2026-11-12: "install packages, open web, merge after a review with owner permission". In every project,
+// Trusted included, merging a code pull request (gh pr merge) or merging into a branch (git merge) needs the owner's
+// yes on that specific merge: the hub sends it to the owner as a card, and once the owner says yes the orchestrator
+// does the merge. Trusted does not remove that. This one function is where that rule lives; to let a level merge
+// without a card, return false for it here (and say so on the settings card, public/project-settings.js).
+export const MERGE_RULE = 'Merges: the orchestrator merges after a review, once you say yes.';
+export function mergeNeedsOwner({ level = 'auto' } = {}) {   // eslint-disable-line no-unused-vars
+  return true;
+}
+
 // agent: the asking agent's name; madeTemp: temp folders it created earlier (full paths). Both decide which temp
 // folders count as its own for deletes (R005). The result's tempMade lists temp folders this request would create.
-export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [] }) {
+// level: the project's permission level (decision 45); only 'trusted' changes what is allowed here.
+export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], level = 'auto' }) {
   const c = new Check(projectDir, tmp, home);
+  c.level = level;
+  c.trusted = level === 'trusted';
   c.agent = String(agent || '').toLowerCase();
   c.madeTemp = new Set([...madeTemp].map(norm));
   c.tempMade = new Set();
@@ -150,7 +173,7 @@ class Check {
     if (SECRET.test(n)) this.stop(`Touches secrets or credentials: ${p}`);
     if (write && w === 'inside') {
       const rel = norm(resolve(cwd, String(p))).slice(norm(this.projectDir).length + 1);
-      if (DEP_FILES.test(rel)) this.stop(`Changes dependencies (${basename(rel)})`);
+      if (DEP_FILES.test(rel) && !this.trusted) this.stop(`Changes dependencies (${basename(rel)})`);   // Trusted: the project's own packages
       if (/^\.git(\/|$)/.test(rel)) this.stop('Writes inside .git (history)');
       if (/^\.crux(\/|$)/.test(rel)) this.stop("Writes the hub's own log (.crux)");
       if (/(^|\/)\.claude\/settings/.test(rel)) this.stop("Changes Claude Code's permission settings");
@@ -170,8 +193,8 @@ class Check {
       if (!f) return this.unsure('No file named');
       return void this.path(f, cwd, { write: true });
     }
-    // Reading docs is allowed (R004) but the hub cannot tell a docs page from any other address.
-    if (tool === 'WebFetch') return this.unsure(`Reads a web page (${String(input.url || '').slice(0, 80)})`);
+    // Reading docs is allowed (R004) but the hub cannot tell a docs page from any other address. Trusted: any website.
+    if (tool === 'WebFetch') return this.trusted ? undefined : this.unsure(`Reads a web page (${String(input.url || '').slice(0, 80)})`);
     // The user's claude.ai connectors (Gmail, Calendar, Drive, ...): anything that sends, shares, changes or deletes is a
     // hard stop in every mode; reading goes to the orchestrator (a code project rarely needs the user's mail); a tool not on
     // the read list is a hard stop by default.
@@ -414,7 +437,9 @@ class Check {
     // An address is a network call, except a PR's own text, GitHub for git, and this machine (localhost).
     const github = this.urlsHere.every(u => /^(https:\/\/|git@)github\.com[/:]/i.test(u));
     const allowsAddress = (head === 'gh' && args[0] === 'pr' && args[1] === 'create') || (head === 'git' && github && args.some(a => /^(clone|fetch|pull|ls-remote)$/.test(a)));
-    if (this.urlsHere.length && !allowsAddress) this.stop(`Reaches the network (${this.urlsHere[0].slice(0, 80)})`);
+    // Trusted (decision 45): an address is no stop by itself; what the program does with it is judged below
+    // (sending data, pushing, ssh and the like stay stops). Anything that reaches git or gh keeps its own checks.
+    if (this.urlsHere.length && !allowsAddress && !(this.trusted && head !== 'gh')) this.stop(`Reaches the network (${this.urlsHere[0].slice(0, 80)})`);
     if (['cd', 'pushd', 'set-location', 'sl', 'push-location', 'chdir'].includes(head)) {
       const to = args.find(a => !a.startsWith('-'));
       if (!to) return this.home;
@@ -496,6 +521,8 @@ class Check {
       if (out >= 0 && args[out + 1]) this.path(args[out + 1], cwd, { write: true });
       return;
     }
+    if (this.trusted && WEB_READ.has(head)) return this.webRead(head, args, cwd);
+    if (this.trusted && /^(ping|nslookup|test-netconnection|tnc)$/.test(head)) return;   // only looks an address up
     if (NETWORK.has(head)) return this.stop(`Reaches the network (${head})`);
     // Programs that write: a target outside the project folder or a temp folder is a hard stop.
     const recursive = args.some(a => /^(-recurse|--recursive|-[rf]*r[rf]*)$/i.test(a));
@@ -509,7 +536,9 @@ class Check {
       return;
     }
     if (KILL.has(head)) return this.kill(head, args, cwd);
-    if (INSTALL.has(head)) return this.stop(`Installs software (${head})`);
+    if (/^(pip3?)$/.test(head)) return this.pip(words[0].text, args, cwd);
+    if (INSTALL.has(head)) return this.stop(SYSTEM_WIDE.has(head) ? `Installs software system-wide (${head})` : `Installs software (${head})`);
+    if (head === 'uv' || head === 'poetry') return this.pyProject(head, args, cwd);
     if (/^(env|printenv|set|get-credential|get-secret)$/.test(head)) return this.stop(`Reads environment variables or credentials (${head})`);
     if (INDIRECT.has(head)) return this.unsure(`Runs commands the hub cannot read (${head})`);
     // R004: deleting inside the project folder or a temp folder is contained; anywhere else is a hard stop.
@@ -539,10 +568,14 @@ class Check {
     // outside, the orchestrator decides.
     const away = outsideHere || positional.some(a => this.outside(a, cwd)) || [...this.env().values()].some(v => this.outside(v, cwd));
     if (head === 'node') { this.node(args, cwd); if (away) this.unsure('Runs node with a path outside the project folder', true); return; }
-    if (/^(python3?|py)$/.test(head)) { this.python(args); if (away) this.unsure('Runs python with a path outside the project folder', true); return; }
-    if (/^(npm|pnpm|yarn|bun)$/.test(head)) { this.npm(args, cwd); if (away) this.unsure('Runs npm outside the project folder', true); return; }
+    if (/^(python3?|py)$/.test(head)) { this.python(args, words[0].text, cwd); if (away) this.unsure('Runs python with a path outside the project folder', true); return; }
+    if (/^(npm|pnpm|yarn|bun)$/.test(head)) { this.npm(args, cwd, head); if (away) this.unsure('Runs npm outside the project folder', true); return; }
     if (head === 'cargo' || head === 'go' || head === 'dotnet') {
-      if (/^(install|add|get)$/.test(args[0] || '')) return this.stop(`Installs software (${head} ${args[0]})`);
+      // Trusted: adding a package to this project (cargo add, go get, dotnet add package). cargo install and go
+      // install put programs on the whole machine: system-wide, a stop at every level.
+      const local = (head === 'cargo' && args[0] === 'add') || (head === 'go' && args[0] === 'get') || (head === 'dotnet' && args[0] === 'add');
+      if (local && this.trusted && ['inside', 'tmp'].includes(this.where(cwd, cwd))) return;
+      if (/^(install|add|get)$/.test(args[0] || '')) return this.stop(`Installs software${local ? '' : ' system-wide'} (${head} ${args[0]})`);
       if (!/^(build|test|run|vet|fmt|check|clippy)$/.test(args[0] || '')) this.unsure(`Not sure what this does (${head} ${args[0] || ''})`.trim());
       return;
     }
@@ -610,7 +643,7 @@ class Check {
     const [sub, ...rest] = a;
     const flag = (...fs) => rest.some(x => fs.includes(x));
     if (!sub) return;
-    if (sub === 'merge') return this.stop('Merges branches (git merge)');
+    if (sub === 'merge') return this.merge('Merges branches (git merge)');
     // In a repo outside the project folder (git -C ../other, or after cd ..), only reading is fine.
     if (this.where(cwd, cwd) === 'outside' && !GIT_READ.has(sub) && sub !== 'branch' || (sub === 'branch' && this.where(cwd, cwd) === 'outside' && rest.some(x => !x.startsWith('-')))) {
       return this.stop(`Changes a git repo outside the project folder (git ${sub})`);
@@ -620,7 +653,9 @@ class Check {
     if (GIT_HISTORY.has(sub)) return this.stop(`Rewrites history (git ${sub})`);
     if (GIT_FETCH.has(sub)) {
       const pos = rest.filter(x => !x.startsWith('-'));
-      if (pos[0] && !/^[\w.-]+$/.test(pos[0]) && !/^(https:\/\/|git@)github\.com[/:]/i.test(pos[0])) return this.stop(`Fetches from an address the hub cannot check (${pos[0]})`);
+      // Trusted: downloading from any https address into the project is fine too (decision 45).
+      const web = this.trusted && /^https:\/\/[\w.-]+\//i.test(pos[0] || '');
+      if (pos[0] && !web && !/^[\w.-]+$/.test(pos[0]) && !/^(https:\/\/|git@)github\.com[/:]/i.test(pos[0])) return this.stop(`Fetches from an address the hub cannot check (${pos[0]})`);
       if (sub === 'clone' && pos[1] && this.outside(pos[1], cwd)) return this.stop(`Clones outside the project folder (${pos[1]})`);
       return;
     }
@@ -754,7 +789,7 @@ class Check {
   gh(args) {
     const [a, b] = args;
     if (a === 'pr' && /^(create|list|view|status|diff|checks)$/.test(b || '')) return;
-    if (a === 'pr' && b === 'merge') return this.stop('Merges a pull request (gh pr merge)');
+    if (a === 'pr' && b === 'merge') return this.merge('Merges a pull request (gh pr merge)');
     if (a === 'auth' || a === 'secret' || a === 'api') return this.stop(`Touches GitHub credentials or calls its API directly (gh ${a})`);
     this.unsure(`Not sure what this does (gh ${[a, b].filter(Boolean).join(' ')})`);
   }
@@ -774,19 +809,87 @@ class Check {
     }
   }
 
-  python(args) {
+  // A merge comes to the owner as a card unless THE MERGE RULE (top of this file) says otherwise for this level.
+  merge(why) { if (mergeNeedsOwner({ level: this.level })) this.stop(why); }
+
+  // exe: the program as written (a project's .venv/Scripts/python is that project's own Python).
+  python(args, exe = 'python', cwd = this.projectDir) {
     if (args[0] === '-c') return this.script(args[1] || '');
     if (args[0] === '-m') {
-      if (/^(pip|ensurepip)$/.test(args[1] || '')) return this.stop('Installs software (pip)');
+      if (args[1] === 'pip') return this.pip(exe, args.slice(2), cwd);
+      if (args[1] === 'ensurepip') return this.stop('Installs software (pip)');
+      // Trusted: a virtual environment made inside the project (python -m venv .venv) is where its packages go.
+      if (args[1] === 'venv' && this.trusted) {
+        const to = args.slice(2).filter(x => !x.startsWith('-'));
+        if (to.length && to.every(t => ['inside', 'tmp'].includes(this.where(t, cwd)))) return;
+      }
       if (!/^(unittest|pytest|py_compile|compileall)$/.test(args[1] || '')) return this.unsure(`Not sure what this does (python -m ${args[1] || ''})`);
     }
   }
 
-  npm(args, cwd) {
-    const a = args.filter((x, i) => !/^--?(prefix|C|workspace|w)$/.test(x) && !/^--?(prefix|C|workspace|w)$/.test(args[i - 1] || ''));
-    const sub = a[0] || '';
-    if (NPM_INSTALL.has(sub)) return this.stop(`Installs or changes packages (npm ${sub})`);
-    if (NPM_NET.has(sub)) return this.stop(`Reaches the npm registry (npm ${sub})`);
+  // pip (decision 45): a stop at Ask and Auto. Trusted allows it into the project only: a pip that belongs to a
+  // virtual environment inside the project or temp folder, or --target into the project. The machine's own pip, and
+  // --user, --prefix or --root, install for the whole machine or the user: a stop at every level.
+  pip(exe, args, cwd) {
+    const sub = args.find(x => !x.startsWith('-')) || '';
+    if (!this.trusted) return this.stop('Installs software (pip)');
+    if (/^(list|show|freeze|check|help|--version|-V)$/.test(sub) || args.includes('--version')) return;
+    if (!/^(install|uninstall|download|wheel)$/.test(sub)) return this.unsure(`Not sure what this does (pip ${sub})`, true);
+    if (args.some(x => /^(--user|--prefix|--root|--break-system-packages)(=|$)/.test(x))) return this.stop('Installs Python packages for the whole machine or user (pip --user, --prefix, --root)');
+    const ti = args.findIndex(x => /^(-t|--target|-d|--dest|-w|--wheel-dir)$/.test(x));
+    const tEq = args.map(x => /^--(target|dest|wheel-dir)=(.+)$/.exec(x)?.[2]).find(Boolean);
+    const target = tEq || (ti >= 0 ? args[ti + 1] : null);
+    if (target) return void (['inside', 'tmp'].includes(this.where(target, cwd)) ? this.path(target, cwd, { write: true }) : this.stop(`Installs Python packages outside the project (${target})`));
+    const own = this.pathLike(exe) && ['inside', 'tmp'].includes(this.where(exe, cwd));
+    if (own) return;
+    if (/^(download|wheel)$/.test(sub) && ['inside', 'tmp'].includes(this.where(cwd, cwd))) return;   // files into the folder it runs in
+    this.stop(`Installs Python packages for the whole machine (pip outside a virtual environment in the project): use the project's .venv`);
+  }
+
+  // uv and poetry manage a project's own packages (pyproject.toml and its virtual environment): Trusted only, and
+  // only inside the project. uv tool, uv pip --system and poetry self install for the whole machine.
+  pyProject(head, args, cwd) {
+    const sub = args.find(x => !x.startsWith('-')) || '';
+    const local = head === 'uv' ? /^(add|remove|sync|lock|venv|init|pip|tree)$/.test(sub) : /^(add|remove|install|update|lock|init|show|check)$/.test(sub);
+    if (head === 'uv' && sub === 'run') return this.unsure('Runs a program through uv', true);
+    if ((head === 'uv' && sub === 'tool') || (head === 'poetry' && sub === 'self') || args.some(x => /^--system$/.test(x))) return this.stop(`Installs software system-wide (${head} ${sub})`);
+    if (!local) return this.unsure(`Not sure what this does (${head} ${sub})`.trim());
+    if (!this.trusted) return this.stop(`Installs or changes packages (${head} ${sub})`);
+    if (!['inside', 'tmp'].includes(this.where(cwd, cwd))) this.stop(`Installs packages outside the project (${head} ${sub})`);
+  }
+
+  // Trusted (decision 45): reading or downloading from a website, saved only into the project or a temp folder.
+  // Sending anything (a form, a file, a POST) or passing credentials is not reading: a stop.
+  webRead(head, args, cwd) {
+    const sends = args.some(a => /^(-d|--data(-\w+)?|-F|--form(-string)?|--json|-T|--upload-file|-Body|-InFile|--post-data|--post-file|--body-data|--body-file|--method)$/i.test(a) || /^-X(POST|PUT|PATCH|DELETE)$/i.test(a))
+      || args.some((a, i) => /^(-X|--request|-Method)$/i.test(args[i - 1] || '') && !/^(GET|HEAD)$/i.test(a));
+    if (sends) return this.stop(`Sends data to a website (${head})`);
+    const creds = args.some((a, i) => /^(-u|--user|-b|--cookie|-c|--cookie-jar|--netrc(-file)?|-Credential|--http-user|--http-password|--password|--oauth2-bearer|-Token|-Authentication)$/i.test(a)
+      || (/^(-H|--header|-Headers)$/i.test(args[i - 1] || '') && /authorization|cookie|token|api[-_]?key/i.test(a)));
+    if (creds) return this.stop(`Passes credentials to a website (${head})`);
+    // Where it saves: curl -o/--output/--output-dir, curl -O (the folder it runs in), wget -O/-P (or the folder it
+    // runs in), Invoke-WebRequest -OutFile.
+    const valued = head === 'wget' ? /^(-O|-o|-a|--output-document|--output-file|--append-output|-P|--directory-prefix)$/
+      : head === 'curl' ? /^(-o|--output|--output-dir|-D|--dump-header|--trace|--trace-ascii|--stderr)$/ : /^-OutFile$/i;
+    const outs = [];
+    args.forEach((a, i) => {
+      if (valued.test(a) && args[i + 1]) outs.push(args[i + 1]);
+      const eq = /^--(output|output-dir|output-document|output-file|directory-prefix|dump-header)=(.+)$/.exec(a); if (eq) outs.push(eq[2]);
+    });
+    // wget with no -O or -P saves into the folder it runs in; so does curl -O (the file's own name).
+    const intoHere = (head === 'wget' && !args.some(a => /^(-O|--output-document|-P|--directory-prefix)(=|$)/.test(a)))
+      || (head === 'curl' && args.some(a => /^(-O|--remote-name(-all)?)$/.test(a)) && !args.some(a => /^--output-dir(=|$)/.test(a)));
+    if (intoHere) outs.push(cwd);
+    for (const o of outs) if (o !== '-' && !/^(\/dev\/null|nul|\$null)$/i.test(o)) this.path(o, cwd, { write: true });
+  }
+
+  npm(args, cwd, tool = 'npm') {
+    const a = args.filter((x, i) => !/^--?(prefix|C|workspace|w|dir|cwd)$/.test(x) && !/^--?(prefix|C|workspace|w|dir|cwd)$/.test(args[i - 1] || ''));
+    const sub = a[0] || (tool === 'yarn' ? 'install' : '');   // a bare yarn installs
+    if (tool === 'yarn' && sub === 'global') return this.stop(`Installs software system-wide (yarn global ${a[1] || ''})`.trim());
+    if (this.trusted && (NPM_INSTALL.has(sub) || NPM_NET.has(sub))) return this.npmTrusted(tool, sub, a, args, cwd);
+    if (NPM_INSTALL.has(sub)) return this.stop(`Installs or changes packages (${tool} ${sub})`);
+    if (NPM_NET.has(sub)) return this.stop(`Reaches the npm registry (${tool} ${sub})`);
     if (sub === 'config') return /^(get|list|ls)$/.test(a[1] || '') ? undefined : this.stop('Changes npm settings');
     if (!NPM_OK.has(sub)) return this.unsure(`Not sure what this does (npm ${sub})`);
     // "npm start" in a folder whose start script is the hub would start it on port 4747 unless a port is given.
@@ -795,6 +898,26 @@ class Check {
       let start = '';
       try { start = JSON.parse(readFileSync(join(pre >= 0 ? resolve(cwd, args[pre + 1]) : cwd, 'package.json'), 'utf8')).scripts?.start || ''; } catch { }
       if (/server\.mjs/.test(start)) { this.hubPort(a); this.hubData(cwd, true); }
+    }
+  }
+
+  // Trusted (decision 45): installing, updating and removing the project's own packages, and reading the registry.
+  // Global installs (-g, --global, yarn global), installs into a folder outside the project, and commands that
+  // download and run a package (npx, npm exec, create, dlx), link it machine-wide, or publish or log in stay stops.
+  npmTrusted(tool, sub, a, args, cwd) {
+    if (args.some(x => /^(-g|--global|--location=global)$/.test(x)) || args.some((x, i) => x === '--location' && args[i + 1] === 'global') || (tool === 'yarn' && sub === 'global')) {
+      return this.stop(`Installs software system-wide (${tool} ${sub} -g)`);
+    }
+    if (/^(publish|unpublish|deprecate|login|logout|adduser|token|owner|access)$/.test(sub)) return this.stop(`Publishes or signs in to the npm registry (${tool} ${sub})`);
+    if (/^(exec|x|dlx|create|link|ln|unlink)$/.test(sub)) return this.stop(`Downloads and runs a package, or links one machine-wide (${tool} ${sub})`);
+    if (/^(view|info|outdated|search|audit)$/.test(sub) && !(sub === 'audit' && a[1] === 'fix')) return;   // reads the registry
+    // Where the packages land: --prefix / -C / --dir / --cwd when given, else the folder it runs in.
+    const fi = args.findIndex(x => /^--?(prefix|C|dir|cwd)$/.test(x));
+    const eq = args.map(x => /^--(prefix|dir|cwd)=(.+)$/.exec(x)?.[2]).find(Boolean);
+    const at = eq || (fi >= 0 ? args[fi + 1] : null);
+    const target = at ? this.abs(at, cwd) : cwd;
+    if (typeof target !== 'string' || ['null', 'outside'].includes(target) || !['inside', 'tmp'].includes(this.where(target, cwd))) {
+      return this.stop(`Installs packages outside the project (${tool} ${sub}${at ? ` in ${at}` : ''})`);
     }
   }
 
@@ -950,14 +1073,16 @@ export function touchesSecrets(tool, input = {}) {
 // The hub's built-in rules for a project in Auto mode whose board has no rules entry yet: R005's text, with this
 // project's own folders. The orchestrator is told it is working from these, and is asked to draft a real entry.
 export const DEFAULT_RULES_ID = 'the hub\'s default rules';
-export function defaultRules(projectDir, tmp = tmpdir()) {
+export function defaultRules(projectDir, tmp = tmpdir(), level = 'auto') {
   const dir = resolve(projectDir);
+  const trusted = level === 'trusted' ? [`TRUSTED (set by {{who}} on the hub page, decision 45). On top of Auto, the hub also allows at once: installing, updating and removing packages into this project (npm, pnpm, yarn, bun, pip into the project's own virtual environment, uv, poetry, cargo add, go get), and reading or downloading from any website into the project or a temp folder. Still hard stops: global or system-wide installs (npm -g, winget, choco, pip outside a project virtual environment), npx and other download-and-run commands, sending data to websites, and every stop below. Merges: the orchestrator merges after a review, once {{who}} says yes to that merge (the hub sends each merge as a card).`] : [];
   return {
     entryId: DEFAULT_RULES_ID, isDefault: true, ts: 'default', from: 'the Crux hub (built in, from R005 on the crux board)',
     title: 'Default agent permission rules (built in)',
     body: [
       `These are the hub's built-in default rules, used because this project's board has no permission rules entry. {{Who}} may replace them with a rules entry on the board at any time.`,
       `AUTO MODE. The hub allows at once, with no prompt: anything whose effects stay inside the project folder (${dir}), an agent's own worktree (${join(dir, '.claude', 'worktrees')}\\...) or a temp folder the agent made under ${tmp}. That covers reading, searching, editing, creating and deleting files there; build, test, lint and running scripts and node; running installed programs by any path; local git, including read-only commands like merge-base and merge-tree; fetch, pull and ls-remote from the repo's own GitHub remote; git push of a feature branch; gh pr create, list, view and checks; starting and stopping test hubs on ports other than 4747; reading files anywhere except secrets.`,
+      ...trusted,
       `HARD STOPS, always to {{who}}: the git merge subcommand into main or shared branches, and gh pr merge, unless {{who}} asks for that merge in chat; pushing to main or master; force-push; deleting branches (local or remote); history rewrites of pushed commits; package installs or dependency changes; writes, deletes or moves outside the project folder, worktree or own temp folder (including ~/.claude and ~/crux); network access other than GitHub and reading docs; stopping or restarting the hub on port 4747; secrets (~/.ssh, .env files, ~/.crux-hub keys, credential stores).`,
       `UNCLEAR requests (including commands the hub can't read in full) come to the orchestrator (answer_permission), which allows them if they are contained and part of the task, and otherwise escalates; {{who}} gets them after 2 minutes. When unsure, escalate.`
     ].join('\n')

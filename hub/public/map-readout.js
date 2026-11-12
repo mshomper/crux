@@ -19,7 +19,7 @@ export function coreReadout(core, { busy = 0, resting = 0 } = {}) {
     { k: 'Model', v: modelLabel(core.model) },
     { k: 'Effort', v: core.effort ? EFFORT_WORDS[core.effort] : 'Default', pips: true },
     { k: 'Context', v: ctx == null ? 'Not measured yet' : `${ctx}% used`, note: level === 'gold' ? `Handoff due (set at ${at}%)` : `Hands off at ${at}%`, tone: level },
-    { k: 'Permissions', v: core.mode === 'auto' ? 'Auto' : 'Ask', note: core.mode === 'auto' ? 'Contained work runs without asking' : 'Requests go to the orchestrator first' }
+    { k: 'Permissions', ...({ auto: { v: 'Auto', note: 'Contained work runs without asking' }, trusted: { v: 'Trusted', note: 'Auto, plus installs and the open web' } }[core.mode] || { v: 'Ask', note: 'Requests go to the orchestrator first' }) }
   ];
   if (core.waiting) rows.push({ k: 'Needs you', v: `${core.waiting} waiting`, tone: 'red' });
   rows.push({ k: 'Workers', v: `${busy} working, ${resting} resting` });

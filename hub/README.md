@@ -3,7 +3,7 @@
 A small, messaging-style home for your Claude agents, built on Crux's memory board. It runs on your own PC; you use it in a browser tab, or on your phone through a private network.
 
 - **Needs you** collects every decision and permission request waiting on you. Pick with one click, take every recommendation at once, or reply in a few characters: `all`, `all but 4A`, `4A 7B`, or just `B` when one decision is open. Agents' questions wait there too, each with its own reply box (Yes and No buttons when the question is plainly yes or no). **Send answers** sends every filled box to that agent as one message, each question quoted above its answer. A question leaves Needs you when you answer or dismiss it, when you pick every decision it names ("decision 31", "D0031"), when someone replies in the agent's thread, or when the agent retires.
-- **Orchestrator** is a role, not a session. Whoever holds it reads the board and the latest handoff, starts workers, answers their questions and sends them back. When its context gets full (60% by default), when you press Hand off, or after an idle stretch (60 minutes above 25% context by default, decision 37; `idleHandoffMin` and `idleFloorPct` in hub settings, 0 minutes turns it off) it hands off and retires; the next holder picks up from there. Each round summary carries brief handoff notes, which the hub keeps as a rolling draft: when that draft is under an hour older than the holder's last turn, the hub publishes the handoff from it without waking the holder, and a holder that has rested an hour or more simply retires, so your next message starts a fresh one. The hub adds the facts: your approvals and instructions since the last handoff, each worker's last summary and last instruction, open PRs and worktrees, unanswered questions, waiting decisions and suggested board tidy-ups.
+- **Orchestrator** is a role, not a session. Whoever holds it reads the board and the latest handoff, starts workers, answers their questions and sends them back. When its context gets full (60% by default), when you press Hand off, or after an idle stretch (60 minutes above 25% context by default, decision 37; set in the hub menu's Whole hub panel and per project on its settings card, 0 minutes turns it off) it hands off and retires; the next holder picks up from there. Each round summary carries brief handoff notes, which the hub keeps as a rolling draft: when that draft is under an hour older than the holder's last turn, the hub publishes the handoff from it without waking the holder, and a holder that has rested an hour or more simply retires, so your next message starts a fresh one. The hub adds the facts: your approvals and instructions since the last handoff, each worker's last summary and last instruction, open PRs and worktrees, unanswered questions, waiting decisions and suggested board tidy-ups.
 - **Agents** work like normal Claude Code sessions in your project. When they finish a round they post a structured summary; decisions they raise show up as cards.
 - **Memory board**: Crux decisions (`.decisions/`) plus requirements, conventions, memos and handoffs. Every new agent starts by reading its one-line index.
 
@@ -37,7 +37,7 @@ npm start -- ~/path/to/project-a
 
 Then open http://localhost:4747. With no folders given, it uses `~/crux/hub.json` (`{ "projects": ["C:/path/a"] }`) or the current folder. Each project should be a git repo (see "Where your picks land").
 
-Options: `--port 4747`, `--retire-at 60` (orchestrator hands off at this % of context), `--no-agents` (a test hub: messages are kept but no agent starts; also automatic when `CRUX_HUB_DATA` points inside the temp folder, and `CRUX_HUB_AGENTS=1` overrides both).
+Options: `--port 4747`, `--retire-at 60` (the starting hub default for when the orchestrator hands off, in % of context; once changed in the hub menu's Whole hub panel the saved value wins, and each project can set its own), `--no-agents` (a test hub: messages are kept but no agent starts; also automatic when `CRUX_HUB_DATA` points inside the temp folder, and `CRUX_HUB_AGENTS=1` overrides both).
 
 The **board** (top right) groups the memory into sections with counts: what waits for your call is open, everything else folds to one line until you open it, and the filter at the top finds words or ids (`D31`, `R5`) across all of it.
 
@@ -77,14 +77,17 @@ A hub started this way writes what it prints to `hub-4747.log` in `~/.crux-hub/`
 
 ## Who may do what (permissions)
 
-Each project runs in one of two modes, switched with the Ask/Auto switch beside the project's name in the sidebar (decisions 21 and 34):
+Each project runs at one of three levels, shown as a chip beside the project's name in the sidebar (decisions 21, 34 and 45). Tap the chip for the project's settings card (decision 44): the level, what it allows, the project's handoff numbers and connectors. Changes are saved when you press Done; the X, Escape or a click outside close it without changing anything.
 
-- **Auto:** work that stays inside the project, its worktrees or a temp folder runs without asking. Requests the hub cannot sort go to the orchestrator.
 - **Ask** (the default): anything beyond reading goes to the orchestrator first.
+- **Auto:** work that stays inside the project, its worktrees or a temp folder runs without asking. Requests the hub cannot sort go to the orchestrator.
+- **Trusted:** Auto, plus installing packages into the project (npm, pnpm, yarn, bun; pip into the project's own virtual environment; uv, poetry, cargo add, go get) and reading or downloading from any website into the project. Set only from the hub page: a `.crux-hub.json` that asks for `"trusted"` gets Auto, so a cloned repo cannot trust itself. Global and system-wide installs (npm -g, winget, choco, pip outside a project virtual environment), npx-style download-and-run, and sending data to websites still come to you.
+
+Merges come to you at every level, Trusted included: the orchestrator merges after a review, once you say yes (the merge rule lives in one place, `mergeNeedsOwner` in `lib/permission-rules.mjs`).
 
 The orchestrator answers within the permission rules on the project's board, and each answer is logged as one line in its thread for you to check. If it escalates, or has not answered within 2 minutes (`permissionTimeoutSec`), the request comes to you as an Allow / Deny card. **Hard stops always come to you**: merging, pushing to main, force-pushing, deleting branches, rewriting history, installing software, writing outside the project, network beyond GitHub, secrets, and anything touching the live hub. **Always** on a card saves the rule to the project's `.claude/settings.local.json`, where you can review or remove it. A repo can start in Auto with a committed `.crux-hub.json`: `{ "permissions": "auto" }`. Reading and searching never need a card. Workers can edit files in the project; the orchestrator cannot (it writes only decision records).
 
-**claude.ai connectors** (mail, calendar, drive) are off in every project unless you turn them on with the project's switch, or with `{ "connectors": true }` in `.crux-hub.json`. Sending, sharing and deleting through them always comes to you.
+**claude.ai connectors** (mail, calendar, drive) are off in every project unless you turn them on on the project's settings card, or with `{ "connectors": true }` in `.crux-hub.json`. Sending, sharing and deleting through them always comes to you.
 
 ## Where your picks land
 
@@ -192,7 +195,7 @@ Agents run through the Claude Agent SDK on this PC. With `CRUX_HUB_USE_API_KEY=1
 | `<project>/.claude/worktrees/decisions/` | The `docs/decisions` worktree where picks and drafted records land (see "Where your picks land"). |
 | `<project>/.claude/settings.local.json` | Rules you saved with **Always** on a permission card (Claude Code's own file). |
 | `~/crux/` (or `CRUX_HOME`) | Your profile and its lessons, and `media/`, the pictures agents post with `post_visual`. Keep it private. |
-| `~/.crux-hub/` (or `CRUX_HUB_DATA`) | Hub settings (`settings.json`, including each project's Auto/Ask and connector switches), notification keys (`vapid.json`), subscribed phones (`push-subscriptions.json`), and the restart files (`hub-<port>.log`, `launch-<port>.json`). Never in a repo. |
+| `~/.crux-hub/` (or `CRUX_HUB_DATA`) | Hub settings (`settings.json`, including each project's level, connectors and handoff numbers), notification keys (`vapid.json`), subscribed phones (`push-subscriptions.json`), and the restart files (`hub-<port>.log`, `launch-<port>.json`). Never in a repo. |
 
 ## How it fits together
 
