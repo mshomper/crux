@@ -3,10 +3,12 @@ import { LiveMap } from './map.js';
 import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
+import { hudBoot, openPanel, closePanel } from './hud.js';
 import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
 import { enterAction, insertLineBreak, composerHint, replyHint, filterHint } from './composer-keys.js';
 import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
+import { UsageUI } from './usage-ui.js';
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
 { const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
@@ -41,6 +43,14 @@ const fineMq = matchMedia('(pointer: fine)');
 const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches) el?.focus(); };
 const map = new LiveMap($('#hud'), { open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t) });
 
+// Decision 36: plan meters in the strip (not on the core) and the usage panel behind them.
+const usageUI = new UsageUI($('#hud'), {
+  source: () => ({
+    rows: S.projects.flatMap(p => p.events.filter(e => e.type === 'usage').map(ev => ({ project: p.name, ev }))),
+    bootAt: S.bootAt, multi: S.projects.length > 1
+  })
+});
+
 // ---------- data ----------
 async function api(path, body) {
   const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
@@ -50,12 +60,14 @@ async function api(path, body) {
 }
 
 async function load() {
-  const { projects, retireAt, models, settings, boot, version, build } = await api('/api/state');
+  const { projects, retireAt, models, settings, boot, version, build, usage, bootAt } = await api('/api/state');
   // The hub now serves different page files (a restart onto new code): reload, so the new page runs (M014+).
   if (S.build && build && build !== S.build) return reloadForUpdate(version);
   S.build ||= build;
   S.version ||= version;
   S.boot = boot;
+  S.bootAt = bootAt;
+  usageUI.setPlan(usage);
   map.retireAt = retireAt;
   S.settings = settings || {};
   S.models = models || [];
@@ -80,6 +92,8 @@ function connect() {
   es = new EventSource('/api/stream');
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
+    // Plan numbers belong to the hub, not a project: the live copy (no project) and the logged one both land here.
+    if (ev.type === 'plan_usage') { if (!ev.logged) usageUI.setPlan(ev); return; }
     const p = S.projects.find(x => x.name === ev.project);
     if (!p) return;
     if (ev.logged) {
@@ -358,6 +372,11 @@ function md(src) {
 // ---------- render: sidebar ----------
 // Everything in a project that waits for you: decisions, permission cards, questions, profile lessons (one card).
 function needsCount(p) { return openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length + (pendingLessons(p).length ? 1 : 0); }
+// The HUD frame's boot readout (decision 33), once, when the hub opens.
+function bootReadout() {
+  const p = proj(), live = p ? p.agents.filter(a => a.state !== 'retired') : [];
+  hudBoot({ project: p?.name, agents: live.length, working: live.filter(a => ['working', 'starting'].includes(a.state)).length, waiting: p ? needsCount(p) : 0 });
+}
 
 // One row however many projects there are: the current one, a count when it needs you, a dot when another does.
 function renderProjects() {
@@ -752,14 +771,13 @@ function renderBoard() {
   const total = groupBoard(p.board).reduce((n, s) => n + s.items.length, 0);
   const shown = view.reduce((n, s) => n + s.items.length, 0);
   $('#board-total').textContent = filter.trim() ? `${shown} of ${total}` : `${total} item${total === 1 ? '' : 's'}`;
-  const page = d => `/p/${encodeURIComponent(p.name)}/${esc(d.page)}`;
   const item = it => {
     if (it.type === 'decision') {
       const d = it.d, waiting = d.status === 'open' || d.status === 'found';
       const line = d.chosen ? `Picked ${esc(d.chosen)}: ${esc(d.options.find(o => o.key === d.chosen)?.name || '')}`
         : waiting ? `${d.status === 'found' ? 'Found in the code: confirm or reject' : `Open${d.recommended ? ` · recommended ${esc(d.recommended)}` : ''}`}` : esc(d.status);
-      return `<a class="bitem ${waiting ? 'hot' : ''}" href="${page(d)}" target="_blank" rel="noopener" title="Open the decision page in a new tab">
-        <span class="bid">${it.id}</span><span class="bt">${esc(it.title)}</span><span class="bs">${line}</span></a>`;
+      return `<button class="bitem ${waiting ? 'hot' : ''}" data-open-decision="${esc(d.id)}" title="Open this decision here">
+        <span class="bid">${it.id}</span><span class="bt">${esc(it.title)}</span><span class="bs">${line}</span></button>`;
     }
     const e = it.e, k = `entry:${e.entryId}`, open = S.open.has(k);
     return `<div class="bitem entry ${open ? 'open' : ''}"><button class="bhead" data-expand="${esc(k)}" aria-expanded="${open}">
@@ -783,6 +801,7 @@ function renderBoard() {
 function render() {
   renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard(); renderModelMenu();
   map.update(proj(), pendingForYou(proj()));
+  usageUI.draw();
   $('#app').classList.toggle('with-board', !$('#board').hidden);
   $('#open-board').classList.toggle('on', !$('#board').hidden);
 }
@@ -924,7 +943,11 @@ document.addEventListener('click', e => {
     return act(async () => { await api('/api/settings', { project: p.name, permissionMode: p.permissionMode === 'auto' ? 'standard' : 'auto' }); await load(); });
   }
   const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return selectThread('needs'); }
+  // A decision on the board opens as a card here, in a HUD panel, not on another page (M008 12).
+  const od = e.target.closest('[data-open-decision]');
+  if (od) { const p = proj(); return openPanel(decisionCard(p, p.board.decisions.find(d => String(d.id) === od.dataset.openDecision)), `Decision ${od.dataset.openDecision}`); }
   const pick = e.target.closest('[data-pick]');
+  if (pick && !pick.disabled) closePanel();
   if (pick && !pick.disabled) return act(() => api('/api/pick', { project: proj().name, picks: [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }] }).then(load));
   if (e.target.closest('[data-take-all]')) {
     const picks = openDecisions(proj()).filter(d => d.status === 'open' && d.recommended).map(d => ({ id: d.id, choice: d.recommended }));
@@ -1196,5 +1219,7 @@ function startView() {
   if (p && needsCount(p)) { S.thread = 'needs'; S.justSwitched = true; store.set('thread', 'needs'); $('#app').classList.remove('show-side'); render(); }
   else $('#app').classList.add('show-side');
 }
-load().then(() => { startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); })
+// ?usagepanel opens the usage panel on load (for screenshots and click-tests); ?usagepanel=session starts on the session totals.
+const openUsage = new URLSearchParams(location.search).get('usagepanel');   // read first: opening a card rewrites the address
+load().then(() => { startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); bootReadout(); if (openUsage !== null) { if (openUsage === 'session') usageUI.range = 'session'; usageUI.open(); } })
   .catch(() => { if (phoneStart) $('#app').classList.add('show-side'); connect(); });

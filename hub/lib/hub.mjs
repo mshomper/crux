@@ -16,7 +16,8 @@ import { HubSettings } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
-import { answerMessage } from '../public/questions.js';
+import { answerMessage, answerNote } from '../public/questions.js';
+import { Usage } from './usage.mjs';
 
 export class Project {
   constructor(dir) {
@@ -55,7 +56,10 @@ export class Hub {
     this.listeners = new Set();
     this.approvals = new Map();
     this.projects = new Map();
+    this.bootAt = Date.now();   // "this session" in the usage panel: since the hub started
+    this.usage = new Usage(this);
     for (const dir of projects) this.addProject(dir);
+    this.usage.restore();
     // After listeners are attached: wake the agents a restart interrupted (M014), every project, a few seconds apart.
     this.resumed = [];
     setTimeout(() => {
@@ -82,7 +86,7 @@ export class Hub {
       const m = evs[i];
       if (!m || now - Date.parse(m.ts) > RESUME_WINDOW_MS) continue;
       // Starting up (agent_created, agent_session, agent_busy) is not acting on it; a reply, summary, card or pick is.
-      const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
+      const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
       if (!actedOn) out.push(m);
     }
     return out;
@@ -366,8 +370,15 @@ export class Hub {
       .map(a => ({ index: Number(a?.index), answer: String(a?.text ?? '').trim() }))
       .filter(a => a.answer && Number.isInteger(a.index) && a.index >= 0 && a.index < ev.questions.length);
     if (!items.length) throw new Error('Type an answer first.');
-    const text = answerMessage(items.map(a => ({ question: ev.questions[a.index], answer: a.answer })));
-    this.fromYou(p, ev.thread, text, [], { answers: items.map(a => ({ question: id, index: a.index })) });
+    const pairs = items.map(a => ({ question: ev.questions[a.index], answer: a.answer }));
+    this.fromYou(p, ev.thread, answerMessage(pairs), [], { answers: items.map(a => ({ question: id, index: a.index })) });
+    // A worker's questions: one line in the orchestrator thread, and a note the orchestrator reads with its next
+    // message, so it knows they are answered and does not ask again. It is not woken just for this. The
+    // orchestrator's own questions skip this: the answer already goes to its thread.
+    if (p.agents.get(ev.from)?.role === 'worker') {
+      this.notice(p, 'orchestrator', answerNote('You', ev.from, pairs));
+      p.orchestrator()?.noteForNextTurn(`[Hub note] ${answerNote('{{Who}}', ev.from, pairs)}. ${ev.from} has the answers; these questions are settled, so don't ask them again.`);
+    }
     return { ok: true, thread: ev.thread, answered: items.map(a => a.index) };
   }
 
