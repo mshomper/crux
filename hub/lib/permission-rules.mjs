@@ -11,6 +11,7 @@
 import { resolve, isAbsolute, join, basename } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { readFileSync, existsSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 const under = (p, root) => { const a = norm(p), r = norm(root); return a === r || a.startsWith(r + '/'); };
@@ -62,6 +63,15 @@ const SECRET_VAR = /token|key|secret|passw|pass\b|auth|cred|api|cookie|session/i
 // Where the path variables point, so a write through them is judged like any other path.
 const VAR_PATHS = { appdata: ['AppData', 'Roaming'], localappdata: ['AppData', 'Local'], userprofile: [], home: [] };
 const TEMP_VARS = /\$\{?(env:temp|env:tmp|tmpdir|temp|tmp)\}?(?![\w:])|%(temp|tmp)%/gi;
+// Variables the command sets itself ($o = 'literal', T=literal, for x in a b) are replaced by their values before the
+// words are judged, so a path held in a variable is checked like any other path.
+const VAR_REF = /\$\{?(env:)?(\w+)\}?|%(\w+)%/gi;
+const varKey = m => `${m[1] ? 'env:' : ''}${m[2] || m[3]}`.toLowerCase();
+// A value the hub can read in full: no globs, substitutions or unknown variables (path and system variables are fine).
+const okValue = v => !/[`*?<>|;&\n[\]]|\$\(|\.\./.test(v) && !/[{}]/.test(v.replace(/\$\{[\w()]+\}/g, '')) &&
+  [...v.matchAll(/\$\{?(?:env:)?([\w()]+)\}?|%(\w+)%/gi)].every(m => SYSTEM_VARS.test(m[1] || m[2]));
+// Properties read off the result of a read-only cmdlet: (Get-Item x).LinkType, (Invoke-WebRequest ...).Content
+const PROPERTY = /^(\.(content|statuscode|statusdescription|linktype|target|length|count|name|fullname|exists|attributes|lastwritetime|creationtime|extension|basename|headers|rawcontent|mode))+$/i;
 
 // agent: the asking agent's name; madeTemp: temp folders it created earlier (full paths). Both decide which temp
 // folders count as its own for deletes (R005). The result's tempMade lists temp folders this request would create.
@@ -100,7 +110,7 @@ const RISKY_PATTERNS = [
 
 class Check {
   constructor(projectDir, tmp, home) {
-    Object.assign(this, { projectDir: resolve(projectDir), tmp, home, reasons: [], doubts: [] });
+    Object.assign(this, { projectDir: resolve(projectDir), tmp, home, reasons: [], doubts: [], vars: new Map() });
   }
   stop(why) { this.reasons.push(why); }
   // known: the hub read the step and only cannot tell if it is safe here (a rebase); otherwise the text is opaque.
@@ -212,15 +222,21 @@ class Check {
     return rel ? join(this.tmp, rel.split('/')[0]) : '';
   }
   // A write into a temp folder that does not exist yet: this agent is making it, so it may delete it later.
-  noteTemp(p, cwd) {
+  // dir: the path itself is a folder being made (mkdir, New-Item), so it is tracked too, however deep (R005).
+  noteTemp(p, cwd, dir = false) {
     const top = this.tempTop(p, cwd);
     if (top && !existsSync(top)) this.tempMade?.add(top);
+    const a = dir && top ? this.abs(p, cwd) : null;
+    if (typeof a === 'string' && !['null', 'tmp', 'outside'].includes(a) && !existsSync(a)) this.tempMade?.add(a);
   }
-  // R005: an agent's own temp folder is one whose name carries the agent's name, or one it made this session.
-  ownTemp(top) {
+  // R005: an agent's own temp folder is one whose name carries the agent's name, or one it made this session
+  // (the folder itself or anything inside it).
+  ownTemp(p, cwd) {
+    const top = this.tempTop(p, cwd);
     if (!top) return false;
-    const name = basename(top).toLowerCase();
-    return (this.agent && name.includes(this.agent)) || this.madeTemp?.has(norm(top)) || this.tempMade?.has(top);
+    if (this.agent && basename(top).toLowerCase().includes(this.agent)) return true;
+    const a = this.abs(p, cwd);
+    return [...(this.madeTemp || []), ...(this.tempMade || [])].some(m => under(a, m));
   }
 
   pathLike(v) { return /[\\/]|^~|^\.\.?$|^[a-z]:/i.test(v) && !/^[\w.-]+:[^\\/]/.test(v); }
@@ -228,8 +244,87 @@ class Check {
 
   // One simple command. Returns the working folder for the next one (only cd changes it).
   part(raw, cwd, ps) {
-    let words = tokens(raw);
+    const words = tokens(raw);
     if (!words.length) return cwd;
+    if (this.defineVars(words, ps, cwd)) return cwd;
+    const sets = this.bind(words);
+    if (!sets) { this.unsure('A loop or variable with too many values for the hub to check'); return cwd; }
+    for (const ws of sets) cwd = this.simple(ws, cwd, ps);
+    return cwd;
+  }
+
+  // The text of a word with the variables set earlier in this command replaced (values: one choice per variable).
+  fill(text, values) {
+    return text.replace(VAR_REF, (all, e, n, p) => {
+      const k = varKey([all, e, n, p]);
+      return values.has(k) ? values.get(k) : all;
+    });
+  }
+  // The words once per value of each loop variable they use (one set when nothing varies); null if far too many.
+  bind(words) {
+    if (!this.vars.size) return [words];
+    const used = new Set();
+    for (const w of words) if (w.vars) for (const m of w.text.matchAll(VAR_REF)) if (this.vars.has(varKey(m))) used.add(varKey(m));
+    if (!used.size) return [words];
+    let sets = [new Map()];
+    for (const k of used) {
+      sets = sets.flatMap(m => this.vars.get(k).map(v => new Map(m).set(k, v)));
+      if (sets.length > 40) return null;
+    }
+    return sets.map(m => words.map(w => {
+      if (!w.vars) return w;
+      const text = this.fill(w.text, m);
+      return { ...w, text, vars: /\$|%\w+%/.test(text) };
+    }));
+  }
+  // A variable the command sets: bash T=value, export T=value, for x in a b; PowerShell $x = 'value', $env:X = 'value',
+  // foreach ($x in 'a','b'). Only literal values count; anything else stays a variable the hub cannot check.
+  // True when the part was only this (nothing else to judge).
+  defineVars(words, ps, cwd) {
+    const single = t => { const v = this.bind([{ text: t, vars: true }]); return v && v.length === 1 ? v[0][0].text : null; };
+    const set = (key, vals) => {
+      const ok = vals.length && vals.every(v => v != null && v !== 'SHORTCUT' && okValue(v));   // SHORTCUT: a COM object, not text
+      if (!ok) { this.vars.delete(key); return false; }
+      if (vals.some(v => SECRET.test(norm(v)))) this.stop(`Touches secrets or credentials: ${vals.join(' ')}`);
+      if (/(^|:)\w*port\w*$/.test(key) && vals.includes('4747')) this.stop("Sets a port to the hub's own 4747");
+      this.vars.set(key, vals);
+      return true;
+    };
+    const t0 = words[0].text;
+    if (!ps && t0 === 'for' && words[2]?.text === 'in' && /^\w+$/.test(words[1].text)) {
+      return set(words[1].text.toLowerCase(), words.slice(3).map(w => single(w.text))) || void 0;
+    }
+    if (ps && /^\$\w+$/.test(t0) && words[1]?.text === 'in') {
+      const list = words.slice(2).map(w => single(w.text)).join(' ').split(/\s*,\s*/).filter(Boolean);
+      return set(t0.slice(1).toLowerCase(), list) || void 0;
+    }
+    let pairs = null;
+    if (ps) {
+      const m = /^\$(env:)?(\w+)(?:=(.*))?$/s.exec(t0);
+      if (m) {
+        const last = words.at(-1);
+        let val = null;
+        if (m[3] !== undefined && m[3] !== '' && words.length === 1) val = m[3];
+        else if (m[3] === '' && words.length === 2) val = words[1].text;
+        else if (m[3] === undefined && words.length === 3 && words[1].text === '=') val = words[2].text;
+        else if (m[3] === undefined && words.length === 2 && /^=./.test(words[1].text)) val = words[1].text.slice(1);
+        if (val != null && (last.quoted || /^\d+$/.test(val))) pairs = [[`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase(), val]];
+        else if (m[3] !== undefined || words[1]?.text === '=' || /^=/.test(words[1]?.text || '')) { this.vars.delete(`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase()); return false; }
+      }
+    } else {
+      const ws = t0 === 'export' ? words.slice(1) : words;
+      if (ws.length && ws.every(w => /^[A-Za-z_]\w*=/.test(w.text))) pairs = ws.map(w => [w.text.split('=')[0].toLowerCase(), w.text.slice(w.text.indexOf('=') + 1)]);
+    }
+    if (!pairs) return false;
+    if (SECRET_VAR.test(pairs.map(p => p[0]).join(' ')) && pairs.some(p => /\$/.test(p[1]))) { for (const w of words) this.word(w, cwd); return false; }
+    let all = true;
+    for (const [k, v] of pairs) all = set(k, [single(v)]) && all;
+    if (!all) for (const w of words) this.word(w, cwd);   // a value that is not a plain literal: judged as before
+    return all;
+  }
+
+  // One simple command, its variables already filled in.
+  simple(words, cwd, ps) {
     // redirections: > file, >> file, 2> file, < file (2>&1 needs no check)
     const keep = [];
     for (let i = 0; i < words.length; i++) {
@@ -249,7 +344,7 @@ class Check {
       this.word({ ...words[0], text: words[0].text.replace(/^\w+=/, '') }, cwd);
       words = words.slice(1);
     }
-    while (words.length && /^(if|then|else|elif|fi|do|done|while|until|!|time)$/.test(words[0].text)) words = words.slice(1);
+    while (words.length && /^(if|then|else|elif|fi|do|done|while|until|!|time|foreach)$/.test(words[0].text)) words = words.slice(1);
     if (!words.length) return cwd;
     // Running a program by its full path is running that program: "/c/Program Files/GitHub CLI/gh.exe" is gh.
     const first = words[0].text;
@@ -288,6 +383,28 @@ class Check {
       return this.unsure(`Runs a command held in a variable (${words.map(w => w.text).join(' ')})`);
     }
     if (head === "'shortcut'" || head === 'shortcut') return;
+    // (Get-Item x).LinkType, (Invoke-WebRequest ...).Content: reading a property of what a cmdlet already returned.
+    if (!args.length && PROPERTY.test(head)) return;
+    // Running a script that sits in the project, a worktree or the temp folder is contained (its arguments were checked).
+    const script = (file, rest) => file && ['inside', 'tmp'].includes(this.where(file, cwd)) && !rest.some(a => a !== file && this.outside(a, cwd));
+    if (/^(powershell|pwsh)$/.test(head)) {
+      const f = args.findIndex(a => /^-file$/i.test(a));
+      if (f >= 0 && !args.some(a => /^-(c|command)$/i.test(a)) && script(args[f + 1], args)) return;
+    }
+    if (/^(sh|bash|zsh)$/.test(head) && !args.some(a => /^-[a-z]*c[a-z]*$/i.test(a))) {
+      const file = args.find(a => !a.startsWith('-'));
+      if (script(file, args)) return;
+    }
+    // cmd /c rmdir PATH (no /s) removes an empty folder or a junction, never what a junction points to.
+    if (head === 'cmd') {
+      const i = args.findIndex(a => /^\/c$/i.test(a));
+      let inner = i >= 0 ? args.slice(i + 1) : [];
+      if (inner.length === 1) inner = tokens(inner[0]).map(w => w.text);
+      if (/^(rmdir|rd)$/i.test(inner[0] || '') && !inner.some(a => /^\/s$/i.test(a))) {
+        const targets = inner.slice(1).filter(a => !a.startsWith('/'));
+        if (targets.length) return this.run('rmdir', targets, words, cwd);
+      }
+    }
     // powershell -Command "...": read the PowerShell inside like any other command.
     if (/^(powershell|pwsh)$/.test(head)) {
       const i = args.findIndex(a => /^-(c|command)$/i.test(a));
@@ -319,7 +436,7 @@ class Check {
     if (writes) {
       for (const t of writes) {
         if (this.outside(t, cwd) || (outsideHere && !this.pathLike(t))) this.stop(`Writes outside the project folder (${head} ${t})`);
-        else if (this.where(t, cwd) === 'tmp') this.noteTemp(t, cwd);
+        else if (this.where(t, cwd) === 'tmp') this.noteTemp(t, cwd, /^(mkdir|md|new-item|ni)$/.test(head));
       }
       return;
     }
@@ -340,7 +457,7 @@ class Check {
       else if (targets.some(t => this.tempTop(t, cwd) === '')) this.stop(`Deletes the whole temp folder (${head} ${targets.join(' ')})`);
       else {
         // In temp: the agent's own folders are contained; anything else there is for the orchestrator.
-        const others = targets.filter(t => this.where(t, cwd) === 'tmp' && !this.ownTemp(this.tempTop(t, cwd)));
+        const others = targets.filter(t => this.where(t, cwd) === 'tmp' && !this.ownTemp(t, cwd));
         if (others.length) this.unsure(`Deletes a temp folder that is not this agent's own (${others.join(' ')})`, true);
       }
       return;
@@ -415,7 +532,7 @@ class Check {
       return this.stop(`Changes a git repo outside the project folder (git ${sub})`);
     }
     if (sub === 'push') return this.push(rest, cwd);
-    if (sub === 'rebase') return this.unsure('Rebases (fine for a branch only this agent has; not for a shared one)', true);
+    if (sub === 'rebase') return this.rebase(rest, cwd);
     if (GIT_HISTORY.has(sub)) return this.stop(`Rewrites history (git ${sub})`);
     if (GIT_FETCH.has(sub)) {
       const pos = rest.filter(x => !x.startsWith('-'));
@@ -441,6 +558,19 @@ class Check {
       if (r.some(x => /^--(hard|merge|keep)$/.test(x))) this.stop('Throws work away (git reset --hard)');
       else if (r.some(x => /^--(soft|mixed)$/.test(x)) || (r.length && r[0] !== '--' && /^(HEAD[~^]|[0-9a-f]{6,}$|origin\/|@)/i.test(r[0]))) this.unsure('Moves the branch back (git reset)', true);
     }
+  }
+
+  // A rebase of a branch that has no upstream, or whose upstream does not contain HEAD (the commits are not pushed), is
+  // contained. A pushed branch, main, a detached HEAD and anything that runs other commands (--exec, -i) are not.
+  rebase(rest, cwd) {
+    const why = 'Rebases (fine for a branch only this agent has; not for a pushed or shared one)';
+    if (rest.some(x => /^(-i|--interactive|-x|--exec(=.*)?|--root|--autostash)$/.test(x))) return this.unsure(why, true);
+    const branch = currentBranch(cwd);
+    if (!branch || /^(main|master)$/i.test(branch) || !existsSync(cwd)) return this.unsure(why, true);
+    const git = (...a) => { try { return execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim(); } catch { return null; } };
+    const upstream = git('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') ||
+      (git('rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}`) ? `origin/${branch}` : null);
+    if (upstream && git('merge-base', '--is-ancestor', 'HEAD', upstream) !== null) this.unsure(why, true);   // HEAD is already pushed
   }
 
   // R004: pushing a feature branch is allowed. Pushing to main or master, force in any form (--force,
