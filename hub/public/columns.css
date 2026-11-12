@@ -50,6 +50,8 @@
 @container conv (max-width:640px){
   .cols.multi .main-head .task-line{display:none}
   .cols.multi .main-head .sub > span:not(.chip):not(.mchip){display:none}
+  /* the right-most header also holds the window's buttons: its model chip drops the version, not the name */
+  .cols.multi > .conv:has(.win-acts) .main-head .mchip .mver{display:none}
 }
 
 /* ---------- the rail: pinned threads with no room for a column; one click shows one ---------- */

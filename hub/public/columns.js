@@ -52,11 +52,19 @@ export class Columns {
     this.store.set(STORE, this.states);
     this.store.set('thread', s.kb);   // the old single-thread key, kept meaningful
   }
-  get kb() { return this.state.kb; }
+  // On a phone (pins ignored) with every column pinned, a thread you open is shown on its own without touching the
+  // pins; with a loose column (always, on a real phone) it replaces it as the one conversation always did.
+  get phoneThread() { return this.phoneMq.matches && this.phoneT?.p === this.project ? this.phoneT.t : null; }
+  get kb() { return this.phoneThread || this.state.kb; }
   isOpen(t) { return P.isOpen(this.state, t); }
   isPinned(t) { return P.isPinned(this.state, t); }
   shown() { return this.measure().shown; }
-  open(t) { this.set(P.open(this.state, t, this.shown())); this.markOpened(t); }
+  open(t) {
+    const s = this.state;
+    if (this.phoneMq.matches && !P.isOpen(s, t) && s.cols.every(c => c.pinned)) { this.phoneT = { p: this.project, t }; return; }
+    this.phoneT = null;
+    this.set(P.open(s, t, this.shown())); this.markOpened(t);
+  }
   pin(t) { const was = this.isOpen(t); this.set(P.pin(this.state, t)); if (!was) this.markOpened(t); }
   unpin(t) { this.set(P.unpin(this.state, t)); }
   close(t) { this.set(P.close(this.state, t)); }
@@ -97,7 +105,7 @@ export class Columns {
     const width = this.area.clientWidth;
     const shown = phone ? 1 : P.fit(width, n);
     const railOn = !phone && shown < n;
-    const multi = shown > 1;
+    const multi = shown > 1 || railOn;   // a column beside the rail is a column like the others
     const narrow = multi && (width - (railOn ? P.RAIL_W : 0)) / shown < NARROW;
     return { phone, width, shown, railOn, multi, narrow, sig: `${phone}|${shown}|${railOn}|${narrow}` };
   }
@@ -105,9 +113,13 @@ export class Columns {
   render() {
     const project = this.project, s = this.state, m = this.measure();
     this.sig = m.sig;
-    const { visible, folded } = P.layout(s, m.shown);
+    let { visible, folded } = P.layout(s, m.shown);
+    const pt = this.phoneThread;
+    if (pt) { visible = [{ t: pt, pinned: false }]; folded = s.cols.filter(c => c.t !== pt); }
+    else if (!m.phone) this.phoneT = null;
+    const kb = pt || s.kb;
     // Conversations for this project's open threads; closed ones (and another project's) go; folded ones wait off the page.
-    const open = new Set(s.cols.map(c => key(project, c.t)));
+    const open = new Set([...s.cols.map(c => key(project, c.t)), ...(pt ? [key(project, pt)] : [])]);
     for (const [k, c] of this.convs) if (!open.has(k)) { c.destroy(); this.convs.delete(k); }
     for (const c of folded) this.convs.get(key(project, c.t))?.detach();
     const els = visible.map(c => this.conv(project, c.t).el);
@@ -122,7 +134,7 @@ export class Columns {
     this.area.style.gridTemplateColumns = `repeat(${visible.length}, minmax(0, 1fr))${m.railOn ? ` ${P.RAIL_W}px` : ''}`;
     this.area.classList.toggle('multi', m.multi);
     const fine = this.fineMq.matches;
-    for (const c of visible) this.convs.get(key(project, c.t)).render({ kb: c.t === s.kb, pinned: c.pinned, multi: m.multi, narrow: m.narrow, phone: m.phone, fine });
+    for (const c of visible) this.convs.get(key(project, c.t)).render({ kb: c.t === kb, pinned: c.pinned, multi: m.multi, narrow: m.narrow, phone: m.phone, fine });
     // The window's own buttons sit in the right-most header, where they always were.
     const last = this.convs.get(key(project, visible.at(-1).t));
     if (this.winActs.parentElement !== last.acts) last.acts.append(this.winActs);
