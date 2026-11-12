@@ -8,7 +8,7 @@
   "data-model",
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "context": "Mockups and sketches for a decision today live in a worker's thread or temp folder, or on a branch, so the decision card in Needs you doesn't carry them and Matt has to go looking (decision 42 was the latest example). Matt proposed that every decision with pictures gets a card that opens a gallery of them. The card part is plain UI; the real choice is where the pictures are kept and whether they travel with the record into git. Agents would name the pictures when drafting (the ids from post_visual, or file paths), and the hub does the copying. Builds on decision 23 (pasted images kept as files next to the event log), 35 (records land on a rolling docs/decisions pull request) and 41 (only .json and .md go into git).",
  "depends_on": [
   23,
@@ -101,9 +101,9 @@
  "recommended": "A",
  "recommendation": "A keeps the record whole: the pictures are what Matt decides from, so they belong with the decision, and they read on GitHub and the phone too. Shrinking them keeps the weight modest. Public repos rely on fake data in mockups, which agents already use.",
  "confidence": "moderate",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-12",
  "superseded_by": null,
  "challenge": null,
  "settles": []

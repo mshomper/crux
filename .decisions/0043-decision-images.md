@@ -1,9 +1,13 @@
 # 0043 Where do a decision's pictures live, so its card can show them?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: data-model, ui
 - Builds on: 0023, 0035, 0041
+
+## Decision
+
+**A: Pictures go into git with the record.** The hub copies each picture into .decisions/images/NNNN-name.png (shrunk to about 1600 px wide) and lists it in the record's .json. The card gets a pictures button that opens them as a gallery; the .md and the page show them too, so they read on GitHub and the phone, and land on the same rolling records pull request.
 
 ## Context
 
@@ -11,7 +15,7 @@ Mockups and sketches for a decision today live in a worker's thread or temp fold
 
 ## Options
 
-### A: Pictures go into git with the record (recommended)
+### A: Pictures go into git with the record (chosen) (recommended)
 
 The hub copies each picture into .decisions/images/NNNN-name.png (shrunk to about 1600 px wide) and lists it in the record's .json. The card gets a pictures button that opens them as a gallery; the .md and the page show them too, so they read on GitHub and the phone, and land on the same rolling records pull request.
 - Pro: The record is complete: pictures survive branches, worktrees and temp folders being cleaned up
