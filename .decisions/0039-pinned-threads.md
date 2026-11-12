@@ -1,9 +1,13 @@
 # 0039 How do two or three threads stay open at once in the main window?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: ui
 - Builds on: 0012, 0031, 0033
+
+## Decision
+
+**A: Split columns.** Pinning a thread opens it as a full column beside the current one, each with its own header and message box. Up to three columns share the width evenly. A cyan top line marks the column that has the keyboard; a red count in a column header means a card waits there. When more are pinned than fit, the extra one folds to a slim rail on the right and opens with one click.
 
 ## Context
 
@@ -11,7 +15,7 @@ The main window shows one conversation at a time (decision 12). On a wide screen
 
 ## Options
 
-### A: Split columns (recommended)
+### A: Split columns (chosen) (recommended)
 
 Pinning a thread opens it as a full column beside the current one, each with its own header and message box. Up to three columns share the width evenly. A cyan top line marks the column that has the keyboard; a red count in a column header means a card waits there. When more are pinned than fit, the extra one folds to a slim rail on the right and opens with one click.
 - Pro: Fills the wide screen: three readable columns of about 965 px at 3170 wide
