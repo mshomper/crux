@@ -358,7 +358,7 @@
     </div>
     <div class="stack">
       <div class="prose">
-        <p>Each project is in one of two modes, switched with the shield button. <strong>Ask</strong> is the default: anything beyond reading goes to the orchestrator first. <strong>Auto</strong> lets contained work run.</p>
+        <p>Each project is in one of two modes, switched with the Ask/Auto switch beside the project's name. <strong>Ask</strong> is the default: anything beyond reading goes to the orchestrator first. <strong>Auto</strong> lets contained work run.</p>
         <p>Mail, calendar and drive connectors are off in every project unless you switch them on, and sending, sharing or deleting through them always comes to you.</p>
       </div>
       <figure class="plate shot">
@@ -581,7 +581,7 @@ export CRUX_HUB_USE_API_KEY=1</code></pre></div></li>
         <ul class="dots prose" style="max-width:none">
           <li><strong>A profile.</strong> Copy the <code>profile-template</code> folder to <code>~/crux/profile/</code> and write down how you like work done. Every agent reads the short core. Keep that folder private and out of any public repository.</li>
           <li><strong>Agent types.</strong> Put agent files in <code>~/.claude/agents/</code> for every project, or in a project's own <code>.claude/agents/</code> folder. Each can set a model, an effort level and standing instructions.</li>
-          <li><strong>Auto mode for a project.</strong> Press the shield button in the Hub, or commit a <code>.crux-hub.json</code> file containing <code>{ "permissions": "auto" }</code>.</li>
+          <li><strong>Auto mode for a project.</strong> Flip the Ask/Auto switch beside the project's name in the Hub, or commit a <code>.crux-hub.json</code> file containing <code>{ "permissions": "auto" }</code>.</li>
           <li><strong>Several projects.</strong> List them after <code>npm start --</code>, or in <code>~/crux/hub.json</code>, and switch between them in the Hub.</li>
         </ul>
       </div>
