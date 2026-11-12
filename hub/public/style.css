@@ -253,11 +253,19 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .bubble pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:6px 0;white-space:pre-wrap;font:12.5px/1.45 var(--mono)}
 .bubble code{font:12.5px var(--mono);background:rgba(255,255,255,.06);padding:1px 5px;border-radius:5px}
 .bubble pre code{background:none;padding:0}
-.md-table{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:12.5px;table-layout:auto}
-.md-table th,.md-table td{border:1px solid var(--line2);padding:5px 8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+/* tables fit their bubble by wrapping their cells; the box scrolls on its own only as a last resort, never the page */
+.md-table-box{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;margin:6px 0 10px}
+.md-table{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:auto}
+.md-table th,.md-table td{border:1px solid var(--line2);padding:5px 8px;text-align:left;vertical-align:top;overflow-wrap:break-word}   /* words stay whole */
+.md-table :is(code,a){overflow-wrap:anywhere}   /* long paths and links may break anywhere, so the table still fits */
 .md-table th{background:var(--surface2);color:var(--muted);font-weight:600}
 .md-table tbody tr:nth-child(even) td{background:rgba(255,255,255,.02)}
 .bubble ul,.bubble ol{margin:4px 0 8px;padding-left:20px}
+.bubble li > ul,.bubble li > ol{margin:2px 0 2px}
+.bubble blockquote{margin:6px 0;padding:1px 0 1px 10px;border-left:2px solid var(--hud-dim);color:var(--muted)}
+.bubble hr{border:0;border-top:1px solid var(--line2);margin:10px 0}
+.bubble a{overflow-wrap:anywhere}
+@media (max-width:720px){.md-table{font-size:12px}.md-table th,.md-table td{padding:4px 6px}}
 .fold:not(.open){max-height:9.5em;overflow:hidden;-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
 .msg.relay .fold:not(.open){max-height:4.5em}
 .more{font:inherit;font-size:12.5px;color:var(--accent);background:none;border:0;padding:4px 0 0;cursor:pointer}
@@ -550,12 +558,19 @@ button.mchip:focus-visible{outline:2px solid var(--mh);outline-offset:2px}
   .vv.kb .hud-slot{position:absolute;left:0;right:0;top:0;visibility:hidden;pointer-events:none}
   /* header: the thread's name gets the room; the model chip sits under it, still a 44 px target */
   .title-block{flex-direction:column;align-items:flex-start;justify-content:center;gap:0}
-  .title-block h1{max-width:100%;line-height:1.25}
+  .title-block h1{max-width:100%;line-height:1.25;margin-bottom:5px}   /* a little air between the name and its chip */
   .sub{max-width:100%}
-  .main-head button.mchip{position:relative;margin:-12px 0;border-width:12px 0;border-color:transparent;background-clip:padding-box;box-shadow:none}
-  .main-head button.mchip::after{content:"";position:absolute;inset:0;border-radius:999px;pointer-events:none;
+  /* The chip is a 44 px target (transparent borders above and below) drawn as the visible chip only: its fill and
+     outline live in ::before, which takes the chip's own corners (a pill, or the HUD's square-cut corners), so no
+     dark box shows around it. */
+  .main-head button.mchip,.main-head button.mchip:hover,.main-head button.mchip[aria-expanded="true"]{position:relative;isolation:isolate;margin:-12px 0;border-width:12px 0;border-color:transparent;background:none;box-shadow:none}
+  .main-head button.mchip::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;background:color-mix(in srgb,var(--mh) 11%,transparent);
     border:1px solid color-mix(in srgb,var(--mh) 55%,transparent);box-shadow:0 0 14px -6px var(--mh),inset 0 0 10px -6px var(--mh)}
-  .main-head .mchip.nohue::after{border-color:var(--line2)}
+  .main-head button.mchip:is(:hover,[aria-expanded="true"])::before{background:color-mix(in srgb,var(--mh) 20%,transparent)}
+  .main-head .mchip.nohue::before{border-color:var(--line2)}
+  /* The list starts below the header with room to spare; a message scrolled up under the header's edge fades out
+     over the last 12 px instead of being sliced by a hard line. */
+  .feed{-webkit-mask-image:linear-gradient(transparent,#000 12px);mask-image:linear-gradient(transparent,#000 12px)}
   /* the bell moves beside the hub menu on phones (app.js) */
   .side-head #phone-alerts{min-width:44px;min-height:44px;color:var(--faint)}
   .side-head #phone-alerts.on{color:var(--accent)}

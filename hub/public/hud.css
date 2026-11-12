@@ -197,8 +197,9 @@ html[data-hud-hold] .hud-boot,html[data-hud-hold] .hud-boot *,html[data-hud-hold
 /* the narrowest phones: every pixel goes to the thread's name and its model chip, so neither is cut off */
 @media (max-width:360px){
   html[data-hud] .main-head{padding-left:8px;padding-right:8px}
-  html[data-hud] .back{width:44px;margin-right:4px}
+  html[data-hud] .back{width:44px;margin-right:6px}   /* the same 12 px after Back as on wider phones */
   html[data-hud] .title-block h1::before{content:none}
+  html[data-hud] .title-block h1{letter-spacing:.1em}   /* ORCHESTRATOR fits whole at 320 */
   html[data-hud] .main-head .mchip{gap:4px;padding:0 6px 0 7px}
   html[data-hud] .main-head .mchip > .icon:last-child{display:none}
 }

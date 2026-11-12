@@ -9,6 +9,7 @@ import { enterAction, insertLineBreak, composerHint, replyHint, filterHint } fro
 import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
 import { UsageUI } from './usage-ui.js';
+import { md } from './markdown.js';
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
 { const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
@@ -348,26 +349,7 @@ function threadEvents(p, t) {
 function orchestrator(p) { return p.agents.find(a => a.role === 'orchestrator' && a.state !== 'retired'); }
 function timeOf(ts) { const d = new Date(ts); return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
 
-function md(src) {
-  const blocks = String(src).split(/```/);
-  return blocks.map((b, i) => {
-    if (i % 2) return `<pre><code>${esc(b.replace(/^\w*\n/, ''))}</code></pre>`;
-    return b.trim().split(/\n{2,}/).map(par => {
-      const lines = par.split('\n');
-      const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
-      // A markdown table: rows of | cells |, the second row being the --- separator. Cells wrap; the table never scrolls sideways.
-      if (lines.length >= 2 && lines.every(l => /^\s*\|.*\|\s*$/.test(l)) && /^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*$/.test(lines[1])) {
-        const cells = l => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map(c => inline(c.trim().replace(/\\\|/g, '|')));
-        const [head, , ...rows] = lines;
-        return `<table class="md-table"><thead><tr>${cells(head).map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${cells(r).map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-      }
-      if (lines.every(l => /^\s*[-*] /.test(l))) return `<ul>${lines.map(l => `<li>${inline(l.replace(/^\s*[-*] /, ''))}</li>`).join('')}</ul>`;
-      if (lines.every(l => /^\s*\d+[.)] /.test(l))) return `<ol>${lines.map(l => `<li>${inline(l.replace(/^\s*\d+[.)] /, ''))}</li>`).join('')}</ol>`;
-      if (/^#{1,4} /.test(par)) return `<p><strong>${inline(par.replace(/^#+ /, ''))}</strong></p>`;
-      return `<p>${lines.map(inline).join('<br>')}</p>`;
-    }).join('');
-  }).join('');
-}
+// Agents' messages are markdown (markdown.js): lists and tables may follow a text line directly.
 
 // ---------- render: sidebar ----------
 // Everything in a project that waits for you: decisions, permission cards, questions, profile lessons (one card).
