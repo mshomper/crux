@@ -511,12 +511,14 @@ function approvalCard(ev) {
   // Why it is with you (decision 21): a hard stop the hub found, the orchestrator escalating, or no answer in time.
   const esc8 = escalation(p, ev.approval);
   const routeNote = esc8 ? `<p class="route-note">${icon('orch')}${esc8.by === 'hub' ? esc(esc8.reason) : `${esc(esc8.by)} sent it to you: ${esc(esc8.reason)}`}</p>`
-    : ev.stops?.length ? `<p class="route-note stop">${icon('shield')}Always yours${ev.rules ? ` under ${esc(ev.rules)}` : ''}: ${esc(ev.stops.join('; '))}</p>`
-    : ev.routedTo && live ? `<p class="route-note">${icon('orch')}With ${esc(ev.routedTo)} for now; answering it here overrides it.</p>` : '';
+    : ev.stops?.length ? '' : ev.routedTo && live ? `<p class="route-note">${icon('orch')}With ${esc(ev.routedTo)} for now; answering it here overrides it.</p>` : '';
+  // A hard stop the hub found goes straight under the headline, so the agent's own words never come first alone.
+  const stopNote = !esc8 && ev.stops?.length ? `<p class="route-note stop">${icon('shield')}<span><b>Always yours${ev.rules ? ` under ${esc(ev.rules)}` : ''}:</b> ${esc(ev.stops.join('; '))}</span></p>` : '';
   const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
   const raw = `<pre>${esc(input)}</pre>`;
   return `<article class="card approval ${live ? '' : 'answered'}" data-card="approval:${esc(ev.approval)}" ${live ? 'tabindex="0"' : `data-expand="${esc(ev.approval)}"`}>
     <div class="card-head">${icon('shield')}<h3>${desc ? `${esc(ev.agent)}: ${esc(desc)}` : `${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}`}</h3>${live ? '<span class="keys">A allow · D deny</span>' : ''}</div>
+    ${stopNote}
     ${hubReads ? `<p class="muted why">The hub reads: ${esc(hubReads)}</p>` : ''}
     ${tags ? `<div class="tags">${tags}</div>` : ''}
     ${routeNote}

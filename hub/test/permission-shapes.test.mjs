@@ -74,6 +74,22 @@ test('2. near misses: secret-looking names, the hub port, and the live hub\'s da
   human('Bash', 'T=$(mktemp -d) && CRUX_HUB_DATA="$T/data" CRUX_HOME=/c/Users/mshom/crux node server.mjs --port 4791');
   human('PowerShell', String.raw`$env:CRUX_HOME = 'C:\Users\mshom\crux'; node server.mjs --port 4761`);
   assert.equal(route('Bash', 'CRUX_HOME=/c/Users/mshom/crux node crux/scripts/build.mjs x'), 'unsure', 'a setting that names a folder outside');
+});
+
+test('a test hub with no data folder of its own would share the live hub\'s settings: for the orchestrator', () => {
+  for (const c of ['node server.mjs --port 4791 --no-agents', 'CRUX_HOME="$TEMP/x/home" node hub/server.mjs --port 4791']) {
+    const r = unsure('Bash', c);
+    assert.match(r.unsure.join(' '), /no data folder of its own/);
+  }
+  unsure('PowerShell', String.raw`$env:CRUX_HOME = "$env:TEMP\x\home"; node server.mjs --port 4761`);
+  // with one: contained, as before; restart.mjs reuses how the hub was last started
+  allow('Bash', 'CRUX_HUB_DATA="$TEMP/x/data" node server.mjs --port 4791 --no-agents');
+  allow('Bash', 'export CRUX_HUB_DATA=/c/Users/mshom/AppData/Local/Temp/x/data; node hub/server.mjs --port 4750');
+  allow('Bash', 'node hub/restart.mjs --port 4752 --no-open');
+  // near misses: still hard stops (npm start in hub/ is covered in permission-rules.test.mjs, with a fake project)
+  human('Bash', 'node server.mjs');
+  human('Bash', 'node server.mjs --port 4747 --no-agents');
+  human('Bash', 'CRUX_HUB_DATA=/c/Users/mshom/Documents/hubdata node server.mjs --port 4791');
   // card-names' inline script read the environment with CRUX_HOME set to Matt's real profile: still Matt's call
   const r = human('Bash', CARD_NAMES, 'card-names');
   assert.match(r.reasons.join(' '), /environment variables or the home folder/);

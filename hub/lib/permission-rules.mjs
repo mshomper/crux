@@ -765,11 +765,7 @@ class Check {
     const file = args.find(x => !x.startsWith('-'));
     if (file && /^(server|restart)\.mjs$/.test(basename(file))) {
       this.hubPort(args);   // restart.mjs with no port restarts the hub on 4747
-      // A test hub's data and profile folders, when set, must be throwaway ones: elsewhere is the live hub's.
-      for (const k of ['crux_hub_data', 'crux_home']) {
-        const v = this.env().get(k);
-        if (v != null && !['inside', 'tmp'].includes(this.where(v, cwd))) this.stop(`Starts a hub on the live hub's data or profile folder (${k.toUpperCase()}=${v})`);
-      }
+      this.hubData(cwd, basename(file) === 'server.mjs');
     }
     // hub/tools/stop-test-hub.mjs <port> stops that port's process tree and refuses 4747.
     if (file && basename(file) === 'stop-test-hub.mjs') {
@@ -798,8 +794,19 @@ class Check {
       const pre = args.indexOf('--prefix');
       let start = '';
       try { start = JSON.parse(readFileSync(join(pre >= 0 ? resolve(cwd, args[pre + 1]) : cwd, 'package.json'), 'utf8')).scripts?.start || ''; } catch { }
-      if (/server\.mjs/.test(start)) this.hubPort(a);
+      if (/server\.mjs/.test(start)) { this.hubPort(a); this.hubData(cwd, true); }
     }
+  }
+
+  // A test hub's data and profile folders, when set, must be throwaway ones: elsewhere is the live hub's (a hard stop).
+  // Starting one with no data folder of its own (CRUX_HUB_DATA) shares the live hub's settings: for the orchestrator.
+  // need: server.mjs and npm start; restart.mjs reuses how the hub was last started, so it is not asked for one.
+  hubData(cwd, need) {
+    for (const k of ['crux_hub_data', 'crux_home']) {
+      const v = this.env().get(k);
+      if (v != null && !['inside', 'tmp'].includes(this.where(v, cwd))) this.stop(`Starts a hub on the live hub's data or profile folder (${k.toUpperCase()}=${v})`);
+    }
+    if (need && this.env().get('crux_hub_data') == null) this.unsure("Starts a test hub with no data folder of its own (CRUX_HUB_DATA), so it would share the live hub's settings", true);
   }
 
   hubPort(args) {
