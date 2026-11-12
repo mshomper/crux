@@ -77,7 +77,7 @@ A hub started this way writes what it prints to `hub-4747.log` in `~/.crux-hub/`
 
 ## Who may do what (permissions)
 
-Each project runs in one of two modes, switched with the shield button (decisions 21 and 34):
+Each project runs in one of two modes, switched with the Ask/Auto switch beside the project's name in the sidebar (decisions 21 and 34):
 
 - **Auto:** work that stays inside the project, its worktrees or a temp folder runs without asking. Requests the hub cannot sort go to the orchestrator.
 - **Ask** (the default): anything beyond reading goes to the orchestrator first.
