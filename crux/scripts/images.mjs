@@ -1,20 +1,40 @@
 // Pictures that travel with a decision record (decision 43 A). They live in .decisions/images/NNNN-name.png and are
 // listed in the record's "images" field: [{ "file": "images/0043-card.png", "caption": "...", "option": "A" }].
-// Agents name a picture with "from": an absolute file path, or the id post_visual returned (a file in the hub's
-// .crux/attachments, decision 23). placeImages() copies it in, shrinks PNGs wider than 1600 px, and rewrites the
-// entry to its "file". Run by the build script and by the hub before it commits records.
-// No dependencies: PNGs are decoded and re-encoded with Node's own zlib. Other kinds are copied as they are.
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'node:fs';
-import { join, resolve, isAbsolute, basename, extname } from 'node:path';
+// Agents name a picture with "from": the id post_visual returned (a file in the hub's .crux/attachments, decision
+// 23), or a path inside the project folder or its worktrees. placeImages() copies it in, shrinks PNGs wider than
+// 1600 px, strips text and camera metadata, and rewrites the entry to its "file". Run by the build script and by the
+// hub before it commits records.
+// Safety: a source must really be inside an allowed folder (real paths, so no ../, symlink or junction escapes);
+// sizes are checked before reading and pixel counts before decoding. A picture that cannot be placed gets
+// "skipped" with the reason, is reported once, and is not tried again until that note is removed.
+// No dependencies: PNGs are decoded and re-encoded with Node's own zlib. JPEGs lose their metadata segments.
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, realpathSync, openSync, readSync, closeSync } from 'node:fs';
+import { join, resolve, isAbsolute, basename, extname, dirname, sep } from 'node:path';
 import { inflateSync, deflateSync } from 'node:zlib';
 
 export const IMAGE_DIR = 'images';
 export const MAX_WIDTH = 1600;                    // wider PNGs are shrunk to this
-export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;   // anything bigger after shrinking is left out, with a warning
+export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;   // the limit for a stored picture; bigger is left out, with a notice
+export const MAX_PNG_INPUT = 12 * 1024 * 1024;    // a PNG may arrive bigger, since shrinking makes it smaller
+export const MAX_PIXELS = 25e6;                   // PNGs with more pixels than this are not decoded
 const PLACED = /^images\/[\w.-]+\.(png|jpg|gif|webp)$/;
 const ATTACHMENT = /^[a-f0-9]{32}\.(png|jpg|gif|webp)$/;
 const pad = n => String(n).padStart(4, '0');
-const kb = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+const kb = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} bytes`;
+const fold = s => process.platform === 'win32' ? s.toLowerCase() : s;
+const real = p => { try { return realpathSync.native(p); } catch { return null; } };
+
+// Is the real path of file inside one of the folders (themselves resolved to real paths)?
+export function insideAny(file, folders) {
+  const f = real(file);
+  if (!f) return false;
+  return folders.filter(Boolean).some(root => {
+    const r = real(root);
+    if (!r) return false;
+    const base = fold(r.endsWith(sep) ? r : r + sep);
+    return fold(f).startsWith(base);
+  });
+}
 
 // What kind of picture the bytes are: 'png', 'jpg', 'gif', 'webp', or null.
 export function sniffImage(buf) {
@@ -35,11 +55,21 @@ export function placedImages(d) {
 }
 
 // Where a not-yet-placed entry's picture comes from: "from", else a "file" or "visual" that is not an images/ name.
+// Every source goes through the same folder checks in placeOne().
 function sourceOf(img) {
   if (!img || typeof img !== 'object') return null;
   const s = img.from ?? (PLACED.test(String(img.file || '')) ? null : img.file ?? img.visual);
   return s ? String(s).trim() : null;
 }
+
+// The first bytes of a file, without reading the rest.
+function head(file, n = 32) {
+  const fd = openSync(file, 'r');
+  try { const b = Buffer.alloc(n); return b.subarray(0, readSync(fd, b, 0, n, 0)); } finally { closeSync(fd); }
+}
+
+class Skip extends Error {}
+const skip = why => { throw new Skip(why); };
 
 // A short file-name part from the caption or the source name.
 function slugOf(img, src) {
@@ -50,51 +80,119 @@ function slugOf(img, src) {
 }
 
 // Copy the pictures named in every record of a folder into its images/ folder and rewrite those entries.
-// attachments: the hub's .crux/attachments folder, for post_visual ids (or a function giving it, asked only when a
-// record names one). Returns { changed: [record files], warnings }.
-export function placeImages(dir, { attachments: att = null, maxWidth = MAX_WIDTH, maxBytes = MAX_IMAGE_BYTES } = {}) {
+// attachments: the hub's .crux/attachments folder, for post_visual ids. roots: the folders a path may point into
+// (default: the folder holding .decisions). Either may be a function, asked only when a record needs it.
+// A picture that cannot be placed is marked { skipped: reason } and reported once: one warning per record.
+// Returns { changed: [record files], warnings }.
+export function placeImages(dir, { attachments: att = null, roots = null, maxWidth = MAX_WIDTH, maxBytes = MAX_IMAGE_BYTES, maxPngInput = MAX_PNG_INPUT, maxPixels = MAX_PIXELS } = {}) {
   dir = resolve(dir);
-  let asked = false, folder = null;
-  const attachmentsDir = () => { if (typeof att !== 'function') return att; if (!asked) { asked = true; folder = att(); } return folder; };
+  const lazy = v => { let done = false, val; return () => { if (!done) { done = true; val = typeof v === 'function' ? v() : v; } return val; }; };
+  const attachmentsDir = lazy(att), rootDirs = lazy(roots ?? [dirname(dir)]);
+  const limits = { maxWidth, maxBytes, maxPngInput, maxPixels };
   const changed = [], warnings = [];
   let files;
   try { files = readdirSync(dir).filter(f => f.endsWith('.json')).sort(); } catch { return { changed, warnings }; }
   for (const f of files) {
     let d;
     try { d = JSON.parse(readFileSync(join(dir, f), 'utf8')); } catch { continue; }
-    if (!Array.isArray(d?.images) || typeof d.id !== 'number' || !d.images.some(i => sourceOf(i))) continue;
+    if (!Array.isArray(d?.images) || typeof d.id !== 'number' || !d.images.some(i => sourceOf(i) && !i.skipped)) continue;
     let dirty = false;
+    const left = [], waiting = [];
     d.images = d.images.map(img => {
       const src = sourceOf(img);
-      if (!src) return img;
-      const where = `D${pad(d.id)}`;
-      const hubId = ATTACHMENT.test(src), store = hubId ? attachmentsDir() : null;
-      const file = hubId ? (store && join(store, src)) : isAbsolute(src) ? src : resolve(dir, src);
-      if (!file || !existsSync(file) || !statSync(file).isFile()) {
-        warnings.push(`${where}: the picture ${src} was not found${hubId && !store ? ' (a hub picture id; the hub copies those in when it commits the record)' : ''}, so it is not in the record yet.`);
-        return img;
+      if (!src || img.skipped) return img;
+      // A hub id outside the hub (a plain build) waits for the hub's commit; it is not marked.
+      if (ATTACHMENT.test(src) && !attachmentsDir()) { waiting.push(src); return img; }
+      try {
+        const placed = placeOne(img, src, dir, attachmentsDir(), rootDirs() || [], limits, d.id);
+        dirty = true;
+        return placed;
+      } catch (e) {
+        if (!(e instanceof Skip)) throw e;
+        left.push(`${basename(src)} (${e.message})`);
+        dirty = true;
+        return { ...img, skipped: e.message };
       }
-      let buf = readFileSync(file);
-      const kind = sniffImage(buf);
-      if (!kind) { warnings.push(`${where}: ${basename(file)} is not a PNG, JPEG, GIF or WebP picture, so it was left out. Save it as PNG.`); return img; }
-      if (kind === 'png') {
-        try { const s = shrinkPng(buf, maxWidth); if (s) buf = s.buf; }
-        catch (e) { warnings.push(`${where}: ${basename(file)} could not be shrunk (${e.message}); copied as it is.`); }
-      }
-      if (buf.length > maxBytes) {
-        warnings.push(`${where}: ${basename(file)} is ${kb(buf.length)} after shrinking, over the ${kb(maxBytes)} limit for record pictures, so it was left out.`);
-        return img;
-      }
-      const name = freeName(join(dir, IMAGE_DIR), `${pad(d.id)}-${slugOf(img, file)}`, kind === 'jpg' ? 'jpg' : kind, buf);
-      mkdirSync(join(dir, IMAGE_DIR), { recursive: true });
-      if (!existsSync(join(dir, IMAGE_DIR, name))) writeFileSync(join(dir, IMAGE_DIR, name), buf);
-      const { from, visual, file: _f, ...rest } = img;
-      dirty = true;
-      return { file: `${IMAGE_DIR}/${name}`, caption: String(img.caption || ''), ...(img.option ? { option: String(img.option) } : {}), ...rest };
     });
+    const where = `D${pad(d.id)}`;
+    if (left.length) warnings.push(`${where}: ${left.length === 1 ? 'a picture was' : `${left.length} pictures were`} left out: ${left.join('; ')}. Fix it and remove its "skipped" note to try again.`);
+    if (waiting.length) warnings.push(`${where}: ${waiting.length === 1 ? 'a hub picture id waits' : `${waiting.length} hub picture ids wait`} for the hub, which copies them in when it commits the record.`);
     if (dirty) { writeFileSync(join(dir, f), JSON.stringify(d, null, 1) + '\n'); changed.push(f); }
   }
   return { changed, warnings };
+}
+
+// Place one picture: check where it is and what it is, read it, clean it, store it. Throws Skip with the reason.
+function placeOne(img, src, dir, store, roots, { maxWidth, maxBytes, maxPngInput, maxPixels }, id) {
+  const ext = extname(src.split(/[?#]/)[0]).toLowerCase();
+  if (['.svg', '.html', '.htm'].includes(ext)) skip(`an ${ext === '.svg' ? 'SVG drawing' : 'HTML page'}; take a PNG screenshot of it and list that`);
+  const hubId = ATTACHMENT.test(src);
+  const file = hubId ? join(store, src) : isAbsolute(src) ? src : resolve(dir, src);
+  if (!existsSync(file) || !statSync(file).isFile()) skip('not found');
+  if (!insideAny(file, hubId ? [store] : roots)) skip(hubId ? 'outside the hub\'s picture folder' : 'outside the project folder; post it with post_visual, or save it inside the project, and list that');
+  const kind = sniffImage(head(file));
+  if (!kind) skip('not a PNG, JPEG, GIF or WebP picture; save it as PNG');
+  const size = statSync(file).size, cap = kind === 'png' ? maxPngInput : maxBytes;
+  if (size > cap) skip(`${kb(size)}, over the ${kb(cap)} limit`);   // checked before reading
+  let buf = readFileSync(file);
+  if (kind === 'png') {
+    const w = buf.length >= 24 ? buf.readUInt32BE(16) : 0, h = buf.length >= 24 ? buf.readUInt32BE(20) : 0;
+    if (w > maxWidth) {
+      if (buf[28] === 1) skip(`an interlaced PNG ${w} px wide, which cannot be shrunk here; save it again without interlacing`);
+      if (w * h > maxPixels) skip(`${Math.round(w * h / 1e6)} megapixels, too many to shrink here`);
+      try { buf = shrinkPng(buf, maxWidth, { maxPixels }).buf; }
+      catch (e) { skip(`could not be shrunk: ${e.message}`); }
+    } else {
+      try { buf = stripPng(buf); } catch (e) { skip(`not a readable PNG: ${e.message}`); }
+    }
+  } else if (kind === 'jpg') {
+    try { buf = stripJpeg(buf); } catch (e) { skip(`not a readable JPEG: ${e.message}`); }
+  }
+  if (buf.length > maxBytes) skip(`${kb(buf.length)} after shrinking, over the ${kb(maxBytes)} limit`);
+  const name = freeName(join(dir, IMAGE_DIR), `${pad(id)}-${slugOf(img, file)}`, kind, buf);
+  mkdirSync(join(dir, IMAGE_DIR), { recursive: true });
+  if (!existsSync(join(dir, IMAGE_DIR, name))) writeFileSync(join(dir, IMAGE_DIR, name), buf);
+  const { from, visual, file: _f, skipped, ...rest } = img;
+  return { file: `${IMAGE_DIR}/${name}`, caption: String(img.caption || ''), ...(img.option ? { option: String(img.option) } : {}), ...rest };
+}
+
+// Public repos (decision 43): no text or camera metadata travels with a picture.
+// PNG: keep only the chunks that draw the picture (and its colour space); drop text, time, EXIF and the rest.
+const PNG_KEEP = new Set(['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND', 'gAMA', 'cHRM', 'sRGB', 'iCCP', 'sBIT', 'bKGD', 'pHYs']);
+export function stripPng(buf) {
+  if (sniffImage(buf) !== 'png') throw new Error('not a PNG');
+  const parts = [buf.subarray(0, 8)];
+  let pos = 8;
+  while (pos + 12 <= buf.length) {
+    const len = buf.readUInt32BE(pos), type = buf.toString('latin1', pos + 4, pos + 8), end = pos + 12 + len;
+    if (end > buf.length) throw new Error('cut short');
+    if (PNG_KEEP.has(type)) parts.push(buf.subarray(pos, end));
+    pos = end;
+    if (type === 'IEND') break;
+  }
+  return Buffer.concat(parts);
+}
+
+// JPEG: drop APP1 (EXIF, XMP), APP3 to APP13, APP15 and comments; keep APP0 (JFIF), APP2 (colour profile) and APP14
+// (Adobe colour transform), the tables and the image data.
+export function stripJpeg(buf) {
+  if (sniffImage(buf) !== 'jpg') throw new Error('not a JPEG');
+  const parts = [buf.subarray(0, 2)];
+  let pos = 2;
+  while (pos < buf.length) {
+    if (buf[pos] !== 0xff) throw new Error('bad marker');
+    const m = buf[pos + 1];
+    if (m === 0xff) { pos++; continue; }                       // fill byte
+    if (m === 0xd9 || (m >= 0xd0 && m <= 0xd7) || m === 0x01) { parts.push(buf.subarray(pos, pos + 2)); pos += 2; continue; }
+    if (pos + 4 > buf.length) throw new Error('cut short');
+    const end = pos + 2 + buf.readUInt16BE(pos + 2);
+    if (end > buf.length) throw new Error('cut short');
+    if (m === 0xda) { parts.push(buf.subarray(pos)); break; }  // start of scan: the rest is image data
+    const drop = m === 0xe1 || (m >= 0xe3 && m <= 0xed) || m === 0xef || m === 0xfe;
+    if (!drop) parts.push(buf.subarray(pos, end));
+    pos = end;
+  }
+  return Buffer.concat(parts);
 }
 
 // stem.ext, or stem-2.ext and so on; a file already there with the same bytes is reused.
@@ -112,6 +210,7 @@ export function imageProblems(d, dir, file) {
   const out = [];
   for (const img of Array.isArray(d?.images) ? d.images : []) {
     if (isPlaced(img)) { if (!existsSync(join(dir, img.file))) out.push(`${file} lists ${img.file}, which is missing`); }
+    else if (sourceOf(img) && img.skipped) out.push(`${file}: picture ${sourceOf(img)} left out: ${img.skipped}`);
     else if (sourceOf(img)) out.push(`${file} lists a picture not copied in yet: ${sourceOf(img)}`);
     else out.push(`${file} has a picture entry without a file`);
   }
@@ -123,8 +222,9 @@ export function imageProblems(d, dir, file) {
 const CRC = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } return t; })();
 function crc32(buf) { let c = -1; for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return (c ^ -1) >>> 0; }
 
-// Decode a PNG into 8-bit RGBA. Returns { width, height, rgba }, or null for interlaced files (copied as they are).
-export function decodePng(buf) {
+// Decode a PNG into 8-bit RGBA. Returns { width, height, rgba }, or null for interlaced files. Throws for files over
+// maxPixels (checked from the header, before unpacking) and for data that unpacks to more than the header says.
+export function decodePng(buf, { maxPixels = MAX_PIXELS } = {}) {
   if (sniffImage(buf) !== 'png') throw new Error('not a PNG');
   let pos = 8, ihdr = null, plte = null, trns = null;
   const idat = [];
@@ -140,10 +240,14 @@ export function decodePng(buf) {
   if (!ihdr) throw new Error('no header');
   const { w, h, depth, ctype, interlace } = ihdr;
   if (interlace) return null;
+  if (!w || !h || w * h > maxPixels) throw new Error(`${Math.round(w * h / 1e6)} megapixels, over the ${Math.round(maxPixels / 1e6)} megapixel limit`);
   const chans = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[ctype];
   if (!chans || ![1, 2, 4, 8, 16].includes(depth)) throw new Error('unsupported colour type');
   const bits = chans * depth, stride = Math.ceil(w * bits / 8), bpp = Math.max(1, bits >> 3);
-  const raw = inflateSync(Buffer.concat(idat));
+  // Never inflate more than the header says the picture holds (a small file cannot unpack into gigabytes).
+  let raw;
+  try { raw = inflateSync(Buffer.concat(idat), { maxOutputLength: h * (stride + 1) + 1024 }); }
+  catch (e) { throw new Error(e.code === 'ERR_BUFFER_TOO_LARGE' || /larger than|too large/i.test(e.message) ? 'image data larger than its header says' : 'image data unreadable'); }
   if (raw.length < h * (stride + 1)) throw new Error('image data cut short');
   // Undo the per-row filters in place, into rows of `stride` bytes.
   const px = Buffer.alloc(h * stride);
@@ -233,7 +337,7 @@ export function encodePng(width, height, rgba) {
   };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = alpha ? 6 : 2;
-  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(out, { level: 9 })), chunk('IEND', Buffer.alloc(0))]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(out, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
 }
 
 // Each output pixel's source pixels and their share (area averaging, for shrinking only).
@@ -281,9 +385,12 @@ export function shrinkRgba(w, h, rgba, ow, oh) {
 }
 
 // A PNG wider than maxWidth, shrunk to it: { buf, width, height }. Null when it is narrow enough or interlaced.
-export function shrinkPng(buf, maxWidth = MAX_WIDTH) {
+// Pictures over maxPixels throw before anything is unpacked. The work is bounded by that and by the input size cap,
+// so it runs in the hub's own thread (0.4 to 1 s for a 4K screenshot, about 3 s at the 25 megapixel cap) once per
+// new picture, at deflate level 6.
+export function shrinkPng(buf, maxWidth = MAX_WIDTH, { maxPixels = MAX_PIXELS } = {}) {
   if (buf.length < 24 || buf.readUInt32BE(16) <= maxWidth) return null;
-  const img = decodePng(buf);
+  const img = decodePng(buf, { maxPixels });
   if (!img) return null;
   const ow = maxWidth, oh = Math.max(1, Math.round(img.height * maxWidth / img.width));
   return { buf: encodePng(ow, oh, shrinkRgba(img.width, img.height, img.rgba, ow, oh)), width: ow, height: oh };

@@ -114,7 +114,8 @@ export class DecisionsDesk {
   get attachmentsDir() { return join(this.projectDir, '.crux', 'attachments'); }
   placeImages() {
     try {
-      const { warnings } = placeImages(this.decisionsDir, { attachments: this.attachmentsDir });
+      // Paths must be inside the project folder (its worktrees are under it); ids come from the attachments folder.
+      const { warnings } = placeImages(this.decisionsDir, { attachments: this.attachmentsDir, roots: [this.projectDir] });
       for (const w of warnings) this.notice(`Decision pictures: ${w}`);
     } catch (e) { console.warn('Copying decision pictures failed:', e.message); }
   }

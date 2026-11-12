@@ -19,8 +19,9 @@ const pad = n => String(n).padStart(4, '0');
 const safeJson = v => JSON.stringify(v).replace(/</g, '\\u003c');
 const fill = (t, data) => t.replace('/*{{DATA}}*/', () => safeJson(data));
 const isRecord = d => typeof d?.id === 'number' && !!d.title && Array.isArray(d.options);
-const mdText = s => String(s).replace(/\s+/g, ' ').replace(/[\\`*_[\]<>]/g, '\\$&');
-const mtime = f =>{ try { return statSync(f).mtimeMs; } catch { return -1; } };
+// Caption text for Markdown: one line, with the characters that would start formatting or a link escaped.
+const mdText = s => String(s).replace(/\s+/g, ' ').trim().replace(/[\\`*_[\]()<>#|!]/g, '\\$&');
+const mtime = f => { try { return statSync(f).mtimeMs; } catch { return -1; } };
 
 // How many pages in the folder git still tracks: 0 or more, or null when git is missing or the folder is not in a repo.
 export function trackedPages(dir) {
@@ -91,28 +92,31 @@ export function refreshPages(dir) {
   return true;
 }
 
-// The hub's picture store (decision 23) for post_visual ids named in records: <repo>/.crux/attachments, where the
-// repo is the folder above .decisions or, in a worktree, the main checkout git points at. Null when there is none.
-export function attachmentsFor(dir) {
-  const near = join(dirname(resolve(dir)), '.crux', 'attachments');
-  if (existsSync(near)) return near;
+// Where a record's pictures may come from (decision 43): the project folder (the folder above .decisions) and, in a
+// worktree, the main checkout git points at, which holds the other worktrees too. Plus the hub's picture store
+// (decision 23) for post_visual ids, <main checkout>/.crux/attachments, or null when there is none.
+export function picturePlaces(dir) {
+  const own = dirname(resolve(dir)), roots = [own];
   try {
     const common = String(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000, windowsHide: true })).trim();
-    const main = join(dirname(common), '.crux', 'attachments');
-    return existsSync(main) ? main : null;
-  } catch { return null; }
+    if (basename(common) === '.git') roots.push(dirname(common));
+  } catch { }
+  const attachments = roots.map(r => join(r, '.crux', 'attachments')).find(a => existsSync(a)) || null;
+  return { roots, attachments };
 }
 
 // Build one folder. pagesOnly writes just the pages and index.html (the refresh after a pull): no .md, no .gitignore,
 // no pictures copied. A full build first copies pictures records name by path or hub id into images/ (decision 43).
 // Returns { count, problems }.
-export function build(dir, { pagesOnly = false, attachments } = {}) {
+export function build(dir, { pagesOnly = false, attachments, roots } = {}) {
   dir = resolve(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const problems = [];
   if (!pagesOnly) {
-    const placed = placeImages(dir, { attachments: attachments === undefined ? () => attachmentsFor(dir) : attachments });
-    problems.push(...placed.warnings);
+    let places = null;
+    const where = () => (places ||= picturePlaces(dir));   // git is asked only when a record names a picture
+    // Pictures left out or still waiting are listed below with each record (imageProblems), every build.
+    placeImages(dir, { attachments: attachments === undefined ? () => where().attachments : attachments, roots: roots ?? (() => where().roots) });
   }
   const css = readFileSync(join(tpl, 'shared.css'), 'utf8');
   const pageTpl = readFileSync(join(tpl, 'page.html'), 'utf8').replace('/*{{CSS}}*/', css);

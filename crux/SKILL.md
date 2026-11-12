@@ -60,8 +60,9 @@ After the pick, still write the record (section 4) with `"mode": "quick"` and no
 
 Every decision that was shown with pictures carries them, so its card, page and `.md` show what the call was made from.
 
-- List each picture in the record's `images` field: `{ "from": "...", "caption": "One line on what it shows", "option": "B" }`. `from` is an absolute file path (PNG, JPEG, GIF or WebP), or the id `post_visual` returned in the Crux hub. Leave out `option` for a picture that covers the whole question.
-- The build script (or the hub, when it commits the record) copies each one into `.decisions/images/NNNN-name.png`, shrinks PNGs wider than 1600 px, and rewrites the entry to `{ "file": "images/NNNN-name.png", ... }`. Never write into `images/` yourself and never edit a `file` entry by hand. A picture that is missing, not an image, or over 3 MB after shrinking is left out, and the build lists it under "Problems to fix".
+- List each picture in the record's `images` field: `{ "from": "...", "caption": "One line on what it shows", "option": "B" }`. `from` is the id `post_visual` returned in the Crux hub, or the path of a PNG, JPEG, GIF or WebP file inside the project folder or one of its worktrees. Files elsewhere (a temp folder, say) are refused: post them with `post_visual` first, or save them inside the project. Leave out `option` for a picture that covers the whole question.
+- The build script (or the hub, when it commits the record) copies each one into `.decisions/images/NNNN-name.png`, shrinks PNGs wider than 1600 px, strips text and camera metadata, and rewrites the entry to `{ "file": "images/NNNN-name.png", ... }`. Never write into `images/` yourself and never edit a `file` entry by hand.
+- A picture that cannot be copied (missing, outside the project, not an image, an interlaced PNG wider than 1600 px, over 3 MB after shrinking) gets a `"skipped"` note with the reason, and the build lists it under "Problems to fix". It is not tried again: fix it, then delete the `"skipped"` note.
 - SVG and HTML mockups: take a PNG screenshot and list that.
 - **Public repos**: the pictures go into git with the record and become public. Mockups use fake, neutral data (made-up names, projects and numbers); never real people, clients, employer work, private paths or anything confidential. Check a repo's visibility before adding a screenshot of real work.
 
@@ -180,13 +181,13 @@ Decisions: read .decisions/*.md before planning work. Do not contradict an activ
   "challenge": null,
   "settles": [ { "key": "length unit", "value": "millimetres" } ],
   "images": [
-    { "from": "C:/path/to/mockup-b.png", "caption": "Option B on a phone", "option": "B" },
+    { "from": "C:/repo/.claude/worktrees/mock/mockup-b.png", "caption": "Option B on a phone", "option": "B" },
     { "file": "images/0007-current-layout.png", "caption": "Today's layout" }
   ]
 }
 ```
 
-`images` is optional. An entry with `from` is still to be copied in; the build turns it into a `file` entry.
+`images` is optional. An entry with `from` is still to be copied in; the build turns it into a `file` entry, or marks it `"skipped"` with the reason.
 
 Deep mode adds these fields (leave them out otherwise):
 

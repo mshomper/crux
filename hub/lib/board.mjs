@@ -88,7 +88,7 @@ export class Board {
       return d;
     }
     writeFileSync(join(this.decisionsDir, name), JSON.stringify(d, null, 1) + '\n');
-    try { placeImages(this.decisionsDir, { attachments: join(this.dir, '.crux', 'attachments') }); }   // decision 43
+    try { placeImages(this.decisionsDir, { attachments: join(this.dir, '.crux', 'attachments'), roots: [this.dir] }); }   // decision 43
     catch (e) { console.warn('Copying decision pictures failed:', e.message); }
     this.rebuild();
     return d;
