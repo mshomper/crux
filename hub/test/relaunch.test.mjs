@@ -95,5 +95,5 @@ test('the app opens in the default browser', () => {
 test('the restart script and its no-window launcher are in the hub folder', () => {
   const vbs = readFileSync(join(HUB_DIR, 'Restart Crux Hub.vbs'), 'utf8');
   assert.match(vbs, /sh\.Run\("node """ & here & "\\restart\.mjs""" & extra, 0, True\)/, 'runs restart.mjs hidden (window style 0) and waits');
-  assert.match(readFileSync(join(HUB_DIR, 'restart.mjs'), 'utf8'), /pidsOnPort[\s\S]*stopTree[\s\S]*readLaunch[\s\S]*startDetached[\s\S]*openApp/);
+  assert.match(readFileSync(join(HUB_DIR, 'restart.mjs'), 'utf8'), /pidsOnPort[\s\S]*stopTree[\s\S]*readLaunch[\s\S]*(startDetached|startHub)[\s\S]*openApp/);
 });

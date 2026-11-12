@@ -6,8 +6,11 @@
 // - Requests that change something (POST and friends) must come from one of those same addresses (Origin), and
 //   carry JSON. A page on some other site cannot send JSON cross-site without a CORS preflight, which we never answer.
 // Extra names (say a Tailscale machine name without the ts.net suffix) can be added with CRUX_HUB_HOSTS=a,b.
+// Changes also need a paired device (decision 47, lib/guard.mjs): these checks only keep other web pages out.
 
-const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+// crux.localhost (decision 47): the PC's own name for the live hub. Browsers resolve *.localhost to this machine and
+// treat it as secure; the device cookie set there is never sent to other programs on localhost:<port>.
+const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]', '::1', 'crux.localhost']);
 
 // A port written any way but plainly (localhost:04747, :0, :99999, :abc) is no browser's; such a Host is refused ('').
 export function hostName(hostHeader) {

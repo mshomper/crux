@@ -21,6 +21,7 @@
 <link rel="stylesheet" href="all-projects.css">
 <link rel="stylesheet" href="pictures.css">
 <link rel="stylesheet" href="project-settings.css">
+<link rel="stylesheet" href="guard.css">
 </head>
 <body>
 <div id="app" class="app">
@@ -28,6 +29,8 @@
     <header class="side-head">
       <img src="icon.svg" alt="" width="22" height="22">
       <strong>Crux Hub</strong>
+      <!-- Decision 47: shown while this device is not paired; opens "Pair this device" (guard.js). -->
+      <button class="btn ghost icon-only pair-btn" id="pair-btn" hidden aria-label="This device is not paired: pair it to make changes" title="This device is not paired: pair it to make changes"><svg class="icon"><use href="#i-key"/></svg></button>
       <div class="hub-menu-wrap">
         <button class="btn ghost icon-only" id="hub-menu-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Hub menu" title="Hub menu"><svg class="icon"><use href="#i-more"/></svg></button>
         <div id="hub-menu" class="hub-menu" role="menu" aria-label="Hub" hidden></div>
@@ -200,6 +203,13 @@
     <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
     <symbol id="i-reset" viewBox="0 0 24 24"><path d="M5 12a7 7 0 1 0 2.1-5"/><path d="M5 4.5V8h3.5"/></symbol>
     <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3.5h6l-1 5.5 3.5 3.5v2h-11v-2L10 9z"/><path d="M12 14.5V21"/></symbol>
+    <!-- Decision 47: pairing, step-up and devices (guard.js) -->
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.2"/><circle cx="8" cy="12" r="1.2"/><path d="M12.2 12H21M17.5 12v3.2M20.5 12v2.4"/></symbol>
+    <symbol id="i-face" viewBox="0 0 24 24"><path d="M4 8.5v-3A1.5 1.5 0 0 1 5.5 4h3M15.5 4h3A1.5 1.5 0 0 1 20 5.5v3M20 15.5v3a1.5 1.5 0 0 1-1.5 1.5h-3M8.5 20h-3A1.5 1.5 0 0 1 4 18.5v-3"/><path d="M9 9.2v1.3M15 9.2v1.3M12.3 9.5v3.6h-1M9.4 15.4a3.8 3.8 0 0 0 5.2 0"/></symbol>
+    <symbol id="i-finger" viewBox="0 0 24 24"><path d="M5.2 8.4A8 8 0 0 1 19 9.3"/><path d="M4.6 14.2a7 7 0 0 0 .8-3.2 6.6 6.6 0 0 1 13.2 0c0 2.6-.4 5-1.3 7.2"/><path d="M8.2 19c1.1-2.2 1.6-4.8 1.6-7.6a2.2 2.2 0 0 1 4.4 0c0 2.9-.5 5.6-1.5 8"/><path d="M12 11.6c0 3.3-.6 6.3-1.8 8.9"/></symbol>
+    <symbol id="i-pc" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="1.5"/><path d="M8.5 20h7M12 16.5V20"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.8" width="10" height="18.4" rx="2"/><path d="M10.8 18h2.4"/></symbol>
+    <symbol id="i-unlink" viewBox="0 0 24 24"><path d="M9.6 14.4l-2 2a3 3 0 0 1-4.2-4.2l2-2M14.4 9.6l2-2a3 3 0 0 1 4.2 4.2l-2 2"/><path d="M8 3.5v2.5M3.5 8H6M16 20.5V18M20.5 16H18"/></symbol>
   </defs>
 </svg>
 <script type="module" src="app.js"></script>

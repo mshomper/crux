@@ -35,9 +35,9 @@ npm start -- ~/path/to/project-a
 
 `CRUX_HUB_USE_API_KEY=1` is required: without it the hub removes `ANTHROPIC_API_KEY` from what its agents see, and they will not use the key. To keep the key across sessions, set both as user environment variables (Windows: Settings, search "environment variables"). The API-key start-up is read from the code (`lib/agent.mjs`) and has not yet been tested end to end on a fresh machine.
 
-Then open http://localhost:4747. With no folders given, it uses `~/crux/hub.json` (`{ "projects": ["C:/path/a"] }`) or the current folder. Each project should be a git repo (see "Where your picks land").
+Then open http://crux.localhost:4747 (http://localhost:4747 takes you there; see "Paired devices" for the first pairing). With no folders given, it uses `~/crux/hub.json` (`{ "projects": ["C:/path/a"] }`) or the current folder. Each project should be a git repo (see "Where your picks land").
 
-Options: `--port 4747`, `--retire-at 60` (the starting hub default for when the orchestrator hands off, in % of context; once changed in the hub menu's Whole hub panel the saved value wins, and each project can set its own), `--no-agents` (a test hub: messages are kept but no agent starts; also automatic when `CRUX_HUB_DATA` points inside the temp folder, and `CRUX_HUB_AGENTS=1` overrides both).
+Options: `--port 4747`, `--retire-at 60` (the starting hub default for when the orchestrator hands off, in % of context; once changed in the hub menu's Whole hub panel the saved value wins, and each project can set its own), `--no-agents` (a test hub: messages are kept but no agent starts; also automatic when `CRUX_HUB_DATA` points inside the temp folder, and `CRUX_HUB_AGENTS=1` overrides both), `--test-pair` (a test hub only: one fake device counts as paired and the page gets its cookie, for screenshots and tests; the hub refuses to start with it on port 4747, with real agents, or with its data folder outside the temp folder).
 
 The **board** (top right) groups the memory into sections with counts: what waits for your call is open, everything else folds to one line until you open it, and the filter at the top finds words or ids (`D31`, `R5`) across all of it.
 
@@ -61,13 +61,50 @@ In the box at the bottom, Enter sends; Alt+Enter or Shift+Enter starts a new lin
 
 ### Windows shortcuts
 
-- **`hub\Crux Hub.cmd`**: double-click to open the hub at http://localhost:4747, starting it first if it is not running. It reads the projects from `~/crux/hub.json` and leaves the hub running in a minimized window; close that window to stop it. It does not set your API key, so set the two variables as user environment variables first.
+- **`hub\Crux Hub.cmd`**: double-click to open the hub at http://crux.localhost:4747, starting it first if it is not running. It reads the projects from `~/crux/hub.json` and leaves the hub running in a minimized window; close that window to stop it. It does not set your API key, so set the two variables as user environment variables first.
 - **`hub\Restart Crux Hub.vbs`**: see below.
+
+## Paired devices: only you can make changes
+
+Any program on this PC can reach the hub's address, so the hub only takes changes from devices you have paired (decision 47). Reading is open; anything that acts as you (Allow and Deny, picks, messages, answers, starting or retiring agents, settings, the board, notifications, restart) needs a paired device. A program that tries without one gets "This device is not paired" and nothing changes.
+
+**On the PC the hub's address is now http://crux.localhost:4747.** Opening http://localhost:4747 takes you there by itself. Browsers treat any `*.localhost` name as this PC and as secure, and the device cookie set on `crux.localhost` is never sent to other programs' servers on `localhost:<port>`. (Your pins and drafts start fresh once at the new address.)
+
+**Pair the PC (once).** The hub shows a pairing code only in its own window, never in a file. So the first time, the hub must be running in a window: double-click `hub\Restart Crux Hub.vbs` (with no device paired yet it restarts the hub in a minimized window, **Crux Hub** on the taskbar), or `hub\Crux Hub.cmd` when the hub is stopped. Open http://crux.localhost:4747: **Pair this device** opens. Type the code from the hub's window, press **Next**, then **Use Windows Hello**. From then on this browser makes changes with no taps. If the page says "Start the hub in a window to pair the first device", the hub is running without a window: double-click Restart Crux Hub.vbs.
+
+**Pair the phone.** On the PC: hub menu (three dots), **Devices**, **Pair another device**, confirm with Windows Hello. A code shows for 10 minutes. On the phone, open Crux from the home screen (not a Safari tab: they keep separate sign-ins), type the code in Pair this device, press **Next**, then **Use Face ID**. The PC and the phone each have their own passkey, because a passkey belongs to the address it was made on.
+
+**Big changes ask for Face ID or Windows Hello**, every time, within the minute before: raising a project to Trusted, turning its connectors on, turning orchestrator answers on and any other change in the Whole hub panel (the wait, the handoff defaults and floors), adding a device to notifications, pairing another device, and unpairing one. Lowering a level, turning connectors or orchestrator answers off, and a project's own handoff numbers need only the paired device.
+
+**You are always told.** Pairing or unpairing a device, and adding or removing a notification device, sends a notification to every phone and a note in each project's orchestrator thread. Devices (hub menu) lists both, with when each was last used; unpair anything you don't recognise.
+
+**Trusted.** A raise to Trusted keeps its Face ID or Windows Hello confirmation as the record. At every start, a project at Trusted whose record does not check out against a paired passkey (for example, one set to Trusted by editing a file, or raised before hub 0.16) drops back to Auto, with a notification and a note. The notification for a raise has **Undo** where the phone shows notification buttons, and the orchestrator thread has an **Undo: back to Auto** button under the raise either way.
+
+**The pairing code** works once, for 30 minutes. It appears only in the hub's own window, at start (and on **Show a new code** in the Pair panel while no device is paired yet). It is never written to a file, the hub's log included, and never appears on the page or in any reply from the hub. A hub running without a window shows no code at all. Once a device is paired, new devices get their code from Devices on a paired device; asking the hub for a fresh code then does nothing. Five wrong codes within ten minutes cancel every code for a minute. Never send a code to anyone, and never paste it to an agent.
+
+**Lost a passkey** (a new PC, Windows Hello reset, a phone wiped):
+- **If another device is still paired:** on it, Devices, **Pair another device**; pair the new one with that code, then unpair the lost one.
+- **If the hub runs in a window** (started with Crux Hub.cmd): close that window and double-click Crux Hub.cmd again. The new window shows a code. On the device you want to use, type it in Pair this device. To keep the other devices, press **Next**; to start over, open **Lost a passkey?** and press **Unpair every device, then pair this one** (your phone is told).
+- **Otherwise:** delete `devices.json` in the `.crux-hub` folder in your user folder, then double-click Restart Crux Hub.vbs. With no device paired, the hub opens in a window with a code; pair this device, then the others from Devices. Projects at Trusted drop to Auto at that start (their records went with the file); raise them again.
+
+Only the code from the hub's own window can start over; a code from another device cannot.
+
+**After this update (first restart).** Until a device is paired, the hub refuses every change, so plan the first restart for when you are at the PC: the hub opens in a window (or double-click Restart Crux Hub.vbs if the page says to start it in a window), pair the PC at http://crux.localhost:4747, then pair the phone from Devices. Your phone's existing notifications keep working meanwhile.
+
+**Where it lives.** `~/.crux-hub/devices.json` holds each device's name, address, a SHA-256 of its device token (never the token itself), its passkey's public key and id, and the Trusted records. The token sits in an HttpOnly, SameSite=Strict cookie (Secure over https) named for the hub's port, so page scripts cannot read it and other sites cannot send it.
+
+**What it does not stop.** A program running as you that sets out to edit `~/.crux-hub` or the hub's code, or to lift the browser's cookie, can still get round it (decision 47 says so plainly; running agents under their own Windows account is parked until the always-on box). What it stops: a script or a misled agent answering its own permission cards, speaking as you, picking for you, adding its own "phone", or raising a project, in one request. A real attempt takes several deliberate steps, and pairing anything new notifies your phone.
+
+**Agent-written pages are sandboxed.** Decision pages and their pictures, the All decisions roll-up, and pictures and pages agents post open in a browser sandbox with no origin of their own, so nothing in them can make a change as you. Links that open a new tab still work; storing page state does not (the pages do without it).
+
+**Test hubs** print `http://127.0.0.1:<port>` and pair at `http://localhost:<port>`; neither name ever receives the live hub's cookie, which lives on `crux.localhost`. Never open a test hub at `crux.localhost:<port>`. A test hub could not use that cookie's passkey anyway: a confirmation is checked against the exact address, port included. Start a test hub with `--test-pair` to make changes in it without pairing; test hubs never open a window.
 
 ## Restart the hub
 
-- **From the hub:** click the three dots next to "Crux Hub" at the top of the thread list, then **Restart hub** and **Restart**. The hub stops and starts again in the background, with no window; the page says "Restarting..." and reconnects by itself. Agents that were working stop and pick up again on their next message, as after any restart.
-- **When the hub is stuck or stopped (Windows):** double-click `hub\Restart Crux Hub.vbs`. It stops whatever is listening on port 4747, starts the hub again the way it was last started (same folder and projects), with no window, and opens it in your browser. If the hub does not come back, it says so.
+- **From the hub:** click the three dots next to "Crux Hub" at the top of the thread list, then **Restart hub** and **Restart**.
+- **By the orchestrator:** after merging, the orchestrator restarts the hub with its `restart_hub` tool (one-line reason), which goes through the hub itself; you get a notification "The hub is restarting" and a note in its thread. Not within a minute of a start, and at most 3 times in 15 minutes. A POST to `/api/restart` from a command is a hard stop and needs a paired device anyway.
+- **While no device is paired** (the first time, or after deleting `devices.json`), any restart of the hub on 4747 opens it in a minimized window instead, the only place it shows a pairing code. The hub stops and starts again in the background, with no window; the page says "Restarting..." and reconnects by itself. Agents that were working stop and pick up again on their next message, as after any restart.
+- **When the hub is stuck or stopped (Windows):** double-click `hub\Restart Crux Hub.vbs`. It stops whatever is listening on port 4747, starts the hub again the way it was last started (same folder and projects), with no window (in a minimized window while no device is paired), and opens it in your browser. If the hub does not come back, it says so.
 
 To put it on your desktop: in File Explorer, open the `hub` folder of your Crux clone, right-click **Restart Crux Hub.vbs**, choose **Show more options**, then **Send to > Desktop (create shortcut)**. Rename the shortcut to "Restart Crux Hub" if you like. For the Crux icon: right-click the shortcut, **Properties > Change Icon... > Browse...**, and pick `hub\public\icons\crux.ico`. You can also drag the shortcut to the taskbar or Start to pin it.
 
@@ -127,7 +164,7 @@ Agents can post pictures (PNG, JPEG, GIF, WebP, SVG) or a small self-contained H
 
 ## On your phone (Tailscale)
 
-The hub only listens on this PC (127.0.0.1). Your phone reaches it through Tailscale, a private network made of your own signed-in devices; nothing is opened to the internet or to your Wi-Fi (decision 18). The hub turns away requests addressed to any other name, and lets only its own page make changes. On a phone, the hub opens on Needs you when something waits; the thread list is behind Back.
+The hub only listens on this PC (127.0.0.1). Your phone reaches it through Tailscale, a private network made of your own signed-in devices; nothing is opened to the internet or to your Wi-Fi (decision 18). The hub turns away requests addressed to any other name, and takes changes only from devices you have paired. On a phone, the hub opens on Needs you when something waits; the thread list is behind Back.
 
 **Before you start: check the PC's name.** Turning on HTTPS gets the PC a certificate, and every certificate's name is written to public certificate-transparency logs. The address will be `https://<pc-name>.<tailnet>.ts.net`, so the PC name should not say anything private (no client or employer names). Check it with `hostname` in a terminal. Rename it under Settings > System > About > Rename this PC if needed (it takes a restart).
 
@@ -140,7 +177,8 @@ The hub only listens on this PC (127.0.0.1). Your phone reaches it through Tails
    ```
    It prints the address, `https://<pc-name>.<tailnet>.ts.net`. `--bg` keeps it running across restarts; `tailscale serve status` shows it and `tailscale serve reset` stops it. Use `tailscale serve`, never `tailscale funnel` (funnel publishes to the whole internet).
 5. **On the phone**, open that address. To put it on the home screen: in Safari tap Share, then **Add to Home Screen** (Android Chrome: menu, then **Install app**).
-6. **Notifications:** open Crux from the home-screen icon, go Back to the thread list, and tap the bell beside the hub menu. Allow notifications; a test one arrives. On iPhone this works only from the home-screen icon (iOS 16.4 or later), not from a Safari tab.
+6. **Pair the phone** (see "Paired devices" above): a code from Devices on the PC, then Face ID.
+7. **Notifications:** open Crux from the home-screen icon, go Back to the thread list, and tap the bell beside the hub menu. Allow notifications and confirm with Face ID; a test one arrives. On iPhone this works only from the home-screen icon (iOS 16.4 or later), not from a Safari tab.
 
 Notifications arrive when a permission request waits for Allow, a decision is ready to pick, or an agent asks a question (questions wait a minute first, since the orchestrator often answers them itself). They say only what kind of card it is and which agent or decision number. Tapping one opens the hub at that card; the details load over Tailscale. Answering happens in the hub, not on the lock screen. Nothing is sent while you are using the hub on the PC on the same view.
 
@@ -181,7 +219,7 @@ The orchestrator sees the list and picks a type for each worker, or follows your
 
 Agents run through the Claude Agent SDK on this PC. With `CRUX_HUB_USE_API_KEY=1` they use your Anthropic API key, and Anthropic bills the tokens they use to that key. Several agents at once use more, faster. (Without the switch, agents fall back to whatever Claude Code sign-in is already on the PC; that is for your own personal use only, and the hub neither offers nor manages it.)
 
-**Spend estimate.** The usage panel shows estimated spend today and since the hub started, per model and per agent. With an API key, open it by adding `?usagepanel` to the hub's address (http://localhost:4747/?usagepanel). Spend is estimated from list prices, not a bill; your Anthropic Console has the real figures.
+**Spend estimate.** The usage panel shows estimated spend today and since the hub started, per model and per agent. With an API key, open it by adding `?usagepanel` to the hub's address (http://crux.localhost:4747/?usagepanel). Spend is estimated from list prices, not a bill; your Anthropic Console has the real figures.
 
 **Plan meters (decision 36).** Only in the personal-use case above, the strip above the conversation shows meters (click them for the usage panel) for the plan's 5-hour, 7-day and Fable weekly windows, with percent used and time to reset; they turn amber at a warning or 80% and up, and red only when work is blocked. They come from the Agent SDK's usage call (marked experimental by the SDK), asked of one live agent every 5 minutes, plus the `rate_limit_event` agents stream. With an API key, plan limits do not apply, so the meters hide and the orchestrator thread gets one notice. With no agent running, the last reading stays, dimmed, with the time it was read.
 
@@ -195,7 +233,7 @@ Agents run through the Claude Agent SDK on this PC. With `CRUX_HUB_USE_API_KEY=1
 | `<project>/.claude/worktrees/decisions/` | The `docs/decisions` worktree where picks and drafted records land (see "Where your picks land"). |
 | `<project>/.claude/settings.local.json` | Rules you saved with **Always** on a permission card (Claude Code's own file). |
 | `~/crux/` (or `CRUX_HOME`) | Your profile and its lessons, and `media/`, the pictures agents post with `post_visual`. Keep it private. |
-| `~/.crux-hub/` (or `CRUX_HUB_DATA`) | Hub settings (`settings.json`, including each project's level, connectors and handoff numbers), notification keys (`vapid.json`), subscribed phones (`push-subscriptions.json`), and the restart files (`hub-<port>.log`, `launch-<port>.json`). Never in a repo. |
+| `~/.crux-hub/` (or `CRUX_HUB_DATA`) | Hub settings (`settings.json`, including each project's level, connectors and handoff numbers), paired devices (`devices.json`: names, addresses, token hashes, passkey public keys and ids, Trusted records), notification keys (`vapid.json`), subscribed phones (`push-subscriptions.json`), and the restart files (`hub-<port>.log`, `launch-<port>.json`). Never in a repo. |
 
 ## How it fits together
 
@@ -214,7 +252,7 @@ flowchart LR
     B -. index at start-up .-> W
 ```
 
-Every agent gets these board tools: `board_index`, `board_read`, `post_entry`, `post_summary`, `propose_lesson` (record a lesson), `post_visual` (post a picture or page), `profile_read` (read the profile; the private section needs a reason) and `write_handoff`. An agent that took over from another also gets `ask_predecessor`. The orchestrator also gets `list_agents`, `list_agent_types`, `message_agent`, `start_worker` (with optional type, model and effort), `set_agent_settings`, `retire_worker`, `handoff_worker` and `answer_permission`. `list_agents` shows each worker's context %, model and effort; `handoff_worker` hands a worker's task to a fresh agent with the same type, model and effort, from 35% of its context (the floor, set in the Whole hub panel) at the end of its turn, with a one-line reason (decision 46). At the project's hand-off mark every agent still hands off by itself.
+Every agent gets these board tools: `board_index`, `board_read`, `post_entry`, `post_summary`, `propose_lesson` (record a lesson), `post_visual` (post a picture or page), `profile_read` (read the profile; the private section needs a reason) and `write_handoff`. An agent that took over from another also gets `ask_predecessor`. The orchestrator also gets `list_agents`, `list_agent_types`, `message_agent`, `start_worker` (with optional type, model and effort), `set_agent_settings`, `retire_worker`, `handoff_worker`, `answer_permission`, `mark_entry_done` and `restart_hub`. `list_agents` shows each worker's context %, model and effort; `handoff_worker` hands a worker's task to a fresh agent with the same type, model and effort, from 35% of its context (the floor, set in the Whole hub panel) at the end of its turn, with a one-line reason (decision 46). At the project's hand-off mark every agent still hands off by itself. These tools run inside the hub, not over HTTP, so they need no paired device; what each may do is checked by the hub itself.
 
 To stop a test hub you started on another port, run `node tools/stop-test-hub.mjs <port>`.
 

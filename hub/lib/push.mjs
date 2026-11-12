@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { questionOpen } from '../public/questions.js';
 import { HUB_THREAD } from '../public/all-projects.js';
 
@@ -22,8 +23,9 @@ export function cardsFor(ev, { decisionOpen = () => true } = {}) {
     return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${ev.agent} is waiting for Allow`, body: `${project} · wants to use ${ev.tool}` }]; // kept minimal on purpose: it can show on a locked phone
   }
   // A project raised to Trusted (decision 45): always told, so a raise nobody made on purpose is seen at once.
+  // Decision 47: with an Undo on the notification where the phone shows actions, and in the thread everywhere.
   if (ev.type === 'project_settings' && ev.permissionMode === 'trusted' && ev.raised) {
-    return [{ kind: 'level', card: `level:${ev.id}`, project, thread: 'orchestrator', title: `${project} was raised to Trusted`, body: project, always: true }];
+    return [{ kind: 'level', card: `level:${ev.id}`, project, thread: 'orchestrator', title: `${project} was raised to Trusted`, body: project, always: true, actions: ['undo'] }];
   }
   if (ev.type !== 'summary') return [];
   const out = [];
@@ -68,7 +70,7 @@ export function stillOpen(card, { approvals, decisionOpen, decisionStatus, event
 // that receives pushes it does not show.
 export function payloadOf(card, close = []) {
   const url = `/?project=${encodeURIComponent(card.project)}&card=${encodeURIComponent(card.card)}`;
-  return { kind: card.kind, title: card.title, body: card.body, card: card.card, project: card.project, url, ...(close.length ? { close } : {}) };
+  return { kind: card.kind, title: card.title, body: card.body, card: card.card, project: card.project, url, ...(card.actions ? { actions: card.actions } : {}), ...(close.length ? { close } : {}) };
 }
 
 // The card an event settles, if a notification may already be out for it.
@@ -129,6 +131,10 @@ export class Push {
 
   has(endpoint) { return this.subs.some(s => s.endpoint === endpoint); }
 
+  // The push devices as the Devices panel lists them: a short id from the endpoint, never the endpoint itself.
+  list() { return this.subs.map(s => ({ id: pushId(s.endpoint), label: s.label || 'A device', added: s.added || '' })); }
+  byId(id) { return this.subs.find(s => pushId(s.endpoint) === String(id || '')) || null; }
+
   presence(client, info, now = Date.now()) {
     if (!client) return;
     if (info.gone) return void this.presences.delete(client);
@@ -160,6 +166,7 @@ export class Push {
   }
 
   async send(payload) {
+    if (!this.subs.length) return 0;   // nothing to reach: no keys made, no library loaded
     const lib = await this.lib();
     const k = await this.keys();
     const opts = { TTL: 6 * 3600, urgency: 'high', vapidDetails: { subject: this.subject, publicKey: k.publicKey, privateKey: k.privateKey } };
@@ -171,9 +178,14 @@ export class Push {
         else console.warn(`Push to ${s.label || 'a device'} failed: ${e.statusCode || ''} ${e.body || e.message}`);
       }
     }));
-    if (gone) { this.subs = this.subs.filter(s => !s.gone); this.save(); }
+    if (gone) {
+      const dropped = this.subs.filter(s => s.gone);
+      this.subs = this.subs.filter(s => !s.gone); this.save();
+      this.onDropped?.(dropped);   // decision 47: a change to the push devices is always told
+    }
     return ok;
   }
 }
 
 function safeJson(file, dflt) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return dflt; } }
+export const pushId = endpoint => createHash('sha256').update(String(endpoint)).digest('hex').slice(0, 16);

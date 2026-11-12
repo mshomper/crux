@@ -3,6 +3,7 @@
 //   node shoot.mjs --out hub.png --url http://127.0.0.1:4801/ --w 1440 --h 900 --view
 // --view shoots just the window (w x h); the default is the whole page height. --dpr 2 for sharp phone shots.
 // --wait ms waits after load (default 1200). --eval "js" runs in the page before the shot. --motion reduce.
+// --ua iphone (or a full user agent) and --standalone (as the home-screen app).
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFile, writeFile, mkdtemp, mkdir, rm } from 'node:fs/promises';
@@ -55,6 +56,9 @@ try {
   await S('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: dpr, mobile: W <= 720 });
   if (W <= 720) await S('Emulation.setTouchEmulationEnabled', { enabled: true });
   if (opt.motion) await S('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: String(opt.motion) }] });
+  // --ua iphone: the page sees an iPhone (its words say Face ID); --standalone: as the home-screen app
+  if (opt.ua) await S('Emulation.setUserAgentOverride', { userAgent: opt.ua === 'iphone' ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1' : String(opt.ua), platform: opt.ua === 'iphone' ? 'iPhone' : undefined });
+  if (opt.standalone) await S('Emulation.setEmulatedMedia', { features: [{ name: 'display-mode', value: 'standalone' }] }).catch(() => {});
   if (opt.noscript) await S('Emulation.setScriptExecutionDisabled', { value: true });   // the page's own scripts are off
   await S('Page.navigate', { url });
   for (let i = 0; i < 100 && !events.some(e => e.method === 'Page.loadEventFired'); i++) await sleep(100);

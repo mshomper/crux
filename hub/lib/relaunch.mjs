@@ -34,6 +34,19 @@ export function testHubFolderError({ noAgents, folders = [] }) {
     : '';
 }
 
+// --test-pair (decision 47): a test hub may start with one fake paired device, so screenshots and tests can make
+// changes. Never the live hub: only on a port other than 4747, with --no-agents (or data in temp) and no real agents,
+// and with its data folder (CRUX_HUB_DATA) inside the system temp folder. Returns the message to print, or ''.
+export function testPairError({ wanted, noAgents, port, env = process.env, tmp = tmpdir() }) {
+  if (!wanted) return '';
+  const norm = s => resolve(String(s)).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+  const tempData = !!env.CRUX_HUB_DATA && (norm(env.CRUX_HUB_DATA) + '/').startsWith(norm(tmp) + '/');
+  if (Number(port) === DEFAULT_PORT || !Number.isInteger(Number(port))) return '--test-pair refused: never on port 4747, the live hub.';
+  if (!noAgents) return '--test-pair refused: only on a test hub with no agents (--no-agents, and CRUX_HUB_AGENTS not 1).';
+  if (!tempData) return '--test-pair refused: the hub\'s data folder (CRUX_HUB_DATA) must be inside the temp folder.';
+  return '';
+}
+
 // A short fingerprint of the page's files (every file under public/, names and contents). It changes whenever
 // any page file does, so an open page can tell that it is out of date.
 export function pageBuild(dir) {
@@ -80,6 +93,24 @@ export function startDetached(spec, { env = process.env, spawnFn = spawn } = {})
     child.unref?.();
     return child;
   } finally { if (typeof out === 'number') closeSync(out); }
+}
+
+// Decision 47: a pairing code is shown only in a window the hub runs in, never written to its log. So a hub with no
+// device paired yet starts in a (minimized) window, on Windows, the way "Crux Hub.cmd" starts it; otherwise detached
+// with no window, as before.
+export function startHub(spec, { window = false, env = process.env, spawnFn = spawn, platform = process.platform } = {}) {
+  if (!window || platform !== 'win32') return startDetached(spec, { env, spawnFn });
+  const q = s => `"${String(s).replace(/"/g, '')}"`;
+  const line = `start "Crux Hub" /min ${q(spec.node)} ${spec.args.map(q).join(' ')}`;
+  const child = spawnFn('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { cwd: spec.cwd, env: { ...env, CRUX_HUB_RESTARTED: '1' }, detached: true, windowsHide: true, windowsVerbatimArguments: true, stdio: 'ignore' });
+  child.unref?.();
+  return child;
+}
+
+// How many real devices are paired with the hub whose data is in <data> (devices.json; the test device never counts).
+export function pairedDevices(env = process.env) {
+  try { const d = JSON.parse(readFileSync(join(dataDir(env), 'devices.json'), 'utf8')); return Array.isArray(d.devices) ? d.devices.filter(x => x && !x.test).length : 0; }
+  catch { return 0; }
 }
 
 // Process ids listening on a TCP port, from `netstat -ano -p TCP` (Windows). Listening sockets are the ones whose
