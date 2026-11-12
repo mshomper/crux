@@ -18,7 +18,11 @@ npm start -- C:/path/to/project-a C:/path/to/project-b
 
 Then open http://localhost:4747. With no folders given, it uses `~/crux/hub.json` (`{ "projects": ["C:/path/a"] }`) or the current folder.
 
-Options: `--port 4747`, `--retire-at 60` (orchestrator hands off at this % of context).
+Options: `--port 4747`, `--retire-at 60` (orchestrator hands off at this % of context), `--no-agents` (a test hub: messages are kept but no agent starts; also automatic when `CRUX_HUB_DATA` points inside the temp folder, and `CRUX_HUB_AGENTS=1` overrides both).
+
+The **board** (top right) groups the memory into sections with counts: what waits for your call is open, everything else folds to one line until you open it, and the filter at the top finds words or ids (`D31`, `R5`) across all of it.
+
+**Keyboard:** in Needs you, click or Tab to a card, then use the arrow keys (or J and K) to move between cards. A decision's option letter picks it, A allows and D denies a permission request, and Enter jumps into a question's reply box.
 
 In the box at the bottom, Enter sends; Alt+Enter or Shift+Enter starts a new line. The box grows with the text, then scrolls inside. On a phone, the return key sends, as before.
 

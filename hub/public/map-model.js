@@ -54,7 +54,7 @@ export class MapModel {
     const list = all.filter(a => keep.has(a.name)).map(a => ({
       id: a.name, kind: a.role === 'orchestrator' ? 'ghost' : 'worker', name: a.name, thread: a.thread, state: a.state || 'asleep',
       handoff: a.retiring || null, predecessor: a.predecessor || null,
-      ctx: a.contextPct, needs: a.role === 'worker' && needs.has(a.thread), goal: a.role === 'orchestrator' ? 'Answering its successor before it retires' : goalOf(a),
+      ctx: a.contextPct, needs: a.role === 'worker' && needs.has(a.thread), asks: a.role === 'worker' ? needs.get(a.thread) || 0 : 0, goal: a.role === 'orchestrator' ? 'Answering its successor before it retires' : goalOf(a),
       activity: this.activityOf(a.name),
       model: a.model || a.modelSeen || null, effort: a.effort || null, type: a.type || null,   // decision 20
       traffic: (traffic.get(a.thread) || 0) / maxTraffic
@@ -83,11 +83,13 @@ export class MapModel {
 
   openDecisions() { return (this.project?.board?.decisions || []).filter(d => d.status === 'open' || d.status === 'found'); }
 
+  // thread -> how many things in it wait for you (permission requests and open questions).
   needsByThread() {
-    const s = new Set();
-    for (const a of this.pendingApprovals()) s.add(a.thread);
-    for (const q of this.openQuestions()) s.add(q.thread);
-    return s;
+    const m = new Map();
+    const add = (t, n = 1) => m.set(t, (m.get(t) || 0) + n);
+    for (const a of this.pendingApprovals()) add(a.thread);
+    for (const q of this.openQuestions()) add(q.thread, q.open.length);
+    return m;
   }
 
   pendingLessons() {

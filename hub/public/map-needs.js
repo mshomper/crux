@@ -74,8 +74,8 @@ export class NeedsPopover {
         ${tags ? `<div class="np-tags">${tags}</div>` : ''}
         <div class="np-acts">
           <button class="np-btn primary" data-approve="${esc(ev.approval)}">${svg('check')}Allow</button>
-          ${ev.always ? `<button class="np-btn" data-approve="${esc(ev.approval)}" data-always title="Always: ${esc(ev.always.join('; '))}">${svg('check')}Always</button>` : ''}
           <button class="np-btn" data-deny="${esc(ev.approval)}">${svg('x')}Deny</button>
+          ${ev.always ? `<button class="np-always" data-approve="${esc(ev.approval)}" data-always title="Allows it now and saves the rule: ${esc(ev.always.join('; '))}">Always allow</button>` : ''}
         </div>
       </article>`;
     }).join('');

@@ -54,6 +54,7 @@
     <section id="feed" class="feed" aria-live="polite"></section>
     <div id="activity" class="activity"></div>
     <form id="composer" class="composer">
+      <div id="quick" class="quick" role="group" aria-label="Quick replies" hidden></div>
       <div id="tray" class="tray" hidden></div>
       <div id="attach-error" class="attach-error" role="alert" hidden></div>
       <div class="compose-row">
@@ -68,9 +69,13 @@
 
   <aside class="board" id="board" hidden>
     <header class="board-head">
-      <h2>Memory board</h2>
-      <button class="btn ghost icon-only" id="close-board" aria-label="Close board"><svg class="icon"><use href="#i-x"/></svg></button>
+      <h2><span class="hud-k">Memory</span>Board</h2>
+      <span id="board-total" class="board-total"></span>
+      <button class="btn ghost icon-only" id="close-board" aria-label="Close board" title="Close the board"><svg class="icon"><use href="#i-x"/></svg></button>
     </header>
+    <div class="board-tools">
+      <label class="board-filter"><svg class="icon"><use href="#i-search"/></svg><input id="board-filter" type="search" placeholder="Filter: words, D0031, R005" aria-label="Filter the board" autocomplete="off" spellcheck="false"></label>
+    </div>
     <div id="board-body" class="board-body"></div>
   </aside>
 </div>
@@ -100,6 +105,21 @@
     </div>
   </form>
 </dialog>
+
+<dialog id="confirm" class="dialog hud-confirm" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <span class="hud-k" id="confirm-k">Confirm</span>
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-body" class="muted"></p>
+    <div class="row end">
+      <button class="btn ghost" value="cancel">Cancel</button>
+      <button class="btn primary" value="ok" id="confirm-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="alert" hidden></div>
+<div id="link" class="link-light" role="status" aria-live="polite" hidden><i></i><span>Link lost · reconnecting</span></div>
 
 <dialog id="viewer" class="viewer" aria-label="Image">
   <div class="viewer-bar">
@@ -133,6 +153,7 @@
     <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17.5l5-4.5 3.5 3 3-2.5 4.5 4"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.5" cy="12" r="1.3"/></symbol>
     <symbol id="i-restart" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></symbol>

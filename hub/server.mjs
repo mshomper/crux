@@ -13,7 +13,7 @@ import { decodeDataUrl, MAX_BYTES } from './lib/attachments.mjs';
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile } from './lib/relaunch.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents } from './lib/relaunch.mjs';
 import { randomUUID } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -23,6 +23,9 @@ const args = process.argv.slice(2);
 const flag = (name, dflt) => { const i = args.indexOf(name); if (i < 0) return dflt; const v = args[i + 1]; args.splice(i, 2); return v; };
 const port = Number(flag('--port', process.env.CRUX_HUB_PORT || 4747));
 const retireAt = Number(flag('--retire-at', 60));
+// Test hubs (--no-agents, or hub data in a temp folder) log messages but start no real agents.
+const noAgents = testHubWithoutAgents({ args, env: process.env });
+if (args.includes('--no-agents')) args.splice(args.indexOf('--no-agents'), 1);
 
 let projects = args.map(a => resolve(a));
 const cfg = join(homedir(), 'crux', 'hub.json');
@@ -36,7 +39,8 @@ if (!projects.length) projects = [process.cwd()];
 
 // Hub settings (decision 21: routePermissions, permissionTimeoutSec) start from hub.json and are saved in ~/.crux-hub.
 const settings = new HubSettings({ initial: hubCfg });
-const hub = new Hub({ projects, retireAt, defaults: hubCfg.defaults, settings });
+const hub = new Hub({ projects, retireAt, defaults: hubCfg.defaults, settings, noAgents });
+if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
 
 // Phone notifications (decision 19): a card that needs you becomes a push to every subscribed phone.
 const push = new Push();
@@ -87,7 +91,7 @@ async function body(req, limit = 1e6) {
 }
 
 const routes = {
-  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT }),
+  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents }),
   // Restart from the hub's own menu: answer first, then hand over to a fresh hub started the same way (M010).
   'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },
   // The off switch for decision 21: false sends every permission request to you.

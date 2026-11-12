@@ -171,16 +171,9 @@ export class HudPainter {
       }
     }
 
-    // labels around the core, full map only
+    // the callout beside the core, full map only (the floating handoff label is gone; M013 reworks the core)
     const la = clamp((e - 0.55) / 0.45, 0, 1) * b;
-    if (la > 0) {
-      const tx = x + Math.cos(ha) * (R2 + 16), ty = y + Math.sin(ha) * (R2 + 16);
-      c.font = `600 9.5px ${MONO}`;
-      c.textAlign = Math.cos(ha) > 0.2 ? 'left' : Math.cos(ha) < -0.2 ? 'right' : 'center';
-      c.fillStyle = rgb(COLORS.amber, 0.85 * la);
-      c.fillText(`HANDOFF ${info.retireAt}%`, tx, ty + 3);
-      this.callout(L, info, col, la, vacant);
-    }
+    if (la > 0) this.callout(L, info, col, la, vacant);
   }
 
   // A leader-line callout off the core: generation and context used, placed where no spoke runs.
@@ -233,9 +226,12 @@ export class HudPainter {
       const st = info.get(id);
       if (!st) continue;
       const fade = st.fade ?? 1;
-      // A worker's ring is its model's hue (decision 20); red, and the handoff gold, still win.
+      // A worker's ring is its model's hue (decision 20), also while it waits on you: only You turns red
+      // (decision 31; a worker shows a red count badge instead). Errors are amber, a handoff gold.
       const hue = st.kind === 'worker' ? rgb01(hueOf(st.model)) : null;
-      const col = st.needs || st.state === 'error' ? COLORS.red
+      const youRed = st.needs && st.kind !== 'worker';
+      const col = youRed ? COLORS.red
+        : st.state === 'error' ? COLORS.amber
         : st.kind === 'ghost' || st.handoff ? TONE.handoff
         : hue ? hue
         : st.kind === 'board' ? COLORS.violet
@@ -263,7 +259,7 @@ export class HudPainter {
         c.strokeStyle = rgb(col, 0.9 * fade);
         c.beginPath(); c.arc(s.x, s.y, R, -Math.PI / 2, -Math.PI / 2 + TAU * clamp(st.ctx / 100, 0, 1)); c.stroke();
       }
-      if (st.needs) {
+      if (youRed) {
         const k = 0.5 + 0.5 * Math.sin(t * 4.2);
         c.save();
         c.shadowColor = rgb(COLORS.red, 0.9); c.shadowBlur = 14;
