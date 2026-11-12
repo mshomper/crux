@@ -158,8 +158,9 @@ export function unansweredQuestions(events, { thread = 'orchestrator', decisionS
 
 // ---------- 9. board tidy-ups ----------
 // Active memos that later text calls done, merged, built, retired or superseded: one sentence naming the memo and
-// one of those words, in a later entry, handoff or round summary. Suggestions only; retiring needs your OK.
-const DONE = /\b(done|built|merged|superseded|supersedes|replaced?|replaces|retired?|finished|complete[d]?|obsolete|no longer needed|can be retired)\b/i;
+// one of those words, in a later entry, handoff or round summary. Suggestions only; retiring needs your OK. Memos
+// already marked done (or superseded, or retired) are not active, so they are never suggested again.
+const DONE =/\b(done|built|merged|superseded|supersedes|replaced?|replaces|retired?|finished|complete[d]?|obsolete|no longer needed|can be retired)\b/i;
 export function tidyUps(board, events) {
   const memos = board.entries().filter(e => e.kind === 'memo' && e.status === 'active');
   if (!memos.length) return [];

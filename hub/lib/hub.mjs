@@ -850,7 +850,7 @@ export class Hub {
       const lessons = this.pendingLessons(p);
       if (lessons.length) lines.push('Profile lessons waiting for {{who}}:', ...lessons.map(e => `- ${e.text}`));
       const tidy = tidyUps(p.board, evs);
-      if (tidy.length) lines.push(`Suggested tidy-ups (memos that look done or superseded; retire them only with {{who}}'s OK):`, ...tidy.map(t => `- ${t.id} ${t.title}. ${t.why}`));
+      if (tidy.length) lines.push(`Suggested tidy-ups (memos that look done or superseded; mark finished ones done with mark_entry_done, retire others only with {{who}}'s OK):`, ...tidy.map(t => `- ${t.id} ${t.title}. ${t.why}`));
       const n = p.board.index().split('\n').length;
       if (n > INDEX_LINES_MAX) lines.push(`Board index: ${n} lines, over ${INDEX_LINES_MAX}. Propose a tidy to {{who}} (retire done memos, merge old ones).`);
     }

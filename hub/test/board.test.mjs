@@ -15,7 +15,7 @@ test('entries fall into sections; nothing is dropped, superseded ones go to Hist
   const s = Object.fromEntries(groupBoard(board).map(x => [x.key, x.items.map(i => i.id)]));
   assert.deepEqual(s, {
     waiting: ['D0032'], requirements: ['R005'], conventions: ['C002'], decided: ['D0031'], memos: ['M008'],
-    handoffs: ['H002', 'H001'], parked: ['D0040'], history: ['D0005', 'R004']
+    handoffs: ['H002', 'H001'], parked: ['D0040'], history: ['D0005', 'R004'], done: []
   });
 });
 
