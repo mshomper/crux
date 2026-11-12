@@ -1,9 +1,13 @@
 # 0042 Where do you see every project's Needs you and agents at once?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: ui
 - Builds on: 0012, 0017, 0031, 0032, 0039
+
+## Decision
+
+**A: An All projects entry that opens as a column.** A hub-wide row above the project switcher, pinnable like Needs you. It opens as a column: a count bar per project, then Needs you grouped by project with the real cards answerable in place, then every orchestrator and agent with its model colour, state, context ring (60% mark) and red counts. The map strip's Needs you counter shows the total across projects and opens it.
 
 ## Context
 
@@ -11,7 +15,7 @@ Today Needs you and the agent list are per project, so with several projects in 
 
 ## Options
 
-### A: An All projects entry that opens as a column (recommended)
+### A: An All projects entry that opens as a column (chosen) (recommended)
 
 A hub-wide row above the project switcher, pinnable like Needs you. It opens as a column: a count bar per project, then Needs you grouped by project with the real cards answerable in place, then every orchestrator and agent with its model colour, state, context ring (60% mark) and red counts. The map strip's Needs you counter shows the total across projects and opens it.
 - Pro: Just another column, so it sits beside a conversation and fits the pinned columns already built

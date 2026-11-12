@@ -7,7 +7,7 @@
  "lenses": [
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "context": "Today Needs you and the agent list are per project, so with several projects in the hub (three now) Matt has to switch projects to see what waits on him. He asked for one master view of every Needs you item and every orchestrator and agent across the projects the hub runs (not the wider roll-up). Answering a card there should work without switching project. Mockups were made on the real hub page with fake projects, at 1920 and 390 wide. Builds on decision 12 (main screen), 17 (live map strip), 31 (red is Matt's call), 32 (phone opens on Needs you) and 39 (split pinned columns, Needs you pinnable).",
  "depends_on": [
   12,
@@ -105,9 +105,9 @@
  "recommended": "A",
  "recommendation": "A reuses the cards and columns that already exist, is the only option that sits beside a conversation, and is the smallest build. It borrows one thing from C: the map strip's Needs you counter shows the total across projects and opens All projects.",
  "confidence": "strong",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-12",
  "superseded_by": null,
  "challenge": null,
  "settles": []
