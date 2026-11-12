@@ -7,14 +7,23 @@ self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Crux Hub', body: e.data?.text() || '' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'Crux Hub', {
-    body: d.body || 'Something needs you.',
-    tag: d.card || undefined, // the same card never stacks twice
-    icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
-    data: { url: d.url || '/' }
-  }));
+  e.waitUntil((async () => {
+    await closeCards(d.close);   // cards settled since their notification went out leave the lock screen
+    await self.registration.showNotification(d.title || 'Crux Hub', {
+      body: d.body || 'Something needs you.',
+      tag: d.card || undefined, // the same card never stacks twice
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      data: { url: d.url || '/' }
+    });
+  })());
 });
+
+// Close the notifications for these cards (their tags are the card ids).
+async function closeCards(tags) {
+  if (!Array.isArray(tags) || !tags.length) return;
+  for (const n of await self.registration.getNotifications()) if (tags.includes(n.tag)) n.close();
+}
 
 // Tapping opens the card: reuse an open hub window if there is one, else open the hub at the card.
 self.addEventListener('notificationclick', e => {
