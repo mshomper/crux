@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Phone screens</title>
+<!-- A review sheet: the mock at phone width (390 x 844), five screens side by side. ?look=a|b|c -->
+<style>
+  html,body{margin:0;background:#020407}
+  body{display:flex;gap:22px;padding:22px;width:max-content}
+  iframe{width:390px;height:844px;border:1px solid #2a3442;border-radius:26px;background:#070b11}
+</style>
+</head>
+<body>
+<script>
+  const look = new URLSearchParams(location.search).get('look') || 'a';
+  for (const at of ['', '#different', '#crux', '#hub', '#setup']) {
+    const f = document.createElement('iframe');
+    f.src = `index.html?look=${look}${at}`;
+    document.body.append(f);
+  }
+</script>
+</body>
+</html>
