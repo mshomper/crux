@@ -9,11 +9,22 @@ export const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2,
 
 const STRIP_SIDE = 214;   // room for the readout blocks at each end of a wide strip
 
+// On a phone the plan meters get a row of their own under the map's lane, so they never share a line with the
+// stations. The row's height here must match usage.css (a test checks it).
+export const PHONE_METER_ROW = 15;
+
+// The part of the strip's slot the map itself may draw in: all of it, minus the meters' row on a phone.
+export function stripLane(rect, phone, meters) {
+  const { left, top, width, height } = rect;
+  return { left, top, width, height: phone && meters ? Math.max(0, height - PHONE_METER_ROW) : height };
+}
+
 export function stripLayout(rect, workers, phone) {
   const { left, top, width: w, height: h } = rect;
   const at = new Map();
   const cx = left + w / 2, cy = top + h / 2;
-  const coreR = phone ? h * 0.26 : h * 0.25;
+  // a phone's lane is low: the core is sized so its tick scale stays inside it (the outer scale is not drawn there)
+  const coreR = phone ? h * 0.3 : h * 0.25;
   const wide = !phone && w >= 980;
   const side = phone ? 10 : wide ? STRIP_SIDE : 18;
   const sr = phone ? 6 : 12;
@@ -23,7 +34,7 @@ export function stripLayout(rect, workers, phone) {
   at.set('board', { x: boardX, y: sy, r: sr });
 
   const right = workers.filter((_, i) => i % 2 === 0), leftSide = workers.filter((_, i) => i % 2 === 1);
-  const gap = coreR * (phone ? 2.1 : 2.3);
+  const gap = coreR * (phone ? 1.9 : 2.3);
   let spacing = Infinity;
   const place = (list, from, to) => {
     const n = list.length;

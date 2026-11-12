@@ -942,7 +942,7 @@ document.addEventListener('click', e => {
     const p = proj();
     return act(async () => { await api('/api/settings', { project: p.name, permissionMode: p.permissionMode === 'auto' ? 'standard' : 'auto' }); await load(); });
   }
-  const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return selectThread('needs'); }
+  const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return selectThread('orchestrator'); }   // a project opens on its orchestrator's chat (Matt, 2026-11-11)
   // A decision on the board opens as a card here, in a HUD panel, not on another page (M008 12).
   const od = e.target.closest('[data-open-decision]');
   if (od) { const p = proj(); return openPanel(decisionCard(p, p.board.decisions.find(d => String(d.id) === od.dataset.openDecision)), `Decision ${od.dataset.openDecision}`); }

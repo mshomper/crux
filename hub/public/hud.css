@@ -185,6 +185,26 @@ html[data-hud-hold] .hud-boot,html[data-hud-hold] .hud-boot *,html[data-hud-hold
   html[data-hud] .card:is(.decision:not(.done),.question,.approval:not(.answered),.lessons){--br:14px}
   html[data-hud] .title-block h1{font-size:12px;letter-spacing:.14em}
   .hud-card{width:calc(100vw - 16px)}
+  /* the plan meters' own row under the strip (usage.css): a flat instrument row, no rounded box */
+  html[data-hud] .usage-meters{border-radius:0}
+  html[data-hud] .usage-meters:is(:hover,:focus-visible,[aria-expanded="true"]){border-color:var(--hud-dim)}
+  /* Back: the same framed box as the buttons on the right, with air before the name, so it reads as a button
+     and not as a mark squeezed against the title */
+  html[data-hud] .back{flex:none;width:46px;height:46px;padding:0;margin-right:6px;justify-content:center;border:1px solid var(--hud-edge);border-radius:3px;background:rgba(10,16,24,.7);color:var(--hud-dim)}
+  html[data-hud] .back:active{color:var(--hud-ice);border-color:var(--hud-cyan)}
+  html[data-hud] .head-actions{flex:none}
+}
+/* the narrowest phones: every pixel goes to the thread's name and its model chip, so neither is cut off */
+@media (max-width:360px){
+  html[data-hud] .main-head{padding-left:8px;padding-right:8px}
+  html[data-hud] .back{width:44px;margin-right:4px}
+  html[data-hud] .title-block h1::before{content:none}
+  html[data-hud] .main-head .mchip{gap:4px;padding:0 6px 0 7px}
+  html[data-hud] .main-head .mchip > .icon:last-child{display:none}
+}
+/* 320px: the chip is its model's robot, hue and effort pips; a name cut to "Fab..." says less than none (it is in the menu) */
+@media (max-width:340px){
+  html[data-hud] .main-head .mchip .mname{width:0;margin-left:-4px}   /* kept at no width, so the chip keeps its height */
 }
 
 /* ---------- reduced motion: the frame stays, nothing moves ---------- */
