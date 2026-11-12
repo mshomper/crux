@@ -127,8 +127,9 @@ export class Conversation {
     if (this.subHtml !== h.sub) { this.subHtml = h.sub; this.sub.innerHTML = h.sub; }
     this.retireBtn.hidden = !h.retire;
     this.finishBtn.hidden = !h.finish;
-    this.input.disabled = !!h.retired;
-    this.attachBtn.disabled = !!h.retired;
+    // No box to write in (a retired agent, or All projects): drops, pastes and focus never land in it.
+    this.input.disabled = !!h.retired || !!h.noBox;
+    this.attachBtn.disabled = !!h.retired || !!h.noBox;
     // The hint fits its box on one line (M008 9, phone pass): one word on a phone, the thread's name in a narrow column.
     this.input.placeholder = composerHint({ thread: this.thread, retired: !!h.retired, narrow: o.phone, fine: o.fine, compact: o.narrow });
     this.renderPin(o);

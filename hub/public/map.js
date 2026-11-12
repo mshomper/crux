@@ -195,8 +195,9 @@ export class LiveMap {
   // ---------- data in ----------
   set retireAt(v) { if (v) this.model.retireAt = Number(v); }
 
-  // hub: { total, projects } across the hub (decision 42): with more than one project the Needs you counter
-  // shows the total and opens All projects; the You station and the telemetry stay this project's.
+  // hub: { total, projects, approvals } across the hub (decision 42): with more than one project the Needs you counter
+  // and the You station (its count and its popover) show every project and open All projects; the core and the
+  // telemetry stay this project's.
   update(project, pending, hub = null) {
     this.hub = hub;
     this.model.setProject(project, pending);
@@ -216,10 +217,11 @@ export class LiveMap {
     const needs = this.model.needsCount();
     const board = this.model.boardCounts();
     this.info = new Map(list.map(w => [w.id, w]));
-    this.info.set('you', { id: 'you', kind: 'you', name: 'You', thread: 'needs', state: needs ? 'needs' : 'idle', needs: needs > 0, traffic: 0.5, sub: needs ? `${needs} waiting` : 'all clear' });
+    const you = this.multi ? this.hub.total : needs;
+    this.info.set('you', { id: 'you', kind: 'you', name: 'You', thread: this.multi ? 'all' : 'needs', state: you ? 'needs' : 'idle', needs: you > 0, traffic: 0.5, sub: you ? `${you} waiting` : 'all clear' });
     this.info.set('board', { id: 'board', kind: 'board', name: 'Board', thread: 'board', state: 'idle', needs: false, traffic: 0.35, sub: `${board.decisions} decision${board.decisions === 1 ? '' : 's'} · ${board.entries} entr${board.entries === 1 ? 'y' : 'ies'}` });
     this.syncStations();
-    this.needsPop.set(project, pending, needs);
+    this.needsPop.set(project, pending, needs, this.multi ? { approvals: this.hub.approvals || [], total: this.hub.total } : null);
     const youEl = this.stationEls.get('you');
     if (youEl) this.needsPop.attach(youEl);
     this.syncText(core, needs);

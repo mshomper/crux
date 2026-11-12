@@ -51,7 +51,8 @@ const proj = () => S.projects.find(p => p.name === S.current) || S.projects[0];
 // Phone width, and whether there is a mouse (no keyboard popping up when a thread opens, no focus jumps).
 const phoneMq = matchMedia('(max-width: 720px)');
 const fineMq = matchMedia('(pointer: fine)');
-const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches) el?.focus(); };
+// A box that is closed or hidden (a retired agent's thread, All projects) is never focused.
+const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches && el && !el.disabled && !el.closest('[hidden]')) el.focus(); };
 // The seam between the list and the conversation widens the list on a desk with a mouse (side-width.js).
 new SideResizer({ app: $('#app'), grip: $('#side-grip'), canResize: matchMedia('(min-width: 721px) and (pointer: fine)'), onResize: () => placeModelMenu() });
 const map = new LiveMap($('#hud'), { open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t) });
@@ -87,6 +88,7 @@ async function load() {
   S.models = models || [];
   S.projects = projects;
   S.pending = new Set(projects.flatMap(p => p.pendingApprovals));
+  S.hub = null;
   // Drafts for questions that are no longer waiting are let go.
   const live = new Set(projects.flatMap(p => openQuestions(p).flatMap(q => q.open.map(x => draftKey(q.id, x.i)))));
   for (const k of Object.keys(S.drafts)) if (!live.has(k)) delete S.drafts[k];
@@ -110,6 +112,7 @@ function connect() {
     if (ev.type === 'plan_usage') { if (!ev.logged) usageUI.setPlan(ev); return; }
     const p = S.projects.find(x => x.name === ev.project);
     if (!p) return;
+    S.hub = null;
     if (ev.logged) {
       p.events.push(ev);
       if (ev.type === 'approval') S.pending.add(ev.approval);
@@ -349,9 +352,11 @@ function timeOf(ts) { const d = new Date(ts); return d.toLocaleTimeString([], { 
 
 // ---------- render: sidebar ----------
 // Everything in a project that waits for you: decisions, permission cards, questions, profile lessons (one card).
-const needsCount = p => AP.needsCount(p, S.pending);
-// Everything that waits for you, in every project (All projects, decision 42).
-const hubTotal = () => S.projects.reduce((n, p) => n + needsCount(p), 0);
+// Everything that waits for you, in every project (All projects, decision 42): worked out once per render and shared
+// by the hub row, the column, its header, the map counter and each project's counts. render() starts it afresh.
+const hub = () => S.hub || (S.hub = AP.hubView(S.projects, S.pending));
+const needsCount = p => hub().groups.find(g => g.p === p)?.count ?? AP.needsCount(p, S.pending);
+const hubTotal = () => hub().total;
 // What waits for you in one thread (a column's red count, decision 39): its permission cards and questions, and the
 // open decisions its round summaries asked for. Needs you counts everything in the project; All projects, every project.
 function waitingIn(p, t) {
@@ -707,7 +712,7 @@ function agentRow(p, a) {
     ${AP.contextRing(a, { hue, retireAt: S.retireAt || 60 })}${n ? `<span class="colbadge" title="${n} waiting for your call">${n}</span>` : ''}</button>`;
 }
 function hubFeed() {
-  const v = AP.hubView(S.projects, S.pending);
+  const v = hub();
   const cards = ({ p, waiting: w }) => w.approvals.map(ev => approvalCard(ev, p)).join('') + w.questions.map(ev => questionCard(ev, p)).join('')
     + (w.lessons.length ? lessonsCard(w.lessons) : '') + w.decisions.map(d => decisionCard(p, d)).join('');
   let html = countBar(v.total, v.kinds);
@@ -722,7 +727,7 @@ function hubFeed() {
 function feedFor(t) {
   const p = proj();
   if (!p) return `<div class="empty"><h2>No projects</h2><p>Start the hub with a project folder: <code>node server.mjs C:/path/to/project</code></p></div>`;
-  if (t === AP.HUB_THREAD) return hubFeed();
+  if (t === AP.HUB_THREAD) { const v = hub(); return v.html ??= hubFeed(); }   // drawn once per render, however many asks
   if (t === 'needs') {
     const ds = openDecisions(p), aps = pendingApprovals(p), qs = openQuestions(p);
     const withRec = ds.filter(d => d.status === 'open' && d.recommended);
@@ -775,7 +780,7 @@ function quickReplies(p) {
 function headFor(t) {
   const p = proj();
   if (t === AP.HUB_THREAD) {   // All projects (decision 42): no message box, read from the top, red count = everything
-    const v = AP.hubView(S.projects, S.pending);
+    const v = hub();
     return { title: 'All projects', sub: `<span>${v.projects} project${v.projects === 1 ? '' : 's'} · ${v.agents} agents · ${v.working} working</span>`,
       retired: false, retire: false, finish: false, chips: [], activity: '', noBox: true, top: true, waiting: v.total };
   }
@@ -844,13 +849,16 @@ function renderBoard() {
 }
 
 function render() {
+  S.hub = null;   // the state may have changed: every project's counts are worked out again, once, for this render
   // The board first: whether it is open decides the width the columns share.
   $('#app').classList.toggle('with-board', !$('#board').hidden);
   $('#open-board').classList.toggle('on', !$('#board').hidden);
   $('#board-filter').placeholder = filterHint({ narrow: phoneMq.matches });
   renderProjects(); cols.render(); renderThreads(); renderBoard(); renderModelMenu();
   // Decision 42: the strip's Needs you counter counts every project and opens All projects (more than one project).
-  map.update(proj(), pendingForYou(proj()), { total: hubTotal(), projects: S.projects.length });
+  // The You station's popover lists every project's permission requests then (each answered by its id).
+  const v = hub();
+  map.update(proj(), pendingForYou(proj()), { total: v.total, projects: v.projects, approvals: v.groups.flatMap(g => g.waiting.approvals.map(ev => ({ ...ev, project: g.name }))) });
   usageUI.draw();
 }
 
@@ -877,7 +885,16 @@ function toast(msg, tone = 'warn') {
 }
 $('#toast').addEventListener('click', () => { $('#toast').hidden = true; });
 
+// Every project switch comes through here (the project menu, a row or Open thread in All projects, a notification):
+// that project's columns come back, the menus close and, on a phone, the list makes way for the conversation.
+function switchProject(name) {
+  if (!name || name === S.current || !S.projects.some(p => p.name === name)) return false;
+  S.current = name; store.set('project', name);
+  openProject();
+  return true;
+}
 function openProject() {
+  S.projMenu = false; closeHubMenu();
   cols.projectOpened(); S.mmenu = null;
   $('#app').classList.remove('show-side');
   render();
@@ -898,7 +915,7 @@ function selectThread(t) {
 // A thread in a given project (a row or "Open thread" in All projects, decision 42): switch to that project the way
 // the project menu does (its pins come back; All projects stays pinned everywhere), then open the thread.
 function openThreadIn(p, t) {
-  if (p && p.name !== S.current && t !== AP.HUB_THREAD) { S.current = p.name; store.set('project', S.current); cols.projectOpened(); S.mmenu = null; }
+  if (p && t !== AP.HUB_THREAD) switchProject(p.name);
   selectThread(t);
 }
 
@@ -908,7 +925,7 @@ function openThreadIn(p, t) {
 // (Needs you first), so the layout does not change; otherwise Needs you (or the card's thread) opens by the usual
 // rule. The lock-on goes to the copy in that one column only.
 function openCard(project, card) {
-  if (project && S.projects.some(p => p.name === project)) { S.current = project; store.set('project', project); }
+  switchProject(project);
   const p = proj();
   if (!p) return;
   const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];

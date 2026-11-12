@@ -8,6 +8,7 @@ import { HUB_THREAD } from './all-projects.js';
 
 const STORE = 'columns';     // { [project]: pins state }
 const HUB_PIN = 'hub-pinned';   // whether All projects (decision 42) is pinned: one answer for the whole hub
+const HUB_OPT = { extra: HUB_THREAD };   // All projects never costs another column its place (pins.js)
 const NARROW = 760;          // a column narrower than this, beside others, gets the short message-box hint
 const key = (p, t) => `${p}::${t}`;
 const icon = id => `<svg class="icon"><use href="#i-${id}"/></svg>`;
@@ -48,7 +49,7 @@ export class Columns {
   get project() { return this.host.proj()?.name || ''; }
   get state() {
     const p = this.project;
-    if (!this.checked.has(p)) { this.states[p] = P.normalize(this.states[p], this.host.startThread()); this.checked.add(p); }
+    if (!this.checked.has(p)) { this.states[p] = P.normalize(this.states[p], this.host.startThread(), HUB_OPT); this.checked.add(p); }
     if (this.synced !== p) { this.synced = p; this.syncHub(p); }
     return this.states[p];
   }
@@ -61,11 +62,13 @@ export class Columns {
     if (hub !== this.hubPinned) { this.hubPinned = hub; this.store.set(HUB_PIN, hub); }
   }
   // All projects is one column for the whole hub (decision 42): pinned in one project means pinned in every project.
-  // Another project catches up the first time it is drawn after a switch, by the usual pin and unpin rules (R008, R010).
+  // Another project catches up the first time it is drawn after a switch. Catching up never unpins or closes one of
+  // that project's columns: with three there already, All projects is a fourth and the least recently used folds to
+  // the rail (pins.js, the extra thread).
   syncHub(p) {
     const s = this.states[p];
     if (P.isPinned(s, HUB_THREAD) === this.hubPinned) return;
-    this.states[p] = this.hubPinned ? P.pin(s, HUB_THREAD) : P.unpin(s, HUB_THREAD);
+    this.states[p] = this.hubPinned ? P.pin(s, HUB_THREAD, HUB_OPT) : P.unpin(s, HUB_THREAD);
     this.store.set(STORE, this.states);
   }
   // On a phone (pins ignored) with every column pinned, a thread you open is shown on its own without touching the
@@ -79,9 +82,9 @@ export class Columns {
     const s = this.state;
     if (this.phoneMq.matches && !P.isOpen(s, t) && s.cols.every(c => c.pinned)) { this.phoneT = { p: this.project, t }; return; }
     this.phoneT = null;
-    this.set(P.open(s, t, this.shown())); this.markOpened(t);
+    this.set(P.open(s, t, this.shown(), HUB_OPT)); this.markOpened(t);
   }
-  pin(t) { const was = this.isOpen(t); this.set(P.pin(this.state, t)); if (!was) this.markOpened(t); }
+  pin(t) { const was = this.isOpen(t); this.set(P.pin(this.state, t, HUB_OPT)); if (!was) this.markOpened(t); }
   unpin(t) { this.set(P.unpin(this.state, t)); }
   close(t) { this.set(P.close(this.state, t)); }
   showFolded(t) { this.set(P.show(this.state, t, this.shown())); }
@@ -107,7 +110,7 @@ export class Columns {
   // threads (Needs you, the orchestrator, every agent's thread, retired ones included). All projects is valid everywhere.
   prune(valid) {
     const ok = new Set([...valid, HUB_THREAD]), s = this.state;
-    const next = P.prune(s, ok, this.host.startThread());
+    const next = P.prune(s, ok, this.host.startThread(), HUB_OPT);
     if (next !== s) this.set(next);
     if (this.phoneT && !ok.has(this.phoneT.t)) this.phoneT = null;
   }

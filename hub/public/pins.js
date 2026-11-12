@@ -14,13 +14,19 @@ export const RAIL_W = 56;     // the slim rail that holds pinned threads with no
 
 export const initial = (t = 'needs') => ({ cols: [{ t, pinned: false }], kb: t, recent: [t] });
 
+// `extra` (an option on the functions below): a thread that does not count towards MAX_COLS, so adding it never
+// costs another column its place. All projects (decision 42) is pinned hub-wide: when a project already has three
+// columns it becomes a fourth, and the least recently used one folds to the rail (layout), never unpinned.
+const counted = (cols, extra) => cols.filter(c => c.t !== extra).length;
+
 // A stored state read back: anything broken or out of shape falls back to one loose column on `fallback`.
-export function normalize(raw, fallback = 'needs') {
+export function normalize(raw, fallback = 'needs', { extra = null } = {}) {
   const seen = new Set();
+  let n = 0;
   let cols = (Array.isArray(raw?.cols) ? raw.cols : [])
     .filter(c => c && typeof c.t === 'string' && c.t && !seen.has(c.t) && seen.add(c.t))
     .map(c => ({ t: c.t, pinned: !!c.pinned }))
-    .slice(0, MAX_COLS);
+    .filter(c => c.t === extra || n++ < MAX_COLS);
   // only one loose column: any extra ones become pinned (they were open; keep them open)
   let loose = 0;
   cols = cols.map(c => c.pinned || loose++ === 0 ? c : { ...c, pinned: true });
@@ -81,14 +87,18 @@ const besideKb = (cols, kb, col) => { const at = cols.findIndex(c => c.t === kb)
 // - a loose column is open: the thread takes its place, as the single conversation always did;
 // - every column is pinned and there are fewer than three: it opens as a new column beside the keyboard column;
 // - three pinned: it takes the place of the column that has the keyboard (that thread is unpinned).
-export function open(s, t, shown = MAX_COLS) {
+export function open(s, t, shown = MAX_COLS, { extra = null } = {}) {
   if (isOpen(s, t)) return show(s, t, shown);
   const loose = s.cols.findIndex(c => !c.pinned);
   let cols, recent = s.recent;
   // (A project switch does not come through here: switching projects never changes pins; see Columns.projectOpened.)
   if (loose >= 0) { recent = recent.filter(x => x !== s.cols[loose].t); cols = s.cols.map((c, i) => i === loose ? { t, pinned: false } : c); }
-  else if (s.cols.length < MAX_COLS) cols = besideKb(s.cols, s.kb, { t, pinned: false });
-  else { recent = recent.filter(x => x !== s.kb); cols = s.cols.map(c => c.t === s.kb ? { t, pinned: false } : c); }
+  else if (counted(s.cols, extra) < MAX_COLS) cols = besideKb(s.cols, s.kb, { t, pinned: false });
+  else {
+    // three pinned: the keyboard column gives up its place; if that is the extra thread, the most recently used other one
+    const out = s.kb !== extra ? s.kb : s.recent.find(x => x !== extra && isOpen(s, x));
+    recent = recent.filter(x => x !== out); cols = s.cols.map(c => c.t === out ? { t, pinned: false } : c);
+  }
   return { cols, kb: t, recent: [t, ...recent.filter(x => x !== t)] };
 }
 
@@ -97,12 +107,14 @@ export function open(s, t, shown = MAX_COLS) {
 // - a thread not open: it opens as a pinned column beside the keyboard column; the keyboard stays where it is.
 //   With no room left the loose column closes; with three pinned the keyboard column gives up its place (as a
 //   click would) and the keyboard moves to the new column.
-export function pin(s, t) {
+// - the extra thread (see normalize) never takes another column's place: past three it is a fourth column, and the
+//   least recently used one folds to the rail.
+export function pin(s, t, { extra = null } = {}) {
   if (isOpen(s, t)) return { ...s, cols: s.cols.map(c => c.t === t ? { ...c, pinned: true } : c) };
   let cols = besideKb(s.cols, s.kb, { t, pinned: true }), kb = s.kb;
-  if (cols.length > MAX_COLS) {
-    const loose = cols.find(c => !c.pinned);
-    const gone = loose ? loose.t : s.kb;
+  if (t !== extra && counted(cols, extra) > MAX_COLS) {
+    const loose = cols.find(c => !c.pinned && c.t !== extra);
+    const gone = loose ? loose.t : s.kb !== extra ? s.kb : s.recent.find(x => x !== extra && isOpen(s, x));
     cols = cols.filter(c => c.t !== gone);
     if (gone === s.kb) kb = t;
   }
@@ -121,13 +133,13 @@ export function close(s, t) {
 // Columns whose thread no longer exists in this project go (a removed agent, or a name from another project).
 // `valid` is a Set of the project's threads (retired agents' threads stay valid: their column shows, box closed).
 // Nothing left: one loose column on `fallback`, if that is valid here, else Needs you. Unchanged: the same object.
-export function prune(s, valid, fallback = 'needs') {
+export function prune(s, valid, fallback = 'needs', opts = {}) {
   const ok = t => valid.has(t);
   if (s.cols.every(c => ok(c.t))) return s;
   const cols = s.cols.filter(c => ok(c.t));
   if (!cols.length) return initial(ok(fallback) ? fallback : 'needs');
   const recent = s.recent.filter(ok);
-  return normalize({ cols, kb: ok(s.kb) ? s.kb : recent[0] ?? cols[0].t, recent });
+  return normalize({ cols, kb: ok(s.kb) ? s.kb : recent[0] ?? cols[0].t, recent }, 'needs', opts);
 }
 
 // Unpin: the column closes (its hover label says so), unless it is the only one, which just stops being pinned.

@@ -106,8 +106,9 @@ test('the page sends every answer to the card\'s project', () => {
 test('a row or Open thread in All projects opens the thread in its own project', () => {
   assert.match(APP, /const t = e\.target\.closest\('\[data-thread\]'\); if \(t\) return openThreadIn\(projectOf\(t\), t\.dataset\.thread\);/);
   const fn = /function openThreadIn\([\s\S]*?\n\}/.exec(APP)[0];
-  assert.match(fn, /S\.current = p\.name; store\.set\('project', S\.current\); cols\.projectOpened\(\)/);
+  assert.match(fn, /if \(p && t !== AP\.HUB_THREAD\) switchProject\(p\.name\);/);
   assert.match(fn, /selectThread\(t\)/);
+  assert.match(/function switchProject\([\s\S]*?\n\}/.exec(APP)[0], /S\.current = name; store\.set\('project', name\);\s*openProject\(\);/);
 });
 
 test('a notification finds the right project\'s copy of a card in All projects', () => {
@@ -161,12 +162,104 @@ test('All projects pinned in one project stays pinned in every project; unpinned
   assert.equal(h.cols.isPinned('all'), false);
 });
 
+test('catching up the hub-wide pin never unpins or closes another project\'s columns: the extra folds to the rail', () => {
+  const three = { cols: [{ t: 'orchestrator', pinned: true }, { t: 'data-check', pinned: true }, { t: 'needs', pinned: true }], kb: 'data-check', recent: ['data-check', 'orchestrator', 'needs'] };
+  const h = setup({ columns: { 'lab-notes': three } });
+  h.cols.render();
+  h.cols.pin('all'); h.cols.render();
+  h.go('lab-notes');
+  const s = h.mem.columns['lab-notes'];
+  assert.deepEqual(s.cols.filter(c => c.pinned).map(c => c.t).sort(), ['all', 'data-check', 'needs', 'orchestrator'], 'all four pinned, none lost');
+  assert.equal(s.kb, 'data-check', 'the keyboard stays where it was');
+  assert.equal(h.shown().length, 3, 'three columns fit');
+  assert.ok(h.shown().includes('all') && h.shown().includes('data-check'));
+  const rail = h.cols.rail.isConnected !== false && h.cols.area.children.includes(h.cols.rail);
+  assert.ok(rail, 'the least recently used column waits on the rail');
+  // stored and read back (a reload), the fourth column is kept, not cut at three
+  const again = setup({ columns: h.mem.columns, 'hub-pinned': true });
+  again.S.current = 'lab-notes'; again.cols.render();
+  assert.equal(again.mem.columns['lab-notes'].cols.length, 4);
+  // unpinning All projects there closes only its own column
+  again.cols.unpin('all'); again.cols.render();
+  assert.deepEqual(again.mem.columns['lab-notes'].cols.map(c => [c.t, c.pinned]), [['orchestrator', true], ['data-check', true], ['needs', true]]);
+});
+
+test('the pin rules with the extra thread', async () => {
+  const P = await import('../public/pins.js');
+  const pinned = t => ({ t, pinned: true }), X = { extra: 'all' };
+  const s3 = { cols: [pinned('a'), pinned('b'), pinned('c')], kb: 'b', recent: ['b', 'a', 'c'] };
+  const s4 = P.pin(s3, 'all', X);
+  assert.deepEqual(s4.cols.map(c => c.t), ['a', 'b', 'all', 'c'], 'beside the keyboard column, nothing removed');
+  assert.ok(s4.cols.every(c => c.pinned));
+  assert.equal(s4.kb, 'b');
+  // without the option the old rule still applies (the keyboard column gives up its place)
+  assert.equal(P.pin(s3, 'all').cols.length, 3);
+  // a fourth own thread opened with All projects there: the keyboard column is replaced as before (R010), never All projects
+  const kbAll = { ...s4, kb: 'all', recent: ['all', 'b', 'a', 'c'] };
+  const opened = P.open(kbAll, 'd', 3, X);
+  assert.ok(opened.cols.some(c => c.t === 'all' && c.pinned), 'All projects keeps its pin');
+  assert.equal(opened.cols.length, 4);
+  assert.ok(!opened.cols.some(c => c.t === 'b'), 'the most recently used other column gave up its place');
+  // normalize keeps three plus All projects; prune keeps it too
+  assert.equal(P.normalize(s4, 'needs', X).cols.length, 4);
+  assert.equal(P.normalize(s4).cols.length, 3, 'without the option, three as before');
+  assert.equal(P.prune({ ...s4, cols: [...s4.cols, pinned('gone')] }, new Set(['a', 'b', 'c', 'all']), 'needs', X).cols.length, 4);
+  // three fit and the fourth folds
+  assert.equal(P.fit(3000, 4), 3);
+  assert.equal(P.layout(s4, 3).folded.length, 1);
+});
+
+test('phone alerts: All projects with the keyboard counts as looking at every project', async () => {
+  const { isLooking } = await import('../lib/push.mjs');
+  const now = 1e9, card = { project: 'lab-notes', thread: 'data-check', card: 'approval:ap-2' };
+  const look = (thread, extra = {}) => isLooking(card, [{ project: 'demo-app', thread, visible: true, focused: true, idleMs: 0, ts: now, ...extra }], now);
+  assert.equal(look('all'), true, 'the card is on screen in All projects, from another project');
+  assert.equal(look('needs'), false, 'another project\'s Needs you does not show it');
+  assert.equal(look('all', { focused: false }), false, 'a page in the background is not looking');
+  assert.equal(look('all', { idleMs: 3 * 60 * 1000 }), false, 'walked away');
+  assert.match(APP, /view: \(\) => \(\{ project: S\.current, thread: cols\.kb \}\)/, 'the page reports the keyboard column, All projects included');
+});
+
+test('every project\'s counts are worked out once per render and shared', () => {
+  assert.equal(APP.split('AP.hubView(').length, 2, 'one place builds the hub view');
+  assert.match(APP, /const hub = \(\) => S\.hub \|\| \(S\.hub = AP\.hubView\(S\.projects, S\.pending\)\);/);
+  assert.match(APP, /function render\(\) \{\s*S\.hub = null;/);
+  assert.match(APP, /const needsCount = p => hub\(\)\.groups\.find\(g => g\.p === p\)\?\.count/);
+  assert.match(APP, /return v\.html \?\?= hubFeed\(\);/, 'the column is drawn once per render');
+  for (const at of [/S\.pending = new Set\([^\n]*\n\s*S\.hub = null;/, /if \(!p\) return;\s*S\.hub = null;/]) assert.match(APP, at, 'a state change starts it afresh');
+});
+
+test('the You station matches the counter: the hub total, its link opening All projects', () => {
+  const NEEDS = pub('map-needs.js');
+  assert.match(MAP, /const you = this\.multi \? this\.hub\.total : needs;/);
+  assert.match(MAP, /thread: this\.multi \? 'all' : 'needs'/);
+  assert.match(MAP, /this\.needsPop\.set\(project, pending, needs, this\.multi \? \{ approvals: this\.hub\.approvals \|\| \[\], total: this\.hub\.total \} : null\)/);
+  assert.match(NEEDS, /this\.openThread\(this\.multi \? 'all' : 'needs'\)/);
+  assert.match(NEEDS, /const approvals = hub \? hub\.approvals :/);
+  assert.match(NEEDS, /in \$\{this\.multi \? 'All projects' : 'Needs you'\}/);
+  assert.match(APP, /approvals: v\.groups\.flatMap\(g => g\.waiting\.approvals\.map\(ev => \(\{ \.\.\.ev, project: g\.name \}\)\)\)/);
+});
+
+test('switching project from All projects or a notification goes through openProject', () => {
+  const sw = /function switchProject\([\s\S]*?\n\}/.exec(APP)[0];
+  assert.match(sw, /openProject\(\);/);
+  assert.match(/function openThreadIn\([\s\S]*?\n\}/.exec(APP)[0], /switchProject\(p\.name\)/);
+  assert.match(/function openCard\([\s\S]*?\n\}/.exec(APP)[0], /^function openCard\(project, card\) \{\s*switchProject\(project\);/);
+  const op = /function openProject\(\) \{[\s\S]*?\n\}/.exec(APP)[0];
+  assert.match(op, /S\.projMenu = false; closeHubMenu\(\);/, 'menus close');
+  assert.match(op, /classList\.remove\('show-side'\)/, 'the phone list makes way');
+});
+
 test('All projects has no message box and reads from the top; it is never pruned as a stale thread', () => {
   const h = setup({ columns: { 'demo-app': { cols: [{ t: 'all', pinned: true }, { t: 'docs-pass', pinned: false }], kb: 'all', recent: ['all', 'docs-pass'] } }, 'hub-pinned': true });
   h.cols.render();
   assert.deepEqual(h.shown(), ['all', 'docs-pass']);
   const c = h.cols.visible('all');
   assert.equal(c.form.hidden, true, 'no one to write to');
+  assert.equal(c.input.disabled, true, 'drops and pastes never attach to the hidden box');
+  assert.equal(c.attachBtn.disabled, true);
+  assert.match(APP, /const focusIfDesk = el => \{ if \(fineMq\.matches && !phoneMq\.matches && el && !el\.disabled && !el\.closest\('\[hidden\]'\)\) el\.focus\(\); \};/, 'a hidden box is never focused');
+  assert.match(APP, /const dropTarget = e => \{ const c = cols\.convAt\(e\.target\) \|\| cols\.kbConv\(\); return c && !c\.input\.disabled \? c : null; \};/);
   assert.equal(c.activity.hidden, true);
   assert.equal(c.top, true);
   assert.equal(h.cols.visible('docs-pass').form.hidden, false);
@@ -183,7 +276,7 @@ test('the page: the hub-wide row, the renamed roll-up link, the map counter', ()
   assert.match(row, /el\.hidden = n < 2/, 'only when the hub runs more than one project');
   assert.match(row, /id: AP\.HUB_THREAD, name: 'All projects'/);
   // the strip's counter: the hub total, opening All projects
-  assert.match(APP, /map\.update\(proj\(\), pendingForYou\(proj\(\)\), \{ total: hubTotal\(\), projects: S\.projects\.length \}\)/);
+  assert.match(APP, /map\.update\(proj\(\), pendingForYou\(proj\(\)\), \{ total: v\.total, projects: v\.projects, approvals:/);
   assert.match(MAP, /if \(e\.target\.closest\('\[data-needs\]'\)\) return this\.go\(this\.multi \? 'all' : 'needs'\);/);
   assert.match(MAP, /const multi = this\.multi, count = multi \? this\.hub\.total : needs;/);
   // phone: still opens on the project's Needs you (decision 32)
