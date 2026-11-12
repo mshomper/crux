@@ -182,9 +182,12 @@ const routes = {
 };
 
 const server = createServer(async (req, res) => {
+  // A full address in the request line (GET http://localhost:4791/... as a proxy is sent) is never one of the hub's
+  // pages: refused, so no proxy trick can reach it (review of PR #51).
+  if (!String(req.url || '').startsWith('/')) return send(res, 400, { error: 'Requests must name a path on this hub' });
   const url = new URL(req.url, 'http://localhost');
-  // Only this machine and the tailnet address get in, and only the hub's own pages may change anything.
-  const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts });
+  // Only this machine (on this hub's own port) and the tailnet address get in, and only the hub's own pages may change anything.
+  const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts, port });
   if (refused) return send(res, 403, { error: refused });
   try {
     if (url.pathname === '/api/stream') {

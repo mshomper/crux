@@ -572,12 +572,18 @@ export class Hub {
     const was = this.permissionMode(p);
     this.settings.setProject(p.dir, { permissionMode: mode });
     if (mode === was) return mode;
-    p.log.append('project_settings', { permissionMode: mode, by, thread: 'orchestrator' });
-    const who = by === 'you' ? 'You' : by;
+    // Raised or lowered, and where from: the hub page (the settings card, by = 'you') or something else. The words
+    // never claim a person did it; a raise to Trusted also goes to the owner's phone (push.mjs), so a raise nobody
+    // made on purpose is seen at once.
+    const rank = { standard: 0, auto: 1, trusted: 2 };
+    const raised = rank[mode] > rank[was];
+    p.log.append('project_settings', { permissionMode: mode, was, raised, by, thread: 'orchestrator' });
+    const word = { standard: 'Ask', auto: 'Auto', trusted: 'Trusted' }[mode];
+    const how = `The level of ${p.name} was ${raised ? 'raised' : 'lowered'} to ${word} ${by === 'you' ? 'from the hub page' : `by ${by}`}`;
     this.notice(p, 'orchestrator', {
-      auto: `${who} switched ${p.name} to Auto: work that stays in the project or a temp folder runs without asking; unclear requests go to the orchestrator, hard stops to you.`,
-      trusted: `${who} switched ${p.name} to Trusted: as Auto, plus installing packages into the project and reading or downloading from any website into it. Merges still need your yes on each one; the fixed stops (force push, history, branch deletion, pushing to main, writes outside, secrets, the live hub, system-wide installs, connector sends) still come to you.`,
-      standard: `${who} switched ${p.name} to Ask: anything beyond reading goes to the orchestrator first, hard stops to you.`
+      auto: `${how}: work that stays in the project or a temp folder runs without asking; unclear requests go to the orchestrator, hard stops to you.`,
+      trusted: `${how}: as Auto, plus installing packages into the project and reading or downloading from any website into it. Merges still need your yes on each one; the fixed stops (force push, history, branch deletion, pushing to main, writes outside, secrets, the live hub, system-wide installs, connector sends) still come to you.`,
+      standard: `${how}: anything beyond reading goes to the orchestrator first, hard stops to you.`
     }[mode]);
     if (mode !== 'standard') this.rulesHint(p);
     return mode;

@@ -21,6 +21,10 @@ export function cardsFor(ev, { decisionOpen = () => true } = {}) {
   if ((ev.type === 'approval' && !ev.routedTo) || ev.type === 'approval_escalated') {
     return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${ev.agent} is waiting for Allow`, body: `${project} · wants to use ${ev.tool}` }]; // kept minimal on purpose: it can show on a locked phone
   }
+  // A project raised to Trusted (decision 45): always told, so a raise nobody made on purpose is seen at once.
+  if (ev.type === 'project_settings' && ev.permissionMode === 'trusted' && ev.raised) {
+    return [{ kind: 'level', card: `level:${ev.id}`, project, thread: 'orchestrator', title: `${project} was raised to Trusted`, body: project, always: true }];
+  }
   if (ev.type !== 'summary') return [];
   const out = [];
   for (const n of ev.decisions_needed || []) {
@@ -55,6 +59,7 @@ export function stillOpen(card, { approvals, decisionOpen, decisionStatus, event
   if (card.kind === 'approval') return approvals.has(card.card.slice('approval:'.length));
   if (card.kind === 'decision') return decisionOpen(Number(card.card.slice('decision:'.length)));
   if (card.kind === 'question') return questionOpen(events, card.askedAt, { decisionStatus });
+  if (card.kind === 'level') return true;   // a notice, not a card that gets settled
   return false;
 }
 
@@ -144,7 +149,7 @@ export class Push {
       const go = () => {
         if (this.sent.has(card.card)) return;
         if (!stillOpen(card, { approvals: ctx.approvals, decisionOpen, decisionStatus, events: ctx.events(ev.project) })) return;
-        if (isLooking(card, this.presences.values())) return;
+        if (!card.always && isLooking(card, this.presences.values())) return;
         this.sent.add(card.card);
         const close = [...this.settled];
         this.settled.clear();

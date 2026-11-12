@@ -125,10 +125,12 @@ const CURL_FLAGS = flagSpec({
   'o output': 'out', 'output-dir': 'outdir', 'D dump-header trace trace-ascii stderr': 'out', 'O remote-name remote-name-all': 'remote',
   'J remote-header-name': 'remote', 'd data data-raw data-binary data-urlencode data-ascii json F form form-string T upload-file': 'send',
   'X request': 'method', 'u user b cookie c cookie-jar n netrc netrc-file netrc-optional oauth2-bearer E cert key U proxy-user proxy-header': 'creds',
-  'H header': 'header', 'K config': 'config',
+  'H header': 'header', 'K config variable': 'config',
+  // Where the request really goes: a proxy, --connect-to (the address after the last two colons), --resolve, --url.
+  'x proxy preproxy socks4 socks4a socks5 socks5-hostname': 'proxy', 'connect-to': 'connectto', resolve: 'resolve', url: 'url',
   's silent S show-error L location f fail fail-with-body k insecure v verbose i include I head G get # progress-bar N no-buffer compressed g globoff 4 6 R remote-time create-dirs http1.1 http2 q no-progress-meter ssl-no-revoke Z parallel location-trusted': 'ok',
-  'A user-agent e referer m max-time connect-timeout retry retry-delay retry-max-time r range w write-out C continue-at x proxy limit-rate z time-cond max-filesize url max-redirs': 'okv'
-}, ['out', 'outdir', 'send', 'method', 'creds', 'header', 'config', 'okv']);
+  'A user-agent e referer m max-time connect-timeout retry retry-delay retry-max-time r range w write-out C continue-at limit-rate z time-cond max-filesize max-redirs': 'okv'
+}, ['out', 'outdir', 'send', 'method', 'creds', 'header', 'config', 'proxy', 'connectto', 'resolve', 'url', 'okv']);
 const WGET_FLAGS = { ...flagSpec({
   'O output-document': 'doc', 'o output-file a append-output save-cookies': 'out', 'P directory-prefix': 'outdir',
   'post-data post-file body-data body-file': 'send', method: 'method',
@@ -141,10 +143,12 @@ const IWR_FLAGS = {
   ps: { Uri: 'url', OutFile: 'out', Method: 'method', CustomMethod: 'method', Body: 'send', InFile: 'send', Form: 'send', Credential: 'creds', ProxyCredential: 'creds',
     UseDefaultCredentials: 'creds', ProxyUseDefaultCredentials: 'creds', Token: 'creds', Authentication: 'creds', Certificate: 'creds', CertificateThumbprint: 'creds',
     WebSession: 'creds', SessionVariable: 'creds', Headers: 'header', UseBasicParsing: 'ok', UserAgent: 'okv', TimeoutSec: 'okv', MaximumRedirection: 'okv',
-    MaximumRetryCount: 'okv', RetryIntervalSec: 'okv', ContentType: 'okv', PassThru: 'ok', SkipCertificateCheck: 'ok', Proxy: 'okv', Resume: 'ok',
+    MaximumRetryCount: 'okv', RetryIntervalSec: 'okv', ContentType: 'okv', PassThru: 'ok', SkipCertificateCheck: 'ok', Proxy: 'proxy', Resume: 'ok',
     ErrorAction: 'okv', Verbose: 'ok', DisableKeepAlive: 'ok', TransferEncoding: 'okv', SkipHeaderValidation: 'ok', SkipHttpErrorCheck: 'ok', NoProxy: 'ok' },
-  valued: ['url', 'out', 'method', 'send', 'creds', 'header', 'okv']
+  valued: ['url', 'out', 'method', 'send', 'creds', 'header', 'proxy', 'okv']
 };
+// Environment settings that send a program's web requests somewhere else.
+const PROXY_VARS = /^(https?_proxy|all_proxy|ftp_proxy|socks_proxy|socks5_proxy)$/i;
 // pip install / uninstall / download / wheel. place: a folder it writes to (must be inside); target: --target and the
 // like (also a place); machine: installs for the user or the machine, or into another Python.
 const PIP_FLAGS = (() => {
@@ -162,6 +166,9 @@ const webFlags = head => head === 'curl' ? CURL_FLAGS : head === 'wget' ? WGET_F
 const INTERPRETERS = new Set(['node', 'nodejs', 'python', 'python3', 'py', 'sh', 'bash', 'zsh', 'dash', 'pwsh', 'powershell', 'iex', 'invoke-expression',
   'cmd', 'perl', 'ruby', 'deno', 'bun', 'source', '.']);
 const DOWNLOADERS = new Set([...['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod', 'start-bitstransfer']]);
+// A download written anywhere in a command's text, not only as its first word: the downloaders by name, and
+// PowerShell's download cradles (Net.WebClient, DownloadString / DownloadFile / DownloadData, HttpClient, WebRequest).
+const DOWNLOAD_TEXT = /(^|[^\w-])(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|start-bitstransfer)(?![\w-])|net\.webclient|\.download(string|file|data)(async|taskasync)?\s*\(|httpclient|\.getstring(async)?\s*\(|\[(system\.)?net\.(http)?webrequest\]/i;
 
 // Installers that put software on the whole machine: a stop at every level, Trusted included (decision 45).
 const SYSTEM_WIDE = new Set(['winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'conda', 'pipx', 'gem', 'install-module', 'install-package', 'install-script', 'update-module']);
@@ -385,13 +392,21 @@ class Check {
   pipeRuns(parts, s = '', ps = false) {
     let fetched = null;   // 'web' or 'local' once a download has been seen earlier in the command
     const heads = parts.map(p => this.headOf(p.text).head);
-    // iex / Invoke-Expression (or a script block made from text) with a download anywhere in the same command:
-    // iex (iwr URL), Invoke-Expression (Invoke-RestMethod URL), $s = irm URL; iex $s.
-    if (heads.some(h => /^(iex|invoke-expression)$/.test(h)) && heads.some(h => DOWNLOADERS.has(h))) this.stop('Runs what it downloads (iex with a download in the same command)');
-    if (/\[scriptblock\]::create/i.test(s) && heads.some(h => DOWNLOADERS.has(h))) this.stop('Runs what it downloads (a script block made from a download)');
+    // A download anywhere in the command: a downloader as a program, or a PowerShell download cradle anywhere in the
+    // text ((New-Object Net.WebClient).DownloadString(...), HttpClient, irm inside a script block).
+    const downloads = heads.some(h => DOWNLOADERS.has(h)) || DOWNLOAD_TEXT.test(s);
+    // iex / Invoke-Expression, a script block made from text, or Invoke-Command -ScriptBlock, with a download
+    // anywhere in the same command: iex (iwr URL), $s = irm URL; iex $s, & ([scriptblock]::Create((irm URL))).
+    const runsText = heads.some(h => /^(iex|invoke-expression)$/.test(h)) || /\[scriptblock\]::create/i.test(s)
+      || (heads.some(h => /^(invoke-command|icm)$/.test(h)) && /\s-s(c(r(i(p(t(b(l(o(c(k)?)?)?)?)?)?)?)?)?)?\b/i.test(s));
+    if (runsText && downloads) this.stop('Runs what it downloads (iex or a script block with a download in the same command)');
+    // (New-Object Net.WebClient).DownloadFile(URL, 'a.ps1'): that file counts as downloaded.
+    for (const m of s.matchAll(/\.DownloadFile(?:Async|TaskAsync)?\s*\(\s*['"][^'"]*['"]\s*,\s*['"]([^'"]+)['"]/gi)) {
+      const p = this.abs(m[1], this.projectDir); if (typeof p === 'string') this.downloaded?.add(norm(p));
+    }
     // A command or process substitution that downloads, feeding a program that runs scripts:
     // sh -c "$(curl URL)", bash <(curl URL), source <(curl URL), . <(curl URL), node -e "$(curl URL)".
-    const fetchingSub = substitutions(s).some(inner => splitParts(inner, ps).some(p => DOWNLOADERS.has(this.headOf(p).head)));
+    const fetchingSub = substitutions(s).some(inner => DOWNLOAD_TEXT.test(inner) || splitParts(inner, ps).some(p => DOWNLOADERS.has(this.headOf(p).head)));
     if (fetchingSub && heads.some(h => INTERPRETERS.has(h) || /^(eval|exec|xargs)$/.test(h))) this.stop('Runs what it downloads (a download inside a command substitution)');
     for (const { text, op } of parts) {
       const { head, args } = this.headOf(text);
@@ -700,10 +715,19 @@ class Check {
     // stop there, at every level.
     if (/^(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)$/.test(head) && !this.urlsHere.length && this.localUrls.length) {
       const r = this.webFlags(head, args);
-      const live = this.localUrls.some(u => localAddress(u)?.live !== false);   // port 4747 as a number, no port, or unreadable
-      if (live && (r.unknown.length || r.config || r.sends || r.inputs.length)) {
-        return this.stop(`Sends a change to the hub on port 4747 (or to localhost with no port named), or uses an option the hub cannot check${r.unknown.length ? ` (${r.unknown[0]})` : ''}`);
+      // Whatever the port: an option the hub cannot read, options from a file or standard input (-K -, --variable,
+      // wget -e) and addresses from a file (-i, -i -) could send the request anywhere, the hub on 4747 included.
+      if (r.unknown.length || r.config || r.inputs.length) {
+        return this.stop(`${head} to this machine with an option the hub cannot check, or with options or addresses read from a file (${r.unknown[0] || r.config || r.inputs[0]})`);
       }
+      // Every place the request may really go: the addresses in its words, the ones its options name (-Uri:x), and
+      // proxies, --connect-to and --resolve. A place off this machine is the network.
+      const places = [...this.localUrls, ...r.addrs, ...r.routes];   // every positional word of curl / wget / iwr is an address
+      const away = places.find(a => !localAddress(a));
+      if (away && !this.trusted) return this.stop(`Reaches the network (${away.slice(0, 80)})`);
+      if (away) return this.webRead(head, args, cwd);
+      const live = places.some(u => localAddress(u)?.live !== false);   // port 4747 as a number, no port, or unreadable
+      if (live && r.sends) return this.stop('Sends a change to the hub on port 4747 (or to this machine with no port named)');
       // A test hub (any other port on this machine) is contained: only where it saves is checked.
       for (const o of [...r.saves, ...r.dirs]) {
         if (o === true || o == null) { this.stop(`${head} saves to a file the hub cannot read`); continue; }
@@ -1138,6 +1162,25 @@ class Check {
     if (out.dirs.some(d => typeof d !== 'string')) out.saves.push(true);   // a folder option with nothing after it
     // wget saves under the address's name unless -O names the file; curl only with -O (into --output-dir when given).
     out.intoHere = fam === 'wget' ? !vals('doc').length : fam === 'curl' ? vals('remote').length > 0 : false;
+    // Every address the request is aimed at (named, --url, -Uri, -Uri:x), and every place it may really go instead:
+    // proxies (options and the http_proxy / all_proxy family in the environment), --connect-to and --resolve.
+    const strs = l => l.filter(v => typeof v === 'string');
+    out.addrs = strs([...r.positional, ...vals('url')]);
+    out.routes = [];
+    const bad = l => l.some(v => typeof v !== 'string');
+    if (bad(vals('url')) || bad(vals('proxy')) || bad(vals('connectto')) || bad(vals('resolve'))) out.unknown.push('an address option with nothing after it');
+    out.routes.push(...strs(vals('proxy')));
+    for (const v of strs(vals('connectto'))) {   // HOST1:PORT1:HOST2:PORT2, HOST2 empty meaning HOST1
+      const f = splitHostFields(v);
+      if (f.length !== 4) { out.unknown.push(`--connect-to ${v}`); continue; }
+      out.routes.push(`${f[2] || f[0]}:${f[3]}`);
+    }
+    for (const v of strs(vals('resolve'))) {     // [+]HOST:PORT:ADDR[,ADDR]...
+      const f = splitHostFields(v.replace(/^\+/, ''));
+      if (f.length < 3) { out.unknown.push(`--resolve ${v}`); continue; }
+      for (const a of f.slice(2).join(':').split(',')) out.routes.push(`${/:/.test(a) && !a.startsWith('[') ? `[${a}]` : a}:${f[1]}`);
+    }
+    for (const [k, v] of this.env()) if (PROXY_VARS.test(k) && v) out.routes.push(String(v));
     return out;
   }
 
@@ -1234,6 +1277,17 @@ class Check {
     if (!targets.length) return this.unsure('An inline script that deletes files the hub cannot name');
     this.deletes(targets, this.projectDir, `an inline script deletes ${targets.join(', ')}`);
   }
+}
+
+// "localhost:4791:[::1]:4747" -> ['localhost', '4791', '[::1]', '4747']: colon-separated fields, brackets kept whole.
+function splitHostFields(v) {
+  const out = []; let cur = '', br = false;
+  for (const c of String(v)) {
+    if (c === '[') br = true; else if (c === ']') br = false;
+    if (c === ':' && !br) { out.push(cur); cur = ''; } else cur += c;
+  }
+  out.push(cur);
+  return out;
 }
 
 // The text inside every command or process substitution in s: $( ... ), <( ... ), >( ... ) and `...`, nested ones

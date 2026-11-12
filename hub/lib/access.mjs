@@ -34,11 +34,22 @@ export function extraHosts(env = process.env) {
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+// The port written in a Host header, as a number; null when none is written.
+export function hostPort(hostHeader) {
+  const h = String(hostHeader || '').trim();
+  const m = h.startsWith('[') ? /^\[[^\]]*\]:(\d+)$/.exec(h) : /:(\d+)$/.exec(h);
+  return m ? Number(m[1]) : null;
+}
+
 // Returns null when the request may go on, or a short reason when it must be refused (403).
 // openPaths: GET endpoints any page may read (the hub's "are you running?" ping).
-export function checkRequest({ method = 'GET', path = '/', headers = {} }, { extra = [], openPaths = ['/api/ping'] } = {}) {
+// port: the port this hub listens on. A Host naming this machine must carry exactly that port: a request that
+// reached the hub while addressed to another local port came through a proxy or a rerouting trick (curl -x,
+// --connect-to), not from a page of this hub, and is refused. Test hubs pass their own port, so they keep working.
+export function checkRequest({ method = 'GET', path = '/', headers = {} }, { extra = [], openPaths = ['/api/ping'], port = null } = {}) {
   const host = hostName(headers.host);
   if (!allowedHost(host, extra)) return `Host ${host || '(none)'} is not this hub`;
+  if (port != null && isLocalHost(host) && hostPort(headers.host) !== Number(port)) return `Host ${String(headers.host)} is not this hub's port`;
   if (SAFE.has(method)) return null;
   if (openPaths.includes(path) && method === 'GET') return null;
   const origin = headers.origin;

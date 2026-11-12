@@ -930,6 +930,8 @@ function openCard(project, card) {
   const p = proj();
   if (!p) return;
   const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];
+  // A level raised to Trusted (push.mjs): the notice is in the project's orchestrator thread.
+  if (kind === 'level') { $('#app').classList.remove('show-side'); return openThreadIn(p, 'orchestrator'); }
   const waiting = kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
     : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
       : openQuestions(p).some(e => e.id === id);
