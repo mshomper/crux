@@ -4,7 +4,8 @@ import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
 import { hudBoot, openPanel, closePanel } from './hud.js';
-import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
+import { isYesNo } from './questions.js';
+import * as AP from './all-projects.js';
 import { enterAction, insertLineBreak, replyHint, filterHint } from './composer-keys.js';
 import { Columns } from './columns.js';
 import { growBox } from './conversation.js';
@@ -81,6 +82,7 @@ async function load() {
   S.bootAt = bootAt;
   usageUI.setPlan(usage);
   map.retireAt = retireAt;
+  S.retireAt = retireAt;
   S.settings = settings || {};
   S.models = models || [];
   S.projects = projects;
@@ -235,24 +237,16 @@ $('#hub-menu').addEventListener('click', e => {
 const key = (p, t) => `${p}::${t}`;
 
 // ---------- helpers ----------
-function openDecisions(p) { return p.board.decisions.filter(d => d.status === 'open' || d.status === 'found'); }
-// Permission requests still waiting. Those with the orchestrator (decision 21) wait on it, not on you, until it
-// escalates or runs out of time; you can still answer them, which overrides it.
-function waitingApprovals(p) {
-  const done = new Set(p.events.filter(e => e.type === 'approval_result').map(e => e.approval));
-  return p.events.filter(e => e.type === 'approval' && !done.has(e.approval) && S.pending.has(e.approval));
-}
-function escalation(p, id) { return p.events.findLast(e => e.type === 'approval_escalated' && e.approval === id); }
-function withOrchestrator(p) { return waitingApprovals(p).filter(e => e.routedTo && !escalation(p, e.approval)); }
-function pendingApprovals(p) { return waitingApprovals(p).filter(e => !e.routedTo || escalation(p, e.approval)); }
+// What waits for you: the rules live in all-projects.js (shared by Needs you and All projects, decision 42).
+const openDecisions = p => AP.openDecisions(p);
+const escalation = (p, id) => AP.escalation(p, id);
+const withOrchestrator = p => AP.withOrchestrator(p, S.pending);
+const pendingApprovals = p => AP.pendingApprovals(p, S.pending);
 function pendingForYou(p) { return new Set(p ? pendingApprovals(p).map(e => e.approval) : []); }
-// Questions agents asked that still wait on you; the rule lives in questions.js, shared with the map and the server.
-function openQuestions(p) { return askedOpen(p.events, { decisionStatus: pageStatus(p) }); }
-// Lessons about you that an agent wants added to the core profile, until you add or skip them.
-function pendingLessons(p) {
-  const done = new Set(p.events.filter(e => e.type === 'lesson_result').map(e => e.lesson));
-  return p.events.filter(e => e.type === 'lesson_proposed' && !done.has(e.lesson));
-}
+const openQuestions = p => AP.openQuestions(p);
+const pendingLessons = p => AP.pendingLessons(p);
+// The project a card or row belongs to (All projects marks each group with data-pj); else the current one.
+const projectOf = el => AP.projectOf(el, S.projects, proj());
 function lessonsCard(ls) {
   return `<article class="card lessons">
     <div class="card-head">${icon('star')}<h3>${ls.length === 1 ? 'A lesson' : `${ls.length} lessons`} for your core profile</h3></div>
@@ -293,8 +287,7 @@ function visualEl(p, ev, compact) {
 // Drafts live in S.drafts, so the list can redraw while you type.
 const draftKey = (id, i) => `${id}:${i}`;
 function filledAnswers(ev) { return ev.open.map(q => ({ index: q.i, text: (S.drafts[draftKey(ev.id, q.i)] || '').trim() })).filter(a => a.text); }
-function questionCard(ev) {
-  const p = proj();
+function questionCard(ev, p = proj()) {
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
   const where = ev.thread === 'orchestrator' ? 'the orchestrator thread' : ev.thread;
   const filled = filledAnswers(ev).length;
@@ -318,8 +311,9 @@ function questionCard(ev) {
   </article>`;
 }
 const sendLabel = (n, of) => !n ? 'Send answers' : n === 1 && of === 1 ? 'Send answer' : `Send ${n} answer${n === 1 ? '' : 's'}`;
-function sendAnswers(id) {
-  const p = proj(), ev = openQuestions(p).find(q => q.id === id);
+// p: the project the card belongs to (projectOf), so answers from All projects reach the right agent.
+function sendAnswers(id, p = proj()) {
+  const ev = openQuestions(p).find(q => q.id === id);
   if (!ev || S.sending) return;
   const answers = filledAnswers(ev);
   if (!answers.length) return;
@@ -338,7 +332,7 @@ function draftChanged(box) {
   if (!box.value) delete S.drafts[box.dataset.answer];
   store.set('drafts', S.drafts);
   growBox(box, 140);
-  const ev = openQuestions(proj()).find(q => q.id === box.dataset.q);
+  const ev = openQuestions(projectOf(box)).find(q => q.id === box.dataset.q);
   const btn = box.closest('.card')?.querySelector('[data-send-answers]');
   if (ev && btn) { const n = filledAnswers(ev).length; btn.disabled = !n; btn.querySelector('.qcount').textContent = sendLabel(n, ev.open.length); }
   for (const b of box.closest('.qrow')?.querySelectorAll('.qquick') || []) { const on = box.value === b.dataset.word; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
@@ -355,15 +349,16 @@ function timeOf(ts) { const d = new Date(ts); return d.toLocaleTimeString([], { 
 
 // ---------- render: sidebar ----------
 // Everything in a project that waits for you: decisions, permission cards, questions, profile lessons (one card).
-function needsCount(p) { return openDecisions(p).length + pendingApprovals(p).length + openQuestions(p).length + (pendingLessons(p).length ? 1 : 0); }
+const needsCount = p => AP.needsCount(p, S.pending);
+// Everything that waits for you, in every project (All projects, decision 42).
+const hubTotal = () => S.projects.reduce((n, p) => n + needsCount(p), 0);
 // What waits for you in one thread (a column's red count, decision 39): its permission cards and questions, and the
-// open decisions its round summaries asked for. Needs you counts everything.
+// open decisions its round summaries asked for. Needs you counts everything in the project; All projects, every project.
 function waitingIn(p, t) {
+  if (t === AP.HUB_THREAD) return hubTotal();
   if (!p) return 0;
   if (t === 'needs') return needsCount(p);
-  const open = new Set(openDecisions(p).map(d => d.id));
-  const asked = new Set(p.events.filter(e => e.type === 'summary' && e.thread === t).flatMap(e => (e.decisions_needed || []).map(Number)).filter(id => open.has(id)));
-  return pendingApprovals(p).filter(e => e.thread === t).length + openQuestions(p).filter(q => q.thread === t).length + asked.size;
+  return AP.threadWaiting(p, t, S.pending);
 }
 // The HUD frame's boot readout (decision 33), once, when the hub opens.
 function bootReadout() {
@@ -448,14 +443,26 @@ function threadButton({ id, name, ava, avaClass = '', last, right, agent = null 
 function railItem(t, instead, pinned = true) {
   const p = proj(), n = waitingIn(p, t);
   const agent = t === 'orchestrator' ? orchestrator(p) : p?.agents.find(a => a.thread === t);
-  const name = t === 'needs' ? 'Needs you' : t === 'orchestrator' ? 'The orchestrator' : t;
-  const where = instead === 'needs' ? 'Needs you' : instead === 'orchestrator' ? 'the orchestrator' : instead;
-  const ava = t === 'needs' ? avaHtml({ ava: 'inbox', avaClass: n ? 'needs' : '' }) : avaHtml({ ava: t === 'orchestrator' ? 'orch' : 'agent', avaClass: t === 'orchestrator' ? 'orch' : '', agent });
+  const label = { needs: 'Needs you', orchestrator: 'the orchestrator', [AP.HUB_THREAD]: 'All projects' };
+  const name = t === 'orchestrator' ? 'The orchestrator' : label[t] || t;
+  const where = label[instead] || instead;
+  const ava = t === 'needs' || t === AP.HUB_THREAD ? avaHtml({ ava: t === 'needs' ? 'inbox' : 'projects', avaClass: n ? 'needs' : 'hub' }) : avaHtml({ ava: t === 'orchestrator' ? 'orch' : 'agent', avaClass: t === 'orchestrator' ? 'orch' : '', agent });
   const tip = `${name}: ${pinned ? 'pinned' : 'open, not pinned'}, folded for lack of room.${n ? ` ${n} waiting for your call.` : ''} Click to show it in place of ${where}.`;
   return `<button type="button" class="rail-item" data-rail="${esc(t)}" aria-label="${esc(tip)}" title="${esc(tip)}">${ava}${n ? `<span class="colbadge">${n}</span>` : ''}</button>`;
 }
 
+// The hub-wide row above the project switcher (decision 42): All projects, with everything that waits in every
+// project. Shown when the hub runs more than one project; with one, Needs you already is everything.
+function renderHubThreads() {
+  const n = S.projects.length, total = hubTotal();
+  const el = $('#hub-threads');
+  el.hidden = n < 2;
+  el.innerHTML = n < 2 ? '' : threadButton({ id: AP.HUB_THREAD, name: 'All projects', ava: 'projects', avaClass: total ? 'needs' : 'hub',
+    last: `${total ? `${total} waiting` : 'Nothing waiting'} · ${n} projects`, right: total ? `<span class="badge" title="${total} waiting for your call across ${n} projects">${total}</span>` : '' });
+}
+
 function renderThreads() {
+  renderHubThreads();
   const p = proj();
   if (!p) { $('#threads').innerHTML = ''; return; }
   const needs = needsCount(p);
@@ -517,9 +524,8 @@ function decisionCard(p, d) {
 // The agent's own one-line description of a request (the Bash or PowerShell description, or the SDK's), else ''.
 function approvalHeadline(ev) { return String(ev.input?.description || ev.description || '').trim().split('\n')[0].slice(0, 160); }
 
-function approvalCard(ev) {
+function approvalCard(ev, p = proj()) {
   const live = S.pending.has(ev.approval);
-  const p = proj();
   const result = p.events.find(e => e.type === 'approval_result' && e.approval === ev.approval);
   const input = ev.input?.command || ev.input?.file_path || JSON.stringify(ev.input, null, 1);
   // Plain words first: the agent's own description leads when it gave one; then what the hub reads in the command
@@ -676,9 +682,47 @@ function closeModelMenu() { if (!S.mmenu) return; const n = S.mmenu; S.mmenu = n
 
 // ---------- render: one conversation (a column; conversation.js draws it, these say what is in it) ----------
 // The list for thread t, as HTML. Seeing a thread's list in a column marks it read.
+// The count bar (M008 1): what is waiting, by kind; each count jumps to its first card.
+function countBar(total, kinds) {
+  return total ? `<div class="countbar" role="navigation" aria-label="Waiting for you"><span class="cb-total"><b>${total}</b> waiting</span>${kinds.map(([k, n, one, many]) => `<button class="cb-chip" data-jump="${k}" title="Go to the first ${one}">${n} ${n === 1 ? one : many}</button>`).join('')}</div>` : '';
+}
+
+// ---------- All projects (decision 42 A) ----------
+// Every project's waiting cards, grouped by project and answerable in place, then every orchestrator and agent.
+// Each group carries data-pj (not data-project, which switches project on a click), so an answer from a card goes to
+// that project (projectOf) and a row or "Open thread" opens the thread in its own project.
+function hubHead(g, meta = '') {
+  return `<div class="hub-head"><span class="hub-k">${icon('projects')}<b>${esc(g.name)}</b></span><span class="hub-mode" title="${g.mode === 'Auto' ? 'Auto: contained work runs without asking' : 'Ask: anything beyond reading goes to the orchestrator or to you'}">${g.mode}</span>
+    <span class="hub-line"></span>${meta ? `<span class="hub-meta">${meta}</span>` : g.count ? `<span class="colbadge" title="${g.count} waiting for your call in ${esc(g.name)}">${g.count}</span>` : ''}
+    <button type="button" class="btn ghost icon-only hub-go" data-project="${esc(g.name)}" aria-label="Open ${esc(g.name)}" title="Open ${esc(g.name)}: its threads, board and live map">${icon('chevron')}</button></div>`;
+}
+// One agent: its robot in its model's hue, name, state, model chip, context ring and red count. A click opens its thread.
+function agentRow(p, a) {
+  const n = waitingIn(p, a.thread), hue = hueOf(modelOf(a));
+  const name = a.role === 'orchestrator' ? `Orchestrator · ${a.name.replace('orchestrator-', '#')}` : a.name;
+  return `<button type="button" class="hub-agent ${n ? 'asks' : ''}" data-thread="${esc(a.thread)}" title="Open ${esc(name)} in ${esc(p.name)}">
+    <span class="ava${hue ? ' ring' : ''}"${hue ? ` style="--mh:${hue}"` : ''}>${robot(a, { size: 24, needs: n > 0 })}</span>
+    <span class="ha-l1"><b class="ha-name">${esc(name)}</b><span class="dot ${esc(a.state)}" title="${esc(a.state)}"></span><span class="chip ${esc(a.state)}">${esc(a.state)}</span>${modelChip(a, { mini: true })}</span>
+    <span class="ha-l2">${esc(lastLine(p, a.thread) || goalOf(a))}</span>
+    ${AP.contextRing(a, { hue, retireAt: S.retireAt || 60 })}${n ? `<span class="colbadge" title="${n} waiting for your call">${n}</span>` : ''}</button>`;
+}
+function hubFeed() {
+  const v = AP.hubView(S.projects, S.pending);
+  const cards = ({ p, waiting: w }) => w.approvals.map(ev => approvalCard(ev, p)).join('') + w.questions.map(ev => questionCard(ev, p)).join('')
+    + (w.lessons.length ? lessonsCard(w.lessons) : '') + w.decisions.map(d => decisionCard(p, d)).join('');
+  let html = countBar(v.total, v.kinds);
+  html += v.groups.filter(g => g.count).map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g)}${cards(g)}</section>`).join('');
+  if (!v.total) html += `<div class="hub-clear">${icon('check')}<span>Nothing waiting in any project</span></div>`;
+  html += `<div class="side-label hub-roster-k">Agents · every project</div>`;
+  html += v.groups.map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g, `${g.agents.length} agent${g.agents.length === 1 ? '' : 's'} · ${g.working} working`)}
+    <div class="hub-agents">${g.agents.map(a => agentRow(g.p, a)).join('') || '<p class="faint hub-none">No agents yet</p>'}</div></section>`).join('');
+  return html;
+}
+
 function feedFor(t) {
   const p = proj();
   if (!p) return `<div class="empty"><h2>No projects</h2><p>Start the hub with a project folder: <code>node server.mjs C:/path/to/project</code></p></div>`;
+  if (t === AP.HUB_THREAD) return hubFeed();
   if (t === 'needs') {
     const ds = openDecisions(p), aps = pendingApprovals(p), qs = openQuestions(p);
     const withRec = ds.filter(d => d.status === 'open' && d.recommended);
@@ -686,14 +730,12 @@ function feedFor(t) {
     if (withRec.length > 1) html += `<div class="batch"><strong>${withRec.length} decisions have a recommendation.</strong><button class="btn primary" data-take-all>${icon('check')}Take all ${withRec.length}</button><span class="faint">or reply "all but 4A"</span></div>`;
     const ls = pendingLessons(p);
     const routed = withOrchestrator(p);
-    // The count bar (M008 1): what is waiting, by kind; each count jumps to its first card.
     const nq = qs.reduce((n, q) => n + q.open.length, 0);
     const kinds = [['approval', aps.length, 'permission', 'permissions'], ['question', nq, 'question', 'questions'], ['lessons', ls.length ? 1 : 0, 'lesson card', 'lesson cards'], ['decision', ds.length, 'decision', 'decisions']].filter(k => k[1]);
-    const total = aps.length + qs.length + (ls.length ? 1 : 0) + ds.length;
-    if (total) html = `<div class="countbar" role="navigation" aria-label="Waiting for you"><span class="cb-total"><b>${total}</b> waiting</span>${kinds.map(([k, n, one, many]) => `<button class="cb-chip" data-jump="${k}" title="Go to the first ${one}">${n} ${n === 1 ? one : many}</button>`).join('')}</div>` + html;
-    html += aps.map(approvalCard).join('') + qs.map(questionCard).join('') + (ls.length ? lessonsCard(ls) : '') + ds.map(d => decisionCard(p, d)).join('');
+    html = countBar(aps.length + qs.length + (ls.length ? 1 : 0) + ds.length, kinds) + html;
+    html += aps.map(ev => approvalCard(ev, p)).join('') + qs.map(ev => questionCard(ev, p)).join('') + (ls.length ? lessonsCard(ls) : '') + ds.map(d => decisionCard(p, d)).join('');
     // Requests the orchestrator is answering: not yours to act on, shown so you can watch or step in.
-    if (routed.length) html += `<div class="side-label routed-label">With the orchestrator</div>` + routed.map(approvalCard).join('');
+    if (routed.length) html += `<div class="side-label routed-label">With the orchestrator</div>` + routed.map(ev => approvalCard(ev, p)).join('');
     return html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
     const evs = threadEvents(p, t);
@@ -703,7 +745,7 @@ function feedFor(t) {
         case 'summary': return summaryCard(p, ev);
         case 'notice': return `<div class="notice">${esc(ev.text)}</div>`;
         case 'pick': return `<div class="notice">You picked D${pad(ev.decision)} · ${esc(ev.label)}</div>`;
-        case 'approval': return approvalCard(ev);
+        case 'approval': return approvalCard(ev, p);
         case 'entry': return `<div class="notice">${esc(ev.from)} posted ${esc(ev.entryId)} to the board: ${esc(ev.title)}</div>`;
         case 'visual': return `<div class="msg"><span class="who">${esc(ev.from)} · ${timeOf(ev.ts)}</span>${visualEl(p, ev)}</div>`;
         case 'lesson': return `<div class="notice">${esc(ev.from)} added a lesson to the ${esc(ev.pack)} pack: ${esc(ev.text)}</div>`;
@@ -732,6 +774,11 @@ function quickReplies(p) {
 // whether the box is closed (a retired agent), the working line, the quick picks and the red count.
 function headFor(t) {
   const p = proj();
+  if (t === AP.HUB_THREAD) {   // All projects (decision 42): no message box, read from the top, red count = everything
+    const v = AP.hubView(S.projects, S.pending);
+    return { title: 'All projects', sub: `<span>${v.projects} project${v.projects === 1 ? '' : 's'} · ${v.agents} agents · ${v.working} working</span>`,
+      retired: false, retire: false, finish: false, chips: [], activity: '', noBox: true, top: true, waiting: v.total };
+  }
   let title = 'Needs you', sub = '';
   if (p && t === 'orchestrator') {
     const o = orchestrator(p);
@@ -802,7 +849,8 @@ function render() {
   $('#open-board').classList.toggle('on', !$('#board').hidden);
   $('#board-filter').placeholder = filterHint({ narrow: phoneMq.matches });
   renderProjects(); cols.render(); renderThreads(); renderBoard(); renderModelMenu();
-  map.update(proj(), pendingForYou(proj()));
+  // Decision 42: the strip's Needs you counter counts every project and opens All projects (more than one project).
+  map.update(proj(), pendingForYou(proj()), { total: hubTotal(), projects: S.projects.length });
   usageUI.draw();
 }
 
@@ -847,6 +895,13 @@ function selectThread(t) {
   focusIfDesk(cols.kbConv()?.input);   // on a phone, opening a thread does not pop the keyboard up
 }
 
+// A thread in a given project (a row or "Open thread" in All projects, decision 42): switch to that project the way
+// the project menu does (its pins come back; All projects stays pinned everywhere), then open the thread.
+function openThreadIn(p, t) {
+  if (p && p.name !== S.current && t !== AP.HUB_THREAD) { S.current = p.name; store.set('project', S.current); cols.projectOpened(); S.mmenu = null; }
+  selectThread(t);
+}
+
 // Open the card a notification points at (card = "approval:<id>", "decision:<n>" or "question:<event id>").
 // Waiting cards are in Needs you; one already answered is shown in its own thread instead. With columns the same
 // card can be drawn twice (in Needs you and in its own thread): a column already on screen that holds it is used
@@ -870,7 +925,7 @@ function openCard(project, card) {
   else { cols.open(target); render(); }
   phone.viewChanged();
   const conv = onScreen || cols.kbConv();
-  const el = conv?.findCard(card);
+  const el = conv?.findCard(card, p.name);
   if (el) { el.scrollIntoView({ block: 'center' }); lockOn(el); }
 }
 // A brief cyan lock-on around a card you were sent to.
@@ -892,7 +947,7 @@ const cols = new Columns({
     startThread: () => store.get('thread', 'needs'),
     head: headFor, feed: feedFor, railItem,
     // This project's threads: columns for any other thread are dropped (columns.js prune).
-    threads: () => { const p = proj(); return p ? ['needs', 'orchestrator', ...p.agents.map(a => a.thread)] : null; },
+    threads: () => { const p = proj(); return p ? ['needs', AP.HUB_THREAD, 'orchestrator', ...p.agents.map(a => a.thread)] : null; },
     ready: () => !!proj(),
     act,
     focusBox: focusIfDesk,
@@ -948,7 +1003,7 @@ if (matchMedia('(pointer: coarse)').matches) new ViewportFit(document.documentEl
   // move the list (phone pass 2).
   onChange: (now, was) => {
     const c = cols.kbConv();
-    if ((now.height !== was.height || now.keyboard !== was.keyboard) && c && c.atBottom && c.thread !== 'needs') c.feed.scrollTop = c.feed.scrollHeight;
+    if ((now.height !== was.height || now.keyboard !== was.keyboard) && c && c.atBottom && !c.top) c.feed.scrollTop = c.feed.scrollHeight;
     placeModelMenu();
   }
 }).start();
@@ -986,7 +1041,8 @@ document.addEventListener('click', e => {
   // The pin on a thread row (decision 39): pin opens it as a column beside the current one; unpin closes its column.
   const rp = e.target.closest('[data-row-pin]');
   if (rp) { const id = rp.dataset.rowPin; cols.isPinned(id) ? cols.unpin(id) : cols.pin(id); render(); phone.viewChanged(); return document.querySelector(`[data-row-pin="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); }
-  const t = e.target.closest('[data-thread]'); if (t) return selectThread(t.dataset.thread);
+  // A thread opens in its own project: a row or "Open thread" in All projects switches to that project first.
+  const t = e.target.closest('[data-thread]'); if (t) return openThreadIn(projectOf(t), t.dataset.thread);
   if (e.target.closest('[data-retired-toggle]')) { S.retiredOpen = !S.retiredOpen; store.set('retired-open', S.retiredOpen); return renderThreads(); }
   if (e.target.closest('[data-retired-older]')) { S.retiredOlder = !S.retiredOlder; return renderThreads(); }
   if (e.target.closest('[data-proj-toggle]')) { S.projMenu = !S.projMenu; return renderProjects(); }
@@ -1007,7 +1063,8 @@ document.addEventListener('click', e => {
   if (od) { const p = proj(); return openPanel(decisionCard(p, p.board.decisions.find(d => String(d.id) === od.dataset.openDecision)), `Decision ${od.dataset.openDecision}`); }
   const pick = e.target.closest('[data-pick]');
   if (pick && !pick.disabled) closePanel();
-  if (pick && !pick.disabled) return act(() => api('/api/pick', { project: proj().name, picks: [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }] }).then(load));
+  // Every answer goes to the card's own project (projectOf): from All projects too, without switching (decision 42).
+  if (pick && !pick.disabled) return act(() => api('/api/pick', { project: projectOf(pick).name, picks: [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }] }).then(load));
   if (e.target.closest('[data-take-all]')) {
     const picks = openDecisions(proj()).filter(d => d.status === 'open' && d.recommended).map(d => ({ id: d.id, choice: d.recommended }));
     return act(() => api('/api/pick', { project: proj().name, picks }).then(load));
@@ -1026,7 +1083,7 @@ document.addEventListener('click', e => {
     return renderBoard();
   }
   const dq = e.target.closest('[data-dismiss]');
-  if (dq) return act(() => api('/api/dismiss', { project: proj().name, question: dq.dataset.dismiss, ...('index' in dq.dataset ? { index: Number(dq.dataset.index) } : {}) }));
+  if (dq) return act(() => api('/api/dismiss', { project: projectOf(dq).name, question: dq.dataset.dismiss, ...('index' in dq.dataset ? { index: Number(dq.dataset.index) } : {}) }));
   const qq = e.target.closest('[data-quick]');
   if (qq) {
     const box = [...document.querySelectorAll('.qbox')].find(x => x.dataset.answer === qq.dataset.quick);
@@ -1034,9 +1091,9 @@ document.addEventListener('click', e => {
     return;
   }
   const sa = e.target.closest('[data-send-answers]');
-  if (sa && !sa.disabled) return sendAnswers(sa.dataset.sendAnswers);
+  if (sa && !sa.disabled) return sendAnswers(sa.dataset.sendAnswers, projectOf(sa));
   const ls = e.target.closest('[data-lesson]');
-  if (ls) return act(() => api('/api/lessons', { project: proj().name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
+  if (ls) return act(() => api('/api/lessons', { project: projectOf(ls).name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
   const ap = e.target.closest('[data-approve]'); if (ap) return act(() => api('/api/approval', { id: ap.dataset.approve, allow: true, always: 'always' in ap.dataset }));
   const dn = e.target.closest('[data-deny]'); if (dn) return act(() => api('/api/approval', { id: dn.dataset.deny, allow: false }));
 });
@@ -1127,7 +1184,7 @@ $('#cols').addEventListener('keydown', e => {
   if (what === 'native') return;
   e.preventDefault();
   if (what === 'newline') insertLineBreak(e.target);
-  else sendAnswers(e.target.dataset.q);
+  else sendAnswers(e.target.dataset.q, projectOf(e.target));
 });
 
 function toggleRouting() {

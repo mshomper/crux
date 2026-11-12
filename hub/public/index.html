@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="usage.css">
 <link rel="stylesheet" href="hud.css">
 <link rel="stylesheet" href="columns.css">
+<link rel="stylesheet" href="all-projects.css">
 </head>
 <body>
 <div id="app" class="app">
@@ -31,6 +32,8 @@
       </div>
     </header>
     <div id="hub-switches" class="hub-switches"></div>
+    <!-- Decision 42: All projects, the hub-wide row above the project switcher (app.js renderHubThreads). -->
+    <nav id="hub-threads" class="hub-threads" aria-label="Every project" hidden></nav>
     <nav id="projects" class="projects" aria-label="Projects"></nav>
     <nav id="threads" class="threads" aria-label="Threads"></nav>
     <div class="side-foot">
@@ -48,7 +51,7 @@
     <span class="win-acts" id="win-acts">
       <button class="btn ghost icon-only" id="phone-alerts" hidden aria-label="Phone notifications" title="Phone notifications"><svg class="icon"><use href="#i-bell"/></svg></button>
       <button class="btn ghost" id="open-board" title="The memory board"><svg class="icon"><use href="#i-board"/></svg>Board</button>
-      <a class="btn ghost" id="all-projects" href="/all" target="_blank" rel="noopener" title="Every project's decisions, in a new tab"><svg class="icon"><use href="#i-projects"/></svg>All projects<svg class="icon ext" aria-hidden="true"><use href="#i-external"/></svg></a>
+      <a class="btn ghost" id="all-projects" href="/all" target="_blank" rel="noopener" title="Every project's decision records (the roll-up page), in a new tab"><svg class="icon"><use href="#i-page"/></svg>All decisions<svg class="icon ext" aria-hidden="true"><use href="#i-external"/></svg></a>
     </span>
   </div>
   <template id="conv-tpl">

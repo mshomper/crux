@@ -4,8 +4,10 @@
 // Conversation per open thread and lays them out. With nothing pinned there is one column, as the hub always had.
 import { Conversation } from './conversation.js';
 import * as P from './pins.js';
+import { HUB_THREAD } from './all-projects.js';
 
 const STORE = 'columns';     // { [project]: pins state }
+const HUB_PIN = 'hub-pinned';   // whether All projects (decision 42) is pinned: one answer for the whole hub
 const NARROW = 760;          // a column narrower than this, beside others, gets the short message-box hint
 const key = (p, t) => `${p}::${t}`;
 const icon = id => `<svg class="icon"><use href="#i-${id}"/></svg>`;
@@ -19,6 +21,8 @@ export class Columns {
     const saved = store.get(STORE, {});
     this.states = saved && typeof saved === 'object' ? saved : {};
     this.checked = new Set();
+    this.hubPinned = store.get(HUB_PIN, false) === true;
+    this.synced = null;          // the project whose All projects pin last caught up with the hub's
     this.convs = new Map();      // "project::thread" -> Conversation, for every open thread (folded ones too)
     this.composes = new Map();   // "project::thread" -> { text, tray }: the draft stays with its thread
     this.sig = '';
@@ -45,12 +49,24 @@ export class Columns {
   get state() {
     const p = this.project;
     if (!this.checked.has(p)) { this.states[p] = P.normalize(this.states[p], this.host.startThread()); this.checked.add(p); }
+    if (this.synced !== p) { this.synced = p; this.syncHub(p); }
     return this.states[p];
   }
   set(s) {
     this.states[this.project] = s;
     this.store.set(STORE, this.states);
     this.store.set('thread', s.kb);   // the old single-thread key, kept meaningful
+    // The project on screen decides whether All projects is pinned (a pin, an unpin, or a click that took its place).
+    const hub = P.isPinned(s, HUB_THREAD);
+    if (hub !== this.hubPinned) { this.hubPinned = hub; this.store.set(HUB_PIN, hub); }
+  }
+  // All projects is one column for the whole hub (decision 42): pinned in one project means pinned in every project.
+  // Another project catches up the first time it is drawn after a switch, by the usual pin and unpin rules (R008, R010).
+  syncHub(p) {
+    const s = this.states[p];
+    if (P.isPinned(s, HUB_THREAD) === this.hubPinned) return;
+    this.states[p] = this.hubPinned ? P.pin(s, HUB_THREAD) : P.unpin(s, HUB_THREAD);
+    this.store.set(STORE, this.states);
   }
   // On a phone (pins ignored) with every column pinned, a thread you open is shown on its own without touching the
   // pins; with a loose column (always, on a real phone) it replaces it as the one conversation always did.
@@ -84,21 +100,22 @@ export class Columns {
 
   // Switching projects never changes pins: that project's columns come back as they were. With nothing pinned there,
   // its orchestrator opens (Matt, 2026-11-11: a project opens on its orchestrator's chat).
-  projectOpened() { this.phoneT = null; if (!this.state.cols.some(c => c.pinned)) this.open('orchestrator'); }
+  // All projects pinned (hub-wide, decision 42) does not count: the project still opens on its orchestrator beside it.
+  projectOpened() { this.phoneT = null; if (!this.state.cols.some(c => c.pinned && c.t !== HUB_THREAD)) this.open('orchestrator'); }
 
   // Columns whose thread no longer exists here go, and the cleaned list is written back. `valid`: this project's
-  // threads (Needs you, the orchestrator, every agent's thread, retired ones included).
+  // threads (Needs you, the orchestrator, every agent's thread, retired ones included). All projects is valid everywhere.
   prune(valid) {
-    const ok = new Set(valid), s = this.state;
+    const ok = new Set([...valid, HUB_THREAD]), s = this.state;
     const next = P.prune(s, ok, this.host.startThread());
     if (next !== s) this.set(next);
     if (this.phoneT && !ok.has(this.phoneT.t)) this.phoneT = null;
   }
 
-  // A notification's card, drawn in a column already on screen (Needs you first for a waiting card, then the card's
-  // own thread), or null. The page then uses that copy and leaves the layout alone.
+  // A notification's card, drawn in a column already on screen (Needs you first for a waiting card, then All projects,
+  // then the card's own thread), or null. The page then uses that copy and leaves the layout alone.
   cardColumn(card, { waiting, thread }) {
-    for (const t of waiting ? ['needs', thread] : [thread]) { const c = t && this.visible(t); if (c?.findCard(card)) return c; }
+    for (const t of waiting ? ['needs', HUB_THREAD, thread] : [thread]) { const c = t && this.visible(t); if (c?.findCard(card, this.project)) return c; }
     return null;
   }
 

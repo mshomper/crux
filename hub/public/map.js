@@ -69,6 +69,7 @@ export class LiveMap {
   }
 
   get phone() { return this.phoneMq.matches; }
+  get multi() { return (this.hub?.projects || 0) > 1; }
   get reduced() { return this.reducedMq.matches || !this.renderer; }
 
   setMotion() {
@@ -122,7 +123,7 @@ export class LiveMap {
       // You: the first tap shows what is waiting, right here; a second tap opens Needs you.
       if (st?.dataset.id === 'you' && this.needsPop.count && this.needsPop.el.hidden) return this.needsPop.show();
       if (st) { this.needsPop.hide(); return this.go(st.dataset.thread); }
-      if (e.target.closest('[data-needs]')) return this.go('needs');
+      if (e.target.closest('[data-needs]')) return this.go(this.multi ? 'all' : 'needs');
       if (e.target.closest('.hud-close')) return this.collapse();
       if (e.target.closest('.tele-feed li[data-thread]')) return this.go(e.target.closest('li').dataset.thread);
       if (this.target === 0) { this.readout.hide(); return this.expand(); }
@@ -194,7 +195,10 @@ export class LiveMap {
   // ---------- data in ----------
   set retireAt(v) { if (v) this.model.retireAt = Number(v); }
 
-  update(project, pending) {
+  // hub: { total, projects } across the hub (decision 42): with more than one project the Needs you counter
+  // shows the total and opens All projects; the You station and the telemetry stay this project's.
+  update(project, pending, hub = null) {
+    this.hub = hub;
     this.model.setProject(project, pending);
     const { list, hidden } = this.model.workers(this.phone ? 8 : 12);
     const now = performance.now();
@@ -290,11 +294,17 @@ export class LiveMap {
     const st = core.state === 'writing' ? 'writing handoff' : core.state;
     // No generation, state or context numbers on screen (Matt, 2026-11-11): the sphere shows them and its readout spells them out.
     this.r.proj.textContent = this.model.project ? `// ${this.model.project.name}` : '';
+    // The counter: this project's count, or with several projects everything in the hub (decision 42).
+    const multi = this.multi, count = multi ? this.hub.total : needs;
+    const tip = multi
+      ? (count ? `${count} waiting for your call across ${this.hub.projects} projects (${needs} here). Opens All projects` : `Nothing waiting in any of the ${this.hub.projects} projects. Opens All projects`)
+      : (count ? `${count} waiting for your call` : 'Nothing waiting for you');
     for (const el of this.needsEls) {
-      const html = needs ? `${svg('alert')}<span>${el.classList.contains('big') ? 'Needs you' : 'Needs you'}</span><b>${needs}</b>` : `<span>All clear</span>`;
+      const html = count ? `${svg('alert')}<span>Needs you</span><b>${count}</b>` : `<span>All clear</span>`;
       if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
-      el.classList.toggle('hot', needs > 0);
-      el.setAttribute('aria-label', needs ? `${needs} waiting for your call` : 'Nothing waiting for you');
+      el.classList.toggle('hot', count > 0);
+      el.setAttribute('aria-label', tip);
+      el.title = tip;
     }
     const workers = this.workers.filter(w => w.kind === 'worker');
     const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;

@@ -51,6 +51,7 @@ export class Conversation {
     this.file.setAttribute('accept', ACCEPT);
     this.sending = false;
     this.justOpened = true;     // the first draw scrolls to the latest message (Needs you: to the top)
+    this.top = thread === 'needs';   // reads from the top (the head can say so too: All projects)
     this.atBottom = true;       // following the latest message
     this.saved = null;          // scroll position kept while the column is folded or moved
     this.subHtml = null;
@@ -115,8 +116,13 @@ export class Conversation {
   // ---------- drawing ----------
   // o: { kb, pinned, multi, narrow (a narrow column beside others), phone, fine }
   render(o) {
-    const h = this.host.head(this.thread);   // { title, sub, retire, finish, retired, activity, chips, waiting }
+    const h = this.host.head(this.thread);   // { title, sub, retire, finish, retired, activity, chips, waiting, noBox, top }
     this.el.classList.toggle('kb', !!o.kb);
+    // A list with no one to write to (All projects, decision 42) has no message box; one that reads from the top
+    // (Needs you, All projects) opens at its top and stays where you are as cards come and go.
+    this.form.hidden = !!h.noBox;
+    this.activity.hidden = !!h.noBox;
+    this.top = h.top ?? this.thread === 'needs';
     this.title.textContent = h.title;
     if (this.subHtml !== h.sub) { this.subHtml = h.sub; this.sub.innerHTML = h.sub; }
     this.retireBtn.hidden = !h.retire;
@@ -154,7 +160,7 @@ export class Conversation {
   }
 
   renderFeed() {
-    const feed = this.feed, needs = this.thread === 'needs';
+    const feed = this.feed, needs = this.top;
     let atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
     const saved = this.saved; this.saved = null;
     if (saved) atBottom = saved.bottom;
@@ -189,7 +195,11 @@ export class Conversation {
   detach() { if (!this.el.isConnected) return; this.keepScroll(); this.el.remove(); }
   destroy() { clearTimeout(this.errTimer); this.el.remove(); }
 
-  findCard(card) { return [...this.feed.querySelectorAll('[data-card]')].find(x => x.dataset.card === card) || null; }
+  // The card with this id; in All projects (cards grouped under data-pj, decision 42) only the given project's copy,
+  // since two projects can each have a decision 12.
+  findCard(card, project) {
+    return [...this.feed.querySelectorAll('[data-card]')].find(x => x.dataset.card === card && (!project || (x.closest('[data-pj]')?.dataset.pj ?? project) === project)) || null;
+  }
 
   // ---------- attachments ----------
   attachError(msg) {
