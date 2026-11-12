@@ -96,6 +96,7 @@ export class Hub {
     this.restore(p);
     p.log.on(ev => this.emit({ ...ev, project: p.name, logged: true }));
     p.desk.notice = text => this.notice(p, 'orchestrator', text);
+    if (this.noAgents) p.desk.local = true;   // a test hub never pushes decision records to the real GitHub
     return p;
   }
 

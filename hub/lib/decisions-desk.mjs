@@ -104,6 +104,12 @@ export class DecisionsDesk {
 
   // Push the branch and keep one open pull request. Runs in the background; writes made meanwhile are pushed after.
   publish() {
+    // A test hub (or a desk told to stay local) commits but never pushes or opens a PR on the real GitHub.
+    if (this.local) {
+      if (!this.saidLocal) this.notice('Test hub: decision records are committed on docs/decisions here but never pushed.');
+      this.saidLocal = true;
+      return Promise.resolve({ ok: false, local: true });
+    }
     if (this.publishing) { this.again = true; return this.publishing; }
     this.publishing = (async () => {
       try {

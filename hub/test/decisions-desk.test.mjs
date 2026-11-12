@@ -165,6 +165,18 @@ test('the orchestrator writes drafts in the worktree; the main folder is refused
   assert.match(orch.options().systemPrompt.append, /worktrees[\\/]+decisions/);
 });
 
+test('a test hub commits picks locally and never pushes them or opens a PR', async () => {
+  const { hub, p, gh, bare } = setup();
+  p.desk.local = true;   // what a test hub (noAgents) sets
+  const r = await hub.pickMany(p, [{ id: 1, choice: 'A' }])[0]._landed.published;
+  assert.deepEqual(r, { ok: false, local: true });
+  assert.equal(git(p.desk.dir, 'log', '-1', '--format=%s'), 'Record pick: D0001 A', 'committed locally');
+  assert.equal(execFileSync('git', ['branch', '--list', 'docs/decisions'], { cwd: bare }).toString().trim(), '', 'nothing pushed');
+  assert.equal(gh.calls.length, 0, 'no PR calls');
+  await hub.pickMany(p, [{ id: 2, choice: 'A' }])[0]._landed.published;
+  assert.equal(p.log.ofType('notice').filter(n => /Test hub: decision records/.test(n.text)).length, 1, 'said once');
+});
+
 test('a project that is not a git repo keeps its records in place', () => {
   const root = mkdtempSync(join(tmpdir(), 'crux-desk-plain-'));
   const dir = join(root, 'plain');
