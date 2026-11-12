@@ -114,5 +114,15 @@ test('negatives: the hard stops and the unreadable still trip', () => {
   // values the hub cannot read stay unread
   assert.notEqual(sh('X=$(cat f); node "$X/a.mjs"').route, 'allow');
   assert.equal(ps(String.raw`$t = $env:GITHUB_TOKEN; Write-Output $t`).route, 'human');
+  // a variable whose value is only known at run time makes any path built from it unresolvable
+  assert.equal(ps('$o = Get-Date; node "$o\\x.mjs"').route, 'unsure');
+  assert.equal(ps('$o = (Get-Date).ToString(); Get-Content "$o\\x.txt"').route, 'unsure');
+  assert.equal(sh('X=$(date); node "$X/x.mjs"').route, 'unsure');
+  assert.equal(ps(String.raw`$o = Get-ChildItem C:\ | Select -First 1; Remove-Item -Recurse $o`).route, 'human');
+  assert.equal(ps('$o = Get-Date; Remove-Item -Recurse "$o\\x"').route, 'human');
+  assert.equal(ps('$o = Get-Date; Remove-Item -Recurse -Force $o').route, 'human');
+  assert.equal(ps('$o = Get-Date; Copy-Item -Recurse x $o').route, 'human');
+  assert.equal(sh('X=$(date); rm -rf "$X/x"').route, 'human');
+  assert.equal(ps('$o = Get-Date; Remove-Item "$o\\x"').route, 'unsure', 'not recursive: for the orchestrator');
   assert.equal(sh('for f in *.txt; do rm "$f"; done').route, 'unsure', 'a glob is not a fixed list');
 });

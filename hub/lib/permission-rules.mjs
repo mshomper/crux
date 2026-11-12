@@ -239,6 +239,13 @@ class Check {
     return [...(this.madeTemp || []), ...(this.tempMade || [])].some(m => under(a, m));
   }
 
+  // True when a word holds a variable whose value is only known at run time ($_, or one set to something not literal).
+  unresolved(t) {
+    for (const m of String(t).matchAll(/\$\{?(env:)?(\w+)\}?/gi)) {
+      if (/^(_|psitem)$/i.test(m[2]) || (!m[1] && this.localVars?.has(m[2].toLowerCase()))) return true;
+    }
+    return false;
+  }
   pathLike(v) { return /[\\/]|^~|^\.\.?$|^[a-z]:/i.test(v) && !/^[\w.-]+:[^\\/]/.test(v); }
   outside(v, cwd) { return this.pathLike(v) && this.where(v, cwd) === 'outside'; }
 
@@ -283,8 +290,9 @@ class Check {
   defineVars(words, ps, cwd) {
     const single = t => { const v = this.bind([{ text: t, vars: true }]); return v && v.length === 1 ? v[0][0].text : null; };
     const set = (key, vals) => {
-      const ok = vals.length && vals.every(v => v != null && v !== 'SHORTCUT' && okValue(v));   // SHORTCUT: a COM object, not text
-      if (!ok) { this.vars.delete(key); return false; }
+      if (vals.length === 1 && vals[0] === 'SHORTCUT') { this.vars.delete(key); return true; }   // a COM object, not text
+      const ok = vals.length && vals.every(v => v != null && okValue(v));
+      if (!ok) { this.vars.delete(key); (this.localVars ||= new Set()).add(key); return false; }   // known only at run time
       if (vals.some(v => SECRET.test(norm(v)))) this.stop(`Touches secrets or credentials: ${vals.join(' ')}`);
       if (/(^|:)\w*port\w*$/.test(key) && vals.includes('4747')) this.stop("Sets a port to the hub's own 4747");
       this.vars.set(key, vals);
@@ -432,9 +440,11 @@ class Check {
     }
     if (NETWORK.has(head)) return this.stop(`Reaches the network (${head})`);
     // Programs that write: a target outside the project folder or a temp folder is a hard stop.
+    const recursive = args.some(a => /^(-recurse|--recursive|-[rf]*r[rf]*)$/i.test(a));
     const writes = WRITE_ALL.has(head) ? positional : WRITE_LAST.has(head) ? positional.slice(-1) : head === 'sed' && args.some(a => /^-i/.test(a)) ? positional.slice(-1) : null;
     if (writes) {
       for (const t of writes) {
+        if (recursive && this.unresolved(t)) { this.stop(`Writes recursively through a path the hub cannot resolve (${head} ${t})`); continue; }
         if (this.outside(t, cwd) || (outsideHere && !this.pathLike(t))) this.stop(`Writes outside the project folder (${head} ${t})`);
         else if (this.where(t, cwd) === 'tmp') this.noteTemp(t, cwd, /^(mkdir|md|new-item|ni)$/.test(head));
       }
@@ -450,6 +460,7 @@ class Check {
       if (!targets.length) return this.unsure(`${head} with nothing named`);
       // "... | ForEach-Object { Remove-Item $_ }" deletes whatever the pipeline lists: outside anywhere in it is a hard stop.
       if (targets.some(t => /^\$(_|psitem)\b/i.test(t) || (/^\$(\w+)/.test(t) && this.localVars?.has(/^\$(\w+)/.exec(t)[1].toLowerCase())))) {
+        if (recursive) return this.stop(`Deletes recursively through a path the hub cannot resolve (${head} ${args.join(' ')})`);
         return this.sawOutside ? this.stop(`Deletes what a pipeline lists, and the command names a path outside the project folder (${head} ${targets.join(' ')})`) : this.unsure(`Deletes what a pipeline lists (${head} ${targets.join(' ')})`, true);
       }
       if (targets.some(t => this.where(t, cwd) === 'outside')) this.stop(`Deletes files outside the project or a temp folder (${head} ${targets.join(' ')})`);
@@ -493,7 +504,10 @@ class Check {
       // Every variable named in the word: $X, ${X}, $env:X, %X%.
       for (const m of t.matchAll(/\$\{?(env:)?([\w()]+)\}?|%(\w+)%/gi)) {
         const name = (m[2] || m[3] || '').replace(/\(x86\)$/i, '(x86)');
-        if (/^(_|psitem|null|true|false|lastexitcode|\d)$/i.test(name) || this.localVars?.has(name.toLowerCase())) continue;
+        if (/^(_|psitem|null|true|false|lastexitcode|\d)$/i.test(name)) continue;
+        // Set by the command itself but not to a plain literal: its value is only known at run time, so a path built
+        // from it cannot be judged.
+        if (this.localVars?.has(name.toLowerCase()) && !m[1]) { this.unsure(`Uses a variable whose value is only known at run time (${m[0]})`); continue; }
         if (SECRET_VAR.test(name)) { this.stop(`Reads what looks like a secret (${m[0]})`); continue; }
         if (SYSTEM_VARS.test(name)) continue;
         this.unsure(`Uses a variable the hub cannot check (${m[0]})`);
