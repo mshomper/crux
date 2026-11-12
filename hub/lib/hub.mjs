@@ -18,6 +18,7 @@ import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
 import { answerMessage, answerNote } from '../public/questions.js';
 import { Usage } from './usage.mjs';
+import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 
 export class Project {
   constructor(dir) {
@@ -37,6 +38,14 @@ export class Project {
 }
 
 const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 60 * 1000;
+// A rolling handoff draft (handoff_notes in post_summary) counts as fresh when it was written within this long of
+// the agent's last turn: then a handoff is published from it without waking the agent (a cold, cache-expired read).
+export const DRAFT_FRESH_MS = 60 * 60 * 1000;
+// How often the hub looks for an orchestrator that has sat idle past the idle window (decision 37).
+const IDLE_CHECK_MS = 5 * 60 * 1000;
+const hasNotes = n => !!n && ['in_flight', 'promises', 'risks', 'next_steps'].some(k => toList(n[k]).length);
+const toList = x => (Array.isArray(x) ? x : x ? [x] : []).map(s => String(s).trim()).filter(Boolean);
+const when = ts => new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 // After a restart (M014): how old an unfinished turn or unread message may be and still be resumed, and the gap
 // between agents waking.
 export const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000, RESUME_GAP_MS = 4000;
@@ -58,7 +67,10 @@ export class Hub {
     this.projects = new Map();
     this.bootAt = Date.now();   // "this session" in the usage panel: since the hub started
     this.usage = new Usage(this);
+    this.run = realRun;   // git and gh for the handoff facts; tests swap in a fake
     for (const dir of projects) this.addProject(dir);
+    this.idleTimer = setInterval(() => this.idleCheck(), IDLE_CHECK_MS);
+    this.idleTimer.unref?.();
     this.usage.restore();
     // After listeners are attached: wake the agents a restart interrupted (M014), every project, a few seconds apart.
     this.resumed = [];
@@ -195,6 +207,7 @@ export class Hub {
         p.agents.get(ev.agent).state = 'retired';
       } else if (ev.type === 'agent_busy' && p.agents.has(ev.agent)) {
         p.agents.get(ev.agent).busyLogged = !!ev.busy;
+        if (ev.contextPct != null) p.agents.get(ev.agent).contextPct = ev.contextPct;   // for the idle handoff after a restart
       }
     }
     // A handoff cut short by a restart: the overlap is over, so the predecessor is done.
@@ -706,66 +719,175 @@ export class Hub {
     }
     if (agent.contextPct != null && agent.contextPct >= this.retireAt) {
       this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role === 'orchestrator' ? 'the role' : 'its task'} on.`);
-      this.retire(p, agent);
+      this.retire(p, agent, { reason: 'threshold' });
     }
   }
 
-  retire(p, agent = p.orchestrator()) {
+  // reason: 'asked' (you, or the API), 'threshold' (decision 10) or 'idle' (decision 37).
+  // With a fresh rolling draft and the agent not mid-turn, the hub publishes the handoff from the draft plus fresh
+  // facts without waking it. An idle handoff then retires it at once: no successor and no overlap until the next
+  // message, which starts a fresh holder from the handoff. Otherwise the agent writes the handoff as before.
+  // Returns 'draft', 'writing' or 'none' (it never started).
+  retire(p, agent = p.orchestrator(), { reason = 'asked' } = {}) {
     if (typeof agent === 'string') agent = p.agents.get(agent);
     if (!agent || agent.state === 'retired') throw new Error('No active agent to retire');
-    if (agent.retiring) return;
+    if (agent.retiring) return agent.retiring;
     agent.retiring = 'writing';
-    if (!agent.sessionId) return this.finishRetire(p, agent); // never started; nothing to hand off
+    if (!agent.sessionId) { this.finishRetire(p, agent); return 'none'; } // never started; nothing to hand off
+    const draft = !['working', 'starting'].includes(agent.state) && this.freshDraft(p, agent);
+    if (draft) {
+      this.publishHandoff(p, agent, draft.handoff_notes, { draft });
+      // Idle, or resting past the cache window: questions to it would cost a cold read, so it retires now and the
+      // next message starts a fresh holder. A worker's task needs a successor to carry on, so it always gets one.
+      const idle = agent.role === 'orchestrator' && (reason === 'idle' || Date.now() - this.lastActive(p, agent) >= DRAFT_FRESH_MS);
+      this.notice(p, agent.thread, `${agent.name}'s handoff ${agent.leftHandoff} was written from its rolling draft (${when(draft.ts)}) plus fresh facts, without waking it.${idle ? ' The next orchestrator starts from it with your next message.' : ''}`);
+      if (idle) this.finishRetire(p, agent);
+      else this.startSuccessor(p, agent);
+      return 'draft';
+    }
     agent.send(RETIRE_MESSAGE(agent.role));
     agent.retireTimer = setTimeout(() => { if (agent.retiring === 'writing') this.startSuccessor(p, agent); }, HANDOFF_MS);
+    return 'writing';
   }
 
-  // The facts half: what the hub knows for certain.
+  // ---------- rolling handoff draft and the idle handoff (decision 37) ----------
+  // The newest handoff_notes this agent gave with a round summary.
+  draftFor(p, agent) { return p.log.ofType('summary').filter(e => e.from === agent.name && hasNotes(e.handoff_notes)).at(-1) || null; }
+
+  // When the agent last did anything: now if it is mid-turn, else the end of its last turn (or its start).
+  lastActive(p, agent, now = Date.now()) {
+    if (['working', 'starting'].includes(agent.state)) return now;
+    const e = p.log.events.findLast(e => e.type === 'agent_busy' && e.agent === agent.name) || p.log.events.find(e => e.type === 'agent_created' && e.agent === agent.name);
+    return e ? Date.parse(e.ts) : now;
+  }
+
+  // Fresh: written within DRAFT_FRESH_MS of the agent's last turn, so nothing much can have happened since.
+  freshDraft(p, agent) {
+    const d = this.draftFor(p, agent);
+    return d && this.lastActive(p, agent) - Date.parse(d.ts) <= DRAFT_FRESH_MS ? d : null;
+  }
+
+  // Decision 37 B: an orchestrator idle for the idle window (minutes) above the floor (percent of context) hands off,
+  // so the next message reaches a fresh holder instead of a cold re-read of a long context. Both are hub settings.
+  idleCheck(now = Date.now()) {
+    const windowMin = Number(this.settings.get('idleHandoffMin')), floor = Number(this.settings.get('idleFloorPct'));
+    if (!(windowMin > 0)) return [];
+    const done = [];
+    for (const p of this.projects.values()) {
+      const o = p.orchestrator();
+      if (!o || o.retiring || o.capture || !o.sessionId || ['working', 'starting', 'error'].includes(o.state)) continue;
+      if (o.contextPct == null || o.contextPct < floor) continue;
+      if ([...this.approvals.values()].some(a => a.routedTo === o.name && !a.escalated)) continue;
+      const idleMin = Math.floor((now - this.lastActive(p, o, now)) / 60000);
+      if (idleMin < windowMin) continue;
+      this.notice(p, 'orchestrator', `${o.name} has been idle for ${idleMin} minutes at ${o.contextPct}% of its context, so it hands the role on (decision 37).`);
+      try { this.retire(p, o, { reason: 'idle' }); done.push(p.name); }
+      catch (e) { this.notice(p, 'orchestrator', `The idle handoff failed: ${e.message}`); }
+    }
+    return done;
+  }
+
+  // The facts half: what the hub knows for certain. The same shape for orchestrators and workers (decision 16):
+  // your approvals and instructions, the work and its last instructions, git, open questions, tidy-ups.
   handoffFacts(p, agent) {
+    const evs = p.log.events;
     const lines = [];
-    const lastSummary = a => p.log.ofType('summary').filter(e => e.from === a.name).at(-1);
-    const mine = p.log.ofType('message').filter(e => e.thread === agent.thread && e.from === 'you').slice(-5);
+    const summaries = evs.filter(e => e.type === 'summary');
+    const orchNames = new Set([...p.agents.values()].filter(a => a.role === 'orchestrator').map(a => a.name));
+    const lastSummary = a => summaries.filter(e => e.from === a.name).at(-1);
+    const lastInstruction = (w, max) => {
+      const m = evs.findLast(e => e.type === 'message' && e.thread === w.thread && orchNames.has(e.from));
+      return m ? `Last instruction from ${m.from} (${when(m.ts)}): "${clip(m.text, max)}"` : 'No instruction from the orchestrator yet.';
+    };
+    const prev = agent.role === 'orchestrator' ? p.board.latestHandoff() : (agent.handoffEntry ? p.board.read(agent.handoffEntry) : null);
+    const since = prev ? Date.parse(prev.ts) : 0;
+    // Approvals the orchestrator noted itself (post_summary approvals).
+    const tagged = summaries.filter(e => e.thread === 'orchestrator' && Date.parse(e.ts) >= since)
+      .flatMap(e => toList(e.approvals).map(text => ({ ts: e.ts, text, by: e.from })));
+    const fmtSummary = s => [`done ${toList(s.done).join('; ') || 'nothing'}`, `changed ${toList(s.changed).join(', ') || 'nothing'}`,
+      toList(s.questions).length && `asked ${toList(s.questions).join(' | ')}`, toList(s.blocked_on).length && `blocked on ${toList(s.blocked_on).join('; ')}`,
+      s.next_step && `next ${s.next_step}`].filter(Boolean).join('; ');
+
+    let a;
     if (agent.role === 'worker') {
       lines.push(`Task goal: ${agent.goal || '(none given)'}`);
       const s = lastSummary(agent);
-      if (s) lines.push(`Last summary: done ${s.done.join('; ') || 'nothing'}; changed ${s.changed.join(', ') || 'nothing'}${s.next_step ? `; next ${s.next_step}` : ''}`);
+      lines.push(s ? `Last summary (${when(s.ts)}): ${fmtSummary(s)}` : 'No summary posted yet.');
+      lines.push(lastInstruction(agent, 600));
+      a = approvals(evs, { since, threads: [agent.thread], mention: agent.name.replace(/-\d+$/, ''), tagged: tagged.filter(t => t.text.includes(agent.name.replace(/-\d+$/, ''))) });
     } else {
+      a = approvals(evs, { since, tagged });
+    }
+    lines.push(`Standing approvals and instructions from {{who}} (${prev ? `since handoff ${prev.entryId}` : 'all so far'}; whole, oldest first):`);
+    lines.push(...(a.kept.length ? a.kept.map(x => `- [${when(x.ts)}${x.answer ? ', answered in Needs you' : ''}${x.thread !== 'orchestrator' ? `, in ${x.thread}'s thread` : ''}${x.noted ? `, noted by ${x.noted}` : ''}] ${x.text}`) : ['- none']));
+    if (a.dropped) lines.push(`- (${a.dropped} older ones not shown; read the thread if needed.)`);
+    if (prev) lines.push(`- (Earlier ones are in handoff ${prev.entryId}.)`);
+
+    if (agent.role === 'orchestrator') {
       const ws = p.workers().filter(w => w !== agent);
       lines.push('Workers:', ...(ws.length ? ws.map(w => {
         const s = lastSummary(w);
-        return `- ${w.name} (${w.state}): ${w.goal || w.task.slice(0, 80)}${s ? `. Last summary: ${s.next_step || s.done[0] || 'posted'}` : ''}`;
+        return `- ${w.name} (${w.state}): ${w.goal || w.task.slice(0, 80)}. ${s ? `Last summary (${when(s.ts)}): ${clip(s.next_step || toList(s.done)[0] || 'posted', 300)}` : 'No summary yet'}. ${lastInstruction(w, INSTRUCTION_MAX)}`;
       }) : ['- none']));
+    }
+
+    lines.push(...gitLines(this.gitState(p), { summaries: summaries.filter(e => !orchNames.has(e.from)), events: evs, tagged }));
+
+    const status = id => p.board.decision(id)?.status;
+    const qs = unansweredQuestions(evs, { thread: agent.thread, decisionStatus: status });
+    lines.push(`Questions still waiting on {{who}}:`, ...(qs.length ? qs.map(q => `- ${q}`) : ['- none']));
+
+    if (agent.role === 'orchestrator') {
       const open = p.board.decisions().filter(d => ['open', 'found'].includes(d.status));
       lines.push('Decisions waiting on {{who}}:', ...(open.length ? open.map(d => `- D${String(d.id).padStart(4, '0')} ${d.title}${d.recommended ? ` (recommended ${d.recommended})` : ''}`) : ['- none']));
-      const cards = [...this.approvals.values()].filter(a => a.p === p);
-      if (cards.length) lines.push('Permission cards waiting:', ...cards.map(a => `- ${a.agent.name} wants ${a.toolName}${a.routedTo && !a.escalated ? ` (with ${a.routedTo})` : ''}`));
+      const cards = [...this.approvals.values()].filter(x => x.p === p);
+      if (cards.length) lines.push('Permission cards waiting:', ...cards.map(x => `- ${x.agent.name} wants ${x.toolName}${x.routedTo && !x.escalated ? ` (with ${x.routedTo})` : ''}`));
       const lessons = this.pendingLessons(p);
       if (lessons.length) lines.push('Profile lessons waiting for {{who}}:', ...lessons.map(e => `- ${e.text}`));
+      const tidy = tidyUps(p.board, evs);
+      if (tidy.length) lines.push(`Suggested tidy-ups (memos that look done or superseded; retire them only with {{who}}'s OK):`, ...tidy.map(t => `- ${t.id} ${t.title}. ${t.why}`));
+      const n = p.board.index().split('\n').length;
+      if (n > INDEX_LINES_MAX) lines.push(`Board index: ${n} lines, over ${INDEX_LINES_MAX}. Propose a tidy to {{who}} (retire done memos, merge old ones).`);
     }
-    if (mine.length) lines.push('Latest messages from {{who}}:', ...mine.map(e => `- ${e.text.replace(/\s+/g, ' ').slice(0, 200)}`));
     return lines.join('\n');
+  }
+
+  // Git state for the facts, from the project folder. Never throws: what it cannot read, it says.
+  gitState(p) {
+    try { return gitState(p.dir, this.run); }
+    catch (e) { return { worktrees: [], prs: null, main: null, errors: [`git state unreadable (${e.message})`] }; }
   }
 
   writeHandoff(p, agent, j) {
     if (agent.retiring !== 'writing') return 'You are not retiring, so no handoff is needed.';
     if (agent.leftHandoff) return `Handoff ${agent.leftHandoff} is already written. Reply "done".`;
-    const sec = (title, xs) => `### ${title}\n${(xs || []).map(x => `- ${x}`).join('\n') || '- none'}`;
+    const ev = this.publishHandoff(p, agent, j);
+    return `Handoff ${ev.entryId} posted. Reply "done" and stop.`;
+  }
+
+  // The handoff entry: judgement (written now, or taken from the rolling draft) plus the facts.
+  publishHandoff(p, agent, j = {}, { draft = null, stale = false } = {}) {
+    const sec = (title, xs) => `### ${title}\n${toList(xs).map(x => `- ${x}`).join('\n') || '- none'}`;
+    const note = draft ? `_Written by the hub from ${agent.name}'s ${stale ? 'last' : 'rolling'} handoff draft of ${when(draft.ts)}, plus fresh facts${stale ? '; the agent did not write a new one' : '; the agent was not woken'}._` : '';
     const body = [
-      sec('In flight, and why', j.in_flight), sec('Promises to {{who}}', j.promises),
+      note, sec('In flight, and why', j.in_flight), sec('Promises to {{who}}', j.promises),
       sec('Risks and things easy to miss', j.risks), sec('Next steps', j.next_steps),
       `### Facts (from the hub)\n${this.handoffFacts(p, agent)}`
-    ].join('\n\n').replaceAll('{{who}}', this.memory.userName() || 'the user');
-    const ev = p.board.addEntry({ kind: 'handoff', title: `Handoff from ${agent.name}`, summary: (j.next_steps || [])[0] || 'handoff', body, from: agent.name, role: agent.role });
+    ].filter(Boolean).join('\n\n').replaceAll('{{who}}', this.memory.userName() || 'the user');
+    const ev = p.board.addEntry({ kind: 'handoff', title: `Handoff from ${agent.name}`, summary: toList(j.next_steps)[0] || 'handoff', body, from: agent.name, role: agent.role, ...(draft ? { fromDraft: draft.id } : {}) });
     agent.leftHandoff = ev.entryId;
     for (const r of j.retire_entries || []) p.board.retireEntry(r.id, r.why, agent.name);
-    for (const l of (j.promote_to_core || []).filter(x => x && x.toLowerCase() !== 'none')) this.proposeLesson(p, agent, 'core', l);
-    return `Handoff ${ev.entryId} posted. Reply "done" and stop.`;
+    for (const l of toList(j.promote_to_core).filter(x => x.toLowerCase() !== 'none')) this.proposeLesson(p, agent, 'core', l);
+    return ev;
   }
 
   startSuccessor(p, old) {
     if (old.retiring !== 'writing') return;
     clearTimeout(old.retireTimer);
-    if (!old.leftHandoff) this.writeHandoff(p, old, { in_flight: ['(The agent did not write its part of the handoff.)'] });
+    if (!old.leftHandoff) {   // it did not write one in time: its last draft if any, else a note saying so
+      const d = this.draftFor(p, old);
+      this.publishHandoff(p, old, d ? d.handoff_notes : { in_flight: ['(The agent did not write its part of the handoff.)'] }, { draft: d, stale: !!d });
+    }
     old.retiring = 'overlap';
     const entryId = old.leftHandoff;
     // The successor keeps its predecessor's type, model and effort.
