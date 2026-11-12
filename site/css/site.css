@@ -34,11 +34,11 @@ img{display:block;max-width:100%;height:auto}
 strong,b{font-weight:600;color:var(--head)}
 .icon{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .icon.big{width:30px;height:30px;stroke-width:1.4}
-code,pre{font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
 code{font:500 .85em/1.5 var(--mono);color:var(--ice);background:rgba(111,227,255,.09);padding:.1em .38em;border-radius:3px;overflow-wrap:anywhere}
 pre{margin:10px 0 0;padding:11px 14px;background:var(--deep);border:1px solid var(--line);border-radius:3px;white-space:pre-wrap;overflow-wrap:anywhere}
 pre code{background:none;padding:0;font-size:13px;color:var(--ice)}
-pre .c{color:var(--faint)}
+/* two hyphens stay two hyphens: no joined-up programming ligatures (set after the font shorthands, which reset it) */
+code,pre,pre code{font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
 .k{font:600 11.5px/1.4 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--label)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 
@@ -145,8 +145,27 @@ figcaption span{font:600 11px/1.4 var(--mono);letter-spacing:.18em;text-transfor
 figure.shot figcaption{padding-inline:6px}
 .shot a{display:block;border:1px solid var(--edge);background:#0a1018}
 .shot img{width:100%}
-.shot.tall a{max-height:620px;overflow:hidden;position:relative}
-.shot.tall a::after{content:"";position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(180deg,transparent,#0a1018)}
+.shot.narrow{max-width:420px}
+/* a crop: the frame shows one part of a screenshot, at a size where its text can be read. The part is given in
+   the picture's own pixels (--x --y --w --h of a picture --sw wide); --px --py --pw --ph --psw say which part to
+   show at phone width, where the picture may be a different, phone-shaped one. Clicking opens the whole picture. */
+.crop{position:relative;overflow:hidden;cursor:zoom-in;--cx:var(--x,0);--cy:var(--y,0);--cw:var(--w,1440);--ch:var(--h,900);--csw:var(--sw,1440);aspect-ratio:var(--cw)/var(--ch)}
+.crop img{position:absolute;max-width:none;height:auto;width:calc(var(--csw)/var(--cw)*100%);left:calc(var(--cx)/var(--cw)*-100%);top:calc(var(--cy)/var(--ch)*-100%)}
+.crop::after{content:"";position:absolute;right:8px;bottom:8px;width:30px;height:30px;border:1px solid var(--edge2);background:rgba(8,13,20,.85) center/16px no-repeat;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236fe3ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7'/%3E%3C/svg%3E")}
+.crop:hover::after{border-color:var(--cyan);box-shadow:0 0 14px -4px var(--cyan)}
+
+/* the larger view (js/zoom.js): one picture over the page; a tap, the close mark or Escape closes it */
+.zoom-box{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;background:rgba(3,6,10,.94);color:var(--text);overflow:hidden}
+.zoom-box::backdrop{background:rgba(3,6,10,.8)}
+.zoom-box .pane{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;display:grid;justify-items:center;align-items:start;padding:58px 12px 20px;cursor:zoom-out}
+.zoom-box img{max-width:100%;height:auto;border:1px solid var(--edge2);box-shadow:0 0 60px -20px var(--cyan)}
+.zoom-box .bar{position:absolute;left:0;right:0;top:0;z-index:1;display:flex;align-items:center;gap:12px;padding:8px 12px;background:linear-gradient(180deg,rgba(3,6,10,.96),rgba(3,6,10,.7))}
+.zoom-box .bar p{flex:1;min-width:0;font-size:14px;line-height:1.35;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.zoom-box .bar a{font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;white-space:nowrap;padding:8px 4px}
+.zoom-box button{flex:none;width:40px;height:40px;display:grid;place-items:center;border:1px solid var(--edge2);background:rgba(10,16,24,.8);color:var(--ice);cursor:pointer;padding:0}
+.zoom-box button:hover{border-color:var(--cyan)}
+html:has(.zoom-box[open]){overflow:hidden}
 .phones{display:flex;justify-content:center;gap:clamp(12px,3vw,28px);align-items:flex-start}
 .phones a{display:block;flex:0 1 250px;min-width:0;padding:6px;border:1px solid var(--edge2);border-radius:26px;background:#05080d;box-shadow:0 20px 50px rgba(0,0,0,.6),0 0 30px -14px var(--cyan)}
 .phones img{width:100%;border-radius:20px}
@@ -273,6 +292,9 @@ footer{padding-top:30px;padding-bottom:50px;margin-top:40px}
   .hero-core{height:440px;margin-inline:calc(-1*var(--pad))}
   figure.plate{padding:22px 18px 14px}
   figure.plate.shot{padding:8px 8px 12px}
+  .crop{--cx:var(--px,var(--x,0));--cy:var(--py,var(--y,0));--cw:var(--pw,var(--w,1440));--ch:var(--ph,var(--h,900));--csw:var(--psw,var(--sw,1440))}
+  .zoom-box .bar p{display:none}
+  .zoom-box .bar{justify-content:space-between}
   /* a flow turns to run down the page */
   .flow{grid-template-columns:minmax(0,1fr);gap:20px}
   .flow li{grid-template-columns:52px minmax(0,1fr);column-gap:14px;row-gap:2px;padding:0}
@@ -301,6 +323,8 @@ footer{padding-top:30px;padding-bottom:50px;margin-top:40px}
   .tiles.four{grid-template-columns:minmax(0,1fr)}
   .part{letter-spacing:.2em;font-size:11px}
   details.fold summary span{display:none}
+  .phones a:nth-child(n+2){display:none}
+  .phones a{flex-basis:280px}
 }
 @media (min-width:521px) and (max-width:860px){.tiles.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}details.fold summary .icon{transition:none}}
