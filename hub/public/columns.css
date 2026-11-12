@@ -67,6 +67,6 @@
 
 /* ---------- phone: one thread at a time, pins ignored (the rail never shows there) ---------- */
 @media (max-width:720px){
-  .cols .c-pin,.cols .c-close,.row-pin{display:none}
+  .cols .c-pin,.cols .c-close,.thread-row:is(:hover,:focus-within,.pinned) .row-pin{display:none}
   .thread-row:is(:hover,:focus-within,.pinned) .thread .last{padding-right:0}
 }

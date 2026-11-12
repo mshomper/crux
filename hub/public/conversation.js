@@ -43,7 +43,7 @@ export class Conversation {
   constructor({ project, thread, template, host, compose }) {
     Object.assign(this, { project, thread, host, compose });
     this.el = template.content.firstElementChild.cloneNode(true);
-    this.el.dataset.thread = thread;
+    this.el.dataset.col = thread;   // not data-thread: that mark means "click to open this thread" across the page
     const q = s => this.el.querySelector(s);
     this.head = q('.main-head'); this.title = q('.c-title'); this.sub = q('.c-sub'); this.badge = q('.c-badge'); this.acts = q('.head-actions');
     this.pinBtn = q('.c-pin'); this.closeBtn = q('.c-close'); this.retireBtn = q('.c-retire'); this.finishBtn = q('.c-retire-finished');
