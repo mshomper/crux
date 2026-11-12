@@ -10,6 +10,7 @@ import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { rollup } from './rollup.mjs';
+import { placeImages, placedImages, imageProblems } from './images.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tpl = join(here, '..', 'template');
@@ -18,7 +19,8 @@ const pad = n => String(n).padStart(4, '0');
 const safeJson = v => JSON.stringify(v).replace(/</g, '\\u003c');
 const fill = (t, data) => t.replace('/*{{DATA}}*/', () => safeJson(data));
 const isRecord = d => typeof d?.id === 'number' && !!d.title && Array.isArray(d.options);
-const mtime = f => { try { return statSync(f).mtimeMs; } catch { return -1; } };
+const mdText = s => String(s).replace(/\s+/g, ' ').replace(/[\\`*_[\]<>]/g, '\\$&');
+const mtime = f =>{ try { return statSync(f).mtimeMs; } catch { return -1; } };
 
 // How many pages in the folder git still tracks: 0 or more, or null when git is missing or the folder is not in a repo.
 export function trackedPages(dir) {
@@ -89,16 +91,33 @@ export function refreshPages(dir) {
   return true;
 }
 
-// Build one folder. pagesOnly writes just the pages and index.html (the refresh after a pull): no .md, no .gitignore.
+// The hub's picture store (decision 23) for post_visual ids named in records: <repo>/.crux/attachments, where the
+// repo is the folder above .decisions or, in a worktree, the main checkout git points at. Null when there is none.
+export function attachmentsFor(dir) {
+  const near = join(dirname(resolve(dir)), '.crux', 'attachments');
+  if (existsSync(near)) return near;
+  try {
+    const common = String(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000, windowsHide: true })).trim();
+    const main = join(dirname(common), '.crux', 'attachments');
+    return existsSync(main) ? main : null;
+  } catch { return null; }
+}
+
+// Build one folder. pagesOnly writes just the pages and index.html (the refresh after a pull): no .md, no .gitignore,
+// no pictures copied. A full build first copies pictures records name by path or hub id into images/ (decision 43).
 // Returns { count, problems }.
-export function build(dir, { pagesOnly = false } = {}) {
+export function build(dir, { pagesOnly = false, attachments } = {}) {
   dir = resolve(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const problems = [];
+  if (!pagesOnly) {
+    const placed = placeImages(dir, { attachments: attachments === undefined ? () => attachmentsFor(dir) : attachments });
+    problems.push(...placed.warnings);
+  }
   const css = readFileSync(join(tpl, 'shared.css'), 'utf8');
   const pageTpl = readFileSync(join(tpl, 'page.html'), 'utf8').replace('/*{{CSS}}*/', css);
   const indexTpl = readFileSync(join(tpl, 'index.html'), 'utf8').replace('/*{{CSS}}*/', css);
 
-  const problems = [];
   const decisions = [];
   for (const f of readdirSync(dir).filter(f => f.endsWith('.json')).sort()) {
     try {
@@ -118,11 +137,12 @@ export function build(dir, { pagesOnly = false } = {}) {
     seen.set(d.id, d._file);
     for (const n of [...(d.depends_on || []), ...(d.conflicts || [])]) if (!links[n]) problems.push(`${d._file} refers to missing decision ${pad(n)}`);
     if (d.status === 'decided' && !d.options.some(o => o.key === d.chosen)) problems.push(`${d._file} is decided but its chosen option "${d.chosen}" does not exist`);
+    if (!pagesOnly) problems.push(...imageProblems(d, dir, d._file.replace(/\.html$/, '.json')));
   }
 
   if (!pagesOnly) ensureGitignore(dir);
   for (const d of decisions) {
-    writeFileSync(join(dir, d._file), fill(pageTpl, { ...d, _links: links }));
+    writeFileSync(join(dir, d._file), fill(pageTpl, { ...d, _links: links, _images: placedImages(d) }));
     if (!pagesOnly) writeFileSync(join(dir, d._file.replace(/\.html$/, '.md')), markdown(d));
   }
   writeFileSync(join(dir, 'index.html'), fill(indexTpl, decisions.map(({ sketch, ...d }) => ({ ...d, options: d.options.map(({ sketch, ...o }) => o) }))));
@@ -149,9 +169,17 @@ function markdown(d) {
     if (d.reason) L.push('', `Reason: ${d.reason}`);
     L.push('');
   }
-  L.push(`## Context`, '', d.context || '', '', `## Options`, '');
+  L.push(`## Context`, '', d.context || '', '');
+  // Decision 43: pictures as relative links, so GitHub and a phone show them. Shared ones here, the rest per option.
+  const pics = placedImages(d), keys = new Set(d.options.map(o => o.key));
+  const pic = i => [`![${mdText(i.caption || 'Picture')}](${i.file.split('/').map(encodeURIComponent).join('/')})`, ...(i.caption ? ['', `*${mdText(i.caption)}*`] : []), ''];
+  const shared = pics.filter(i => !keys.has(i.option));
+  if (shared.length) { L.push(`## Pictures`, ''); for (const i of shared) L.push(...pic(i)); }
+  L.push(`## Options`, '');
   for (const o of d.options) {
     L.push(`### ${o.key}: ${o.name}${o.key === d.chosen ? ' (chosen)' : ''}${o.key === d.recommended ? ' (recommended)' : ''}`, '', o.summary || '');
+    const own = pics.filter(i => i.option === o.key);
+    if (own.length) { L.push(''); for (const i of own) L.push(...pic(i)); }
     for (const p of o.pros || []) L.push(`- Pro: ${p}`);
     for (const c of o.cons || []) L.push(`- Con: ${c}`);
     if (o.effort) L.push(`- Effort: ${o.effort}`);

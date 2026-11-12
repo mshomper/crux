@@ -197,6 +197,14 @@ const server = createServer(async (req, res) => {
     // Crux decision pages for each project: /p/<project>/<file>
     const m = /^\/p\/([^/]+)\/([\w.-]+\.html)$/.exec(url.pathname);
     if (m) return serveFile(res, hub.project(decodeURIComponent(m[1])).board.pageFile(m[2]));   // unmerged picks first (decision 35)
+    // Their pictures (decision 43): /p/<project>/images/<file>, the cards' galleries and the pages' relative links.
+    const im = /^\/p\/([^/]+)\/images\/([\w-][\w.-]*\.(?:png|jpg|gif|webp))$/.exec(url.pathname);
+    if (im) {
+      const file = hub.project(decodeURIComponent(im[1])).board.imageFile(im[2]);
+      if (!file) return send(res, 404, { error: 'Not found' });
+      res.writeHead(200, { 'content-type': TYPES[extname(file)], 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'same-origin' });
+      return res.end(readFileSync(file));
+    }
 
     // Pages ask this to know the hub is running, so they can show a link back to it (they may be opened as files).
     if (url.pathname === '/api/ping') {
@@ -212,14 +220,15 @@ const server = createServer(async (req, res) => {
       return send(res, 200, html, TYPES['.html']);
     }
 
-    // Any project's Crux pages under the roll-up folders: only .html files inside a .decisions folder.
+    // Any project's Crux pages under the roll-up folders: only .html and .md files inside a .decisions folder, and the
+    // pictures in its images folder (decision 43).
     const f = /^\/files\/(\d+)\/(.+)$/.exec(url.pathname);
     if (f) {
       const root = roots[Number(f[1])];
       const rel = decodeURIComponent(f[2]);
       const file = root && normalize(join(root, rel));
       if (!file || !file.startsWith(root + (root.endsWith('\\') ? '' : '\\')) && !file.startsWith(root + '/')) return send(res, 403, { error: 'Forbidden' });
-      if (!/[\\/]\.decisions[\\/][\w.-]+\.(html|md)$/.test(file)) return send(res, 403, { error: 'Only Crux pages are served here' });
+      if (!/[\\/]\.decisions[\\/]([\w.-]+\.(html|md)|images[\\/][\w-][\w.-]*\.(png|jpg|gif|webp))$/.test(file)) return send(res, 403, { error: 'Only Crux pages are served here' });
       // Decision 41: pages are built locally; rebuild a folder's stale ones first, and serve the .md if a page is missing.
       if (file.endsWith('.html')) {
         try { refreshPages(dirname(file)); } catch (e) { console.warn('Crux page refresh failed:', e.message); }

@@ -1,0 +1,36 @@
+/* Decision 43: the pictures button on decision cards and its gallery (pictures.js). The gallery reuses the image
+   viewer's frame (.viewer, .viewer-bar in style.css). */
+.decision .foot .btn.pics-btn{flex:0 0 auto;gap:6px;padding:4px 10px;font-size:12.5px;color:var(--text);border:1px solid var(--hud-line,var(--line));background:rgba(111,227,255,.05)}
+.pics-btn .icon{width:17px;height:17px;color:var(--hud-cyan,var(--accent))}
+.decision .foot .btn.pics-btn:hover,.decision .foot .btn.pics-btn:focus-visible{border-color:var(--hud-cyan,var(--accent))}
+.pics-n{font-variant-numeric:tabular-nums;font-weight:600}
+
+.gallery{width:min(1200px,calc(100vw - 24px))}
+.gallery .gal-title{color:var(--text)}
+.gal-count{flex:none;font:600 11px/1 var(--mono,monospace);letter-spacing:.12em;color:var(--hud-cyan,var(--accent));padding:0 6px}
+.gal-stage{position:relative;display:flex;align-items:center;justify-content:center;min-height:0;flex:1;padding:10px 60px;background:rgba(0,0,0,.25);touch-action:pan-y}
+.gallery.single .gal-stage{padding:10px}
+.gallery .gal-img{display:block;max-width:100%;max-height:calc(100dvh - 150px);object-fit:contain;margin:auto;user-select:none;-webkit-user-drag:none}
+.gal-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:64px;display:grid;place-items:center;border:1px solid var(--hud-line,var(--line));border-radius:4px;background:rgba(6,11,18,.72);color:var(--text);cursor:pointer;padding:0}
+.gal-nav:hover,.gal-nav:focus-visible{border-color:var(--hud-cyan,var(--accent));color:var(--hud-cyan,var(--accent));outline:none}
+.gal-nav .icon{width:22px;height:22px}
+.gal-nav.prev{left:8px}
+.gal-nav.next{right:8px}
+.gal-nav.next .icon{transform:scaleX(-1)}
+.gallery.single .gal-nav{display:none}
+.gal-foot{display:flex;gap:10px;align-items:baseline;padding:9px 14px 11px;border-top:1px solid var(--hud-line,var(--line));font-size:13.5px;line-height:1.45;min-width:0}
+.gal-opt{flex:none;font:600 10.5px/1.6 var(--mono,monospace);letter-spacing:.14em;text-transform:uppercase;color:var(--hud-cyan,var(--accent));border:1px solid var(--hud-line,var(--line));border-radius:3px;padding:0 6px}
+.gal-opt[hidden]{display:none}
+.gal-cap{min-width:0;overflow-wrap:anywhere;color:var(--text)}
+.gal-cap:empty{display:none}
+
+@media (max-width:720px){
+  .decision .foot .btn.pics-btn{min-height:44px;padding:5px 12px}
+  .gallery{width:calc(100vw - 12px);max-height:calc(100dvh - 12px)}
+  /* On a phone the arrows sit under the picture instead of over it; a swipe pages too. */
+  .gal-stage,.gallery.single .gal-stage{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 0 8px}
+  .gallery .gal-img{grid-column:1/-1;grid-row:1;max-height:calc(100dvh - 230px)}
+  .gal-nav{position:static;transform:none;grid-row:2;width:64px;height:44px}
+  .gal-nav.prev{justify-self:start;margin-left:8px}
+  .gal-nav.next{justify-self:end;margin-right:8px}
+}

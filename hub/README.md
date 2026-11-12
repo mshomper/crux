@@ -90,7 +90,9 @@ The orchestrator answers within the permission rules on the project's board, and
 
 When you pick in the hub, or the orchestrator drafts a decision, the record is written into a standing worktree at `<project>/.claude/worktrees/decisions`, on the branch `docs/decisions`, never into the project's main folder (decision 35). The hub rebuilds the Crux pages there, commits the records, and keeps one rolling pull request open, titled "Decision records (rolling)", for you to review and merge. The board reads both the main folder and this worktree, so a pick shows at once.
 
-Only the `.json` and `.md` records go into git; the pages and `index.html` stay local, ignored by a `.gitignore` inside `.decisions` (decision 41). The hub writes that file in the worktree, and rebuilds any page that is missing or older than its record when a project loads and before it opens a page. If a page cannot be built, it opens the `.md` record instead.
+A decision's pictures travel with it (decision 43). Agents name them in the record's `images` list, as a `post_visual` id or an absolute file path; when the hub commits the record it copies each one into `.decisions/images/NNNN-name.png` (PNGs wider than 1600 px are shrunk, with no extra software) and rewrites the entry. The decision card then has a pictures button that opens them as a gallery, and the `.md` and the page show them too. A picture that is missing, not an image, or over 3 MB is left out, and the orchestrator's thread gets a notice.
+
+Only the `.json` and `.md` records and their pictures go into git; the pages and `index.html` stay local, ignored by a `.gitignore` inside `.decisions` (decision 41). The hub writes that file in the worktree, and rebuilds any page that is missing or older than its record when a project loads and before it opens a page. If a page cannot be built, it opens the `.md` record instead.
 
 This needs the project to be a git repo with git installed. `gh`, signed in, is optional: without it (or offline) the commit stays local, a notice says so, and the next write tries again. A project that is not a git repo keeps its records in its own `.decisions/` folder. A test hub never pushes.
 

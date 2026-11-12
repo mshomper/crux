@@ -1,13 +1,14 @@
 // Where decision records land (decision 35 A): never in the project's main folder (convention C005). Picks from the
 // hub page, and the orchestrator's drafts, are written into a standing worktree, <project>/.claude/worktrees/decisions,
-// on the branch docs/decisions. The hub builds the Crux pages there, commits the records (.json, .md; the pages stay
-// local, decision 41), pushes, and keeps one rolling pull request open, "Decision records (rolling)". The board reads the main folder plus this worktree, so a pick shows at once.
+// on the branch docs/decisions. The hub builds the Crux pages there, commits the records (.json, .md and their pictures
+// in .decisions/images, decision 43; the pages stay local, decision 41), pushes, and keeps one rolling pull request open, "Decision records (rolling)". The board reads the main folder plus this worktree, so a pick shows at once.
 // If pushing or the pull request fails (offline, no gh), the commit stays local, a notice says so, and the next write retries.
 import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { execFileSync, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ensureGitignore } from '../../crux/scripts/build.mjs';
+import { placeImages } from '../../crux/scripts/images.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const BUILD = resolve(here, '../../crux/scripts/build.mjs');
@@ -108,8 +109,19 @@ export class DecisionsDesk {
     return this.commit(message);
   }
 
+  // Decision 43: pictures a record names (a post_visual id from the hub's attachments, or an absolute path, as the
+  // orchestrator writes them) are copied into .decisions/images before the commit, so they land on the same PR.
+  get attachmentsDir() { return join(this.projectDir, '.crux', 'attachments'); }
+  placeImages() {
+    try {
+      const { warnings } = placeImages(this.decisionsDir, { attachments: this.attachmentsDir });
+      for (const w of warnings) this.notice(`Decision pictures: ${w}`);
+    } catch (e) { console.warn('Copying decision pictures failed:', e.message); }
+  }
+
   commit(message) {
     this.ignorePages();
+    this.placeImages();
     this.rebuild();
     this.git(['add', '-A', '--', '.decisions']);
     if (this.tryGit(['diff', '--cached', '--quiet']) !== null) return null;   // nothing changed
@@ -172,6 +184,9 @@ export class DecisionsDesk {
     const f = join(this.decisionsDir, name);
     return existsSync(f) && statSync(f).isFile() ? f : null;
   }
+
+  // A record picture (decision 43), the worktree's copy when it has one.
+  image(name) { return this.page(join('images', name)); }
 }
 
 export function readJson(file) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } }
