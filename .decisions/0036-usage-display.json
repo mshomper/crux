@@ -1,0 +1,53 @@
+{
+  "id": 36,
+  "slug": "usage-display",
+  "title": "How does the hub show Matt's usage?",
+  "date": "2026-11-11",
+  "mode": "quick",
+  "lenses": ["data-model", "ui"],
+  "status": "decided",
+  "context": "Matt wants to see his plan usage, and Fable usage in particular, in the hub's visual display. The Agent SDK gives per-turn tokens and estimated cost per model (stable), and the plan limits behind /usage (5-hour, 7-day, per-model weekly windows with reset times) through a method marked experimental, plus rate_limit events. The hub keeps none of it today.",
+  "depends_on": [2, 17, 20, 31],
+  "conflicts": [],
+  "options": [
+    {
+      "key": "A",
+      "name": "Plan meters plus per-model totals",
+      "summary": "A hub-wide poller reads plan usage every few minutes through the experimental call and listens for rate_limit events. A usage event per turn goes into the append-only log, so totals survive restarts. The always-on strip carries 5-hour, 7-day and Fable meters, with a usage panel on click. If the experimental call fails, the meters hide quietly.",
+      "pros": ["Answers how close Matt is to his limits, including Fable", "Totals survive restarts", "Degrades quietly"],
+      "cons": ["Relies on an experimental SDK method", "Medium effort"],
+      "effort": "Medium",
+      "source": "claude"
+    },
+    {
+      "key": "B",
+      "name": "Per-model totals only",
+      "summary": "Stable data only: today's and the session's tokens and estimated cost per agent and model, in a panel.",
+      "pros": ["Stable features only"],
+      "cons": ["No plan percentages or reset times"],
+      "effort": "Small",
+      "source": "claude"
+    },
+    {
+      "key": "C",
+      "name": "Limit warnings only",
+      "summary": "No meters; an amber notice near a limit, red when work is blocked.",
+      "pros": ["Least effort"],
+      "cons": ["Least information"],
+      "effort": "Small",
+      "source": "claude"
+    }
+  ],
+  "criteria": [],
+  "recommended": "A",
+  "recommendation": "It answers what Matt asked, including Fable, and the quiet fallback makes the experimental risk acceptable.",
+  "confidence": "lean",
+  "chosen": "A",
+  "reason": null,
+  "decided_on": "2026-11-11",
+  "superseded_by": null,
+  "challenge": null,
+  "settles": [
+    { "key": "usage display", "value": "plan meters (5-hour, 7-day, per-model incl. Fable) in the always-on strip from the SDK usage method plus rate_limit events, per-turn usage events in the log, a usage panel on click; hide quietly if the experimental call fails" }
+  ]
+}
