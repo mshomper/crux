@@ -100,9 +100,11 @@ const routes = {
   'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },
   // The off switch for decision 21: false sends every permission request to you.
   // Per repo (decision 34): { project, permissionMode: 'auto' | 'standard' }.
-  'POST /api/settings': ({ routePermissions, project, permissionMode }) => {
+  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors }) => {
     if (project && permissionMode) hub.setPermissionMode(hub.project(project), permissionMode);
-    return { settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(), permissionMode: project ? hub.permissionMode(hub.project(project)) : undefined };
+    if (project && typeof connectors === 'boolean') hub.setConnectors(hub.project(project), connectors);   // Matt's claude.ai connectors
+    const p = project ? hub.project(project) : null;
+    return { settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(), permissionMode: p ? hub.permissionMode(p) : undefined, connectors: p ? hub.connectorsOn(p) : undefined };
   },
 
   // One image from the composer, as a data URL. Stored by content hash; returns { id, type, size } (decision 23).

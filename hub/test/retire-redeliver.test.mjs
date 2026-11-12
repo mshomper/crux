@@ -50,7 +50,8 @@ test('a message cut off by a restart is delivered again, once, with a note', asy
     ev('message', 20, { thread: 'orchestrator', from: 'orchestrator-1', text: 'Hi' }),
     ev('message', 2, { thread: 'orchestrator', from: 'you', text: 'retire phone-reach please' })
   ]);
-  await new Promise(r => setTimeout(r, 5));
+  // The hub redelivers on a timer after start-up; under a busy parallel test run a fixed 5 ms was not always enough.
+  for (let i = 0; i < 200 && !sent.length; i++) await new Promise(r => setTimeout(r, 10));
   assert.deepEqual(sent, [['orchestrator-1', 'retire phone-reach please']]);
   assert.ok(p.log.ofType('notice').some(n => /restarted before your message/.test(n.text)));
 });
@@ -67,6 +68,6 @@ test('answered, old, or quick-pick messages are not delivered again', async () =
     ev('message', 3, { thread: 'w2', from: 'you', text: 'all' }),
     ev('pick', 3, { decision: 1, thread: 'orchestrator' })
   ]);
-  await new Promise(r => setTimeout(r, 5));
+  await new Promise(r => setTimeout(r, 200));   // long enough for the start-up timer to have run, even under load
   assert.deepEqual(sent, []);
 });

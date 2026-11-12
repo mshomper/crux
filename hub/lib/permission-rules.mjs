@@ -159,6 +159,15 @@ class Check {
     }
     // Reading docs is allowed (R004) but the hub cannot tell a docs page from any other address.
     if (tool === 'WebFetch') return this.unsure(`Reads a web page (${String(input.url || '').slice(0, 80)})`);
+    // Matt's claude.ai connectors (Gmail, Calendar, Drive, ...): anything that sends, shares, changes or deletes is a
+    // hard stop in every mode; reading goes to the orchestrator (a code project rarely needs Matt's mail); a tool not on
+    // the read list is a hard stop by default.
+    const conn = connectorTool(tool);
+    if (conn) {
+      if (conn.kind === 'read') return this.unsure(`Reads Matt's ${conn.service} (${conn.name}): only if the task clearly needs it`, true);
+      if (conn.kind === 'draft') return this.unsure(`Writes a draft in Matt's ${conn.service} (${conn.name}); nothing is sent`, true);
+      return this.stop(`Acts in Matt's ${conn.service} (${conn.name}): sends, shares, changes or deletes, or is not a known read`);
+    }
     if (tool.startsWith('mcp__crux__') || KNOWN_TOOLS.has(tool)) return;
     this.unsure(`A tool the hub does not know (${tool})`);
   }
@@ -629,6 +638,28 @@ export function defaultRules(projectDir, tmp = tmpdir()) {
       `UNCLEAR requests (including commands the hub can't read in full) come to the orchestrator (answer_permission), which allows them if they are contained and part of the task, and otherwise escalates; Matt gets them after 2 minutes. When unsure, escalate.`
     ].join('\n')
   };
+}
+
+// claude.ai connector tools are named mcp__claude_ai_<Service>__<tool>. Only these reads (and Gmail drafts) are not
+// hard stops; everything else a connector offers is, including tools added later.
+const CONNECTOR_READS = {
+  Gmail: ['search_threads', 'get_thread', 'get_message', 'list_labels', 'list_drafts', 'get_draft'],
+  Google_Calendar: ['list_calendars', 'list_events', 'get_event', 'search_events', 'suggest_time'],
+  Google_Drive: ['search_files', 'read_file_content', 'get_file_metadata', 'get_file_permissions', 'list_recent_files', 'list_shared_drives', 'get_shared_drive_metadata', 'download_file_content']
+};
+const CONNECTOR_DRAFTS = { Gmail: ['create_draft', 'update_draft'] };
+// The claude.ai connector servers known today, disallowed by name when a project has connectors off (a server-level
+// spec removes every tool of that server). New ones are kept out by disableClaudeAiConnectors, and stopped here anyway.
+export const CONNECTOR_SERVERS = ['Gmail', 'Google_Calendar', 'Google_Drive', 'Claude_Docs', 'Three_js_3D_Viewer', 'Slack', 'Notion', 'Linear', 'Atlassian', 'Asana', 'Canva', 'Figma']
+  .map(s => `mcp__claude_ai_${s}`);
+
+// { service, name, kind: 'read' | 'draft' | 'act' } for a claude.ai connector tool, else null.
+export function connectorTool(tool) {
+  const m = /^mcp__claude_ai_(.+?)__(.+)$/.exec(String(tool || ''));
+  if (!m) return null;
+  const [, service, name] = m;
+  const kind = CONNECTOR_READS[service]?.includes(name) ? 'read' : CONNECTOR_DRAFTS[service]?.includes(name) ? 'draft' : 'act';
+  return { service: service.replace(/_/g, ' '), name, kind };
 }
 
 // The newest active "permission rules" requirement on a board, or null (no rules: nothing is routed).

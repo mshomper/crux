@@ -4,7 +4,7 @@ import { userContent } from './attachments.mjs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
-import { rulesEntry } from './permission-rules.mjs';
+import { rulesEntry, CONNECTOR_SERVERS } from './permission-rules.mjs';
 
 class Inbox {
   constructor() { this.items = []; this.waiters = []; this.closed = false; }
@@ -106,13 +106,17 @@ export class Agent {
     // A type's tools are limits, as in Claude Code: they set which built-in tools it has. They do not skip
     // permission cards. The board tools are always there.
     const builtIn = type?.tools?.filter(t => !t.startsWith('mcp__'));
+    // Matt's claude.ai connectors (mail, calendar, drive) are off unless this project turns them on: they are neither
+    // connected (disableClaudeAiConnectors) nor offered (the known connector servers are disallowed by name).
+    const connectors = this.hub.connectorsOn ? this.hub.connectorsOn(p) : false;
     return {
       cwd: p.dir,
       systemPrompt: { type: 'preset', preset: 'claude_code', append },
       settingSources: ['user', 'project', 'local'],
       mcpServers: { crux: cruxTools(this.hub, p, this) },
       allowedTools: cruxToolNames(this),
-      disallowedTools: this.role === 'orchestrator' ? ['NotebookEdit'] : [],
+      disallowedTools: [...(this.role === 'orchestrator' ? ['NotebookEdit'] : []), ...(connectors ? [] : CONNECTOR_SERVERS)],
+      ...(connectors ? {} : { settings: { disableClaudeAiConnectors: true } }),
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
       ...(builtIn?.length ? { tools: builtIn } : {}),
