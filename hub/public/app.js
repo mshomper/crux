@@ -17,6 +17,8 @@ import { md } from './markdown.js';
 import { retiredView, RETIRED_RECENT_DAYS } from './retired-list.js';
 import { SideResizer } from './side-width.js';
 import { routeSwitch } from './route-switch.js';
+import { picturesButton, installPictures } from './pictures.js';
+installPictures();   // decision 43: the pictures button on decision cards opens a gallery
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
 { const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
@@ -522,7 +524,7 @@ function decisionCard(p, d) {
     <div class="card-head"><h3>D${pad(d.id)} · ${esc(d.title)}</h3>${keys ? `<span class="keys">${open ? `Keys ${esc(keys)}` : keys}</span>` : ''}<span class="chip ${esc(d.status)}">${esc(d.status)}</span></div>
     ${d.context ? `<p class="ctx">${esc(d.context)}</p>` : ''}
     ${found ? '' : `<div class="options">${opts}</div>`}
-    <div class="foot">${foot}<span class="spacer"></span><a href="/p/${encodeURIComponent(p.name)}/${esc(d.page)}" target="_blank" rel="noopener" class="row">${icon('page')}Full page</a></div>
+    <div class="foot">${foot}<span class="spacer"></span>${picturesButton(p.name, d)}<a href="/p/${encodeURIComponent(p.name)}/${esc(d.page)}" target="_blank" rel="noopener" class="row">${icon('page')}Full page</a></div>
   </article>`;
 }
 

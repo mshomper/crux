@@ -13,7 +13,7 @@ import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs'
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, pageBuild } from './lib/relaunch.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, pageBuild } from './lib/relaunch.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
 
@@ -32,8 +32,11 @@ const retireAt = Number(flag('--retire-at', 60));
 const noAgents = testHubWithoutAgents({ args, env: process.env });
 if (args.includes('--no-agents')) args.splice(args.indexOf('--no-agents'), 1);
 
+// A test hub never falls back to ~/crux/hub.json or the current folder: that loads real projects.
+const folderError = testHubFolderError({ noAgents, folders: args });
+if (folderError) { console.error(folderError); process.exit(1); }
 let projects = args.map(a => resolve(a));
-const cfg = join(homedir(), 'crux', 'hub.json');
+const cfg = join(process.env.CRUX_HOME || join(homedir(), 'crux'), 'hub.json');
 // hub.json may also hold { "defaults": { "worker": { "model": "sonnet", "effort": "medium" }, "orchestrator": {...} } }.
 let hubCfg = {};
 if (existsSync(cfg)) {
@@ -197,6 +200,14 @@ const server = createServer(async (req, res) => {
     // Crux decision pages for each project: /p/<project>/<file>
     const m = /^\/p\/([^/]+)\/([\w.-]+\.html)$/.exec(url.pathname);
     if (m) return serveFile(res, hub.project(decodeURIComponent(m[1])).board.pageFile(m[2]));   // unmerged picks first (decision 35)
+    // Their pictures (decision 43): /p/<project>/images/<file>, the cards' galleries and the pages' relative links.
+    const im = /^\/p\/([^/]+)\/images\/([\w-][\w.-]*\.(?:png|jpg|gif|webp))$/.exec(url.pathname);
+    if (im) {
+      const file = hub.project(decodeURIComponent(im[1])).board.imageFile(im[2]);
+      if (!file) return send(res, 404, { error: 'Not found' });
+      res.writeHead(200, { 'content-type': TYPES[extname(file)], 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'same-origin' });
+      return res.end(readFileSync(file));
+    }
 
     // Pages ask this to know the hub is running, so they can show a link back to it (they may be opened as files).
     if (url.pathname === '/api/ping') {
@@ -212,14 +223,15 @@ const server = createServer(async (req, res) => {
       return send(res, 200, html, TYPES['.html']);
     }
 
-    // Any project's Crux pages under the roll-up folders: only .html files inside a .decisions folder.
+    // Any project's Crux pages under the roll-up folders: only .html and .md files inside a .decisions folder, and the
+    // pictures in its images folder (decision 43).
     const f = /^\/files\/(\d+)\/(.+)$/.exec(url.pathname);
     if (f) {
       const root = roots[Number(f[1])];
       const rel = decodeURIComponent(f[2]);
       const file = root && normalize(join(root, rel));
       if (!file || !file.startsWith(root + (root.endsWith('\\') ? '' : '\\')) && !file.startsWith(root + '/')) return send(res, 403, { error: 'Forbidden' });
-      if (!/[\\/]\.decisions[\\/][\w.-]+\.(html|md)$/.test(file)) return send(res, 403, { error: 'Only Crux pages are served here' });
+      if (!/[\\/]\.decisions[\\/]([\w.-]+\.(html|md)|images[\\/][\w-][\w.-]*\.(png|jpg|gif|webp))$/.test(file)) return send(res, 403, { error: 'Only Crux pages are served here' });
       // Decision 41: pages are built locally; rebuild a folder's stale ones first, and serve the .md if a page is missing.
       if (file.endsWith('.html')) {
         try { refreshPages(dirname(file)); } catch (e) { console.warn('Crux page refresh failed:', e.message); }

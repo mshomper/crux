@@ -99,6 +99,8 @@ test('the page sends every answer to the card\'s project', () => {
   assert.match(hub, /decisionCard\(p, d\)/);
   assert.match(hub, /data-pj="\$\{esc\(g\.name\)\}"/);
   assert.doesNotMatch(hub, /class="hub-group" data-project=/, 'data-project switches project on any click inside');
+  // a decision's pictures (decision 43) come from the card's own project, so they are right in All projects too
+  assert.match(/function decisionCard\([\s\S]*?\n\}/.exec(APP)[0], /picturesButton\(p\.name, d\)/);
   // .map(approvalCard) would pass the list index as the project
   assert.doesNotMatch(APP, /\.map\((approvalCard|questionCard)\)/);
 });

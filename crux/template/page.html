@@ -65,6 +65,13 @@
 .warn-read{border-color:var(--warn)}.warn-read .icon{color:var(--warn)}
 .bad-read{border-color:var(--bad)}.bad-read .icon{color:var(--bad)}
 .ruled{margin-top:12px}
+.pics{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px}
+.pic{margin:0;display:grid;gap:6px;min-width:0}
+.pic a{display:block;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface2)}
+.pic a:hover{border-color:var(--accent)}
+.pic img{display:block;width:100%;height:auto;max-height:70vh;object-fit:contain}
+.pic.small img{max-height:220px}
+.pic figcaption{font-size:13px;color:var(--muted)}
 .deep-chip{background:var(--accent-bg);color:var(--accent);border-color:transparent}
 .hub-nav{display:flex;gap:8px;align-items:center}.hub-nav a{display:inline-flex;align-items:center;gap:7px;padding:6px 14px 6px 11px;border-radius:999px;border:1px solid var(--line2);background:var(--surface);color:var(--text);font-size:13.5px;font-weight:500;text-decoration:none;transition:border-color .15s,background .15s,color .15s}.hub-nav a[hidden]{display:none}.hub-nav a svg{width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.hub-nav a:hover{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}.hub-nav a.hub{background:var(--accent-bg);border-color:transparent;color:var(--accent)}.hub-nav a.hub:hover{border-color:var(--accent)}
 </style>
@@ -121,6 +128,11 @@ if (D.status === 'parked'){
 if ((D.log_refs||[]).length) h += `<p class="muted row" style="gap:6px">${I.book}Also in the repo's log: ${D.log_refs.map(r=>`<span class="code">${esc(r.file)}</span> ${esc(r.entry||'')}`).join(', ')}</p>`;
 if (D.status === 'superseded' && D.superseded_by) h += `<div class="callout bad">Replaced by decision ${refLinks([D.superseded_by])}.</div>`;
 
+// Decision 43: pictures stored with the record (images/...), shared ones before the options, the rest in their option.
+const pics = D._images || [], optKeys = new Set(opts.map(o => o.key));
+const fig = (i, small) => `<figure class="pic${small?' small':''}"><a href="${esc(i.file)}" target="_blank" rel="noopener" title="Open the full picture"><img src="${esc(i.file)}" alt="${esc(i.caption||'Picture')}" loading="lazy"></a>${i.caption?`<figcaption>${esc(i.caption)}</figcaption>`:''}</figure>`;
+const sharedPics = pics.filter(i => !optKeys.has(i.option));
+if (sharedPics.length) h += `<h2>Pictures</h2><div class="pics">${sharedPics.map(i => fig(i)).join('')}</div>`;
 h += `<h2>Options</h2><div class="options">`;
 for (const o of opts){
   const rec = o.key === D.recommended, ch = decided && o.key === D.chosen;
@@ -129,6 +141,7 @@ for (const o of opts){
     ${(rec||ch||o.source==='human')?`<div class="row">${rec?`<span class="badge rec">${I.star}${(D.status==='found'||D.deliberate)?'In the code now':'Recommended'}</span>`:''}${ch?`<span class="badge ch">${I.check}Chosen</span>`:''}${o.source==='human'?'<span class="chip">Your option</span>':''}</div>`:''}
     ${o.sketch?`<div class="sketch">${o.sketch}</div>`:''}
     <p style="margin:0">${esc(o.summary)}</p>
+    ${pics.filter(i => i.option === o.key).map(i => fig(i, true)).join('')}
     <ul class="pc">${(o.pros||[]).map(p=>`<li class="pro">${I.plus}<span>${esc(p)}</span></li>`).join('')}${(o.cons||[]).map(c=>`<li class="con">${I.minus}<span>${esc(c)}</span></li>`).join('')}</ul>
     ${o.effort?`<p class="note" style="margin:0">Effort: ${esc(o.effort)}</p>`:''}
     ${(o.assumptions||[]).length?`<div class="sub">Assumes</div><ul class="mini">${o.assumptions.map(a=>`<li>${I.dot}<span>${esc(a)}</span></li>`).join('')}</ul>`:''}
