@@ -26,6 +26,14 @@ export function testHubWithoutAgents({ args = [], env = process.env, tmp = tmpdi
   return !!env.CRUX_HUB_DATA && (norm(env.CRUX_HUB_DATA) + '/').startsWith(norm(tmp) + '/');
 }
 
+// A test hub must be given its project folders on the command line; it never reads ~/crux/hub.json or uses the
+// current folder, which would load real projects. Returns the message to print, or '' when the start is fine.
+export function testHubFolderError({ noAgents, folders = [] }) {
+  return noAgents && !folders.length
+    ? 'Test hub refused: give its project folders on the command line (it never falls back to hub.json or the current folder).'
+    : '';
+}
+
 // A short fingerprint of the page's files (every file under public/, names and contents). It changes whenever
 // any page file does, so an open page can tell that it is out of date.
 export function pageBuild(dir) {

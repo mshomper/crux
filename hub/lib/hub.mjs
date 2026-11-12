@@ -74,7 +74,8 @@ export class Hub {
     this.usage.restore();
     // After listeners are attached: wake the agents a restart interrupted (M014), every project, a few seconds apart.
     this.resumed = [];
-    setTimeout(() => {
+    // A test hub has no real agents, so it writes no resume or hint notices into the logs.
+    if (!this.noAgents) setTimeout(() => {
       for (const p of this.projects.values()) this.rulesHint(p);
       this.resumeAll();
     }, 0);
