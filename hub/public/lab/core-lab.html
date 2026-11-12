@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Core lab</title>
+<style>
+  :root{--hud-cyan:#6fe3ff;--hud-ice:#d8f6ff;--hud-dim:rgba(111,227,255,.55);--hud-line:rgba(111,227,255,.16);--mono:"Cascadia Mono",Consolas,ui-monospace,monospace}
+  html,body{margin:0;background:#070b11;color:var(--hud-cyan);font-family:var(--mono);overflow-x:hidden}
+  #sheet{position:relative;overflow:hidden;
+    background:linear-gradient(rgba(111,227,255,.04) 1px,transparent 1px) 0 0/28px 28px,linear-gradient(90deg,rgba(111,227,255,.04) 1px,transparent 1px) 0 0/28px 28px,linear-gradient(180deg,#0b121c,#06090e)}
+  canvas{position:absolute;left:0;top:0;pointer-events:none}
+  header{position:absolute;left:0;right:0;top:0;padding:14px 20px 0;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+  header b{font-size:13px;letter-spacing:.3em;text-transform:uppercase;color:var(--hud-ice);font-weight:600;white-space:nowrap}
+  header span{font:400 13px/1.35 system-ui,"Segoe UI",sans-serif;color:#9fb6c8}
+  .cap{position:absolute;transform:translateX(-50%);text-align:center;white-space:nowrap}
+  .cap b{display:block;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--hud-ice);font-weight:600}
+  .cap i{display:block;font-style:normal;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--hud-dim);margin-top:3px}
+  .rule{position:absolute;left:20px;right:20px;height:1px;background:var(--hud-line)}
+  .rule span{position:absolute;left:0;top:-18px;font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--hud-dim)}
+  .strip{position:absolute;border:1px solid var(--hud-line);background:rgba(7,11,17,.7);box-sizing:border-box}
+  .strip u{position:absolute;right:8px;top:5px;text-decoration:none;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--hud-dim)}
+  .phone .cap b{font-size:9.5px;letter-spacing:.14em}.phone .cap i{font-size:8.5px}
+  .phone header{padding:10px 12px 0;gap:4px}.phone header b{font-size:11px;letter-spacing:.2em}.phone header span{font-size:11.5px}
+</style>
+</head>
+<body>
+<div id="sheet"><canvas id="lines"></canvas><canvas id="glow"></canvas><header></header></div>
+<script type="module">
+import { VARIANTS, coreLook, stream } from './core-variants.js';
+import { createRenderer } from '../map-gl.js';
+import { HudPainter } from '../map-hud.js';
+import { STRIDE, bend } from '../map-particles.js';
+
+const q = new URLSearchParams(location.search);
+const V = VARIANTS[q.get('v') || 'A'], key = q.get('v') || 'A';
+const live = q.has('live');
+const W = Number(q.get('w')) || innerWidth, phone = W <= 720;
+document.body.style.width = W + 'px';
+const sheet = document.getElementById('sheet');
+sheet.classList.toggle('phone', phone);
+sheet.querySelector('header').innerHTML = `<b>Core ${key} · ${V.name}</b><span>${V.line}</span>`;
+
+const OPUS = 'claude-opus-5-5';
+const S = {
+  idle: { cap: 'Idle', sub: '8% context', in: { state: 'idle', ctx: 8, model: OPUS, effort: 'high' } },
+  work: { cap: 'Working', sub: '30% context', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' } },
+  near: { cap: 'Near handoff', sub: '58% of 60%', in: { state: 'working', ctx: 58, model: OPUS, effort: 'high' } },
+  wait: { cap: 'Waiting on Matt', sub: 'red flare at the edge', in: { state: 'idle', ctx: 30, model: OPUS, effort: 'high', needs: true } },
+  spark: { cap: 'Permission spark', sub: 'request allowed', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' }, spark: 'allowed' },
+  due: { cap: 'Handoff due', sub: 'gold pulse', in: { state: 'idle', ctx: 61, model: OPUS, effort: 'high' } },
+  hand: { cap: 'Handing off', sub: 'writing the handoff', in: { state: 'writing', ctx: 61, model: OPUS, effort: 'high' } },
+  ask: { cap: 'Ask mode', sub: 'field held on hoops', in: { state: 'idle', ctx: 30, model: OPUS, effort: 'high', mode: 'ask' } },
+  deny: { cap: 'Permission spark', sub: 'sent to Matt', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' }, spark: 'escalated' },
+  sonnet: { cap: 'Sonnet · low effort', sub: 'working, 30%', in: { state: 'working', ctx: 30, model: 'claude-sonnet-5-5', effort: 'low' } },
+  haiku: { cap: 'Haiku · medium', sub: 'working, 30%', in: { state: 'working', ctx: 30, model: 'claude-haiku-5-5', effort: 'medium' } },
+  fable: { cap: 'Fable · max effort', sub: 'working, 45%, two workers in flight', in: { state: 'working', ctx: 45, model: 'claude-fable-5-2', effort: 'max' } }
+};
+
+// ---- lay the sheet out: big tiles (the open map's core size), then the strip as it sits over the chat ----
+const tiles = [], caps = [], strips = [], rules = [];
+let H;
+if (!phone) {
+  const cw = W / 6, r = 76, th = 330, top = 58;
+  [['idle', 'work', 'near', 'wait', 'spark', 'due'], ['hand', 'ask', 'deny', 'sonnet', 'haiku', 'fable']].forEach((row, j) => row.forEach((id, i) => {
+    tiles.push({ ...S[id], x: cw * (i + 0.5), y: top + th * j + 158, r, e: 1, stations: id === 'fable' ? [{ x: cw * (i + 0.5) - 132, y: top + th * j + 52, r: 13 }, { x: cw * (i + 0.5) + 128, y: top + th * j + 250, r: 13 }] : [] });
+    caps.push({ x: cw * (i + 0.5), y: top + th * j + 322, ...S[id] });
+  }));
+  const sy = top + th * 2 + 62;
+  rules.push({ y: sy - 12, text: 'In the strip above the chat (actual size)' });
+  const sw = (W - 40 - 4 * 12) / 5;
+  ['idle', 'work', 'near', 'wait', 'spark'].forEach((id, i) => {
+    const x0 = 20 + i * (sw + 12), cx = x0 + sw / 2, cy = sy + 62;
+    strips.push({ x: x0, y: sy, w: sw, h: 124, text: S[id].cap });
+    tiles.push({ ...S[id], x: cx, y: cy, r: 31, e: 0, stations: id === 'work' || id === 'near' || id === 'spark' ? [{ x: cx - 118, y: sy + 52, r: 12 }, { x: cx + 118, y: sy + 52, r: 12 }] : [], idleStations: [{ x: cx - 118, y: sy + 52, r: 12 }, { x: cx + 118, y: sy + 52, r: 12 }] });
+  });
+  H = sy + 124 + 22;
+} else {
+  const cw = W / 2, r = 47, th = 232, top = 66;
+  ['idle', 'work', 'near', 'wait', 'spark', 'due', 'hand', 'ask'].forEach((id, k) => {
+    const i = k % 2, j = (k / 2) | 0;
+    tiles.push({ ...S[id], x: cw * (i + 0.5), y: top + th * j + 100, r, e: 1, stations: [] });
+    caps.push({ x: cw * (i + 0.5), y: top + th * j + 200, ...S[id] });
+  });
+  const sy = top + th * 4 + 40;
+  rules.push({ y: sy - 12, text: 'In the phone strip (actual size)' });
+  ['idle', 'work', 'near', 'wait', 'spark'].forEach((id, i) => {
+    const y0 = sy + i * 58;
+    strips.push({ x: 0, y: y0, w: W, h: 50, text: S[id].cap });
+    tiles.push({ ...S[id], x: W / 2, y: y0 + 25, r: 13, e: 0, stations: id === 'work' || id === 'near' ? [{ x: W / 2 + 70, y: y0 + 25, r: 6 }, { x: W / 2 - 70, y: y0 + 25, r: 6 }] : [], idleStations: [{ x: W / 2 + 70, y: y0 + 25, r: 6 }, { x: W / 2 - 70, y: y0 + 25, r: 6 }] });
+  });
+  H = sy + 5 * 58 + 6;
+}
+sheet.style.height = H + 'px';
+for (const c of caps) sheet.insertAdjacentHTML('beforeend', `<div class="cap" style="left:${c.x}px;top:${c.y}px"><b>${c.cap}</b><i>${c.sub}</i></div>`);
+for (const r of rules) sheet.insertAdjacentHTML('beforeend', `<div class="rule" style="top:${r.y}px"><span>${r.text}</span></div>`);
+for (const s of strips) sheet.insertAdjacentHTML('afterbegin', `<div class="strip" style="left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px"><u>${s.text}</u></div>`);
+
+// ---- cores ----
+const n = phone ? 300 : 760;
+tiles.forEach((t, i) => { t.look = coreLook(t.in); t.core = V.make(n, { seed: 11 + i * 7, light: phone }); t.core.set(t.look, true); });
+const dpr = Math.min(devicePixelRatio || 1, 2);
+const renderer = createRenderer(document.getElementById('glow'));
+renderer.resize(W, H, dpr);
+const hud = new HudPainter(document.getElementById('lines'));
+hud.callout = () => {};   // numbers live in the hover readout, not beside the core
+hud.resize(W, H, dpr);
+for (const cv of sheet.querySelectorAll('canvas')) { cv.style.width = W + 'px'; cv.style.height = H + 'px'; }
+const buf = new Float32Array(tiles.length * (n + 400) * STRIDE);
+const rgba = (c, a) => `rgba(${(c[0] * 255) | 0},${(c[1] * 255) | 0},${(c[2] * 255) | 0},${a})`;
+
+function draw(trail) {
+  let o = 0;
+  for (const t of tiles) {
+    o = t.core.project(t.x, t.y, t.r, buf, o);
+    for (const [k, s] of t.stations.entries()) {
+      const core = { x: t.x, y: t.y }, via = bend(core, s, 0.17, 60), len = Math.hypot(s.x - t.x, s.y - t.y);
+      o = stream(buf, o, core, via, s, t.core.t, t.look.hue, { u0: Math.min(0.5, t.r * 1.05 / len), u1: 1 - (s.r + 3) / len, n: t.r < 20 ? 5 : 9, pace: 0.25 + 0.4 * t.look.energy, seed: k * 0.37 });
+    }
+  }
+  renderer.draw(buf, o, trail);
+}
+
+function lines(time) {
+  const c = hud.c;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+  c.lineCap = 'round';
+  for (const t of tiles) {
+    // light behind the particles, in the model's hue
+    const hue = t.look.gold ? [1, 0.82, 0.48] : t.look.hue, g = c.createRadialGradient(t.x, t.y, 0, t.x, t.y, t.r * 1.5);
+    g.addColorStop(0, rgba(hue, 0.16)); g.addColorStop(0.5, rgba(hue, 0.06)); g.addColorStop(1, rgba(hue, 0));
+    c.fillStyle = g; c.beginPath(); c.arc(t.x, t.y, t.r * 1.5, 0, 6.2832); c.fill();
+    hud.rings({ L: { core: t, at: new Map() }, e: t.e, t: time, boot: 1, core: { state: t.in.state, ctx: t.in.ctx, retireAt: 60 } });
+    for (const s of t.idleStations || t.stations) {
+      c.strokeStyle = 'rgba(111,227,255,.5)'; c.lineWidth = 1.2;
+      c.beginPath(); c.arc(s.x, s.y, s.r + 3, 0, 6.2832); c.stroke();
+      c.fillStyle = 'rgba(111,227,255,.08)'; c.fill();
+    }
+  }
+}
+
+function stepAll(dt) { for (const t of tiles) t.core.step(dt); }
+
+if (live) {
+  let last = performance.now(), nextSpark = 0;
+  const frame = now => {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    stepAll(dt);
+    if (now > nextSpark) { nextSpark = now + 2600; for (const t of tiles) if (t.spark) t.core.spark(t.spark, -0.6); }
+    draw(0.66); lines(now / 1000);
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+} else {
+  // a still: run seven seconds, fire the sparks just before the end, and draw the last frames for the trails
+  const N = 420;
+  for (let k = 0; k < N; k++) {
+    stepAll(1 / 60);
+    if (k === N - 9) for (const t of tiles) if (t.spark) t.core.spark(t.spark, -0.6);
+    if (k >= N - 40) draw(0.66);
+  }
+  lines(7);
+  document.title = 'ready';
+}
+</script>
+</body>
+</html>
