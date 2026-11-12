@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Core lab</title>
+<!-- A test page for the live map's core (M013): every state side by side, drawn by the map's own code.
+     ?live animates it (sparks fire every few seconds; click a sphere for a spark where you clicked). ?w=390 forces phone width. -->
+<style>
+  :root{--hud-cyan:#6fe3ff;--hud-ice:#d8f6ff;--hud-dim:rgba(111,227,255,.55);--hud-line:rgba(111,227,255,.16);--mono:"Cascadia Mono",Consolas,ui-monospace,monospace}
+  html,body{margin:0;background:#070b11;color:var(--hud-cyan);font-family:var(--mono);overflow-x:hidden}
+  #sheet{position:relative;overflow:hidden;
+    background:linear-gradient(rgba(111,227,255,.04) 1px,transparent 1px) 0 0/28px 28px,linear-gradient(90deg,rgba(111,227,255,.04) 1px,transparent 1px) 0 0/28px 28px,linear-gradient(180deg,#0b121c,#06090e)}
+  canvas{position:absolute;left:0;top:0;pointer-events:none}
+  header{position:absolute;left:0;right:0;top:0;padding:14px 20px 0;display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+  header b{font-size:13px;letter-spacing:.3em;text-transform:uppercase;color:var(--hud-ice);font-weight:600;white-space:nowrap}
+  header span{font:400 13px/1.35 system-ui,"Segoe UI",sans-serif;color:#9fb6c8}
+  .cap{position:absolute;transform:translateX(-50%);text-align:center;white-space:nowrap}
+  .cap b{display:block;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--hud-ice);font-weight:600}
+  .cap i{display:block;font-style:normal;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--hud-dim);margin-top:3px}
+  .rule{position:absolute;left:20px;right:20px;height:1px;background:var(--hud-line)}
+  .rule span{position:absolute;left:0;top:-18px;font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--hud-dim)}
+  .strip{position:absolute;border:1px solid var(--hud-line);background:rgba(7,11,17,.7);box-sizing:border-box}
+  .strip u{position:absolute;right:8px;top:5px;text-decoration:none;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--hud-dim)}
+  .phone .cap b{font-size:9.5px;letter-spacing:.14em}.phone .cap i{font-size:8.5px}
+  .phone header{padding:10px 12px 0;gap:4px}.phone header b{font-size:11px;letter-spacing:.2em}.phone header span{font-size:11.5px}
+</style>
+</head>
+<body>
+<div id="sheet"><canvas id="lines"></canvas><canvas id="glow"></canvas><header></header></div>
+<script type="module">
+import { ReservoirCore, paintGlass, stream } from '../map-core.js';
+import { createRenderer } from '../map-gl.js';
+import { HudPainter } from '../map-hud.js';
+import { STRIDE, bend } from '../map-particles.js';
+
+const q = new URLSearchParams(location.search);
+const live = q.has('live');
+const W = Number(q.get('w')) || innerWidth, phone = W <= 720;
+document.body.style.width = W + 'px';
+const sheet = document.getElementById('sheet');
+sheet.classList.toggle('phone', phone);
+sheet.querySelector('header').innerHTML = `<b>Core · glass reservoir</b><span>The liquid level is context used; a full sphere means hand off. ${live ? 'Live: click a sphere for a spark.' : ''}</span>`;
+
+const OPUS = 'claude-opus-5-5';
+const S = {
+  hero: { cap: 'Working', sub: 'Opus, high effort, 42% context', in: { state: 'working', ctx: 42, model: OPUS, effort: 'high' } },
+  idle: { cap: 'Idle', sub: '8% context', in: { state: 'idle', ctx: 8, model: OPUS, effort: 'high' } },
+  work: { cap: 'Working', sub: '30% context', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' } },
+  near: { cap: 'Near handoff', sub: '58% of 60%', in: { state: 'working', ctx: 58, model: OPUS, effort: 'high' } },
+  wait: { cap: 'Waiting on Matt', sub: 'red flare at the edge', in: { state: 'idle', ctx: 30, model: OPUS, effort: 'high', needs: true } },
+  spark: { cap: 'Permission spark', sub: 'request allowed', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' }, spark: 'allowed' },
+  deny: { cap: 'Permission spark', sub: 'sent to Matt', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' }, spark: 'escalated' },
+  due: { cap: 'Handoff due', sub: 'gold pulse', in: { state: 'idle', ctx: 61, model: OPUS, effort: 'high' } },
+  hand: { cap: 'Handing off', sub: 'writing the handoff', in: { state: 'writing', ctx: 61, model: OPUS, effort: 'high' } },
+  ask: { cap: 'Ask mode', sub: 'field held on hoops', in: { state: 'idle', ctx: 30, model: OPUS, effort: 'high', mode: 'ask' } },
+  sonnet: { cap: 'Sonnet · low effort', sub: 'working, 30%', in: { state: 'working', ctx: 30, model: 'claude-sonnet-5-5', effort: 'low' } },
+  haiku: { cap: 'Haiku · medium', sub: 'working, 20%', in: { state: 'working', ctx: 20, model: 'claude-haiku-5-5', effort: 'medium' } },
+  fable: { cap: 'Fable · max effort', sub: 'working, 45%, two workers in flight', in: { state: 'working', ctx: 45, model: 'claude-fable-5-2', effort: 'max' } },
+  still: { cap: 'Reduced motion', sub: 'the still: no particles', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high', needs: true }, still: true }
+};
+
+// ---- lay the sheet out: big tiles (the open map's core size), then the strip as it sits over the chat ----
+const tiles = [], caps = [], strips = [], rules = [];
+const add = (id, x, y, r, capY, extra = {}) => { tiles.push({ ...S[id], id, x, y, r, e: 1, stations: [], ...extra }); if (capY) caps.push({ x, y: capY, ...S[id] }); };
+let H;
+if (!phone) {
+  const top = 58, th = 330, hw = 500, cw = (W - hw) / 4, r = 76;
+  add('hero', hw / 2 + 10, top + th, 168, top + th + 250);
+  [['idle', 'work', 'near', 'wait'], ['spark', 'deny', 'due', 'hand']].forEach((row, j) => row.forEach((id, i) => add(id, hw + cw * (i + 0.5), top + th * j + 158, r, top + th * j + 322)));
+  const cw3 = W / 5, y3 = top + th * 2;
+  ['ask', 'sonnet', 'haiku', 'fable', 'still'].forEach((id, i) => {
+    const cx = cw3 * (i + 0.5);
+    add(id, cx, y3 + 158, r, y3 + 322, id === 'fable' ? { stations: [{ x: cx - 150, y: y3 + 60, r: 13 }, { x: cx + 150, y: y3 + 235, r: 13 }] } : {});
+  });
+  const sy = y3 + th + 62;
+  rules.push({ y: sy - 12, text: 'In the strip above the chat (actual size)' });
+  const sw = (W - 40 - 4 * 12) / 5;
+  ['idle', 'work', 'near', 'wait', 'spark'].forEach((id, i) => {
+    const x0 = 20 + i * (sw + 12), cx = x0 + sw / 2, st = [{ x: cx - 118, y: sy + 52, r: 12 }, { x: cx + 118, y: sy + 52, r: 12 }];
+    strips.push({ x: x0, y: sy, w: sw, h: 124, text: S[id].cap });
+    add(id, cx, sy + 62, 31, 0, { e: 0, stations: ['work', 'near', 'spark'].includes(id) ? st : [], rings: st });
+  });
+  H = sy + 124 + 22;
+} else {
+  const cw = W / 2, r = 47, th = 232, top = 66 + 300;
+  add('hero', W / 2, 66 + 150, 104, 66 + 290);
+  ['idle', 'work', 'near', 'wait', 'spark', 'deny', 'due', 'hand', 'ask', 'still'].forEach((id, k) => {
+    const i = k % 2, j = (k / 2) | 0;
+    add(id, cw * (i + 0.5), top + th * j + 100, r, top + th * j + 200);
+  });
+  const sy = top + th * 5 + 40;
+  rules.push({ y: sy - 12, text: 'In the phone strip (actual size)' });
+  ['idle', 'work', 'near', 'wait', 'spark'].forEach((id, i) => {
+    const y0 = sy + i * 58, st = [{ x: W / 2 + 70, y: y0 + 25, r: 6 }, { x: W / 2 - 70, y: y0 + 25, r: 6 }];
+    strips.push({ x: 0, y: y0, w: W, h: 50, text: S[id].cap });
+    add(id, W / 2, y0 + 25, 13, 0, { e: 0, stations: ['work', 'near'].includes(id) ? st : [], rings: st });
+  });
+  H = sy + 5 * 58 + 6;
+}
+sheet.style.height = H + 'px';
+for (const c of caps) sheet.insertAdjacentHTML('beforeend', `<div class="cap" style="left:${c.x}px;top:${c.y}px"><b>${c.cap}</b><i>${c.sub}</i></div>`);
+for (const r of rules) sheet.insertAdjacentHTML('beforeend', `<div class="rule" style="top:${r.y}px"><span>${r.text}</span></div>`);
+for (const s of strips) sheet.insertAdjacentHTML('afterbegin', `<div class="strip" style="left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px"><u>${s.text}</u></div>`);
+
+// ---- cores: the phone sheet runs the phone's particle budget ----
+tiles.forEach((t, i) => { t.core = new ReservoirCore({ light: phone, seed: 11 + i * 7 }); t.core.setMood(t.in); t.core.settle(); });
+const dpr = Math.min(devicePixelRatio || 1, 2);
+const renderer = createRenderer(document.getElementById('glow'));
+renderer.resize(W, H, dpr);
+const hud = new HudPainter(document.getElementById('lines'));
+hud.resize(W, H, dpr);
+for (const cv of sheet.querySelectorAll('canvas')) { cv.style.width = W + 'px'; cv.style.height = H + 'px'; }
+const buf = new Float32Array(tiles.reduce((n, t) => n + t.core.capacity + 40, 0) * STRIDE);
+
+function draw(trail) {
+  let o = 0;
+  for (const t of tiles) {
+    if (t.still) continue;
+    o = t.core.project(t.x, t.y, t.r, buf, o);
+    for (const [k, s] of t.stations.entries()) {
+      const core = { x: t.x, y: t.y }, via = bend(core, s, 0.17, 60), len = Math.hypot(s.x - t.x, s.y - t.y);
+      o = stream(buf, o, core, via, s, t.core.t, t.core.look.hue, { u0: Math.min(0.5, t.r * 1.05 / len), u1: 1 - (s.r + 3) / len, n: t.r < 20 ? 5 : 9, pace: 0.25 + 0.4 * t.core.look.energy, seed: k * 0.37 });
+    }
+  }
+  renderer.draw(buf, o, trail);
+}
+
+function lines(time) {
+  const c = hud.c;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+  c.lineCap = 'round';
+  for (const t of tiles) {
+    const f = { L: { core: t, at: new Map() }, e: t.e, t: time, boot: 1, core: { state: t.in.state }, glass: t.core.view(), staticCore: !!t.still };
+    hud.aura(f);
+    hud.glass(f);
+    hud.rings(f);
+    for (const s of t.rings || t.stations) {
+      c.strokeStyle = 'rgba(111,227,255,.5)'; c.lineWidth = 1.2;
+      c.beginPath(); c.arc(s.x, s.y, s.r + 3, 0, 6.2832); c.stroke();
+      c.fillStyle = 'rgba(111,227,255,.08)'; c.fill();
+    }
+  }
+}
+
+const stepAll = dt => { for (const t of tiles) if (!t.still) t.core.step(dt); };
+
+if (live) {
+  let last = performance.now(), nextSpark = 1500;
+  const frame = now => {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    stepAll(dt);
+    if (now > nextSpark) { nextSpark = now + 3200; for (const t of tiles) if (t.spark) t.core.spark(t.spark, -0.6); }
+    draw(0.66); lines(now / 1000);
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+  sheet.addEventListener('click', e => {
+    const b = sheet.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
+    const t = tiles.filter(t => !t.still).sort((p, q) => Math.hypot(mx - p.x, my - p.y) / p.r - Math.hypot(mx - q.x, my - q.y) / q.r)[0];
+    if (t) t.core.spark(e.shiftKey ? 'escalated' : 'allowed', Math.atan2(my - t.y, mx - t.x));
+  });
+} else {
+  // a still: run seven seconds, fire the sparks shortly before the end, and draw the last frames for the trails.
+  // ?at=0.3 sets how long before the end the sparks fire.
+  const N = 420, lead = Math.round((Number(q.get('at')) || 0.17) * 60);
+  for (let k = 0; k < N; k++) {
+    stepAll(1 / 60);
+    if (k === N - lead) for (const t of tiles) if (t.spark || t.id === 'hero') t.core.spark(t.spark || 'allowed', -0.6);
+    if (k >= N - 40) draw(0.66);
+  }
+  lines(7);
+  document.title = 'ready';
+}
+</script>
+</body>
+</html>

@@ -5,17 +5,10 @@
 import { clamp, lerp } from './map-layout.js';
 import { bend, onCurve, COLORS, TONE } from './map-particles.js';
 import { hueOf, rgb01, pipCount } from './models.js';
+import { paintGlass } from './map-core.js';
 
 const rgb = (c, a) => `rgba(${(c[0] * 255) | 0},${(c[1] * 255) | 0},${(c[2] * 255) | 0},${a})`;
 const TAU = Math.PI * 2;
-const MONO = '"Cascadia Mono", Consolas, ui-monospace, monospace';
-
-export function ctxColor(ctx, retireAt) {
-  if (ctx == null) return COLORS.cyan;
-  if (ctx >= retireAt) return COLORS.red;
-  if (ctx >= retireAt * 0.8) return COLORS.amber;
-  return COLORS.cyan;
-}
 
 export class HudPainter {
   constructor(canvas) {
@@ -36,7 +29,8 @@ export class HudPainter {
     c.clearRect(0, 0, this.w, this.h);
     c.lineCap = 'round';
     this.edges(f);
-    if (f.staticCore) this.staticCore(f); else this.aura(f);
+    this.aura(f);
+    this.glass(f);
     this.rings(f);
     this.stations(f);
     this.pings(f);
@@ -97,8 +91,6 @@ export class HudPainter {
   rings({ L, e, t, boot, core: info }) {
     const c = this.c, { x, y, r } = L.core;
     const b = boot ?? 1;
-    const col = ctxColor(info.ctx, info.retireAt);
-    const vacant = info.state === 'vacant';
     // inner scale: rotating ticks
     const R1 = r * 1.18;
     c.save();
@@ -131,17 +123,8 @@ export class HudPainter {
     c.setLineDash([]);
 
     if (e > 0.02) {
-      // radar sweep, full map only
-      const R4 = r * 1.9, a = t * 0.9;
-      if (c.createConicGradient) {
-        const g = c.createConicGradient(a - 1.1, x, y);
-        g.addColorStop(0, rgb(COLORS.cyan, 0));
-        g.addColorStop(0.17, rgb(COLORS.cyan, 0.32 * e));
-        g.addColorStop(0.175, rgb(COLORS.cyan, 0));
-        c.strokeStyle = g;
-        c.lineWidth = 10;
-        c.beginPath(); c.arc(x, y, R4, a - 1.1, a); c.stroke();
-      }
+      // outermost scale, full map only (the radar sweep is gone: Matt, 2026-11-11)
+      const R4 = r * 1.9;
       c.strokeStyle = rgb(COLORS.cyan, 0.08 * e);
       c.lineWidth = 1;
       c.beginPath(); c.arc(x, y, R4 + 5, 0, TAU); c.stroke();
@@ -153,50 +136,17 @@ export class HudPainter {
       }
     }
 
-    // the callout beside the core, full map only (the floating handoff label is gone; M013 reworks the core)
-    const la = clamp((e - 0.55) / 0.45, 0, 1) * b;
-    if (la > 0) this.callout(L, info, col, la, vacant);
-  }
-
-  // A leader-line callout off the core: generation and context used, placed where no spoke runs.
-  callout(L, info, col, alpha, vacant) {
-    const c = this.c, { x, y, r } = L.core;
-    const taken = [...L.at.values()].map(s => Math.atan2(s.y - y, s.x - x));
-    const gap = a => Math.min(...taken.map(t => Math.abs(Math.atan2(Math.sin(a - t), Math.cos(a - t)))), 9);
-    const cands = [-140, -40, 140, 40, -120, -60, 120, 60, 180, 0].map(d => (d * Math.PI) / 180);
-    const a = cands.reduce((best, k) => gap(k) > gap(best) + 0.05 ? k : best, cands[0]);
-    const R = r * 1.6 + 9;
-    const p0 = { x: x + Math.cos(a) * R, y: y + Math.sin(a) * R };
-    const p1 = { x: p0.x + Math.cos(a) * 18, y: p0.y + Math.sin(a) * 18 };
-    let dir = Math.cos(a) >= 0 ? 1 : -1;
-    if (p1.x + dir * 96 > this.w - 8 || p1.x + dir * 96 < 8) dir = -dir;   // keep it on screen
-    const p2 = { x: clamp(p1.x + dir * 92, 8, this.w - 8), y: p1.y };
-    c.strokeStyle = rgb(COLORS.cyan, 0.55 * alpha);
-    c.lineWidth = 1;
-    c.beginPath(); c.moveTo(p0.x, p0.y); c.lineTo(p1.x, p1.y); c.lineTo(p2.x, p2.y); c.stroke();
-    c.fillStyle = rgb(COLORS.cyan, 0.9 * alpha);
-    c.beginPath(); c.arc(p0.x, p0.y, 2, 0, TAU); c.fill();
-    c.fillRect(dir > 0 ? p2.x - 6 : p2.x, p2.y - 1, 6, 2);
-    c.textAlign = dir > 0 ? 'left' : 'right';
-    const tx = p1.x + dir * 4;
-    c.font = `600 10.5px ${MONO}`;
-    c.fillStyle = rgb(COLORS.cyan, 0.85 * alpha);
-    c.fillText(vacant ? 'ROLE VACANT' : `GEN ${String(info.generation).padStart(2, '0')}`, tx, p1.y - 6);
-    c.font = `600 13px ${MONO}`;
-    c.fillStyle = rgb(col, 0.95 * alpha);
-    c.fillText(info.ctx == null || vacant ? '--' : `${info.ctx}%`, tx, p1.y + 16);
-    c.font = `500 9px ${MONO}`;
-    c.fillStyle = rgb(COLORS.dim, alpha);
-    c.fillText('CONTEXT', tx + dir * (info.ctx == null || vacant ? 22 : 38), p1.y + 15);
+    // (No callout beside the core: nothing is written on it. The numbers are in its hover or tap readout, M013.)
   }
 
   // Soft light behind the particles so the core reads as a source, not a cloud.
-  aura({ L, core: info }) {
+  aura({ L, core: info, glass }) {
     const c = this.c, { x, y, r } = L.core;
-    const col = info.needs ? COLORS.red : info.state === 'vacant' ? COLORS.dim : COLORS.accent;
+    // the light is the model's hue (decision 20), gold while the handoff is written
+    const col = info.state === 'vacant' ? COLORS.dim : glass ? [0, 1, 2].map(i => lerp(glass.hue[i], TONE.handoff[i], glass.gold)) : COLORS.accent;
     const g = c.createRadialGradient(x, y, 0, x, y, r * 1.5);
-    g.addColorStop(0, rgb(COLORS.cyan, info.state === 'vacant' ? 0.06 : 0.2));
-    g.addColorStop(0.45, rgb(col, 0.08));
+    g.addColorStop(0, rgb(col, info.state === 'vacant' ? 0.05 : 0.15));
+    g.addColorStop(0.5, rgb(col, 0.06));
     g.addColorStop(1, rgb(col, 0));
     c.fillStyle = g;
     c.beginPath(); c.arc(x, y, r * 1.5, 0, TAU); c.fill();
@@ -260,25 +210,9 @@ export class HudPainter {
     }
   }
 
-  // Reduced motion: a still core instead of particles.
-  staticCore({ L, core: info }) {
-    const c = this.c, { x, y, r } = L.core;
-    const col = info.needs ? COLORS.red : info.state === 'vacant' ? COLORS.dim : COLORS.cyan;
-    const g = c.createRadialGradient(x, y, 0, x, y, r * 1.1);
-    g.addColorStop(0, rgb(COLORS.white, info.state === 'vacant' ? 0.25 : 0.9));
-    g.addColorStop(0.18, rgb(col, 0.55));
-    g.addColorStop(0.6, rgb(COLORS.accent, 0.14));
-    g.addColorStop(1, rgb(COLORS.accent, 0));
-    c.fillStyle = g;
-    c.beginPath(); c.arc(x, y, r * 1.1, 0, TAU); c.fill();
-    c.strokeStyle = rgb(col, 0.4);
-    c.lineWidth = 1;
-    c.beginPath(); c.arc(x, y, r, 0, TAU); c.stroke();
-    for (let k = 0; k < 3; k++) {
-      c.save(); c.translate(x, y); c.rotate((k * Math.PI) / 3 + 0.3);
-      c.strokeStyle = rgb(COLORS.accent, 0.35);
-      c.beginPath(); c.ellipse(0, 0, r * 1.05, r * 0.36, 0, 0, TAU); c.stroke();
-      c.restore();
-    }
+  // The core's glass sphere and the liquid in it (map-core.js). With reduced motion this is the whole core:
+  // a still sphere at the right level, with a red rim when something waits on Matt.
+  glass({ L, glass, staticCore }) {
+    if (glass) paintGlass(this.c, L.core.x, L.core.y, L.core.r, glass, { still: !!staticCore });
   }
 }

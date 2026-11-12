@@ -1,17 +1,20 @@
 // Crux hub live map (decision 0017): an always-on strip over the conversation that zooms into
 // the centre of the screen as the full map when you engage it.
-//   centre   - the orchestrator role as a particle core; its ring is the holder's context used,
-//              (no context meter: M013 moves context into the particles); the swarm re-forms at each handoff
+//   centre   - the orchestrator role as a glass sphere of liquid light (map-core.js, M013): level = context
+//              used, hue = model, stir = effort and state, red flare = waiting on you, sparks = permission
+//              answers; nothing is written on it, the numbers are in its hover or tap readout
 //   stations - workers, plus You and the Board; red when something needs you
 //   pulses   - messages, summaries, board posts, picks and approvals flying along the edges
 // Driven by the hub's SSE events. With prefers-reduced-motion it draws a still map.
 
 import { MapModel } from './map-model.js';
 import { stripLayout, radialLayout, blendLayouts, easeInOut, clamp, lerp } from './map-layout.js';
-import { ParticleCore, Effects, STRIDE } from './map-particles.js';
+import { Effects, STRIDE, bend } from './map-particles.js';
+import { ReservoirCore, stream } from './map-core.js';
 import { createRenderer } from './map-gl.js';
 import { HudPainter } from './map-hud.js';
 import { NeedsPopover } from './map-needs.js';
+import { CoreReadout, coreReadout } from './map-readout.js';
 import { hueOf, describe } from './models.js';
 
 const ICON = {
@@ -25,7 +28,6 @@ const ICON = {
 };
 const svg = (name, cls = 'hud-i') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const pad2 = n => String(n).padStart(2, '0');
 const DUR = 0.62;           // seconds for the zoom
 const GLYPHS = '█▓▒░<>/\\|=+*#01';
 
@@ -48,11 +50,12 @@ export class LiveMap {
     this.feedKey = '';
     this.last = performance.now();
     this.needsPop = new NeedsPopover({ open: t => this.go(t) });
+    this.readout = new CoreReadout({ open: () => this.go('orchestrator') });
     this.build();
     this.hud = new HudPainter(this.lineCanvas);
-    this.core = new ParticleCore(this.phone ? 300 : 760);
+    this.core = new ReservoirCore({ light: this.phone });   // a phone carries about a third of the particles
     this.fx = new Effects();
-    this.buf = new Float32Array((this.core.n + 700) * STRIDE);
+    this.buf = new Float32Array((this.core.capacity + 700 + 12 * 9) * STRIDE);
     this.setMotion();
     this.reducedMq.addEventListener('change', () => this.setMotion());
     addEventListener('resize', () => this.reduced && this.drawStatic());
@@ -81,14 +84,12 @@ export class LiveMap {
         <canvas class="hud-lines" aria-hidden="true"></canvas>
         <canvas class="hud-glow" aria-hidden="true"></canvas>
         <div class="hud-stations"></div>
-        <div class="hud-read hud-read-l" aria-hidden="true">
-          <span class="k">Orchestrator</span>
-          <span class="v" data-r="gen"></span>
-          <span class="v dim" data-r="ctx"></span>
+        <div class="hud-read hud-read-l">
+          <span class="k">Latest</span>
+          <span class="hud-ticker" data-r="ticker" aria-live="off"></span>
         </div>
         <div class="hud-read hud-read-r">
           <button class="hud-needs" data-needs></button>
-          <span class="hud-ticker" data-r="ticker" aria-live="off"></span>
         </div>
         <header class="hud-top">
           <div class="hud-title"><span class="hud-live"></span><b>Live map</b><span class="dim" data-r="proj"></span></div>
@@ -121,19 +122,46 @@ export class LiveMap {
       if (e.target.closest('[data-needs]')) return this.go('needs');
       if (e.target.closest('.hud-close')) return this.collapse();
       if (e.target.closest('.tele-feed li[data-thread]')) return this.go(e.target.closest('li').dataset.thread);
-      if (this.target === 0) return this.expand();
-      if (this.overCore(e)) this.go('orchestrator');
+      if (this.target === 0) { this.readout.hide(); return this.expand(); }
+      if (!this.overCore(e)) return this.readout.hide();
+      // The core: with a mouse the readout is already showing, so a click opens the chat. A tap shows the
+      // readout first; a second tap (or its button) opens the chat.
+      if (this.touch && !this.readout.open) return this.showReadout();
+      this.readout.hide();
+      this.go('orchestrator');
     });
+    this.panel.addEventListener('pointerdown', e => { this.touch = e.pointerType !== 'mouse'; });
     this.panel.addEventListener('pointermove', e => {
-      this.panel.classList.toggle('over-core', this.target === 1 && this.overCore(e));
+      const over = this.overCore(e);
+      this.panel.classList.toggle('over-core', this.target === 1 && over);
+      if (e.pointerType !== 'mouse') return;
+      // pointing at the core shows its numbers, in the strip and in the open map
+      const on = this.overCore(e, 1.12) && !e.target.closest('.hs, button');
+      if (on && !this.readout.open) this.showReadout();
+      else if (!on && this.readout.open && !this.readoutClosing) { this.readoutClosing = true; this.readout.closeSoon(); }
+      if (on) { this.readoutClosing = false; clearTimeout(this.readout.closeTimer); }
     });
+    this.panel.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') this.readout.closeSoon(); });
   }
 
-  overCore(e) {
+  overCore(e, k = 1.45) {
     if (!this.L) return false;
     const b = this.panel.getBoundingClientRect();
     const { x, y, r } = this.L.core;
-    return Math.hypot(e.clientX - b.left - x, e.clientY - b.top - y) < r * 1.45;
+    return Math.hypot(e.clientX - b.left - x, e.clientY - b.top - y) < r * k;
+  }
+
+  readoutData() {
+    const workers = this.workers.filter(w => w.kind === 'worker');
+    const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;
+    return coreReadout(this.coreInfo || this.model.core(), { busy, resting: workers.length - busy });
+  }
+
+  showReadout() {
+    if (!this.L) return;
+    const b = this.panel.getBoundingClientRect();
+    this.readoutClosing = false;
+    this.readout.show(this.readoutData(), { x: b.left + this.L.core.x, y: b.top + this.L.core.y, r: this.L.core.r, under: this.target === 0 ? b.bottom : null });
   }
 
   go(thread) {
@@ -176,7 +204,8 @@ export class LiveMap {
     this.hidden = hidden;
     const core = this.model.core();
     this.coreInfo = core;
-    this.core.setMood({ state: core.state, ctx: core.ctx, retireAt: core.retireAt, needs: core.needs });
+    this.core.setMood(core);   // state, context, model, effort, waiting on you, Auto or Ask (see coreLook)
+    if (this.readout.open) this.readout.set(this.readoutData());
     const needs = this.model.needsCount();
     const board = this.model.boardCounts();
     this.info = new Map(list.map(w => [w.id, w]));
@@ -200,6 +229,11 @@ export class LiveMap {
     if (res.spin) this.fx.boost(res.spin, now);
     if (res.core === 'handoff') this.core.handoff();
     if (res.core === 'retire') this.core.retire();
+    if (res.spark) {
+      // a permission answer: a spark off the glass on the side of the worker that asked
+      const s = res.spark.to && this.L?.at.get(res.spark.to), c = this.L?.core;
+      this.core.spark(res.spark.kind, s && c ? Math.atan2(s.y - c.y, s.x - c.x) : -Math.PI / 2);
+    }
     if (res.line) this.freshLine = res.line.id;
     this.kick();
   }
@@ -247,9 +281,7 @@ export class LiveMap {
 
   syncText(core, needs) {
     const st = core.state === 'writing' ? 'writing handoff' : core.state;
-    this.decode(this.r.gen, core.state === 'vacant' ? 'NO HOLDER' : `GEN ${pad2(core.generation)} · ${st.toUpperCase()}`);
-    // Context as a number only: no meter, arc or threshold mark (Matt, 2026-11-11; M013 moves it into the particles).
-    this.decode(this.r.ctx, core.ctx == null ? 'CONTEXT --' : `CONTEXT ${core.ctx}%`);
+    // No generation, state or context numbers on screen (Matt, 2026-11-11): the sphere shows them and its readout spells them out.
     this.r.proj.textContent = this.model.project ? `// ${this.model.project.name}` : '';
     for (const el of this.needsEls) {
       const html = needs ? `${svg('alert')}<span>${el.classList.contains('big') ? 'Needs you' : 'Needs you'}</span><b>${needs}</b>` : `<span>All clear</span>`;
@@ -259,12 +291,10 @@ export class LiveMap {
     }
     const workers = this.workers.filter(w => w.kind === 'worker');
     const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;
-    const lvl = core.ctx == null ? '' : core.ctx >= core.retireAt ? 'over' : core.ctx >= core.retireAt * 0.8 ? 'near' : '';
     const holder = `
       <div class="th-k">Orchestrator role</div>
       <div class="th-name"><span>${esc(core.holder || 'No holder')}</span><span class="th-state ${esc(st)}">${esc(st)}</span></div>
-      <div class="th-big ${lvl}"><b>${core.ctx ?? '--'}</b><span>% of context</span></div>
-      <div class="th-act">${core.activity ? `<span class="caret">&gt;</span> ${esc(core.activity)}` : core.state === 'vacant' ? 'Starts when you send a message' : `Generation ${core.generation}`}</div>
+      <div class="th-act">${core.activity ? `<span class="caret">&gt;</span> ${esc(core.activity)}` : core.state === 'vacant' ? 'Starts when you send a message' : 'Point at or tap the core for details'}</div>
       <div class="th-stats"><span><b>${busy}</b>working</span><span><b>${workers.length - busy}</b>resting</span><span class="${needs ? 'hot' : ''}"><b>${needs}</b>need you</span>${this.hidden ? `<span><b>+${this.hidden}</b>off map</span>` : ''}</div>`;
     if (this.holderEl.dataset.html !== holder) { this.holderEl.dataset.html = holder; this.holderEl.innerHTML = holder; }
     const top = this.model.feed[0];
@@ -404,10 +434,11 @@ export class LiveMap {
       p => { if (p.from === 'core') { const b = L.at.get(p.to); if (b) this.core.burst(b.x - L.core.x, b.y - L.core.y); } },
       p => { if (p.to === 'core') this.core.absorb(); });
     let o = this.core.project(L.core.x, L.core.y, L.core.r, this.buf, 0);
-    o = this.fx.project(this.buf, o, L, info, now, this.size.w, this.size.h, this.buf.length / STRIDE);
+    o = this.fx.project(this.buf, o, L, info, now, this.size.w, this.size.h, this.buf.length / STRIDE - 12 * 9);
+    o = this.streams(o, L, info);
     try { this.renderer.draw(this.buf, o, zooming ? 0.35 : lerp(0.72, 0.6, E)); }
     catch (err) { console.warn('Live map renderer stopped:', err); this.renderer = null; this.setMotion(); return; }
-    this.hud.paint({ L, e: E, t: now / 1000, boot: this.boot, core: this.coreInfo || this.model.core(), info, pings: this.fx.pings, now });
+    this.hud.paint({ L, e: E, t: now / 1000, boot: this.boot, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: this.fx.pings, now });
     this.positionStations(L, info);
     if (now - (this.lastText || 0) > 1000) {
       this.lastText = now;
@@ -417,12 +448,31 @@ export class LiveMap {
     requestAnimationFrame(t => this.frame(t));
   }
 
+  // Workers in flight: the core's own particles stream out along the spoke to every worker that is working.
+  streams(o, L, info) {
+    const hue = this.core.look?.hue;
+    if (!hue) return o;
+    let k = 0;
+    for (const [id, s] of L.at) {
+      const st = info.get(id);
+      if (!st || st.kind !== 'worker' || !['working', 'starting'].includes(st.state) || k >= 12) continue;
+      const len = Math.hypot(s.x - L.core.x, s.y - L.core.y) || 1;
+      o = stream(this.buf, o, L.core, bend(L.core, s, 0.17, L.bendMax), s, this.core.t, hue, {
+        u0: Math.min(0.5, (L.core.r * 1.12) / len), u1: 1 - (s.r + 4) / len, n: L.core.r < 20 ? 5 : 9,
+        pace: 0.25 + 0.4 * this.core.look.energy, seed: k++ * 0.37, alpha: st.fade ?? 1
+      });
+    }
+    return o;
+  }
+
   drawStatic() {
     this.e = this.target;
     const L = this.place(this.e);
+    this.entering.clear(); this.leaving.clear();   // a still has no fades: stations are simply there or not
     const info = this.withTransitions(L, performance.now());
     this.renderer?.clear?.();
-    this.hud.paint({ L, e: this.e, t: 0, boot: 1, core: this.coreInfo || this.model.core(), info, pings: [], now: 0, staticCore: true });
+    this.core.settle();   // the still shows the sphere at its level, with no motion
+    this.hud.paint({ L, e: this.e, t: 0, boot: 1, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: [], now: 0, staticCore: true });
     this.positionStations(L, info);
   }
 }
