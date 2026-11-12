@@ -24,7 +24,7 @@ export class Columns {
     this.sig = '';
     this.rail = document.createElement('nav');
     this.rail.className = 'pin-rail';
-    this.rail.setAttribute('aria-label', 'Pinned threads with no room');
+    this.rail.setAttribute('aria-label', 'Open threads with no room for a column');
     this.rail.addEventListener('click', e => { const b = e.target.closest('[data-rail]'); if (b) { this.showFolded(b.dataset.rail); host.changed(true); } });
     // What a conversation asks of its columns: the keyboard, its pin and close buttons; the rest goes to app.js.
     this.convHost = {
@@ -78,8 +78,29 @@ export class Columns {
     for (const c of this.convs.values()) c.el.classList.toggle('kb', c.thread === t);
     return true;
   }
-  // A thread opened again (from the list, a card or the map) starts at its latest message, as it always did.
-  markOpened(t) { const c = this.convs.get(key(this.project, t)); if (c && !c.el.isConnected) c.justOpened = true; }
+  // A thread opened (from the list, a card or the map), even one already on screen, goes to its latest message
+  // (Needs you: to the top), as a click always did. A rail click instead shows a column where you left it.
+  markOpened(t) { const c = this.convs.get(key(this.project, t)); if (c) c.justOpened = true; }
+
+  // Switching projects never changes pins: that project's columns come back as they were. With nothing pinned there,
+  // its orchestrator opens (Matt, 2026-11-11: a project opens on its orchestrator's chat).
+  projectOpened() { this.phoneT = null; if (!this.state.cols.some(c => c.pinned)) this.open('orchestrator'); }
+
+  // Columns whose thread no longer exists here go, and the cleaned list is written back. `valid`: this project's
+  // threads (Needs you, the orchestrator, every agent's thread, retired ones included).
+  prune(valid) {
+    const ok = new Set(valid), s = this.state;
+    const next = P.prune(s, ok, this.host.startThread());
+    if (next !== s) this.set(next);
+    if (this.phoneT && !ok.has(this.phoneT.t)) this.phoneT = null;
+  }
+
+  // A notification's card, drawn in a column already on screen (Needs you first for a waiting card, then the card's
+  // own thread), or null. The page then uses that copy and leaves the layout alone.
+  cardColumn(card, { waiting, thread }) {
+    for (const t of waiting ? ['needs', thread] : [thread]) { const c = t && this.visible(t); if (c?.findCard(card)) return c; }
+    return null;
+  }
 
   // ---------- conversations ----------
   conv(project, t) {
@@ -111,6 +132,8 @@ export class Columns {
   }
 
   render() {
+    const valid = this.host.threads?.();
+    if (valid) this.prune(valid);
     const project = this.project, s = this.state, m = this.measure();
     this.sig = m.sig;
     let { visible, folded } = P.layout(s, m.shown);
@@ -144,8 +167,8 @@ export class Columns {
   // The rail: each folded thread's avatar and its red count; a click shows it in place of the least recently used column.
   renderRail(folded, s, shown) {
     const instead = P.replacedBy(s, shown);
-    const html = `<span class="rail-k" title="Pinned threads with no room for a column at this width">${icon('pin')}</span>`
-      + folded.map(c => this.host.railItem(c.t, instead)).join('');
+    const html = `<span class="rail-k" title="Threads with no room for a column at this width">${icon('pin')}</span>`
+      + folded.map(c => this.host.railItem(c.t, instead, c.pinned)).join('');
     if (this.rail.dataset.html !== html) { this.rail.dataset.html = html; this.rail.innerHTML = html; }
   }
 }

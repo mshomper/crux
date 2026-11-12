@@ -85,6 +85,7 @@ export function open(s, t, shown = MAX_COLS) {
   if (isOpen(s, t)) return show(s, t, shown);
   const loose = s.cols.findIndex(c => !c.pinned);
   let cols, recent = s.recent;
+  // (A project switch does not come through here: switching projects never changes pins; see Columns.projectOpened.)
   if (loose >= 0) { recent = recent.filter(x => x !== s.cols[loose].t); cols = s.cols.map((c, i) => i === loose ? { t, pinned: false } : c); }
   else if (s.cols.length < MAX_COLS) cols = besideKb(s.cols, s.kb, { t, pinned: false });
   else { recent = recent.filter(x => x !== s.kb); cols = s.cols.map(c => c.t === s.kb ? { t, pinned: false } : c); }
@@ -115,6 +116,18 @@ export function close(s, t) {
   if (!isOpen(s, t) || s.cols.length === 1) return s;
   const recent = s.recent.filter(x => x !== t);
   return { cols: s.cols.filter(c => c.t !== t), kb: s.kb === t ? recent[0] : s.kb, recent };
+}
+
+// Columns whose thread no longer exists in this project go (a removed agent, or a name from another project).
+// `valid` is a Set of the project's threads (retired agents' threads stay valid: their column shows, box closed).
+// Nothing left: one loose column on `fallback`, if that is valid here, else Needs you. Unchanged: the same object.
+export function prune(s, valid, fallback = 'needs') {
+  const ok = t => valid.has(t);
+  if (s.cols.every(c => ok(c.t))) return s;
+  const cols = s.cols.filter(c => ok(c.t));
+  if (!cols.length) return initial(ok(fallback) ? fallback : 'needs');
+  const recent = s.recent.filter(ok);
+  return normalize({ cols, kb: ok(s.kb) ? s.kb : recent[0] ?? cols[0].t, recent });
 }
 
 // Unpin: the column closes (its hover label says so), unless it is the only one, which just stops being pinned.

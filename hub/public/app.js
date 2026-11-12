@@ -443,13 +443,14 @@ function threadButton({ id, name, ava, avaClass = '', last, right, agent = null 
     <span class="last">${esc(last)}</span></button><button type="button" class="row-pin" data-row-pin="${esc(id)}" aria-pressed="${pinned}" aria-label="${esc(tip)}" title="${esc(tip)}">${icon('pin')}</button></div>`;
 }
 // A thread's avatar as the rail shows it, with its red count; a click shows it in place of the column named.
-function railItem(t, instead) {
+// A column that is not pinned can fold too (the keyboard went elsewhere): it is labelled as open, not pinned.
+function railItem(t, instead, pinned = true) {
   const p = proj(), n = waitingIn(p, t);
   const agent = t === 'orchestrator' ? orchestrator(p) : p?.agents.find(a => a.thread === t);
   const name = t === 'needs' ? 'Needs you' : t === 'orchestrator' ? 'The orchestrator' : t;
   const where = instead === 'needs' ? 'Needs you' : instead === 'orchestrator' ? 'the orchestrator' : instead;
   const ava = t === 'needs' ? avaHtml({ ava: 'inbox', avaClass: n ? 'needs' : '' }) : avaHtml({ ava: t === 'orchestrator' ? 'orch' : 'agent', avaClass: t === 'orchestrator' ? 'orch' : '', agent });
-  const tip = `${name}: pinned, folded for lack of room.${n ? ` ${n} waiting for your call.` : ''} Click to show it in place of ${where}.`;
+  const tip = `${name}: ${pinned ? 'pinned' : 'open, not pinned'}, folded for lack of room.${n ? ` ${n} waiting for your call.` : ''} Click to show it in place of ${where}.`;
   return `<button type="button" class="rail-item" data-rail="${esc(t)}" aria-label="${esc(tip)}" title="${esc(tip)}">${ava}${n ? `<span class="colbadge">${n}</span>` : ''}</button>`;
 }
 
@@ -742,7 +743,8 @@ function headFor(t) {
     sub = `<span>${esc(p.name)}</span>`;
   }
   const a = p?.agents.find(a => a.thread === t && a.state !== 'retired') || p?.agents.find(a => a.thread === t);
-  const retired = !!(a && a.state === 'retired' && t !== 'orchestrator');
+  // A retired agent's thread, or one with no agent at all (never a usable box: nobody would read it).
+  const retired = !!(a && a.state === 'retired' && t !== 'orchestrator') || !!(p && !a && t !== 'needs' && t !== 'orchestrator');
   return {
     title, sub, retired,
     retire: !!(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring)),
@@ -824,6 +826,14 @@ function toast(msg, tone = 'warn') {
 }
 $('#toast').addEventListener('click', () => { $('#toast').hidden = true; });
 
+function openProject() {
+  cols.projectOpened(); S.mmenu = null;
+  $('#app').classList.remove('show-side');
+  render();
+  phone.viewChanged();
+  focusIfDesk(cols.kbConv()?.input);
+}
+
 // Open a thread (a row in the list, the map, a card's "Open thread", a new agent): the rule is in pins.js. With
 // nothing pinned it replaces the one conversation, as always; beside pinned columns it opens a new one, up to three.
 function selectThread(t) {
@@ -852,7 +862,7 @@ function openCard(project, card) {
   const target = waiting || !ev ? 'needs' : ev.thread;
   $('#app').classList.remove('show-side');
   render();
-  const onScreen = (waiting ? ['needs', ev?.thread] : [target]).filter(Boolean).map(t => cols.visible(t)).find(c => c?.findCard(card));
+  const onScreen = cols.cardColumn(card, { waiting, thread: waiting ? ev?.thread : target });
   if (onScreen) { cols.focus(onScreen.thread); renderThreads(); }
   else { cols.open(target); render(); }
   phone.viewChanged();
@@ -878,6 +888,8 @@ const cols = new Columns({
     proj, render,
     startThread: () => store.get('thread', 'needs'),
     head: headFor, feed: feedFor, railItem,
+    // This project's threads: columns for any other thread are dropped (columns.js prune).
+    threads: () => { const p = proj(); return p ? ['needs', 'orchestrator', ...p.agents.map(a => a.thread)] : null; },
     ready: () => !!proj(),
     act,
     focusBox: focusIfDesk,
@@ -979,7 +991,9 @@ document.addEventListener('click', e => {
     const p = proj();
     return act(async () => { await api('/api/settings', { project: p.name, permissionMode: p.permissionMode === 'auto' ? 'standard' : 'auto' }); await load(); });
   }
-  const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return selectThread('orchestrator'); }   // a project opens on its orchestrator's chat (Matt, 2026-11-11)
+  // A project opens on its orchestrator's chat (Matt, 2026-11-11), unless threads are pinned there: switching projects
+  // never changes pins, so those columns come back as they were (columns.js).
+  const pj = e.target.closest('[data-project]'); if (pj) { S.projMenu = false; S.current = pj.dataset.project; store.set('project', S.current); return openProject(); }
   // A decision on the board opens as a card here, in a HUD panel, not on another page (M008 12).
   const od = e.target.closest('[data-open-decision]');
   if (od) { const p = proj(); return openPanel(decisionCard(p, p.board.decisions.find(d => String(d.id) === od.dataset.openDecision)), `Decision ${od.dataset.openDecision}`); }
@@ -1026,7 +1040,8 @@ const asDataUrl = f => new Promise((ok, fail) => { const r = new FileReader(); r
 let dragDepth = 0;
 const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
 const dropTarget = e => { const c = cols.convAt(e.target) || cols.kbConv(); return c && !c.input.disabled ? c : null; };
-addEventListener('dragenter', e => { if (!hasFiles(e) || !cols.kbConv()) return; e.preventDefault(); dragDepth++; $('#drop-veil').hidden = false; });
+// The drop veil shows only when the keyboard column's box can take images (not in a retired agent's thread).
+addEventListener('dragenter', e => { if (!hasFiles(e) || !cols.kbConv() || cols.kbConv().input.disabled) return; e.preventDefault(); dragDepth++; $('#drop-veil').hidden = false; });
 addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
 addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $('#drop-veil').hidden = true; } });
 addEventListener('drop', e => {

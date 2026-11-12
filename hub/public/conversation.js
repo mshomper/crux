@@ -173,10 +173,11 @@ export class Conversation {
     }
     // Needs you reads from the top: it opens there and stays where you are as cards come and go (M008 1).
     // Conversations open at their latest message and follow new ones while you are at the bottom.
-    // A column back from the rail, or moved, is where you left it.
-    if (saved) feed.scrollTop = saved.bottom && !needs ? feed.scrollHeight : saved.top;
-    else if (needs) { if (this.justOpened) feed.scrollTop = 0; }
-    else if (atBottom || this.justOpened) feed.scrollTop = feed.scrollHeight;
+    // A thread just opened (or clicked again in the list) goes to its latest message, Needs you to its top; a column
+    // back from the rail, or moved, is where you left it.
+    if (this.justOpened) feed.scrollTop = needs ? 0 : feed.scrollHeight;
+    else if (saved) feed.scrollTop = saved.bottom && !needs ? feed.scrollHeight : saved.top;
+    else if (!needs && atBottom) feed.scrollTop = feed.scrollHeight;
     this.justOpened = false;
   }
 

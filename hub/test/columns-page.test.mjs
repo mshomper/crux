@@ -55,7 +55,6 @@ test('phone alerts treat the keyboard column as the one you are looking at', () 
 
 test('a notification card already on screen is used where it is; the lock-on goes to one copy only', () => {
   const fn = /function openCard\([\s\S]*?\n\}/.exec(APP)[0];
-  assert.match(fn, /\['needs', ev\?\.thread\]/, 'Needs you first, then the card\'s own thread');
-  assert.match(fn, /cols\.visible\(t\)\)\.find\(c => c\?\.findCard\(card\)\)/);
+  assert.match(fn, /cols\.cardColumn\(card, \{ waiting, thread: waiting \? ev\?\.thread : target \}\)/, 'the choice is Columns.cardColumn (tested in columns-behaviour)');
   assert.doesNotMatch(fn, /document\.querySelectorAll\('\[data-card\]'\)/, 'not the first copy anywhere on the page');
 });
