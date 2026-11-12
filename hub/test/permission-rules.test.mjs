@@ -28,7 +28,7 @@ test('everyday project work may go to the orchestrator', () => {
     'git switch -c feat/x', 'git checkout feat/x', 'git branch feat/y', 'git stash', 'git reset', 'git reset -- hub/a.mjs',
     'git -C hub status', 'cd hub && npm test', 'ls -la hub', 'mkdir hub/tmp', 'grep -rn "approval" hub/lib',
     'cat hub/package.json | head -5', 'npm test 2>&1 | tail -20', 'echo ok > hub/out.txt',
-    'node server.mjs --port 4748 ../proj', 'cd hub && npm start -- --port 4750',
+    'CRUX_HUB_DATA=/tmp/crux-x/data node server.mjs --port 4748 ../proj', 'cd hub && CRUX_HUB_DATA=/tmp/crux-x npm start -- --port 4750',
     'git push -u origin feat/permission-routing', 'git push origin feat/x:feat/x', 'git -C hub push origin feat/x',
     'gh pr create --title "Routing" --body "See https://example.com/x"',
     `git commit -m "$(cat <<'EOF'\nHub: permission routing\n\nCo-Authored-By: x\nEOF\n)"`
@@ -119,6 +119,8 @@ test('reading or running from outside the project folder is fine (R004); running
     'git -C ../other status', 'git -C ../other log --oneline -3', 'cp ../template.txt hub/x.txt', 'cat \\\\server\\share\\x'
   ]) orch(c);
   for (const c of ['cd ../other; npm test', 'node ../other/build.mjs', 'node scripts/x.mjs --out C:/elsewhere']) unsure(c);
+  // a test hub with no data folder of its own would share the live hub's settings (R005: the live hub)
+  for (const c of ['node server.mjs --port 4748 ../proj', 'cd hub && npm start -- --port 4750', 'npm start --prefix hub -- --port 4750']) unsure(c);
   assert.equal(toolRoute('Read', { file_path: join(projectDir, '..', 'x.txt') }).route, 'allow');
   assert.equal(toolRoute('Glob', { pattern: 'C:/Users/**/*.md' }).route, 'allow');
 });

@@ -8,10 +8,7 @@
 
 Crux is a decision skill for Claude Code: it stops at the few choices that matter, shows you the options as pictures, waits for your pick, and keeps a record every later session reads. Crux Hub is a small chat app for running several Claude agents at once from your desk or your phone, built on the same decision records. Claude does the work around the decision. You make the call.
 
-<!-- IMAGE SLOT: the Hub on a desktop, with a decision card in the conversation and the live strip on top.
-     Restore the line below (move it out of this comment) when assets/hub-hero.png is added.
 <p align="center"><img src="assets/hub-hero.png" alt="Crux Hub: a conversation with an agent, a decision card waiting for a pick, and the live strip of agents above" width="900"></p>
--->
 
 
 ## Try the skill

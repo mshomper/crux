@@ -66,11 +66,13 @@ export class NeedsPopover {
   render() {
     const { approvals, others } = this.items;
     const cards = approvals.map(ev => {
-      const plain = ev.summary?.plain || ev.input?.description || ev.description || `use ${ev.tool}`;
+      // The agent's own description leads when it gave one (as on the card in the thread); else the hub's reading.
+      const desc = String(ev.input?.description || ev.description || '').trim().split('\n')[0].slice(0, 160);
+      const plain = ev.summary?.plain || `use ${ev.tool}`;
       const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
       return `<article class="np-card">
-        <div class="np-who">${esc(ev.agent)} wants to</div>
-        <div class="np-what">${esc(plain[0].toLowerCase() + plain.slice(1))}</div>
+        <div class="np-who">${esc(ev.agent)}${desc ? '' : ' wants to'}</div>
+        <div class="np-what">${esc(desc || plain[0].toLowerCase() + plain.slice(1))}</div>
         ${tags ? `<div class="np-tags">${tags}</div>` : ''}
         <div class="np-acts">
           <button class="np-btn primary" data-approve="${esc(ev.approval)}">${svg('check')}Allow</button>
