@@ -99,7 +99,8 @@ test('the header on a phone: Back is a framed button with air before the name; a
   assert.match(back, /width:46px;height:46px/, 'at least a 44px target');
   assert.match(back, /margin-right:6px/);
   assert.doesNotMatch(css.slice(0, css.indexOf('/* ---------- phone ---------- */')), /\.back\{/, 'phone only');
-  // a project opens on its orchestrator, unless threads are pinned there (decision 39; columns.js projectOpened)
+  // a project opens on its orchestrator, unless threads are pinned there (decision 39; columns.js projectOpened);
+  // All projects pinned does not count, since it is pinned in every project (decision 42)
   assert.match(pub('app.js'), /\[data-project\]'\); if \(pj\) \{[^}]*return openProject\(\); \}/);
-  assert.match(pub('columns.js'), /projectOpened\(\) \{[^}]*if \(!this\.state\.cols\.some\(c => c\.pinned\)\) this\.open\('orchestrator'\); \}/);
+  assert.match(pub('columns.js'), /projectOpened\(\) \{[^}]*if \(!this\.state\.cols\.some\(c => c\.pinned && c\.t !== HUB_THREAD\)\) this\.open\('orchestrator'\); \}/);
 });

@@ -106,6 +106,10 @@ This needs the project to be a git repo with git installed. `gh`, signed in, is 
 
 Pin a thread (the pin in its header, or on its row in the list when you point at it) to keep it open as a column; the next thread you open goes beside it, up to three columns (decision 39). The column you click or type in has the keyboard: a cyan line along its top and a lit message box. A red count in a column's header means a card waits for you there. When the columns do not fit (a narrow window, or the board open), the extra ones fold to a slim rail with their red counts; one click shows a folded one in place of the column you used least recently. With three pinned, opening a fourth thread takes the place of the keyboard column. Pins are remembered on that device, per project. On a phone, one thread at a time as before.
 
+## All projects
+
+When the hub runs more than one project, **All projects** sits above the project switcher (decision 42). It opens as a column: a count bar for everything waiting in every project, then the waiting cards grouped by project, then every orchestrator and agent with its model colour, state, model chip, context ring (the orchestrator's has a gold mark where it hands off) and a red count when something in its thread waits for you. Answer a card right there: it goes to that project's agent or decision without switching project. Click an agent, or Open thread on a question, to go to that thread in its project; the arrow beside a project's name opens the project. All projects has no message box. Pin it like any thread; it stays pinned when you switch projects. The live map's Needs you counter shows the total across projects and opens All projects. On a phone the hub still opens on the project's Needs you (decision 32); All projects is at the top of the thread list. The roll-up page of every project's decision records is the **All decisions** button.
+
 ## Pictures and files in threads
 
 Paste, drop or attach files in any thread, in every open column (the clip beside the message box opens a file picker). Each column keeps its own tray until you send.
@@ -116,7 +120,7 @@ Paste, drop or attach files in any thread, in every open column (the clip beside
 - The hub checks what a file is from its bytes as well as its name: a PDF must start like one, and a text file must be UTF-8 text (or UTF-16 with a byte-order mark, which is saved as UTF-8) with no binary data. A program renamed `.txt` is refused, and so is a CSV that is not UTF-8 (in Excel, save as "CSV UTF-8"). Word, Excel and PowerPoint files are refused with a hint to export to PDF or CSV; SVG pictures and anything else are refused with a list of what is accepted.
 - An attached document never opens as a page inside the hub: it always downloads, as plain text or PDF, so an uploaded `.html` file cannot run.
 
-Agents can post pictures (PNG, JPEG, GIF, WebP, SVG) or a small self-contained HTML page into their thread with `post_visual`; HTML pages run in a sandbox. Messages render Markdown. The hub also serves every project's Crux pages and an All projects view, so decision pages open inside it.
+Agents can post pictures (PNG, JPEG, GIF, WebP, SVG) or a small self-contained HTML page into their thread with `post_visual`; HTML pages run in a sandbox. Messages render Markdown. The hub also serves every project's Crux pages and the All decisions roll-up page, so decision pages open inside it.
 
 ## On your phone (Tailscale)
 

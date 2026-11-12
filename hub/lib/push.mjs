@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { questionOpen } from '../public/questions.js';
+import { HUB_THREAD } from '../public/all-projects.js';
 
 const pad = n => String(n).padStart(4, '0');
 export const QUESTION_GRACE_MS = 60 * 1000; // the orchestrator often answers a worker's question itself
@@ -35,11 +36,13 @@ export function cardsFor(ev, { decisionOpen = () => true } = {}) {
 
 // Is someone already looking at this card in an open hub page? Pages report where they are and how long since
 // the last click or key; a focused page with recent input that shows the card's thread (or Needs you) counts.
+// All projects (decision 42) shows every project's waiting cards, so it counts for a card in any project.
 export function isLooking(card, presences, now = Date.now()) {
   for (const p of presences) {
     const age = now - p.ts;
     if (age > LOOK_FRESH_MS || !p.visible || !p.focused) continue;
     if ((p.idleMs || 0) + age > LOOK_IDLE_MS) continue;
+    if (p.thread === HUB_THREAD) return true;
     if (p.project !== card.project) continue;
     if (p.thread === 'needs' || p.thread === card.thread) return true;
   }

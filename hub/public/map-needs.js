@@ -25,7 +25,7 @@ export class NeedsPopover {
     this.el.addEventListener('pointerenter', () => clearTimeout(this.closeTimer));
     this.el.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') this.closeSoon(); });
     this.el.addEventListener('click', e => {
-      if (e.target.closest('[data-needs-open]')) { this.hide(); this.openThread('needs'); }
+      if (e.target.closest('[data-needs-open]')) { this.hide(); this.openThread(this.multi ? 'all' : 'needs'); }
       if (e.target.closest('[data-pop-close]')) this.hide();
     });
     addEventListener('keydown', e => { if (e.key === 'Escape' && !this.el.hidden) this.hide(); });
@@ -36,10 +36,14 @@ export class NeedsPopover {
   }
 
   // project: the hub's project state; pending: ids of approvals still waiting; total: everything that needs you.
-  set(project, pending, total) {
+  // hub: with more than one project, { approvals (each with its project), total } for every project (decision 42):
+  // the popover then matches the strip's counter and its link opens All projects.
+  set(project, pending, total, hub = null) {
     const done = new Set(project.events.filter(e => e.type === 'approval_result').map(e => e.approval));
-    const approvals = project.events.filter(e => e.type === 'approval' && pending.has(e.approval) && !done.has(e.approval));
-    this.items = { approvals, others: Math.max(0, total - approvals.length) };
+    const approvals = hub ? hub.approvals : project.events.filter(e => e.type === 'approval' && pending.has(e.approval) && !done.has(e.approval));
+    const all = hub ? hub.total : total;
+    this.multi = !!hub;
+    this.items = { approvals, others: Math.max(0, all - approvals.length) };
     if (!this.el.hidden) { if (this.count) { this.render(); this.place(); } else this.hide(); }
   }
 
@@ -71,7 +75,7 @@ export class NeedsPopover {
       const plain = ev.summary?.plain || `use ${ev.tool}`;
       const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
       return `<article class="np-card">
-        <div class="np-who">${esc(ev.agent)}${desc ? '' : ' wants to'}</div>
+        <div class="np-who">${esc(ev.agent)}${this.multi && ev.project ? ` · ${esc(ev.project)}` : ''}${desc ? '' : ' wants to'}</div>
         <div class="np-what">${esc(desc || plain[0].toLowerCase() + plain.slice(1))}</div>
         ${tags ? `<div class="np-tags">${tags}</div>` : ''}
         <div class="np-acts">
@@ -81,7 +85,7 @@ export class NeedsPopover {
         </div>
       </article>`;
     }).join('');
-    const more = others ? `<button class="np-more" data-needs-open>${others} decision${others === 1 ? '' : 's'} or question${others === 1 ? '' : 's'} in Needs you ${svg('arrow')}</button>` : '';
+    const more = others ? `<button class="np-more" data-needs-open>${others} decision${others === 1 ? '' : 's'} or question${others === 1 ? '' : 's'} in ${this.multi ? 'All projects' : 'Needs you'} ${svg('arrow')}</button>` : '';
     this.el.innerHTML = `<header class="np-head"><b>Waiting for you</b><span>${this.count}</span><button class="np-x" data-pop-close aria-label="Close">${svg('x')}</button></header>
       <div class="np-list">${cards || ''}</div>${more}`;
   }
