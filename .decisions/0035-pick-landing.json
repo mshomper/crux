@@ -1,0 +1,77 @@
+{
+ "id": 35,
+ "slug": "pick-landing",
+ "title": "Where should Matt's picks from the hub page land?",
+ "date": "2026-11-11",
+ "mode": "quick",
+ "lenses": [
+  "architecture"
+ ],
+ "status": "decided",
+ "context": "Picking a decision in the hub page wrote the record straight into the project's main folder and rebuilt the pages there. Convention C005 says no one works in main, so those files sat uncommitted until someone swept them into a branch. Builds on decision 2 (the board and its records) and decision 34 (agents work in their own folders).",
+ "depends_on": [
+  2,
+  34
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "A standing docs branch with one open PR",
+   "summary": "The hub writes picks (and the orchestrator's drafts) into a standing worktree on docs/decisions, builds the pages there, commits, pushes, and keeps one rolling pull request open. The board reads the main folder plus the unmerged picks, so a pick shows as decided at once.",
+   "pros": [
+    "The main folder is never touched",
+    "Matt merges records like any other change",
+    "Picks show at once"
+   ],
+   "cons": [
+    "One more branch and PR to merge from time to time"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Committed straight to main by the hub",
+   "summary": "The hub commits each pick to main and pushes it.",
+   "pros": [
+    "No PR to merge"
+   ],
+   "cons": [
+    "Pushes to main without Matt's review",
+    "Breaks the rule that merges to main need his OK"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Left uncommitted in the main folder",
+   "summary": "As before: the record is written into the main folder and the next worker sweeps it into a branch.",
+   "pros": [
+    "No change"
+   ],
+   "cons": [
+    "Breaks C005",
+    "Records can sit uncommitted and be lost or committed by accident"
+   ],
+   "effort": "None",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "Keeps the main folder clean and every record reviewed, at the cost of one rolling PR.",
+ "confidence": "strong",
+ "chosen": "A",
+ "reason": "Picks must not write into the main folder (C005).",
+ "decided_on": "2026-11-11",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "decision record landing",
+   "value": "picks are committed to a standing docs/decisions branch with one rolling PR; never written into the main folder"
+  }
+ ]
+}
