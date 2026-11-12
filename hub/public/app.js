@@ -2,6 +2,7 @@
 import { LiveMap } from './map.js';
 import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
+import { robot } from './robots.js';
 import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
 import { enterAction, insertLineBreak } from './composer-keys.js';
 import { boardView, groupBoard, SECTIONS } from './board.js';
@@ -386,7 +387,7 @@ function threadButton({ id, name, ava, avaClass = '', last, right, agent = null 
   const hue = agent ? hueOf(modelOf(agent)) : null;
   const ring = hue ? ` ring" style="--mh:${hue}" title="${esc(describe(agent))}` : '';
   return `<button class="thread ${S.thread === id ? 'on' : ''}" data-thread="${esc(id)}">
-    <span class="ava ${avaClass}${ring}">${icon(ava)}</span>
+    <span class="ava ${avaClass}${ring}">${agent ? robot(agent) : icon(ava)}</span>
     <span class="name">${esc(name)}</span>${right}
     <span class="last">${esc(last)}</span></button>`;
 }
@@ -521,7 +522,7 @@ function modelChip(a, { button = false, mini = false } = {}) {
   const eff = a.effort ? EFFORT_SHORT[a.effort] : 'default';
   const open = S.mmenu === a.name;
   const [fam, ...ver] = modelLabel(id).split(' ');   // the version and the effort word drop out at phone width
-  const inner = `${a.type ? `<span class="mtype">${esc(a.type)}</span>` : ''}<span class="mname">${esc(fam)}${ver.length ? `<span class="mver"> ${esc(ver.join(' '))}</span>` : ''}</span><span class="msep">·</span><span class="meff">${esc(eff)}</span>${pips(a.effort)}`;
+  const inner = `${robot(a, { size: 18, cls: mini ? 'calm' : '' })}${a.type ? `<span class="mtype">${esc(a.type)}</span>` : ''}<span class="mname">${esc(fam)}${ver.length ? `<span class="mver"> ${esc(ver.join(' '))}</span>` : ''}</span><span class="msep">·</span><span class="meff">${esc(eff)}</span>${pips(a.effort)}`;
   const cls = `mchip ${mini ? 'mini' : ''} ${hue ? '' : 'nohue'} ${a.restartPending ? 'pending' : ''}`;
   const style = hue ? ` style="--mh:${hue}"` : '';
   const tip = `${describe(a)}${a.restartPending ? '. The change applies once it finishes what it is doing' : ''}`;

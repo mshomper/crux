@@ -4,73 +4,82 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Robot lab</title>
-<!-- M015: style directions for the model-family robots. ?w=390 forces phone width; ?only=glyph|mech|visor shows one direction. -->
+<!-- M015: the model-family robots (robots.js) in every size, effort and state. ?w=390 forces phone width. -->
+<link rel="stylesheet" href="../robots.css">
 <style>
-  :root{--hud-cyan:#6fe3ff;--hud-ice:#d8f6ff;--hud-dim:rgba(111,227,255,.55);--hud-line:rgba(111,227,255,.16);--hud-red:#f2727a;--mono:"Cascadia Mono",Consolas,ui-monospace,monospace}
+  :root{--hud-cyan:#6fe3ff;--hud-ice:#d8f6ff;--hud-dim:rgba(111,227,255,.55);--hud-line:rgba(111,227,255,.16);--hud-red:#f2727a;--hud-amber:#f3b955;--mono:"Cascadia Mono",Consolas,ui-monospace,monospace}
   html,body{margin:0;background:#070b11;color:#e8eef5;font-family:system-ui,"Segoe UI",sans-serif;overflow-x:hidden}
   #sheet{padding:16px 18px 22px;box-sizing:border-box;
     background:linear-gradient(rgba(111,227,255,.035) 1px,transparent 1px) 0 0/28px 28px,linear-gradient(90deg,rgba(111,227,255,.035) 1px,transparent 1px) 0 0/28px 28px,linear-gradient(180deg,#0b121c,#06090e)}
   h1{font:600 13px var(--mono);letter-spacing:.3em;text-transform:uppercase;color:var(--hud-ice);margin:0 0 14px}
-  .cols{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:16px}
-  .col{border:1px solid var(--hud-line);background:rgba(7,11,17,.6);padding:14px 14px 16px;min-width:0;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%)}
-  .col h2{font:600 12px var(--mono);letter-spacing:.24em;text-transform:uppercase;color:var(--hud-cyan);margin:0 0 4px}
-  .col p{font-size:13px;line-height:1.4;color:#9fb6c8;margin:0 0 12px;min-height:36px}
-  .lab{font:600 10px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--hud-dim);margin:14px 0 8px;padding-top:10px;border-top:1px solid var(--hud-line)}
-  .fam{display:grid;grid-template-columns:24px 48px minmax(0,1fr) auto;gap:14px;align-items:center;padding:6px 0;color:var(--mh)}
-  .fam .big{justify-self:center}
-  .fam .who{font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;text-align:right;white-space:nowrap}
-  .fam .who i{display:block;font:400 11px system-ui,"Segoe UI",sans-serif;letter-spacing:0;text-transform:none;color:#8296a8;margin-top:2px}
-  .bot{display:block;fill:none;stroke:currentColor;stroke-width:var(--sw);stroke-linecap:round;stroke-linejoin:round;overflow:visible}
-  .bot .f{fill:color-mix(in srgb,currentColor 15%,transparent)}
-  .bot .g{fill:color-mix(in srgb,currentColor calc(var(--glow) * 100%),transparent);stroke:none;filter:drop-shadow(0 0 calc(var(--glow) * 3px) currentColor)}
-  .row{display:flex;gap:12px;align-items:center;flex-wrap:nowrap}
-  .eff{display:flex;gap:10px;align-items:flex-end;color:#b47cff}
-  .eff span{display:grid;justify-items:center;gap:4px;font:500 9px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--hud-dim)}
-  .eff .bot{color:#b47cff}
-  /* a live-map station, as in map.css */
-  .stations{display:flex;gap:20px;justify-content:space-between;padding:6px 6px 0}
-  .st{display:grid;justify-items:center;gap:7px;color:var(--mh)}
-  .st .body{position:relative;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 50% 30%,color-mix(in srgb,var(--mh) 22%,transparent),rgba(6,12,20,.94) 70%);box-shadow:inset 0 0 0 1px var(--mh),0 0 18px color-mix(in srgb,var(--mh) 35%,transparent)}
+  .cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+  .col,.wide{border:1px solid var(--hud-line);background:rgba(7,11,17,.6);padding:14px;min-width:0;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%)}
+  .col h2{font:600 12px var(--mono);letter-spacing:.24em;text-transform:uppercase;margin:0 0 2px;color:var(--mh)}
+  .col p{font-size:12.5px;color:#9fb6c8;margin:0 0 10px}
+  .hero{display:grid;place-items:center;height:150px}
+  .sizes{display:flex;align-items:flex-end;justify-content:center;gap:18px;padding:8px 0 4px}
+  .lab{font:600 10px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--hud-dim);margin:12px 0 8px;padding-top:10px;border-top:1px solid var(--hud-line)}
+  .strip{display:flex;gap:6px;justify-content:space-between}
+  .strip span{display:grid;justify-items:center;gap:4px;font:500 8.500px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--hud-dim);min-width:0}
+  .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:14px;margin-top:14px}
+  .wide .lab:first-child{margin-top:0;padding-top:0;border-top:0}
+  .stations{display:flex;gap:10px;justify-content:space-around;padding:8px 4px 2px}
+  .st{display:grid;justify-items:center;gap:8px}
+  .st .body{position:relative;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 50% 30%,color-mix(in srgb,var(--mh) 28%,transparent),rgba(6,12,20,.94) 70%);box-shadow:inset 0 0 0 1px var(--mh),0 0 18px color-mix(in srgb,var(--mh) 35%,transparent)}
   .st .body::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1.5px solid color-mix(in srgb,var(--mh) 70%,transparent)}
-  .st b{font:600 10.5px var(--mono);letter-spacing:.06em;color:var(--hud-ice)}
-  .st.needs .badge{position:absolute;right:-7px;top:-7px;min-width:15px;height:15px;border-radius:8px;background:var(--hud-red);color:#2a0609;font:700 10px/15px var(--mono);text-align:center;box-shadow:0 0 0 2px #070b11}
-  /* a sidebar thread row */
+  .st b{font:600 10px var(--mono);letter-spacing:.04em;color:var(--hud-ice);white-space:nowrap}
+  .st .badge{position:absolute;right:-7px;top:-7px;min-width:15px;height:15px;border-radius:8px;background:var(--hud-red);color:#2a0609;font:700 10px/15px var(--mono);text-align:center;box-shadow:0 0 0 2px #070b11;z-index:1}
   .side{display:grid;gap:6px}
   .thr{display:grid;grid-template-columns:36px minmax(0,1fr);gap:10px;align-items:center;padding:7px 9px;border-radius:10px;background:#131a24}
-  .thr .ava{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:var(--mh);background:color-mix(in srgb,var(--mh) 12%,#0d131b);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--mh) 60%,transparent)}
+  .thr .ava{position:relative;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#1b2431;box-shadow:0 0 0 1.5px var(--mh)}
   .thr b{display:block;font-size:13.5px;font-weight:600}.thr i{display:block;font-style:normal;font-size:12px;color:#8a98a8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .phone .cols{grid-template-columns:minmax(0,1fr)}
-  .phone .fam{grid-template-columns:24px 48px minmax(0,1fr) auto;gap:10px}
-  .phone .stations{gap:8px}
+  .phone .cols{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .phone .col{padding:10px}
+  .phone .hero{height:110px}
+  .phone .grid2{grid-template-columns:minmax(0,1fr)}
+  .phone .sizes{gap:10px}
 </style>
 </head>
 <body>
 <div id="sheet"></div>
 <script type="module">
-import { STYLES, FAMILIES, robotSvg } from './robot-styles.js';
+import { robot } from '../robots.js';
+import { MODEL_HUES } from '../models.js';
 const q = new URLSearchParams(location.search);
 const W = Number(q.get('w')) || innerWidth, phone = W <= 720;
 document.body.style.width = W + 'px';
 const sheet = document.getElementById('sheet');
 sheet.classList.toggle('phone', phone);
-const only = q.get('only');
-const keys = Object.keys(STYLES).filter(k => !only || k === only);
-const letter = k => 'ABC'[Object.keys(STYLES).indexOf(k)];
-const EFFORT = [['low', 0.3], ['med', 0.48], ['high', 0.66], ['xhigh', 0.83], ['max', 1]];
-const col = k => {
-  const s = STYLES[k], big = phone ? 96 : 128;
-  return `<section class="col"><h2>${letter(k)} · ${s.name}</h2><p>${s.line}</p>
-    <div class="lab" style="margin-top:0">24px · 48px · ${big}px</div>
-    ${FAMILIES.map(f => `<div class="fam" style="--mh:${f.hue}">${robotSvg(k, f.id, { size: 24 })}${robotSvg(k, f.id, { size: 48 })}<span class="big">${robotSvg(k, f.id, { size: big })}</span><span class="who">${f.name}<i>${f.note}</i></span></div>`).join('')}
-    <div class="lab">Effort as eye glow (Opus, low to max)</div>
-    <div class="eff">${EFFORT.map(([n, g]) => `<span>${robotSvg(k, 'opus', { size: 40, glow: g })}${n}</span>`).join('')}</div>
-    <div class="lab">On the live map (one waits on Matt)</div>
-    <div class="stations">${FAMILIES.map((f, i) => `<div class="st ${i === 2 ? 'needs' : ''}" style="--mh:${f.hue}"><span class="body">${robotSvg(k, f.id, { size: 26 })}${i === 2 ? '<span class="badge">1</span>' : ''}</span><b>${f.name.toLowerCase()}</b></div>`).join('')}</div>
-    <div class="lab">In the sidebar</div>
-    <div class="side">${FAMILIES.slice(1, 4).map((f, i) => `<div class="thr" style="--mh:${f.hue}"><span class="ava">${robotSvg(k, f.id, { size: 24 })}</span><span><b>${['reviewer', 'map-core', 'researcher'][i]}</b><i>${['Reading the whole change before Matt click-tests it', 'Posted three style directions', 'Looking up the licence'][i]}</i></span></div>`).join('')}</div>
+const FAM = [
+  { id: 'haiku', model: 'claude-haiku-5-5', name: 'Haiku', note: 'small and quick' },
+  { id: 'sonnet', model: 'claude-sonnet-5-5', name: 'Sonnet', note: 'balanced and sleek' },
+  { id: 'opus', model: 'claude-opus-5-5', name: 'Opus', note: 'larger, heavier frame' },
+  { id: 'fable', model: 'claude-fable-5-2', name: 'Fable', note: 'distinctive, in copper' }
+];
+const EFF = ['low', 'medium', 'high', 'xhigh', 'max'];
+const STATES = [['idle', {}], ['working', {}], ['asleep', {}], ['error', {}], ['needs you', { needs: true }]];
+const big = phone ? 96 : 128;
+const col = f => {
+  const a = (extra = {}) => ({ model: f.model, effort: 'high', state: 'idle', ...extra });
+  return `<section class="col" style="--mh:${MODEL_HUES[f.id]}"><h2>${f.name}</h2><p>${f.note}</p>
+    <div class="hero">${robot(a({ state: 'working' }), { size: big })}</div>
+    <div class="sizes">${[24, 32, 48].map(s => robot(a(), { size: s })).join('')}${phone ? '' : robot(a({ role: 'orchestrator' }), { size: 48 })}</div>
+    <div class="lab">Effort: glow and pips</div>
+    <div class="strip">${EFF.map(e => `<span>${robot(a({ effort: e }), { size: phone ? 28 : 44, cls: 'calm' })}${phone ? e.slice(0, 3) : e}</span>`).join('')}</div>
+    <div class="lab">State</div>
+    <div class="strip">${STATES.map(([n, o]) => `<span>${robot(a({ state: o.needs ? 'idle' : n }), { size: phone ? 28 : 40, ...o })}${phone ? n.split(' ')[0].slice(0, 5) : n}</span>`).join('')}</div>
   </section>`;
 };
-sheet.innerHTML = `<h1>Model robots · three style directions</h1><div class="cols" style="--n:${keys.length}">${keys.map(col).join('')}</div>`;
+const station = (f, name, extra = {}, opt = {}) => `<div class="st" style="--mh:${MODEL_HUES[f.id]}"><span class="body">${robot({ model: f.model, effort: 'high', state: 'working', ...extra }, { size: 28, ...opt })}${opt.needs ? '<span class="badge">1</span>' : ''}</span><b>${name}</b></div>`;
+const thread = (f, name, last, extra = {}) => `<div class="thr" style="--mh:${MODEL_HUES[f.id]}"><span class="ava">${robot({ model: f.model, effort: 'high', state: 'idle', ...extra }, { size: 26 })}</span><span><b>${name}</b><i>${last}</i></span></div>`;
+sheet.innerHTML = `<h1>Model robots · sleek visor</h1>
+  <div class="cols">${FAM.map(col).join('')}</div>
+  <div class="grid2">
+    <section class="wide"><div class="lab">On the live map (one waits on Matt, one asleep)</div>
+      <div class="stations">${station(FAM[0], 'quick-fix', { state: 'asleep' })}${station(FAM[1], 'reviewer')}${station(FAM[2], 'hub-polish', { state: 'idle' }, { needs: true })}${station(FAM[3], 'map-core')}</div></section>
+    <section class="wide"><div class="lab">In the sidebar (the orchestrator wears the crown)</div>
+      <div class="side">${thread(FAM[2], 'Orchestrator · #3', 'Matt picked C. Building it out.', { role: 'orchestrator', state: 'working' })}${thread(FAM[3], 'map-core', 'Posted the robot set', { state: 'working' })}${thread(FAM[1], 'reviewer', 'Reading the whole change before Matt click-tests it')}${thread(FAM[0], 'quick-fix', 'Done. Asleep until needed.', { state: 'asleep' })}</div></section>
+  </div>`;
 document.title = 'ready';
 </script>
 </body>
