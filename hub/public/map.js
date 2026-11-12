@@ -28,7 +28,6 @@ const ICON = {
 };
 const svg = (name, cls = 'hud-i') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const pad2 = n => String(n).padStart(2, '0');
 const DUR = 0.62;           // seconds for the zoom
 const GLYPHS = '█▓▒░<>/\\|=+*#01';
 
@@ -85,14 +84,12 @@ export class LiveMap {
         <canvas class="hud-lines" aria-hidden="true"></canvas>
         <canvas class="hud-glow" aria-hidden="true"></canvas>
         <div class="hud-stations"></div>
-        <div class="hud-read hud-read-l" aria-hidden="true">
-          <span class="k">Orchestrator</span>
-          <span class="v" data-r="gen"></span>
-          <span class="v dim" data-r="ctx"></span>
+        <div class="hud-read hud-read-l">
+          <span class="k">Latest</span>
+          <span class="hud-ticker" data-r="ticker" aria-live="off"></span>
         </div>
         <div class="hud-read hud-read-r">
           <button class="hud-needs" data-needs></button>
-          <span class="hud-ticker" data-r="ticker" aria-live="off"></span>
         </div>
         <header class="hud-top">
           <div class="hud-title"><span class="hud-live"></span><b>Live map</b><span class="dim" data-r="proj"></span></div>
@@ -284,9 +281,7 @@ export class LiveMap {
 
   syncText(core, needs) {
     const st = core.state === 'writing' ? 'writing handoff' : core.state;
-    this.decode(this.r.gen, core.state === 'vacant' ? 'NO HOLDER' : `GEN ${pad2(core.generation)} · ${st.toUpperCase()}`);
-    // Context as a number only: no meter, arc or threshold mark (Matt, 2026-11-11; M013 moves it into the particles).
-    this.decode(this.r.ctx, core.ctx == null ? 'CONTEXT --' : `CONTEXT ${core.ctx}%`);
+    // No generation, state or context numbers on screen (Matt, 2026-11-11): the sphere shows them and its readout spells them out.
     this.r.proj.textContent = this.model.project ? `// ${this.model.project.name}` : '';
     for (const el of this.needsEls) {
       const html = needs ? `${svg('alert')}<span>${el.classList.contains('big') ? 'Needs you' : 'Needs you'}</span><b>${needs}</b>` : `<span>All clear</span>`;
@@ -296,12 +291,10 @@ export class LiveMap {
     }
     const workers = this.workers.filter(w => w.kind === 'worker');
     const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;
-    const lvl = core.ctx == null ? '' : core.ctx >= core.retireAt ? 'over' : core.ctx >= core.retireAt * 0.8 ? 'near' : '';
     const holder = `
       <div class="th-k">Orchestrator role</div>
       <div class="th-name"><span>${esc(core.holder || 'No holder')}</span><span class="th-state ${esc(st)}">${esc(st)}</span></div>
-      <div class="th-big ${lvl}"><b>${core.ctx ?? '--'}</b><span>% of context</span></div>
-      <div class="th-act">${core.activity ? `<span class="caret">&gt;</span> ${esc(core.activity)}` : core.state === 'vacant' ? 'Starts when you send a message' : `Generation ${core.generation}`}</div>
+      <div class="th-act">${core.activity ? `<span class="caret">&gt;</span> ${esc(core.activity)}` : core.state === 'vacant' ? 'Starts when you send a message' : 'Point at or tap the core for details'}</div>
       <div class="th-stats"><span><b>${busy}</b>working</span><span><b>${workers.length - busy}</b>resting</span><span class="${needs ? 'hot' : ''}"><b>${needs}</b>need you</span>${this.hidden ? `<span><b>+${this.hidden}</b>off map</span>` : ''}</div>`;
     if (this.holderEl.dataset.html !== holder) { this.holderEl.dataset.html = holder; this.holderEl.innerHTML = holder; }
     const top = this.model.feed[0];

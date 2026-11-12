@@ -190,6 +190,8 @@ test('the readout carries the numbers the sphere does not', () => {
   assert.match(due.rows.find(x => x.k === 'Context').note, /Handoff due/);
   assert.deepEqual(due.rows.find(x => x.k === 'Needs you'), { k: 'Needs you', v: '2 waiting', tone: 'red' });
   assert.equal(due.rows.find(x => x.k === 'Permissions').v, 'Ask');
+  assert.equal(row('Doing'), undefined, 'no activity line when nothing is running');
+  assert.equal(coreReadout({ ...m.core(), activity: 'Reading map.js' }).rows.at(-1).v, 'Reading map.js', 'what it is doing right now');
   assert.equal(coreReadout({ state: 'vacant' }).state, 'No holder');
   assert.ok(TONE.handoff, 'gold is the handoff tone');
 });

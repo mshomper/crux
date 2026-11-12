@@ -162,11 +162,6 @@
 .th-state{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;padding:1px 7px;border-radius:999px;border:1px solid var(--hud-line);color:var(--hud-dim)}
 .th-state.working,.th-state.starting{color:var(--hud-cyan);border-color:var(--hud-dim);box-shadow:0 0 10px rgba(111,227,255,.25)}
 .th-state.error{color:var(--hud-red);border-color:var(--hud-red)}
-.th-big{display:flex;align-items:flex-end;gap:10px;margin:8px 0 8px;color:var(--hud-cyan)}
-.th-big b{font-family:var(--font);font-size:46px;line-height:.9;font-weight:250;letter-spacing:-.02em;text-shadow:0 0 18px rgba(111,227,255,.55)}
-.th-big span{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--hud-dim);line-height:1.45;padding-bottom:2px}
-.th-big.near{color:var(--hud-amber)}.th-big.near b{text-shadow:0 0 18px rgba(243,185,85,.5)}
-.th-big.over{color:var(--hud-red)}.th-big.over b{text-shadow:0 0 18px rgba(242,114,122,.5)}
 .th-act{margin-top:10px;font-size:11px;color:var(--hud-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .th-act .caret{color:var(--hud-cyan);animation:hud-blink 1s steps(2) infinite}
 .th-stats{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:12px;padding-top:10px;border-top:1px solid var(--hud-line);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--hud-dim)}
@@ -209,13 +204,9 @@
 /* narrow trays: holder card compacts, feed shows fewer lines */
 @container hud (max-width:560px){
   .hud[data-tele="tray"] .hud-tele{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);height:200px;gap:8px}
-  .hud[data-tele="tray"] .tele-holder{padding:10px 14px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 12px;align-items:center}
+  .hud[data-tele="tray"] .tele-holder{padding:10px 14px;display:grid;gap:4px;align-items:center}
   .hud[data-tele="tray"] .th-k,.hud[data-tele="tray"] .th-stats{display:none}
-  .hud[data-tele="tray"] .th-big{grid-row:1/3;grid-column:1;margin:0}
-  .hud[data-tele="tray"] .th-big b{font-size:34px}
-  .hud[data-tele="tray"] .th-big span{display:none}
-  .hud[data-tele="tray"] .th-name{grid-column:2}
-  .hud[data-tele="tray"] .th-act{grid-column:2;margin:0}
+  .hud[data-tele="tray"] .th-act{margin:0}
   .hud[data-tele="tray"] .tele-feed{padding:10px 12px}
   .hud[data-tele="tray"] .tele-feed h3{margin-bottom:4px}
 }

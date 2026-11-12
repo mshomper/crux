@@ -23,6 +23,7 @@ export function coreReadout(core, { busy = 0, resting = 0 } = {}) {
   ];
   if (core.waiting) rows.push({ k: 'Needs you', v: `${core.waiting} waiting`, tone: 'red' });
   rows.push({ k: 'Workers', v: `${busy} working, ${resting} resting` });
+  if (core.activity) rows.push({ k: 'Doing', v: core.activity });
   return { title: core.holder || 'Orchestrator', sub: `Generation ${core.generation}`, state: STATE_WORDS[core.state] || core.state, hue: hueOf(core.model), effort: core.effort, rows };
 }
 
