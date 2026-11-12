@@ -1,7 +1,20 @@
 // Pinned threads as split columns (decision 39 A, R008): the rules in pins.js.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initial, normalize, fit, layout, open, pin, unpin, close, show, focus, replacedBy, isPinned, pinnedCount, MAX_COLS, MIN_COL, RAIL_W } from '../public/pins.js';
+import { initial, normalize, fit, layout, open, pin, unpin, close, show, focus, replacedBy, isPinned, pinnedCount, prune, MAX_COLS, MIN_COL, RAIL_W } from '../public/pins.js';
+
+test('prune drops columns for threads that are not in the project, and keeps the rest as they were', () => {
+  const valid = new Set(['needs', 'orchestrator', 'a', 'b']);
+  const s = { cols: [{ t: 'a', pinned: true }, { t: 'gone', pinned: true }, { t: 'b', pinned: false }], kb: 'gone', recent: ['gone', 'b', 'a'] };
+  const t = prune(s, valid);
+  assert.deepEqual(t.cols, [{ t: 'a', pinned: true }, { t: 'b', pinned: false }]);
+  assert.equal(t.kb, 'b', 'the keyboard goes to the most recently used column left');
+  assert.deepEqual(t.recent, ['b', 'a']);
+  const ok = { cols: [{ t: 'a', pinned: true }], kb: 'a', recent: ['a'] };
+  assert.equal(prune(ok, valid), ok, 'nothing to drop: the same state, so nothing is written');
+  assert.deepEqual(prune({ cols: [{ t: 'x', pinned: true }], kb: 'x', recent: ['x'] }, valid, 'orchestrator'), initial('orchestrator'));
+  assert.deepEqual(prune({ cols: [{ t: 'x', pinned: true }], kb: 'x', recent: ['x'] }, valid, 'other-project-thread'), initial('needs'), 'a fallback from another project is not used');
+});
 
 const ts = s => s.cols.map(c => c.t + (c.pinned ? '*' : ''));
 const vis = (s, n) => layout(s, n).visible.map(c => c.t);
