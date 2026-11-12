@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "context": "Every agent hands off automatically at 60% of its context (decision 10); only the orchestrator also hands off after a long idle stretch (decision 37). Every step re-sends an agent's whole context, so the cost per step grows with it, and quality tends to drop in very long contexts. A fresh worker that reads the board and a handoff is cheaper. Matt wants an adaptive rule: the orchestrator decides when a worker hands off, within general bounds. Today the orchestrator can't see a worker's context level, and it can only retire a worker, not hand its task on. So whichever option is picked, the hub shows each worker's context % (and model) in the orchestrator's agent list, and gives it a hand-off tool that writes the handoff (decision 16) and starts the successor with the same model and effort. Things the orchestrator weighs (Claude's judgement): how much of the task is left, whether the next step needs the current context (a review-fix loop does), the model's price, and whether a lot of what the agent knows is still unwritten. Amends decisions 3 and 10.",
  "depends_on": [
   3,
@@ -66,9 +66,9 @@
  "recommended": "A",
  "recommendation": "A gives the orchestrator the discretion with a floor that stops churn and the 60% net that already works; B can follow if long single turns turn out to be where the tokens go.",
  "confidence": "lean",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-12",
  "superseded_by": null,
  "challenge": null,
  "settles": [

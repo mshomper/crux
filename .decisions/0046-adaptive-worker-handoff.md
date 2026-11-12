@@ -1,10 +1,14 @@
 # 0046 Who decides when a worker hands off before 60%?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: architecture
 - Builds on: 0003, 0010, 0016, 0037
 - Settles: worker handoff threshold = orchestrator may hand a worker off from 35% context at the end of a turn, with a one-line reason; automatic at 60%; never below 35%
+
+## Decision
+
+**A: Orchestrator's call between 35% and 60%, at the end of a turn.** Below 35% a worker is never handed off. From 35% the orchestrator may hand a worker off when its turn ends, if it judges a fresh agent cheaper or better; it notes the reason in one line. At 60% the hub still hands off automatically, as today. Never mid-turn.
 
 ## Context
 
@@ -12,7 +16,7 @@ Every agent hands off automatically at 60% of its context (decision 10); only th
 
 ## Options
 
-### A: Orchestrator's call between 35% and 60%, at the end of a turn (recommended)
+### A: Orchestrator's call between 35% and 60%, at the end of a turn (chosen) (recommended)
 
 Below 35% a worker is never handed off. From 35% the orchestrator may hand a worker off when its turn ends, if it judges a fresh agent cheaper or better; it notes the reason in one line. At 60% the hub still hands off automatically, as today. Never mid-turn.
 - Pro: Adaptive, and nothing is ever cut off half done
