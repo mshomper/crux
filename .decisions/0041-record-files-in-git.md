@@ -7,7 +7,7 @@
 
 ## Context
 
-Each record is saved three ways: the .json is the source (about 70 lines), the .md is the readable copy that GitHub and phones show nicely (about 40 lines), and the .html page is about 290 lines, plus an index.html that every build rewrites. Another of Matt's projects found the pages made up about 75% of a 61-file records pull request, and GitHub's merge timed out on it twice. GitHub also shows .html only as raw code. The build script recreates every page from the .json, so nothing would be lost. That project now keeps the pages local, with Matt's OK, and its orchestrator suggested the same for Crux. Builds on decision 35 (records land on a rolling docs/decisions pull request) and decision 40 (the orchestrator merges records-only pull requests).
+Each record is saved three ways: the .json is the source (about 70 lines), the .md is the readable copy that GitHub and phones show nicely (about 40 lines), and the .html page is about 290 lines, plus an index.html that every build rewrites. Another of Matt's projects found the pages made up about 75% of a 61-file records pull request, and GitHub's merge timed out on it twice. GitHub also shows .html only as raw code. And every page carries links to all the other decisions, so adding one record rewrites every page in the folder: drafting this one changed 34 pages for one new line in each. The build script recreates every page from the .json, so nothing would be lost. That project now keeps the pages local, with Matt's OK, and its orchestrator suggested the same for Crux. Builds on decision 35 (records land on a rolling docs/decisions pull request) and decision 40 (the orchestrator merges records-only pull requests).
 
 ## Options
 
@@ -15,7 +15,7 @@ Each record is saved three ways: the .json is the source (about 70 lines), the .
 
 A .gitignore inside .decisions ignores *.html, so the pages and index.html stay on disk but out of git. The build script writes that .gitignore whenever it creates a .decisions folder, the hub's records worktree does the same, and the hub rebuilds a project's pages after a pull when a .json is newer than its page.
 - Pro: Records pull requests shrink to about a quarter
-- Pro: No more conflicts on index.html between two branches that both add records
+- Pro: No more conflicts between two branches that both add records: today each new record rewrites every page and index.html
 - Pro: GitHub and phones show the .md, which is what reads well there anyway
 - Pro: Nothing is lost: every page is rebuilt from its .json
 - Con: After a pull, the pages are missing or stale until something runs the build, so the hub and the roll-up need to rebuild before they link to a page
@@ -29,7 +29,7 @@ Keep committing the pages, but mark them as generated in .gitattributes so GitHu
 - Pro: Pages are always there after a pull, with no rebuild step
 - Pro: Small change
 - Con: The pages still make up most of every records pull request, and it is not clear this stops the merge timeouts
-- Con: index.html still conflicts whenever two branches add records
+- Con: Every new record still rewrites every page, so two branches that add records conflict on all of them
 - Effort: Tiny
 
 ### C: Commit only the .json

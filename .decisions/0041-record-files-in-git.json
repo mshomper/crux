@@ -4,18 +4,33 @@
   "title": "Which decision record files go into git?",
   "date": "2026-11-12",
   "mode": "quick",
-  "lenses": ["architecture", "data-model"],
+  "lenses": [
+    "architecture",
+    "data-model"
+  ],
   "status": "open",
-  "context": "Each record is saved three ways: the .json is the source (about 70 lines), the .md is the readable copy that GitHub and phones show nicely (about 40 lines), and the .html page is about 290 lines, plus an index.html that every build rewrites. Another of Matt's projects found the pages made up about 75% of a 61-file records pull request, and GitHub's merge timed out on it twice. GitHub also shows .html only as raw code. The build script recreates every page from the .json, so nothing would be lost. That project now keeps the pages local, with Matt's OK, and its orchestrator suggested the same for Crux. Builds on decision 35 (records land on a rolling docs/decisions pull request) and decision 40 (the orchestrator merges records-only pull requests).",
-  "depends_on": [35, 40],
+  "context": "Each record is saved three ways: the .json is the source (about 70 lines), the .md is the readable copy that GitHub and phones show nicely (about 40 lines), and the .html page is about 290 lines, plus an index.html that every build rewrites. Another of Matt's projects found the pages made up about 75% of a 61-file records pull request, and GitHub's merge timed out on it twice. GitHub also shows .html only as raw code. And every page carries links to all the other decisions, so adding one record rewrites every page in the folder: drafting this one changed 34 pages for one new line in each. The build script recreates every page from the .json, so nothing would be lost. That project now keeps the pages local, with Matt's OK, and its orchestrator suggested the same for Crux. Builds on decision 35 (records land on a rolling docs/decisions pull request) and decision 40 (the orchestrator merges records-only pull requests).",
+  "depends_on": [
+    35,
+    40
+  ],
   "conflicts": [],
   "options": [
     {
       "key": "A",
       "name": "Commit .json and .md; build the pages locally",
       "summary": "A .gitignore inside .decisions ignores *.html, so the pages and index.html stay on disk but out of git. The build script writes that .gitignore whenever it creates a .decisions folder, the hub's records worktree does the same, and the hub rebuilds a project's pages after a pull when a .json is newer than its page.",
-      "pros": ["Records pull requests shrink to about a quarter", "No more conflicts on index.html between two branches that both add records", "GitHub and phones show the .md, which is what reads well there anyway", "Nothing is lost: every page is rebuilt from its .json"],
-      "cons": ["After a pull, the pages are missing or stale until something runs the build, so the hub and the roll-up need to rebuild before they link to a page", "Someone who clones the public repo has to run the build to see the pages (the example folder keeps its own pages)", "A one-time cleanup in each repo: untrack the existing pages, which stay on disk"],
+      "pros": [
+        "Records pull requests shrink to about a quarter",
+        "No more conflicts between two branches that both add records: today each new record rewrites every page and index.html",
+        "GitHub and phones show the .md, which is what reads well there anyway",
+        "Nothing is lost: every page is rebuilt from its .json"
+      ],
+      "cons": [
+        "After a pull, the pages are missing or stale until something runs the build, so the hub and the roll-up need to rebuild before they link to a page",
+        "Someone who clones the public repo has to run the build to see the pages (the example folder keeps its own pages)",
+        "A one-time cleanup in each repo: untrack the existing pages, which stay on disk"
+      ],
       "effort": "Small: a .gitignore, a rebuild-if-stale step in the hub and roll-up, and doc updates",
       "source": "claude"
     },
@@ -23,8 +38,14 @@
       "key": "B",
       "name": "Keep all three, marked as generated",
       "summary": "Keep committing the pages, but mark them as generated in .gitattributes so GitHub folds them away in pull request views.",
-      "pros": ["Pages are always there after a pull, with no rebuild step", "Small change"],
-      "cons": ["The pages still make up most of every records pull request, and it is not clear this stops the merge timeouts", "index.html still conflicts whenever two branches add records"],
+      "pros": [
+        "Pages are always there after a pull, with no rebuild step",
+        "Small change"
+      ],
+      "cons": [
+        "The pages still make up most of every records pull request, and it is not clear this stops the merge timeouts",
+        "Every new record still rewrites every page, so two branches that add records conflict on all of them"
+      ],
       "effort": "Tiny",
       "source": "claude"
     },
@@ -32,17 +53,51 @@
       "key": "C",
       "name": "Commit only the .json",
       "summary": "Treat both the .md and the .html as generated and keep them local.",
-      "pros": ["The smallest records pull requests"],
-      "cons": ["Records are no longer readable on GitHub or a phone", "Reviewing a records pull request means reading raw JSON"],
+      "pros": [
+        "The smallest records pull requests"
+      ],
+      "cons": [
+        "Records are no longer readable on GitHub or a phone",
+        "Reviewing a records pull request means reading raw JSON"
+      ],
       "effort": "Small",
       "source": "claude"
     }
   ],
   "criteria": [
-    { "name": "Small, reviewable records pull requests", "scores": { "A": 3, "B": 1, "C": 3 } },
-    { "name": "Readable on GitHub and phones", "scores": { "A": 3, "B": 2, "C": 1 } },
-    { "name": "Pages ready without a rebuild", "scores": { "A": 1, "B": 3, "C": 1 } },
-    { "name": "No conflicts between branches", "scores": { "A": 3, "B": 1, "C": 3 }, "note": "index.html is rewritten by every build" }
+    {
+      "name": "Small, reviewable records pull requests",
+      "scores": {
+        "A": 3,
+        "B": 1,
+        "C": 3
+      }
+    },
+    {
+      "name": "Readable on GitHub and phones",
+      "scores": {
+        "A": 3,
+        "B": 2,
+        "C": 1
+      }
+    },
+    {
+      "name": "Pages ready without a rebuild",
+      "scores": {
+        "A": 1,
+        "B": 3,
+        "C": 1
+      }
+    },
+    {
+      "name": "No conflicts between branches",
+      "scores": {
+        "A": 3,
+        "B": 1,
+        "C": 3
+      },
+      "note": "index.html is rewritten by every build"
+    }
   ],
   "recommended": "A",
   "recommendation": "A keeps what reads well on GitHub and drops what only bloats pull requests and causes conflicts. Its one real cost, pages missing after a pull, is solved by having the hub and the roll-up rebuild stale pages before linking to them. If picked, the build script and the docs/decisions setup write the .gitignore by default, so every repo gets it.",
