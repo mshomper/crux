@@ -6,11 +6,15 @@
 //   idleFloorPct: ... but only when above this percent of its context.
 //   retireAt: the orchestrator hands off at this percent of its context (decision 10).
 // The last three are the hub defaults; each project may set its own (decision 44 B), empty meaning "use the hub default".
+//   workerHandoffFloorPct: the orchestrator may hand a worker on from this percent of its context (decision 46 A).
+//     Hub-wide only: a project whose own mark is at or below it gets the automatic handoff only.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60 };
+export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35 };
+// Hub-wide numbers with no per-project value, and the range each accepts.
+export const HUB_NUMBERS = { workerHandoffFloorPct: { min: 0, max: 100 } };
 // The handoff numbers a project may set for itself, with the range each accepts.
 export const HANDOFF_NUMBERS = {
   idleHandoffMin: { min: 0, max: 24 * 60 },
@@ -81,6 +85,10 @@ function pick(o = {}) {
   if (typeof o.routePermissions === 'boolean') out.routePermissions = o.routePermissions;
   const t = Number(o.permissionTimeoutSec);
   if (o.permissionTimeoutSec != null && o.permissionTimeoutSec !== '' && Number.isFinite(t) && t >= 10 && t <= 3600) out.permissionTimeoutSec = t;
+  for (const [n, range] of Object.entries(HUB_NUMBERS)) {   // out of range or not a number: ignored, the saved or default stays
+    const v = Number(o[n]);
+    if (o[n] != null && o[n] !== '' && Number.isFinite(v) && v >= range.min && v <= range.max) out[n] = v;
+  }
   for (const [n, range] of Object.entries(HANDOFF_NUMBERS)) {
     if (o[n] == null || o[n] === '') continue;
     const v = Number(o[n]);

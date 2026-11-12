@@ -82,10 +82,15 @@ export function cruxTools(hub, project, agent) {
 
   if (agent.role === 'orchestrator') {
     tools.push(
-      tool('list_agents', 'List the worker agents on this project and what each is doing.', {},
-        async () => out(project.workers().map(w => ({ name: w.name, state: w.state, goal: w.goal, runs_as: hub.describeSettings(w) })))),
+      tool('list_agents', 'List the worker agents on this project: what each is doing, its context % (null until it reports one), model and effort, and whether handoff_worker is available for it now; plus this project\'s hand-off marks.', {},
+        async () => out(hub.agentList(project))),
 
-      tool('retire_worker', 'Retire a worker whose job is finished and has nothing more coming: it stops and leaves the active list. No handoff, no successor. For a worker that should continue under a fresh agent, ask the human to use Hand off instead.',
+      // Decision 46 A: hand a worker's task to a fresh agent from the floor (35% by default) at the end of its turn.
+      tool('handoff_worker', 'Hand a worker\'s task to a fresh agent: it writes its handoff (the hub adds the facts) and a successor with the same type, model and effort carries on. Only from the floor in list_agents, at the end of the worker\'s turn. Give a one-line reason; it is shown in the worker\'s thread and yours.',
+        { name: z.string().describe('The worker\'s name from list_agents.'), reason: z.string().max(200).describe('One plain line, e.g. "half the task left at 48%; next step needs no history".') },
+        async ({ name, reason }) => out(hub.handoffWorker(project, name.trim(), agent.name, reason))),
+
+      tool('retire_worker', 'Retire a worker whose job is finished and has nothing more coming: it stops and leaves the active list. No handoff, no successor. For a worker that should continue under a fresh agent, use handoff_worker instead.',
         { name: z.string(), reason: z.string().max(200).describe('One plain line, e.g. "phone access merged".') },
         async ({ name, reason }) => out(hub.retireFinished(project, name, agent.name, reason))),
 
@@ -181,7 +186,7 @@ export function markEntryDone(board, id, from, note = '') {
 export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
-  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'answer_permission', 'mark_entry_done');
+  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'handoff_worker', 'answer_permission', 'mark_entry_done');
   if (agent.role === 'orchestrator') names.push('restart_hub');   // decision 47
   return names.map(n => `mcp__crux__${n}`);
 }

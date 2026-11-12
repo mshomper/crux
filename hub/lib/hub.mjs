@@ -772,7 +772,8 @@ export class Hub {
     }
   }
 
-  // reason: 'asked' (you, or the API), 'threshold' (decision 10) or 'idle' (decision 37).
+  // reason: 'asked' (you, or the API), 'threshold' (decision 10), 'idle' (decision 37) or 'orchestrator' (a worker
+  // handed on early, decision 46).
   // With a fresh rolling draft and the agent not mid-turn, the hub publishes the handoff from the draft plus fresh
   // facts without waking it. An idle handoff then retires it at once: no successor and no overlap until the next
   // message, which starts a fresh holder from the handoff. Otherwise the agent writes the handoff as before.
@@ -966,6 +967,74 @@ export class Hub {
     p.log.append('handoff_qa', { entryId: succ.handoffEntry, from: succ.name, q: question, a: answer, thread: succ.thread });
     if (succ.questionsLeft === 0) this.finishRetire(p, old);
     return answer;
+  }
+
+  // ---------- the orchestrator hands a worker on (decision 46 A; amends 3 and 10) ----------
+  // From the hub-wide floor up to the project's own mark, at the end of the worker's turn, with a one-line reason.
+  // At the mark the hub still hands off by itself (onIdle). Never mid-turn, never below the floor.
+  workerFloor() { const v = Number(this.settings.get('workerHandoffFloorPct')); return Number.isFinite(v) ? v : 35; }
+
+  // Null when early handoffs are possible in this project; else why not: its own mark is at or below the floor.
+  earlyHandoffOff(p) {
+    const mark = this.retireAtFor(p), floor = this.workerFloor();
+    return mark > floor ? null : `Not available in ${p.name}: its hand-off mark (${mark}%) is at or below the hub's floor for early handoffs (${floor}%), so its workers hand off only by themselves at ${mark}%.`;
+  }
+
+  // Why this agent cannot be handed on now, in a plain line; null when it can.
+  workerHandoffBlock(p, a) {
+    const floor = this.workerFloor();
+    if (a.role === 'orchestrator') return 'That is the orchestrator. It hands the role on at its own mark, after a long idle stretch, or on {{who}}\'s word; not with this tool.';
+    if (a.state === 'retired') return `${a.name} has retired.`;
+    if (a.retiring) return `${a.name} is already handing off.`;
+    const off = this.earlyHandoffOff(p);
+    if (off) return off;
+    if (a.contextPct == null) return `${a.name}'s context level is not known yet (it reports it at the end of a turn), so it cannot be handed on before ${floor}%.`;
+    if (a.contextPct < floor) return `${a.name} is at ${a.contextPct}% of its context, below the ${floor}% floor. Not yet.`;
+    if (['working', 'starting'].includes(a.state)) return `${a.name} is in the middle of a turn. Call handoff_worker again when its turn ends (its summary reaches you then).`;
+    if ([...this.approvals.values()].some(x => x.agent === a)) return `${a.name} is waiting on a permission card. Call handoff_worker again once that is answered and its turn ends.`;
+    if (!a.sessionId) return `${a.name} has not started yet, so there is nothing to hand on.`;
+    return null;
+  }
+
+  // The orchestrator's list (list_agents): each worker's context %, model and effort, whether it can be handed on now,
+  // and the project's two marks, so the orchestrator can judge.
+  agentList(p) {
+    const mark = this.retireAtFor(p), floor = this.workerFloor();
+    return {
+      handoff: {
+        automatic_at_pct: mark,
+        orchestrator_may_from_pct: floor,
+        note: this.earlyHandoffOff(p) || `Workers hand off by themselves at ${mark}% of their context. From ${floor}% you may hand one on with handoff_worker at the end of its turn.`
+      },
+      workers: p.workers().map(w => ({
+        name: w.name, state: w.state, goal: w.goal,
+        context_pct: w.contextPct ?? null,
+        model: w.model || w.modelSeen || null,
+        effort: w.effort || null,
+        type: w.type || null,
+        runs_as: this.describeSettings(w),
+        handoff_worker: this.workerHandoffBlock(p, w) || 'available now'
+      }))
+    };
+  }
+
+  // handoff_worker: the same path as the automatic handoff at the mark (retire with a successor, decision 16). The
+  // reason goes in the worker's thread and the orchestrator's. Returns the plain line the tool shows.
+  handoffWorker(p, name, by, reason = '') {
+    reason = String(reason || '').trim().replace(/\s+/g, ' ');
+    const a = name === 'orchestrator' ? p.orchestrator() : p.agents.get(name);
+    if (!a) return /^orchestrator(-\d+)?$/.test(name) ? this.workerHandoffBlock(p, { role: 'orchestrator' }) : `No worker called ${name}. Names are in list_agents.`;
+    const blocked = this.workerHandoffBlock(p, a);
+    if (blocked) return blocked;
+    if (!reason) return 'Give a one-line reason, then call it again.';
+    const line = `${by} hands ${a.name}'s task to a fresh agent at ${a.contextPct}% of its context: ${reason}`;
+    this.notice(p, a.thread, line);
+    this.notice(p, 'orchestrator', line);
+    p.log.append('worker_handoff', { agent: a.name, by, reason, contextPct: a.contextPct, thread: a.thread });
+    const how = this.retire(p, a, { reason: 'orchestrator' });
+    return how === 'draft'
+      ? `Handed on: handoff ${a.leftHandoff} was written from ${a.name}'s rolling draft plus fresh facts, and a fresh agent with the same type, model and effort takes over in its own thread.`
+      : `${a.name} is writing its handoff now; a fresh agent with the same type, model and effort takes over when it is done.`;
   }
 
   // A worker whose job is finished: retire it with no handoff and no successor. You or the orchestrator can do this.
