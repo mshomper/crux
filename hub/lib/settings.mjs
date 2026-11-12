@@ -6,7 +6,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120 };
+//   idleHandoffMin: an orchestrator idle this many minutes hands off (decision 37); 0 turns it off.
+//   idleFloorPct: ... but only when above this percent of its context.
+export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120, idleHandoffMin: 60, idleFloorPct: 25 };
 
 export class HubSettings {
   constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), initial = {}, file } = {}) {
@@ -53,5 +55,8 @@ function pick(o = {}) {
   if (typeof o.routePermissions === 'boolean') out.routePermissions = o.routePermissions;
   const t = Number(o.permissionTimeoutSec);
   if (o.permissionTimeoutSec != null && Number.isFinite(t) && t >= 10 && t <= 3600) out.permissionTimeoutSec = t;
+  const w = Number(o.idleHandoffMin), f = Number(o.idleFloorPct);
+  if (o.idleHandoffMin != null && o.idleHandoffMin !== '' && Number.isFinite(w) && w >= 0 && w <= 24 * 60) out.idleHandoffMin = w;
+  if (o.idleFloorPct != null && o.idleFloorPct !== '' && Number.isFinite(f) && f >= 0 && f <= 100) out.idleFloorPct = f;
   return out;
 }

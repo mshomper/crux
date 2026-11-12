@@ -101,7 +101,9 @@ const routes = {
   'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },
   // The off switch for decision 21: false sends every permission request to you.
   // Per repo (decision 34): { project, permissionMode: 'auto' | 'standard' }.
-  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors }) => {
+  // Decision 37: { idleHandoffMin, idleFloorPct }, the idle handoff's window (0 = off) and context floor.
+  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, idleHandoffMin, idleFloorPct }) => {
+    if (idleHandoffMin != null || idleFloorPct != null) hub.settings.set({ idleHandoffMin, idleFloorPct });
     if (project && permissionMode) hub.setPermissionMode(hub.project(project), permissionMode);
     if (project && typeof connectors === 'boolean') hub.setConnectors(hub.project(project), connectors);   // Matt's claude.ai connectors
     const p = project ? hub.project(project) : null;

@@ -70,7 +70,8 @@ export class Agent {
     // M014: the start and end of each turn go in the log, so after a restart the hub knows who was mid-turn.
     // Not while the hub itself is stopping: its agents' turns are cut, not finished.
     const busy = state === 'working' || state === 'starting';
-    if (busy !== !!this.busyLogged && !this.hub.stopping) { this.busyLogged = busy; this.project.log.append('agent_busy', { agent: this.name, busy }); }
+    // The end of a turn carries its context size, so the idle handoff (decision 37) still knows it after a restart.
+    if (busy !== !!this.busyLogged && !this.hub.stopping) { this.busyLogged = busy; this.project.log.append('agent_busy', { agent: this.name, busy, ...(!busy && this.contextPct != null ? { contextPct: this.contextPct } : {}) }); }
     this.hub.emit({ type: 'agent_state', project: this.project.name, thread: this.thread, agent: this.name, state, contextPct: this.contextPct });
   }
 

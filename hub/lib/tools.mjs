@@ -37,7 +37,16 @@ export function cruxTools(hub, project, agent) {
         decisions_needed: z.array(z.number()).optional().default([]).describe(t('Crux decision numbers waiting on {{who}}.')),
         blocked_on: list,
         next_step: z.string().optional().default(''),
-        visuals: list.describe('Ids from post_visual that help answer the questions.')
+        visuals: list.describe('Ids from post_visual that help answer the questions.'),
+        // Rolling handoff draft (decision 16, 37): the hub keeps the newest, so a handoff need not wake the agent.
+        handoff_notes: z.object({
+          in_flight: list.describe('In flight, who is doing it, and why.'),
+          promises: list.describe(t('Promises to {{who}} not yet kept.')),
+          risks: list.describe('Risks and things easy to miss.'),
+          next_steps: list.describe('What you would do next, in order.')
+        }).optional().describe('Your handoff judgement as of now, a line or two per heading. The hub keeps the newest as a rolling draft.'),
+        approvals: list.describe(t('Approvals, decisions or standing instructions {{who}} gave this round (merge #31, keep w1), briefly.')),
+        open_questions: list.describe(t('Questions or quick calls you put to {{who}} in chat that are still unanswered.'))
       },
       async (args) => { hub.postSummary(project, agent, args); return out('Summary posted. Stop here and wait for a reply.'); }),
 

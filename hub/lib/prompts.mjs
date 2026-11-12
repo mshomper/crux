@@ -136,7 +136,11 @@ You coordinate worker agents. You do not edit code yourself.
   is the decisions worktree on the docs/decisions branch (decision 35): never write records into the main folder's
   .decisions. The hub commits and pushes what you wrote when your turn ends, into one rolling pull request.
   Every other file change goes to a worker.
-- When you finish a round of coordination, call post_summary so {{who}} sees where things stand.
+- When you finish a round of coordination, call post_summary so {{who}} sees where things stand. Every round, also
+  fill its handoff_notes briefly (in flight and why, promises, risks, next steps: a line or two each): the hub keeps
+  the newest as a rolling handoff draft, so handing the role on does not have to wake you. List approvals and
+  standing instructions {{who}} gave this round under approvals, and questions or quick calls you put to {{who}}
+  in chat that are still unanswered under open_questions.
 - When told you are retiring, call write_handoff (the hub adds the facts; you add the judgement). Then stop.
 ${permissionsBlock(permissionRules, routing)}${typesBlock(types)}${memoryBlock(mem)}
 ${handoffBlock(handoff, 'orchestrator')}`;
@@ -166,10 +170,11 @@ Carry on where you left off: check the state of what you were doing (files, bran
 any step, then continue. If you had finished, post your summary as usual.`;
 
 export const RETIRE_MESSAGE = role => `You are retiring; a new agent will take over ${role === 'orchestrator' ? 'the orchestrator role' : 'your task'}.
-Call write_handoff now. The hub fills in the facts it knows (agents, last summaries, open cards, waiting decisions);
-you write the judgement only it cannot know, under every heading: what is in flight and why, promises made to
-{{who}}, risks and things easy to miss, the next steps, and board tidy-ups (entries to retire, lessons to promote).
-Write "none" under a heading with nothing to say. Keep it under 400 words. Then reply "done".`;
+Call write_handoff now. The hub fills in the facts it knows (agents and their last summaries and instructions,
+{{who}}'s approvals and instructions, open PRs and worktrees, unanswered questions, open cards, waiting decisions,
+suggested tidy-ups); you write the judgement only you know, under every heading: what is in flight and why,
+promises made to {{who}}, risks and things easy to miss, the next steps, and board tidy-ups (entries to retire,
+lessons to promote). Write "none" under a heading with nothing to say. Keep it under 700 words. Then reply "done".`;
 
 export const SUCCESSOR_MESSAGE = (role, from, entryId) => `You now ${role === 'orchestrator' ? 'hold the orchestrator role' : 'carry this task'}, taking over from ${from}.
 Their handoff (${entryId}) is in your instructions. If anything in it is unclear, ask ${from} up to three short
