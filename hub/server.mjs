@@ -13,7 +13,7 @@ import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs'
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, pageBuild } from './lib/relaunch.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, pageBuild } from './lib/relaunch.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
 
@@ -32,8 +32,11 @@ const retireAt = Number(flag('--retire-at', 60));
 const noAgents = testHubWithoutAgents({ args, env: process.env });
 if (args.includes('--no-agents')) args.splice(args.indexOf('--no-agents'), 1);
 
+// A test hub never falls back to ~/crux/hub.json or the current folder: that loads real projects.
+const folderError = testHubFolderError({ noAgents, folders: args });
+if (folderError) { console.error(folderError); process.exit(1); }
 let projects = args.map(a => resolve(a));
-const cfg = join(homedir(), 'crux', 'hub.json');
+const cfg = join(process.env.CRUX_HOME || join(homedir(), 'crux'), 'hub.json');
 // hub.json may also hold { "defaults": { "worker": { "model": "sonnet", "effort": "medium" }, "orchestrator": {...} } }.
 let hubCfg = {};
 if (existsSync(cfg)) {
