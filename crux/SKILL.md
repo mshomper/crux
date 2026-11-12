@@ -186,7 +186,7 @@ Deep mode adds these fields (leave them out otherwise):
       "key": "A",
       "assumptions": ["..."],
       "risks": ["..."],
-      "estimates": [ { "what": "Run time", "value": "about 2x current", "basis": "band doubles cell count near the screw" } ]
+      "estimates": [ { "what": "Run time", "value": "about 2x current", "basis": "the finer band doubles the cell count" } ]
     }
   ],
   "brief": {

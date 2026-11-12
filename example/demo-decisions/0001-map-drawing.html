@@ -91,11 +91,12 @@ svg{max-width:100%}
 .bad-read{border-color:var(--bad)}.bad-read .icon{color:var(--bad)}
 .ruled{margin-top:12px}
 .deep-chip{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.hub-nav{display:flex;gap:8px;align-items:center}.hub-nav a{display:inline-flex;align-items:center;gap:7px;padding:6px 14px 6px 11px;border-radius:999px;border:1px solid var(--line2);background:var(--surface);color:var(--text);font-size:13.5px;font-weight:500;text-decoration:none;transition:border-color .15s,background .15s,color .15s}.hub-nav a[hidden]{display:none}.hub-nav a svg{width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.hub-nav a:hover{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}.hub-nav a.hub{background:var(--accent-bg);border-color:transparent;color:var(--accent)}.hub-nav a.hub:hover{border-color:var(--accent)}
 </style>
 </head>
 <body>
 <main id="app"></main>
-<script id="data" type="application/json">{"id":2,"slug":"units","title":"Internal length unit is millimetres","date":"2026-11-02","mode":"quick","lenses":["data-model"],"status":"found","context":"All geometry code (src/geom/*.js) assumes millimetres with no unit field in saved files.","depends_on":[],"conflicts":[],"options":[{"key":"A","name":"Millimetres, implicit","summary":"What the code does now: every length is millimetres, never stated.","pros":["Matches implant drawings"],"cons":["Saved files carry no unit"]},{"key":"B","name":"Explicit unit field","summary":"Store the unit in every saved file and convert on load.","pros":["Safe to share files"],"cons":["Format change"]}],"criteria":[],"recommended":"A","recommendation":"Consistent across geometry code; only the saved-file format is at risk.","confidence":"lean","chosen":null,"reason":null,"decided_on":null,"superseded_by":null,"challenge":null,"deliberate":"likely","holding_up":"strained","strain":"Saved files carry no unit field, so a file shared with another tool can be misread.","_file":"0002-units.html","_links":{"1":"0001-gpu-compute-path.html","2":"0002-units.html","3":"0003-contact-model.html","4":"0004-preset-storage.html","5":"0005-run-archive.html"}}</script>
+<script id="data" type="application/json">{"id":1,"slug":"map-drawing","title":"Where should the trail map be drawn?","date":"2026-10-20","mode":"quick","lenses":["architecture"],"status":"decided","context":"Alex's trail planner shows a route on a topographic map. Panning and zooming must stay smooth on a phone, out on the trail.","depends_on":[],"conflicts":[],"options":[{"key":"A","name":"Vector tiles in the browser","summary":"Download map data as vector tiles and draw them on the device.","pros":["Smooth zoom at any level","Small downloads, easy to keep offline later"],"cons":["More work on older phones"],"effort":"Medium"},{"key":"B","name":"Ready-made image tiles","summary":"Fetch pre-drawn map pictures from a tile server.","pros":["Simplest to build","Light on the phone"],"cons":["Blurry between zoom levels","Large downloads for offline use"],"effort":"Low"}],"criteria":[],"recommended":"A","recommendation":"Offline use is likely to come up, and vector tiles keep it small.","confidence":"strong","chosen":"A","reason":"Smooth zoom matters most when reading contours on a small screen.","decided_on":"2026-10-20","superseded_by":null,"challenge":null,"_file":"0001-map-drawing.html","_links":{"1":"0001-map-drawing.html","2":"0002-distance-unit.html","3":"0003-walking-time.html","4":"0004-route-files.html","5":"0005-offline-maps.html"}}</script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
 const I = {
@@ -125,7 +126,7 @@ function refLinks(list){
 }
 function fileOf(n){ return (D._links || {})[n] || 'index.html'; }
 
-let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></div>`;
+let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><span class="row" style="gap:14px"><nav class="hub-nav"><a id="hub-link" class="hub" hidden href="http://localhost:4747/" title="Back to the Crux hub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h10a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2H8.5L5 16.5V14H4a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2z"/><path d="M18.5 8.5H20a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2h-1v2.5L15.5 18H12"/></svg>Open hub</a></nav><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></span></div>`;
 h += `<div class="row" style="margin-top:14px"><span class="muted">${pad(D.id)}</span><span class="chip ${esc(D.status)}">${esc(D.status)}</span><span class="chip">${I.clock}${esc(D.date)}</span>${(D.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}${D.deep?'<span class="chip deep-chip">deep</span>':''}</div>`;
 h += `<h1>${esc(D.title)}</h1><p>${esc(D.context)}</p>`;
 if ((D.depends_on||[]).length) h += `<p class="muted row" style="gap:6px">${I.link}Builds on ${refLinks(D.depends_on)}</p>`;
@@ -266,6 +267,14 @@ if (rev) rev.addEventListener('click', async () => {
   catch(e){ const t = document.getElementById('why'); t.value = line; t.select(); document.getElementById('toast').textContent = 'Copy was blocked; the line is selected in the box above.'; }
 });
 document.getElementById('why')?.addEventListener('input', () => document.getElementById('err').textContent = '');
+</script>
+<script>
+// Links to the Crux hub: shown when the page comes from the hub, or when a running hub answers on this machine.
+(() => {
+  const show = (id, href) => { const a = document.getElementById(id); if (a) { if (href) a.href = href; a.hidden = false; } };
+  if (location.protocol !== 'file:') { show('hub-link', '/'); show('all-link', '/all'); return; }
+  fetch('http://localhost:4747/api/ping').then(r => { if (r.ok) show('hub-link'); }).catch(() => {});
+})();
 </script>
 </body>
 </html>
