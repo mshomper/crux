@@ -98,6 +98,10 @@ This needs the project to be a git repo with git installed. `gh`, signed in, is 
 - **Worker handoffs** follow the same rules as the orchestrator's: the hub writes the facts, the outgoing agent writes its judgement, and the new agent may ask the old one up to three questions. A worker's thread has **Retire** (job done) and **Hand off** (fresh agent, same job).
 - **Sub-agents.** Workers may use Claude Code's own sub-agents for parts of a task. Their messages are kept out of the threads, and they do not appear on the live map.
 
+## Several threads side by side
+
+Pin a thread (the pin in its header, or on its row in the list when you point at it) to keep it open as a column; the next thread you open goes beside it, up to three columns (decision 39). The column you click or type in has the keyboard: a cyan line along its top and a lit message box. A red count in a column's header means a card waits for you there. When the columns do not fit (a narrow window, or the board open), the extra ones fold to a slim rail with their red counts; one click shows a folded one in place of the column you used least recently. With three pinned, opening a fourth thread takes the place of the keyboard column. Pins are remembered on that device, per project. On a phone, one thread at a time as before.
+
 ## Pictures in threads
 
 Paste, drop or attach images in any thread; agents see them. Agents can post pictures (PNG, JPEG, GIF, WebP, SVG) or a small self-contained HTML page into their thread with `post_visual`; HTML pages run in a sandbox. Messages render Markdown. The hub also serves every project's Crux pages and an All projects view, so decision pages open inside it.

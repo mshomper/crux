@@ -51,11 +51,14 @@ test('a scroll that reaches the end of the list never drags the page', () => {
 });
 
 test('the list is redrawn only when what it shows changed, and a box keeps the list still as it grows', () => {
-  const app = pub('app.js');
-  assert.match(app, /function setFeed\(feed, html\)/);
-  assert.doesNotMatch(app, /feed\.innerHTML = html \|\|/, 'every redraw goes through setFeed');
-  const grow = /function growBox\(box, max\) \{([\s\S]*?)\n\}/.exec(app)[1];
+  // Since decision 39 each column is a Conversation (conversation.js) with its own list and box.
+  const conv = pub('conversation.js'), app = pub('app.js');
+  assert.match(conv, /export function setFeed\(feed, html, where = ''\)/);
+  assert.match(conv, /setFeed\(feed, this\.host\.feed\(this\.thread\)/, 'a column draws its list through setFeed');
+  for (const src of [conv, app]) assert.doesNotMatch(src, /feed\.innerHTML = (?!html;)/, 'every redraw goes through setFeed');
+  const grow = /export function growBox\(box, max\) \{([\s\S]*?)\n\}/.exec(conv)[1];
+  assert.match(grow, /closest\('\.conv'\)/, 'the list of the box\'s own column');
   assert.match(grow, /const top = feed\.scrollTop/, 'remembers where the list was');
   assert.match(grow, /feed\.scrollTop = /, 'and puts it back after measuring');
-  assert.match(app, /function autosize\(\) \{ growBox\(\$\('#input'\), 200\); \}/);
+  assert.match(conv, /autosize\(\) \{ growBox\(this\.input, 200\); \}/);
 });

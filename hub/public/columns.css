@@ -1,0 +1,75 @@
+/* Pinned threads as split columns (decision 39 A, R008). Loaded after hud.css. With a single column nothing here
+   changes how the hub looks, apart from the pin in the header and on the thread rows. Everything that applies only
+   beside other columns hangs off .cols.multi. No motion is added. */
+
+/* ---------- the area the columns share: as many as fit its measured width (columns.js), never a sideways scroll ---------- */
+.cols{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);min-width:0;min-height:0;overflow:hidden;overflow:clip}
+.cols > .conv{min-width:0;min-height:0;position:relative;container:conv / inline-size}
+.cols > .conv + .conv,.pin-rail{border-left:1px solid var(--hud-line)}
+.win-acts{display:contents}   /* the window's buttons join the right-most header's toolbar */
+
+/* ---------- the pin: drawn, with a hover label; lit while pinned ---------- */
+.head-actions .btn.c-pin.on,.head-actions .btn.c-pin.on .icon{color:var(--hud-cyan)}
+.c-pin.on .icon,.row-pin[aria-pressed="true"] .icon{fill:rgba(111,227,255,.28);filter:drop-shadow(0 0 5px rgba(111,227,255,.55))}
+
+/* thread rows: the row and its pin are sibling buttons in one wrapper; the pin shows on hover or keyboard focus */
+.thread-row{position:relative}
+.row-pin{position:absolute;right:8px;bottom:6px;width:24px;height:22px;display:none;place-items:center;padding:0;border:0;border-radius:4px;background:none;color:var(--faint);cursor:pointer}
+.row-pin .icon{width:14px;height:14px}
+.row-pin:hover{background:rgba(255,255,255,.08);color:var(--text)}
+.row-pin:focus-visible{outline:none;box-shadow:0 0 0 2px var(--hud-cyan),0 0 16px rgba(111,227,255,.45)}
+.thread-row:is(:hover,:focus-within,.pinned) .row-pin{display:grid}
+.thread-row:is(:hover,:focus-within,.pinned) .thread .last{padding-right:26px}
+.thread-row.pinned .row-pin{color:var(--hud-cyan)}
+
+/* ---------- a red count in a column's header: a card waits for you in that thread (decision 31) ---------- */
+.colbadge{flex:none;font-size:11px;font-weight:700;min-width:20px;height:20px;padding:0 6px;border-radius:999px;display:grid;place-items:center;background:var(--bad);color:#2a0609;box-shadow:0 0 10px -2px rgba(242,114,122,.7)}
+
+/* ---------- the column that has the keyboard: a line along its top and a lit message box ----------
+   Cyan also means "working" (decision 31), but working is only ever a small pulsing dot, a chip and the working
+   line; the full-width top line and the lit box mean the keyboard, and the other columns' titles and send buttons
+   step back so the one in use reads at a glance. */
+.cols.multi > .conv.kb::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:var(--hud-cyan);box-shadow:0 0 16px var(--hud-cyan);z-index:3;pointer-events:none}
+.cols.multi > .conv.kb::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(111,227,255,.035),transparent 220px);pointer-events:none}
+.cols.multi > .conv.kb .composer textarea{border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.18),0 0 16px -4px rgba(111,227,255,.5)}
+.cols.multi > .conv:not(.kb) .title-block h1{color:var(--muted)}
+.cols.multi > .conv:not(.kb) .main-head::after{opacity:0}
+.cols.multi > .conv:not(.kb) .composer .btn.primary{background:var(--surface2);color:var(--muted);border-color:var(--line2);box-shadow:none}
+
+/* ---------- headers beside other columns: one line, never wrapped ---------- */
+.cols.multi .sub{flex-wrap:nowrap;overflow:hidden}
+.cols.multi .sub > *{flex:none}
+.cols.multi .sub > .mchip{flex:0 1 auto}
+.cols.multi .sub > .task-line{flex:1 1 0;min-width:0}
+/* narrower than about 900 px: the buttons become icons; their hover labels say what they do */
+@container conv (max-width:900px){
+  .cols.multi .head-actions .btn:not(.icon-only){font-size:0;gap:0;padding:7px}
+  .cols.multi .head-actions .btn .ext{display:none}
+}
+/* narrower than about 640 px: the task line and the context figure drop out rather than wrap */
+@container conv (max-width:640px){
+  .cols.multi .main-head .task-line{display:none}
+  .cols.multi .main-head .sub > span:not(.chip):not(.mchip){display:none}
+  /* the right-most header also holds the window's buttons: its model chip keeps the name and the effort pips, and
+     drops the version and the effort word (both in its hover label), as on a phone */
+  .cols.multi > .conv:has(.win-acts) .main-head .mchip :is(.mver,.msep,.meff){display:none}
+}
+
+/* ---------- the rail: pinned threads with no room for a column; one click shows one ---------- */
+.pin-rail{display:flex;flex-direction:column;align-items:center;gap:14px;padding:14px 0;min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;scrollbar-width:none;background:linear-gradient(180deg,#0d131b,#0a0e14)}
+.rail-k{display:grid;place-items:center;height:20px;color:var(--hud-cyan)}
+.rail-k .icon{width:15px;height:15px;fill:rgba(111,227,255,.28)}
+.rail-item{position:relative;flex:none;padding:0;border:0;background:none;color:inherit;cursor:pointer;border-radius:4px}
+.rail-item .ava{position:relative;width:34px;height:34px;border-radius:4px;display:grid;place-items:center;background:var(--surface2);color:var(--muted)}
+.rail-item .ava.orch{color:var(--accent)}
+.rail-item .ava.needs{color:var(--bad);box-shadow:inset 0 0 0 1px rgba(242,114,122,.4)}
+.rail-item .ava.ring::after{content:"";position:absolute;inset:-2px;border-radius:6px;border:1.5px solid var(--mh);pointer-events:none;box-shadow:0 0 10px -2px var(--mh),inset 0 0 9px -4px var(--mh)}
+.rail-item:hover .ava{background:rgba(111,227,255,.09)}
+.rail-item:focus-visible{outline:none;box-shadow:0 0 0 2px var(--hud-cyan),0 0 16px rgba(111,227,255,.45)}
+.rail-item .colbadge{position:absolute;top:-7px;right:-9px;min-width:18px;height:18px;padding:0 5px;font-size:10.5px}
+
+/* ---------- phone: one thread at a time, pins ignored (the rail never shows there) ---------- */
+@media (max-width:720px){
+  .cols .c-pin,.cols .c-close,.thread-row:is(:hover,:focus-within,.pinned) .row-pin{display:none}
+  .thread-row:is(:hover,:focus-within,.pinned) .thread .last{padding-right:0}
+}
