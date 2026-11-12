@@ -98,7 +98,7 @@ test('the meters are not on the core: they live in the strip\'s slot, and the co
 
 test('no horizontal scroll: the meters and panel set no fixed width wider than the screen', () => {
   const css = readFileSync(new URL('../public/usage.css', import.meta.url), 'utf8');
-  assert.match(css, /@container hud \(max-width:720px\)/, 'a phone layout');
+  assert.match(css, /@media \(max-width:720px\)\{\s*\.hud-slot\[data-under-row\]/, 'a phone layout');
   assert.doesNotMatch(css, /overflow-x:\s*(auto|scroll)/);
   assert.match(readFileSync(new URL('../public/usage-ui.js', import.meta.url), 'utf8'), /innerWidth - 24|innerWidth - 16/, 'the panel is sized from the window');
 });

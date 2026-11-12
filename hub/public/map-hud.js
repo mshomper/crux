@@ -10,6 +10,10 @@ import { paintGlass } from './map-core.js';
 const rgb = (c, a) => `rgba(${(c[0] * 255) | 0},${(c[1] * 255) | 0},${(c[2] * 255) | 0},${a})`;
 const TAU = Math.PI * 2;
 
+// How strongly the core's outer scale is drawn: fully everywhere, except in a phone's strip (compact), where it
+// is left out and fades in over the first half of the zoom, so nothing jumps when the map opens.
+export const outerScale = (compact, e) => (compact ? clamp(e * 2, 0, 1) : 1);
+
 export class HudPainter {
   constructor(canvas) {
     this.canvas = canvas;
@@ -109,18 +113,22 @@ export class HudPainter {
     // (No context ring, track or handoff tick any more: Matt, 2026-11-11. M013 shows context in the particles.)
 
     // outer scale: three arcs turning one way, a dotted ring turning the other
+    // A phone's strip is too low for it (it would be cut off at the edges): there it fades in as the map opens.
     const R3 = r * 1.6;
-    c.lineWidth = 1;
-    c.strokeStyle = rgb(COLORS.cyan, 0.38);
-    for (let k = 0; k < 3; k++) {
-      const a0 = -t * 0.16 + (k * TAU) / 3;
-      c.beginPath(); c.arc(x, y, R3, a0, a0 + 1.25 * b); c.stroke();
+    const outer = outerScale(L.compact, e);
+    if (outer > 0.01) {
+      c.lineWidth = 1;
+      c.strokeStyle = rgb(COLORS.cyan, 0.38 * outer);
+      for (let k = 0; k < 3; k++) {
+        const a0 = -t * 0.16 + (k * TAU) / 3;
+        c.beginPath(); c.arc(x, y, R3, a0, a0 + 1.25 * b); c.stroke();
+      }
+      c.setLineDash([1, 5]);
+      c.lineDashOffset = t * 6;
+      c.strokeStyle = rgb(COLORS.accent, 0.3 * outer);
+      c.beginPath(); c.arc(x, y, R3 + 6, 0, TAU * b); c.stroke();
+      c.setLineDash([]);
     }
-    c.setLineDash([1, 5]);
-    c.lineDashOffset = t * 6;
-    c.strokeStyle = rgb(COLORS.accent, 0.3);
-    c.beginPath(); c.arc(x, y, R3 + 6, 0, TAU * b); c.stroke();
-    c.setLineDash([]);
 
     if (e > 0.02) {
       // outermost scale, full map only (the radar sweep is gone: Matt, 2026-11-11)

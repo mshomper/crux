@@ -8,7 +8,7 @@
 // Driven by the hub's SSE events. With prefers-reduced-motion it draws a still map.
 
 import { MapModel } from './map-model.js';
-import { stripLayout, radialLayout, blendLayouts, easeInOut, clamp, lerp } from './map-layout.js';
+import { stripLayout, stripLane, radialLayout, blendLayouts, easeInOut, clamp, lerp } from './map-layout.js';
 import { Effects, STRIDE, bend } from './map-particles.js';
 import { ReservoirCore, stream } from './map-core.js';
 import { createRenderer } from './map-gl.js';
@@ -62,7 +62,9 @@ export class LiveMap {
     addEventListener('resize', () => this.reduced && this.drawStatic());
     addEventListener('keydown', e => { if (e.key === 'Escape' && this.target === 1) this.collapse(); });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) this.kick(); });
-    new ResizeObserver(() => this.reduced ? this.drawStatic() : this.kick()).observe(slot);
+    const ro = new ResizeObserver(() => this.reduced ? this.drawStatic() : this.kick());
+    ro.observe(slot);
+    ro.observe(this.panel);   // the lane changes height when the row under it comes or goes: a still map redraws for that too
     if (new URLSearchParams(location.search).has('mapdebug')) window.__liveMap = this;
   }
 
@@ -337,7 +339,8 @@ export class LiveMap {
 
   // ---------- geometry ----------
   geometry(E) {
-    const s = this.slot.getBoundingClientRect();
+    // on a phone the slot may keep a slim row under the lane for something else (data-under-row); the map stays out of it
+    const s = stripLane(this.slot.getBoundingClientRect(), this.phone, !!this.slot.dataset.underRow);
     const app = this.slot.parentElement.getBoundingClientRect();
     const tgt = this.phone
       ? { left: 0, top: 0, width: innerWidth, height: innerHeight }

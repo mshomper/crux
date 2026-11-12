@@ -27,13 +27,23 @@
   .um{grid-template-columns:auto 52px auto auto;gap:5px}
   .hud-slot.has-usage .hud-read-l{top:auto;transform:none}
 }
-/* a phone: the whole bottom edge, three equal meters with percent only (the times are in the panel) */
-@container hud (max-width:720px){
-  .usage-meters{left:6px;right:6px;bottom:0;margin:0;gap:10px;padding:0 4px;height:13px;align-items:center;border-radius:0;border-color:transparent;background:none}
+/* A phone: the meters get a slim row of their own under the map's lane, so they never share a line with the
+   stations or sit under their glow. Three equal meters with percent only (the times are in the panel).
+   The row is 15px: the same number as PHONE_METER_ROW in map-layout.js, which keeps the map out of it.
+   The strip as a whole is no taller than before. Same width rule as the map's own phone check (map.js). */
+@media (max-width:720px){
+  .hud-slot[data-under-row] .hud.docked{bottom:15px}
+  .usage-meters,.usage-meters:hover,.usage-meters:focus-visible,.usage-meters[aria-expanded="true"]{background:#070b11}
+  .usage-meters{left:0;right:0;bottom:0;margin:0;gap:12px;padding:0 12px;height:15px;box-sizing:border-box;align-items:center;
+    border:0;border-bottom:1px solid var(--hud-line);border-radius:0}
+  .usage-meters[aria-expanded="true"]{border-bottom-color:var(--hud-dim)}
+  /* the row is slim, so a finger gets a taller target: it reaches a little way up into the lane */
+  .usage-meters::before{content:"";position:absolute;left:0;right:0;top:-9px;bottom:0}
   .usage-meters>.um{flex:1 1 0;min-width:0;grid-template-columns:auto minmax(0,1fr) auto;gap:5px}
   .um-r{display:none}
   .um-l{letter-spacing:.04em}
   .um-bar{height:3px}
+  .um-bar b{box-shadow:none}
 }
 
 /* ---------- the panel ---------- */

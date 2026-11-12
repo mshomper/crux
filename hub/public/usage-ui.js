@@ -114,6 +114,8 @@ export class UsageUI {
     const list = meterList(this.plan);
     const on = list.length > 0;
     this.slot.classList.toggle('has-usage', on);
+    // tells the map that, on a phone, the row under its lane is taken (map-layout.js stripLane)
+    if (on) this.slot.dataset.underRow = '1'; else delete this.slot.dataset.underRow;
     this.el.hidden = !on;
     this.el.classList.toggle('stale', on && isStale(this.plan, now));
     if (on) {
