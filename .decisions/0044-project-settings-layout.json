@@ -8,7 +8,7 @@
   "ui",
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "context": "Matt asked for per-project settings in the hub's screen: how much room agents get in each repo (personal projects may get more than work ones) and the idle-handoff numbers per repo. Today the only on-screen setting per project is the Ask/Auto switch (plus connectors). Idle handoff (60 min, above 25% context) is in settings files only, the 60% handoff mark is a start flag that applies to every project, and the time before an unanswered request comes to Matt (120 s) has no screen. Mockups use made-up projects. The permission levels shown (Ask, Auto, Trusted) are drafted in decision 45. Builds on decisions 10 (retire at a threshold), 21 (who answers permissions), 34 (auto mode per repo) and 37 (idle handoff); per-project numbers amend 10 and 37.",
  "depends_on": [
   10,
@@ -93,9 +93,9 @@
  "recommended": "B",
  "recommendation": "B puts the settings where the project already shows its level, one tap away, and is the shortest on the phone. Comparing projects can come later as a column in the All projects view if it matters. Either way: per-project numbers are saved on this computer like the level is today, and the 60% handoff mark stops being a start flag.",
  "confidence": "lean",
- "chosen": null,
+ "chosen": "B",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-12",
  "superseded_by": null,
  "challenge": null,
  "settles": [],

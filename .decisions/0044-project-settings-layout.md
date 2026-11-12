@@ -1,9 +1,13 @@
 # 0044 Where do you set each project's permissions and handoff numbers?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: ui, architecture
 - Builds on: 0010, 0021, 0034, 0037
+
+## Decision
+
+**B: A card per project, opened from its level chip.** The project row's Ask/Auto switch becomes a level chip (ASK, AUTO, TRUSTED). Tapping it opens that project's settings card: pick the level, see what it allows (the always-to-you list folds open on request), and three plain number fields (idle minutes, idle floor %, handoff %) with the hub default under each. The few hub-wide settings (orchestrator answers requests, the 120 s wait, role defaults) go in a small Whole hub panel in the three-dots menu.
 
 ## Context
 
@@ -20,7 +24,7 @@ A Settings dialog from the three-dots menu at the top, with the projects listed 
 - Con: Two places show the level: the project row and the panel
 - Effort: Medium
 
-### B: A card per project, opened from its level chip (recommended)
+### B: A card per project, opened from its level chip (chosen) (recommended)
 
 The project row's Ask/Auto switch becomes a level chip (ASK, AUTO, TRUSTED). Tapping it opens that project's settings card: pick the level, see what it allows (the always-to-you list folds open on request), and three plain number fields (idle minutes, idle floor %, handoff %) with the hub default under each. The few hub-wide settings (orchestrator answers requests, the 120 s wait, role defaults) go in a small Whole hub panel in the three-dots menu.
 - Pro: One tap from where the project already shows its level
