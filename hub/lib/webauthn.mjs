@@ -85,7 +85,8 @@ export function verifyRegistration(c, { challenge, origin, rpId }) {
 }
 
 // A step-up: a = { clientDataJSON, authenticatorData, signature } (base64url). cred = { publicKey, alg, signCount }.
-// Returns the new signCount, or throws. A counter that stops climbing (both non-zero) points at a copied passkey.
+// Returns the new signCount, or throws. As the WebAuthn spec says: once either counter is non-zero, a count that does
+// not climb (0 included) points at a copied passkey. Passkeys that never count (both 0) pass.
 export function verifyAssertion(a, cred, { challenge, origin, rpId }) {
   if (!a || typeof a !== 'object') throw new Error('No confirmation was sent');
   const cdBytes = unb64u(a.clientDataJSON), adBytes = unb64u(a.authenticatorData), sig = unb64u(a.signature);
@@ -93,7 +94,8 @@ export function verifyAssertion(a, cred, { challenge, origin, rpId }) {
   const ad = parseAuthData(adBytes);
   checkAuth(ad, rpId);
   if (!signatureOk(cred, adBytes, cdBytes, sig)) throw new Error('The signature does not check out');
-  if (ad.signCount && cred.signCount && ad.signCount <= cred.signCount) throw new Error('The passkey counter went backwards (a copied passkey?)');
+  const stored = Number(cred.signCount) || 0;
+  if ((ad.signCount || stored) && ad.signCount <= stored) throw new Error('The passkey counter went backwards (a copied passkey?)');
   return ad.signCount;
 }
 

@@ -3,7 +3,7 @@
 // started, wait until it answers, then open it. Double-click "Restart Crux Hub.vbs" to run this with no console.
 //   node restart.mjs [--port 4747] [--no-open]
 // Exit code 0 when the hub is back, 1 when it is not (the .vbs then says so, with where the log is).
-import { DEFAULT_PORT, pidsOnPort, stopTree, readLaunch, startDetached, ping, waitFor, openApp, logFile } from './lib/relaunch.mjs';
+import { DEFAULT_PORT, pidsOnPort, stopTree, readLaunch, startHub, pairedDevices, ping, waitFor, openApp, logFile } from './lib/relaunch.mjs';
 
 const args = process.argv.slice(2);
 const i = args.indexOf('--port');
@@ -24,12 +24,15 @@ for (const pid of pids) say(`${await stopTree(pid) ? 'Stopped' : 'Could not stop
 if (pids.length && !await waitFor(async () => !(await pidsOnPort(port)).length, { timeoutMs: 10000 })) say('The port is still taken; trying anyway.');
 
 const spec = readLaunch(port);
-say(`Starting: ${spec.node} ${spec.args.join(' ')}  (in ${spec.cwd})`);
-startDetached(spec);
+// Decision 47: with no device paired yet, the live hub starts in a minimized window, the only place it shows a
+// pairing code. Test hubs (other ports) never open a window.
+const window = port === DEFAULT_PORT && pairedDevices() === 0;
+say(`Starting${window ? ' in a window (no device is paired yet)' : ''}: ${spec.node} ${spec.args.join(' ')}  (in ${spec.cwd})`);
+startHub(spec, { window });
 const boot = await waitFor(() => ping(port), { timeoutMs: 45000, everyMs: 400 });
 if (!boot) { say(`The hub did not answer. Its log: ${logFile(port)}`); process.exit(1); }
 say('The hub is back.');
 const after = await state();
 const resumed = after?.resumed || [];
 if (after) say(resumed.length ? `Resuming, a few seconds apart: ${resumed.map(r => `${r.agent} (${r.project}, ${r.why === 'working' ? 'was working' : 'had an unread message'})`).join(', ')}` : 'Nothing to resume.');
-if (open) openApp(`http://localhost:${port}/`);
+if (open) openApp(port === DEFAULT_PORT ? `http://crux.localhost:${port}/` : `http://127.0.0.1:${port}/`);   // decision 47: the PC's own name

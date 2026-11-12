@@ -2,13 +2,13 @@
 // the Trusted record checked at start, the alerts, restart_hub and the --test-pair guard.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Guard, stepUpNeed, settingsNeed, makeAlert, dropUnbackedTrusted, makeRestartHub, addressOf, OPEN_POSTS, STEP_UP_MS } from '../lib/guard.mjs';
+import { Guard, stepUpNeed, settingsNeed, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, addressOf, pcRedirect, projectScope, projectTag, cutScope, OPEN_POSTS, STEP_UP_MS } from '../lib/guard.mjs';
 import { verifyRegistration, verifyAssertion, parseAuthData } from '../lib/webauthn.mjs';
 import { Push, cardsFor, payloadOf } from '../lib/push.mjs';
-import { testPairError } from '../lib/relaunch.mjs';
+import { testPairError, startHub, pairedDevices } from '../lib/relaunch.mjs';
 import { cruxToolNames, restartHub } from '../lib/tools.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -23,9 +23,10 @@ const roots = [];
 const tmp = name => { const d = mkdtempSync(join(tmpdir(), `crux-guard-${name}-`)); roots.push(d); return d; };
 test.after(() => { for (const d of roots) rmSync(d, { recursive: true, force: true }); });
 
+// interactive: as a hub running in a window (the only place a console code is shown).
 function newGuard(opts = {}) {
   const out = [], clock = { t: Date.parse('2026-11-12T10:00:00Z') };
-  const g = new Guard({ port: PORT, file: null, print: s => out.push(s), now: () => clock.t, ...opts });
+  const g = new Guard({ port: PORT, file: null, print: s => out.push(s), now: () => clock.t, interactive: true, ...opts });
   return { g, out, clock };
 }
 // Pair a fake passkey through the console code, as the page would. Returns { device, cookie, key }.
@@ -77,7 +78,7 @@ test('RS256 passkeys check out too', () => {
 test('pairing: the console code works once; the hub keeps a hash of the token, never the token', () => {
   const dir = tmp('store');
   const out = [];
-  const g = new Guard({ dir, port: PORT, print: s => out.push(s) });
+  const g = new Guard({ dir, port: PORT, print: s => out.push(s), interactive: true });
   assert.equal(g.paired().length, 0);
   const r = pair(g, out);
   assert.match(r.cookie, /^crux_device_4790=[\w-]{40,}; Path=\/; Max-Age=\d+; HttpOnly; SameSite=Strict$/, 'HttpOnly, Strict, no Secure on http://localhost');
@@ -112,9 +113,45 @@ test('pairing refuses numbers for names, wrong origins, and five wrong codes can
   g.printCode('test');
   clock.t += 31 * 60000;
   assert.throws(() => g.pairOptions({ headers: H, code: codeIn(out) }), /wrong or has expired/);
-  // asking for a new code: at most every 15 seconds
+  // asking for a new code (no device paired yet): at most every 15 seconds
   assert.equal(g.askForCode().printed, true);
   assert.equal(g.askForCode().printed, false);
+});
+
+test('no window, no code: nothing is printed or accepted; once a device is paired, asking without a cookie does nothing', () => {
+  const { g, out } = newGuard({ interactive: false });
+  assert.equal(g.printCode('test'), false);
+  assert.deepEqual(g.askForCode(), { printed: false, why: 'nowindow' });
+  assert.equal(out.length, 0, 'nothing printed: with no window, output goes to a log file');
+  assert.equal(g.codes.size, 0);
+  g.codes.set('ABCD-EFGH', { source: 'console', expires: Date.now() + 1e9 });   // even one put there by hand
+  assert.throws(() => g.pairOptions({ headers: H, code: 'ABCD-EFGH' }), /wrong or has expired/);
+  assert.equal(g.status(H).codeWhere, 'none');
+  // in a window: the first device may ask for a code; after that, asking does nothing (codes come from a paired device)
+  const w = newGuard();
+  pair(w.g, w.out);
+  w.clock.t += 60000;
+  assert.deepEqual(w.g.askForCode(), { printed: false, why: 'paired' });
+  assert.equal(w.g.status(H).codeWhere, 'window');
+});
+
+test('the live hub pairs the PC at crux.localhost only; plain localhost page loads move there', () => {
+  const { g, out } = newGuard({ port: 4747 });
+  g.printCode('test');
+  assert.throws(() => g.pairOptions({ headers: { host: 'localhost:4747', origin: 'http://localhost:4747' }, code: codeIn(out) }), /crux\.localhost:4747/);
+  const ch = { host: 'crux.localhost:4747', origin: 'http://crux.localhost:4747' };
+  const o = g.pairOptions({ headers: ch, code: codeIn(out), label: 'PC' });
+  assert.equal(o.publicKey.rp.id, 'crux.localhost');
+  const k = new FakePasskey();
+  const r = g.pairFinish({ headers: ch, credential: k.register({ challenge: o.publicKey.challenge, origin: 'http://crux.localhost:4747', rpId: 'crux.localhost' }) });
+  assert.match(r.cookie, /^crux_device_4747=.*SameSite=Strict$/);
+  assert.equal(g.status({ host: '127.0.0.1:4747' }).pcUrl, 'http://crux.localhost:4747');
+  assert.equal(g.status({ host: 'localhost:4747' }).webauthn, false, 'the page at plain localhost is sent on, not paired');
+  assert.equal(pcRedirect({ method: 'GET', path: '/', url: '/?card=x', host: 'localhost:4747', port: 4747 }), 'http://crux.localhost:4747/?card=x');
+  assert.equal(pcRedirect({ method: 'GET', path: '/api/state', url: '/api/state', host: 'localhost:4747', port: 4747 }), null, 'API calls are not moved');
+  assert.equal(pcRedirect({ method: 'GET', path: '/', url: '/', host: 'crux.localhost:4747', port: 4747 }), null);
+  assert.equal(pcRedirect({ method: 'GET', path: '/', url: '/', host: 'localhost:4791', port: 4791 }), null, 'test hubs stay where they are');
+  assert.equal(new Guard({ port: 4791, file: null }).pcUrl, 'http://localhost:4791');
 });
 
 test('a device-issued code pairs a second device but cannot start over; the console code can', () => {
@@ -169,18 +206,75 @@ test('step-up: verified once, within a minute, for that change and that device o
   assert.match(g.verifyStepUp({ headers: H, device, stepUp: undefined, need }).error, /Windows Hello or Face ID/);
 });
 
+test('the passkey counter keeps its highest value: a 0 or a lower count after a higher one is refused', () => {
+  const { g, out } = newGuard();
+  const { device, key } = pair(g, out);
+  const need = { purpose: 'push', scope: 'push' };
+  key.count = 4;
+  assert.equal(g.verifyStepUp({ headers: H, device, stepUp: stepUp(g, device, key, need), need }).ok, true);
+  assert.equal(device.credential.signCount, 5);
+  key.count = -1;   // the next assertion counts 0
+  assert.match(g.verifyStepUp({ headers: H, device, stepUp: stepUp(g, device, key, need), need }).error, /counter went backwards/);
+  assert.equal(device.credential.signCount, 5, 'never reset to 0');
+  key.count = 2;
+  assert.match(g.verifyStepUp({ headers: H, device, stepUp: stepUp(g, device, key, need), need }).error, /counter went backwards/);
+  key.count = 9;
+  assert.equal(g.verifyStepUp({ headers: H, device, stepUp: stepUp(g, device, key, need), need }).ok, true);
+  assert.equal(device.credential.signCount, 10);
+  // a passkey that never counts (both 0) is fine
+  const flat = pair(g, out, { label: 'Flat' });
+  flat.key.count = -1;
+  assert.equal(g.verifyStepUp({ headers: H, device: flat.device, stepUp: stepUp(g, flat.device, flat.key, need), need }).ok, true);
+});
+
+test('a need is cut the same way the challenge cuts it, so a long scope still matches', () => {
+  const { g, out } = newGuard();
+  const { device, key } = pair(g, out);
+  const long = { purpose: 'unpair', scope: 'device=' + 'x'.repeat(600) };
+  const need = { purpose: long.purpose, scope: cutScope(long.scope) };
+  assert.equal(need.scope.length, 400);
+  assert.equal(g.verifyStepUp({ headers: H, device, stepUp: stepUp(g, device, key, long), need }).ok, true, 'challenge() made from the long scope matches the cut need');
+  assert.ok(stepUpNeed('POST /api/devices/remove', { id: 'd'.repeat(900) }, {}).scope.length <= 400);
+});
+
+test('a pairing push says how the device was paired, not only the name it gave', () => {
+  const d = { label: 'iPhone', rpId: 'pc.tail1234.ts.net' };
+  assert.equal(pairAlert({ device: d, via: 'a code from Windows PC', removed: [] }).title, 'Device paired with a code from Windows PC: iPhone');
+  assert.equal(pairAlert({ device: d, via: 'the code from the hub\'s window', removed: [] }).title, 'Device paired with the code in the hub\'s window: iPhone');
+  assert.match(pairAlert({ device: d, via: 'the code from the hub\'s window', removed: [{ label: 'Old PC' }], startOver: true }).title, /^Every device was unpaired, with the code in the hub's window$/);
+});
+
+test('a live hub with no device paired restarts into a window; otherwise, and test hubs, with none', () => {
+  const calls = [], fake = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { unref() { } }; };
+  const spec = { port: 4747, node: 'C:/Program Files/nodejs/node.exe', args: ['C:/hub/server.mjs'], cwd: 'C:/hub' };
+  startHub(spec, { window: true, spawnFn: fake, platform: 'win32', env: {} });
+  assert.equal(calls[0].cmd, 'cmd.exe');
+  assert.equal(calls[0].args.at(-1), '"start "Crux Hub" /min "C:/Program Files/nodejs/node.exe" "C:/hub/server.mjs""');
+  assert.equal(calls[0].opts.windowsVerbatimArguments, true);
+  assert.equal(calls[0].opts.stdio, 'ignore', 'nothing goes to a log file: the window shows it');
+  startHub(spec, { window: false, spawnFn: fake, platform: 'win32', env: {} });
+  assert.equal(calls[1].cmd, spec.node, 'detached as before');
+  const data = tmp('paired');
+  assert.equal(pairedDevices({ CRUX_HUB_DATA: data }), 0);
+  writeFileSync(join(data, 'devices.json'), JSON.stringify({ devices: [{ id: 'd1' }, { id: 'dtest', test: true }] }));
+  assert.equal(pairedDevices({ CRUX_HUB_DATA: data }), 1);
+  const src = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
+  assert.match(src, /startHub\(launchSpec\(\{ port \}\), \{ window: port === 4747 && !guard\.paired\(\)\.length \}\)/);
+  assert.match(readFileSync(new URL('../restart.mjs', import.meta.url), 'utf8'), /const window = port === DEFAULT_PORT && pairedDevices\(\) === 0;/);
+});
+
 test('a raise to Trusted is kept as its signed step-up and checked again from scratch', () => {
   const { g, out } = newGuard();
   const { device, key } = pair(g, out);
   const k = 'c:/users/x/proj';
-  const need = { purpose: 'project', scope: `project=${encodeURIComponent(k)};trusted` };
+  const need = { purpose: 'project', scope: `${projectTag(k)};trusted` };
   const v = g.verifyStepUp({ headers: H, device, stepUp: stepUp(g, device, key, need), need });
   g.recordRaise(k, v.proof);
   assert.equal(g.raiseBacked(k), true);
   assert.equal(g.raiseBacked('c:/users/x/other'), false, 'not for another project');
-  g.raises['c:/users/x/other'] = { ...v.proof, scope: `project=${encodeURIComponent('c:/users/x/other')};trusted` };
+  g.raises['c:/users/x/other'] = { ...v.proof, scope: `${projectTag('c:/users/x/other')};trusted` };
   assert.equal(g.raiseBacked('c:/users/x/other'), false, 'a copied record whose scope was edited no longer checks out');
-  const conn = { purpose: 'project', scope: `project=${encodeURIComponent(k)};connectors` };
+  const conn = { purpose: 'project', scope: `${projectTag(k)};connectors` };
   g.raises[k] = g.verifyStepUp({ headers: H, device, stepUp: stepUp(g, device, key, conn), need: conn }).proof;
   assert.equal(g.raiseBacked(k), false, 'a step-up for connectors is not a raise');
   g.raises[k] = v.proof;
@@ -191,14 +285,15 @@ test('a raise to Trusted is kept as its signed step-up and checked again from sc
 test('which changes need a step-up', () => {
   const p = { name: 'proj', dir: 'C:/x/proj' };
   const hub = { project: n => { if (n !== 'proj') throw new Error('Unknown project'); return p; }, permissionMode: () => 'auto', connectorsOn: () => false, settings: { all: () => ({ routePermissions: false, permissionTimeoutSec: 120, retireAt: 60 }) } };
-  assert.deepEqual(settingsNeed({ project: 'proj', permissionMode: 'trusted' }, hub), { purpose: 'project', scope: 'project=c%3A%2Fx%2Fproj;trusted', why: 'Raise proj to Trusted' });
+  assert.deepEqual(settingsNeed({ project: 'proj', permissionMode: 'trusted' }, hub), { purpose: 'project', scope: `${projectScope('C:/x/proj')};trusted`, why: 'Raise proj to Trusted' });
+  assert.match(projectScope('C:/x/proj'), /^project=[0-9a-f]{24}$/, 'a short hash, whatever the path');
   assert.equal(settingsNeed({ project: 'proj', permissionMode: 'standard' }, hub), null, 'lowering: cookie only');
   assert.equal(settingsNeed({ project: 'proj', handoff: { retireAt: 50 } }, hub), null, 'a project\'s own handoff numbers: cookie only');
   assert.match(settingsNeed({ project: 'proj', connectors: true }, hub).scope, /;connectors$/);
   assert.equal(settingsNeed({ project: 'proj', connectors: false }, hub), null);
   assert.equal(settingsNeed({ routePermissions: false }, hub), null, 'orchestrator answers off: cookie only');
   assert.equal(settingsNeed({ routePermissions: true }, hub).purpose, 'hub', 'on: step-up');
-  assert.equal(settingsNeed({ project: 'proj', routePermissions: true }, hub).scope, 'project=c%3A%2Fx%2Fproj;routing', 'even beside a project');
+  assert.equal(settingsNeed({ project: 'proj', routePermissions: true }, hub).scope, `${projectScope('C:/x/proj')};routing`, 'even beside a project');
   assert.equal(settingsNeed({ permissionTimeoutSec: 300 }, hub).purpose, 'hub');
   assert.equal(settingsNeed({ permissionTimeoutSec: 120 }, hub), null, 'no change, no step-up');
   assert.equal(settingsNeed({ workerHandoffFloorPct: 40 }, hub).purpose, 'hub', 'a hub-wide number added later is covered');
@@ -286,10 +381,10 @@ test('at start, a Trusted project whose raise checks out stays Trusted', () => {
 test('restart_hub: orchestrator only, with a reason, not within a minute of start; notes, pushes, then restarts', async () => {
   assert.ok(cruxToolNames({ role: 'orchestrator' }).includes('mcp__crux__restart_hub'));
   assert.ok(!cruxToolNames({ role: 'worker' }).includes('mcp__crux__restart_hub'), 'workers do not get it');
-  const notes = [], push = fakePush();
+  const notes = [], push = fakePush(), env = {};
   let restarted = 0, now = 1_000_000;
   const hub = { notice: (p, t, text) => notes.push([t, text]) };
-  hub.restartHub = makeRestartHub({ hub, push, restart: () => restarted++, bootAt: now, now: () => now, delayMs: 0 });
+  hub.restartHub = makeRestartHub({ hub, push, restart: () => restarted++, bootAt: now, now: () => now, delayMs: 0, env });
   const project = { name: 'proj' }, orch = { name: 'orchestrator-4', role: 'orchestrator' };
   assert.match(await restartHub(hub, project, { name: 'w1', role: 'worker' }, 'x'), /Only the orchestrator/);
   assert.match(await restartHub(hub, project, orch, 'merged #53'), /seconds ago/, 'too soon after start');
@@ -303,6 +398,18 @@ test('restart_hub: orchestrator only, with a reason, not within a minute of star
   assert.equal(push.sent[0].body, 'Asked by orchestrator-4 in proj', 'the push says who and where, not the reason (C001)');
   assert.match(await restartHub(hub, project, orch, 'again'), /already restarting/);
   assert.match(await restartHub({}, project, orch, 'x'), /cannot restart itself/, 'a hub with no server');
+  // at most 3 in 15 minutes: the times travel to the next hub in its environment
+  assert.equal(env.CRUX_HUB_RESTARTS.split(',').length, 1);
+  for (let i = 0; i < 2; i++) {   // two more restarted hubs, each up for over a minute
+    now += 2 * 60000;
+    const next = makeRestartHub({ hub, push, restart: () => restarted++, bootAt: now - 61000, now: () => now, delayMs: 0, env });
+    assert.match(await next(project, orch, `merge ${i}`), /Restarting now/);
+  }
+  now += 2 * 60000;
+  const fourth = makeRestartHub({ hub, push, restart: () => restarted++, bootAt: now - 61000, now: () => now, delayMs: 0, env });
+  assert.match(await fourth(project, orch, 'once more'), /3 times in the last 15 minutes/);
+  now += 15 * 60000;
+  assert.match(await makeRestartHub({ hub, push, restart: () => { }, bootAt: now - 61000, now: () => now, delayMs: 0, env })(project, orch, 'later'), /Restarting now/, 'fine again later');
 });
 
 test('--test-pair: never the live hub', () => {

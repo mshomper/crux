@@ -3,9 +3,14 @@
 // - Pairing: a device registers a passkey once (Windows Hello on the PC, Face ID in the iPhone home-screen app) and
 //   gets a random device token in an HttpOnly, SameSite=Strict cookie (Secure over https) named for this hub's port.
 //   The hub keeps only a SHA-256 of each token, plus each passkey's public key and id, in <data>/devices.json.
-// - Bootstrapping: a one-time pairing code that the hub prints in its own output (its window, or hub-<port>.log after
-//   a restart from the menu), never in the page or the API. Or a code a paired device issues after Windows Hello or
-//   Face ID. Codes work once, expire, and five wrong tries cancel every code for a minute.
+// - Bootstrapping: a one-time pairing code shown only in the hub's own interactive window (a TTY), never written to a
+//   file (log included), the page or the API. A hub with no window shows none: with no device paired it asks you to
+//   start it in a window (and its own restarts open one). Once a device is paired, new devices get a code from a
+//   paired device after Windows Hello or Face ID; the window's code is then only the lost-passkey path, and asking
+//   for a fresh one without a cookie does nothing. Codes work once, expire, and five wrong tries within ten minutes
+//   cancel every code for a minute.
+// - On the PC the live hub is http://crux.localhost:4747 (plain localhost page loads move there): its cookie and
+//   passkey belong to that name only, so other programs' servers on localhost:<port> never receive the cookie.
 // - Every POST but the three pairing steps needs the cookie (server.mjs). The few big changes also need a step-up: a
 //   passkey assertion with user verification, made on a hub-issued challenge less than 60 seconds old, bound to that
 //   one change (purpose and scope are hashed into the challenge), used once.
@@ -51,7 +56,19 @@ const okDevice = d => d && typeof d.id === 'string' && typeof d.tokenHash === 's
 // clientDataJSON then names that change, which is what lets a stored raise be checked again at start.
 export const bindChallenge = (random, purpose, scope) => sha256(random, Buffer.from(`\n${purpose}\n${scope}`));
 export const scopeHas = (scope, part) => String(scope || '').split(';').includes(part);
-export const projectScope = dir => `project=${encodeURIComponent(projectKey(dir))}`;
+// A project in a scope: a short hash of its folder key, so a scope stays well under the cut whatever the path.
+export const projectTag = key => `project=${sha256(String(key)).toString('hex').slice(0, 24)}`;
+export const projectScope = dir => projectTag(projectKey(dir));
+// One cut for a scope, used both where a change says what it needs and where the challenge is made, so they match.
+export const cutScope = s => String(s ?? '').slice(0, 400);
+// The PC's own name for a hub: crux.localhost for the live hub on 4747, plain localhost for test hubs (which are
+// opened at 127.0.0.1 and pair at localhost:<port>, a name the live hub's cookie never goes to).
+export const pcNameFor = port => (Number(port) === 4747 ? 'crux.localhost' : 'localhost');
+// A page load of the live hub at plain localhost moves to its own name. Returns the new address, or null.
+export function pcRedirect({ method, path, url, host, port }) {
+  if (method !== 'GET' || pcNameFor(port) === 'localhost' || hostName(host) !== 'localhost' || !['/', '/index.html'].includes(path)) return null;
+  return `http://${pcNameFor(port)}:${Number(port)}${url}`;
+}
 
 // Where a request was made: the passkey's address (rpId), the page's origin and whether it came over https.
 // Passkeys bind to a name, so 127.0.0.1 and [::1] cannot pair (webauthn: false).
@@ -78,8 +95,11 @@ export function addressOf(headers = {}, port = 4747) {
 
 export class Guard {
   // file: null keeps devices in memory only (tests). now: the clock (tests move it). print: where codes go (stdout).
-  constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), port = 4747, now = () => Date.now(), print = s => console.log(s), file } = {}) {
-    Object.assign(this, { dir, port: Number(port), now, print });
+  // interactive: the hub runs in a window you can see (stdout is a TTY); only then is a pairing code ever printed.
+  constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), port = 4747, now = () => Date.now(), print = s => console.log(s), file, interactive = false } = {}) {
+    Object.assign(this, { dir, port: Number(port), now, print, interactive: !!interactive });
+    this.pcName = pcNameFor(port);
+    this.pcUrl = `http://${this.pcName}:${this.port}`;
     this.file = file === undefined ? join(dir, 'devices.json') : file;
     this.challenges = new Map();   // challenge (base64url) -> what it is for
     this.codes = new Map();        // code -> { source: 'console' | 'device', expires, by }
@@ -136,7 +156,8 @@ export class Guard {
     if (headers.origin !== undefined && headers.origin !== a.origin) throw new GuardError(`This page (${headers.origin}) is not the hub at ${a.origin}.`);
   }
   needName(a) {
-    if (!a.webauthn) throw new GuardError(`Passkeys need a name, not a number: open http://localhost:${this.port} to pair or confirm on this PC.`, 400);
+    if (!a.webauthn) throw new GuardError(`Passkeys need a name, not a number: open ${this.pcUrl} to pair or confirm on this PC.`, 400);
+    if (a.rpId === 'localhost' && this.pcName !== 'localhost') throw new GuardError(`On this PC the hub pairs at ${this.pcUrl}, so its cookie is never sent to other programs on localhost. Open that address.`, 400);
   }
 
   // ---------- pairing codes ----------
@@ -145,17 +166,23 @@ export class Guard {
     while (s.length < 8) for (const x of randomBytes(12)) if (x < 248 && s.length < 8) s += ALPHABET[x % 31];   // 31 x 8 = 248: no bias
     return `${s.slice(0, 4)}-${s.slice(4)}`;
   }
-  // The console code: printed in the hub's own output only, one at a time. Never returned to a caller.
+  // The console code: shown in the hub's own window only, one at a time. Never returned to a caller, and never
+  // printed at all when the hub has no window (its output then goes to a log file, which any program can read).
   printCode(why = 'at start') {
+    if (!this.interactive) return false;
     for (const [c, v] of this.codes) if (v.source === 'console') this.codes.delete(c);
     const code = this.newCode();
     this.codes.set(code, { source: 'console', expires: this.now() + CONSOLE_CODE_MS });
     this.lastPrint = this.now();
     const line = '-'.repeat(66);
     this.print(`${line}\n  Pairing code (${why}): ${code}\n  Type it under "Pair this device" on the hub page. It works once, for 30 minutes.\n  Never send it to anyone, and never paste it to an agent.\n${line}`);
+    return true;
   }
-  // "Print a new code" on the pair panel: at most every 15 seconds.
+  // "Print a new code" on the pair panel: only for the first device, only into a window, at most every 15 seconds.
+  // Once a device is paired it does nothing: new devices get their code from a paired device.
   askForCode() {
+    if (!this.interactive) return { printed: false, why: 'nowindow' };
+    if (this.paired().length) return { printed: false, why: 'paired' };
     const wait = this.lastPrint + PRINT_GAP_MS - this.now();
     if (wait > 0) return { printed: false, waitSec: Math.ceil(wait / 1000) };
     this.printCode('asked for from the hub page');
@@ -174,7 +201,7 @@ export class Guard {
     const s = String(text || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const code = s.length === 8 ? `${s.slice(0, 4)}-${s.slice(4)}` : '';
     const v = code && this.codes.get(code);
-    if (v && v.expires >= now) return { code, ...v };
+    if (v && v.expires >= now && (v.source !== 'console' || this.interactive)) return { code, ...v };
     if (v) this.codes.delete(code);
     this.wrong = this.wrong.filter(t => now - t < WRONG_WINDOW_MS);
     this.wrong.push(now);
@@ -250,7 +277,7 @@ export class Guard {
   // Options for navigator.credentials.get, for one change (purpose and scope come from stepUpNeed via the 403).
   challenge({ headers = {}, device, purpose, scope = '' }) {
     if (!PURPOSES.has(purpose)) throw new GuardError('Unknown kind of confirmation.', 400);
-    scope = String(scope).slice(0, 400);
+    scope = cutScope(scope);
     const a = addressOf(headers, this.port);
     this.sameOrigin(headers, a); this.needName(a);
     const random = randomBytes(32);
@@ -276,7 +303,7 @@ export class Guard {
     let count;
     try { count = verifyAssertion(stepUp, holder.credential, { challenge: ch, origin: a.origin, rpId: a.rpId }); }
     catch (e) { return fail(`The confirmation did not check out: ${e.message}.`); }
-    holder.credential.signCount = count;
+    holder.credential.signCount = Math.max(Number(holder.credential.signCount) || 0, count);   // never back to 0
     holder.lastStepUp = iso(this.now());
     this.save();
     const proof = { at: iso(this.now()), deviceId: holder.id, credentialId: holder.credential.id, rpId: a.rpId, origin: a.origin, random: rec.random, purpose: rec.purpose, scope: rec.scope, clientDataJSON: stepUp.clientDataJSON, authenticatorData: stepUp.authenticatorData, signature: stepUp.signature };
@@ -292,7 +319,7 @@ export class Guard {
     const r = this.raises[key];
     if (!r || typeof r !== 'object') return false;
     try {
-      if (r.purpose !== 'project' || !scopeHas(r.scope, `project=${encodeURIComponent(key)}`) || !scopeHas(r.scope, 'trusted')) return false;
+      if (r.purpose !== 'project' || !scopeHas(r.scope, projectTag(key)) || !scopeHas(r.scope, 'trusted')) return false;
       const holder = this.devices.find(d => d.id === r.deviceId && d.rpId === r.rpId && d.credential?.id === r.credentialId);
       if (!holder) return false;
       const cdBytes = unb64u(r.clientDataJSON), adBytes = unb64u(r.authenticatorData);
@@ -307,8 +334,8 @@ export class Guard {
   // ---------- the device list ----------
   status(headers = {}) {
     const a = addressOf(headers, this.port), me = this.deviceFor(headers);
-    return { paired: !!me, device: me ? { id: me.id, label: me.label, test: !!me.test } : null, address: a.rpId, webauthn: a.webauthn,
-      passkeyHere: this.devices.some(d => d.rpId === a.rpId && d.credential), devices: this.paired().length, port: this.port };
+    return { paired: !!me, device: me ? { id: me.id, label: me.label, test: !!me.test } : null, address: a.rpId, webauthn: a.webauthn && !(a.rpId === 'localhost' && this.pcName !== 'localhost'),
+      passkeyHere: this.devices.some(d => d.rpId === a.rpId && d.credential), devices: this.paired().length, port: this.port, pcUrl: this.pcUrl, codeWhere: this.interactive ? 'window' : 'none' };
   }
   list(headers = {}) {
     const me = this.deviceFor(headers);
@@ -336,6 +363,10 @@ export class Guard {
 // Returns null, or { purpose, scope, why } for the confirmation panel. Only the server's view counts: the page learns
 // what is needed from the 403 and asks for exactly that.
 export function stepUpNeed(route, body = {}, hub) {
+  const need = needFor(route, body, hub);
+  return need && { ...need, scope: cutScope(need.scope) };   // cut as challenge() cuts it, so a long path still matches
+}
+function needFor(route, body, hub) {
   switch (route) {
     case 'POST /api/settings': return settingsNeed(body, hub);
     case 'POST /api/push/subscribe': return { purpose: 'push', scope: 'push', why: 'Add this device to the hub\'s notifications' };
@@ -380,6 +411,16 @@ export function makeAlert({ hub, push, warn = s => console.warn(s) }) {
   };
 }
 
+// The alert for a pairing (pairFinish's result). The title says how the device was paired, not just the name it
+// chose for itself, since a name can be anything.
+export function pairAlert(r) {
+  const d = r.device;
+  const how = r.via.startsWith('a code from ') ? `with a code from ${r.via.slice('a code from '.length)}` : 'with the code in the hub\'s window';
+  return r.startOver
+    ? { title: `Every device was unpaired, ${how}`, note: `Every paired device was unpaired (${r.removed.map(x => x.label).join(', ') || 'none'}) with the code from the hub's window, and ${d.label} (${d.rpId}) paired in their place. If this was not you, stop the hub and check who can reach this PC.` }
+    : { title: `Device paired ${how}: ${d.label}`, note: `${d.label} (${d.rpId}) was paired with the hub, using ${r.via}. If this was not you, unpair it under Devices in the hub menu.` };
+}
+
 // At start: a project at Trusted with no raise the guard can check drops to Auto, with a note and a push.
 export function dropUnbackedTrusted({ hub, guard, push, warn = s => console.warn(s) }) {
   const dropped = [];
@@ -398,8 +439,10 @@ export function dropUnbackedTrusted({ hub, guard, push, warn = s => console.warn
 }
 
 // restart_hub (orchestrator only): through the hub process itself, no HTTP. A note in the thread, a one-line push,
-// then the same restart as the hub menu's. Not within a minute of the hub starting, so a confused loop stays slow.
-export function makeRestartHub({ hub, push, restart, bootAt = Date.now(), now = () => Date.now(), minUpMs = 60 * 1000, delayMs = 1500, warn = s => console.warn(s) }) {
+// then the same restart as the hub menu's. Not within a minute of the hub starting, and at most 3 in 15 minutes (the
+// times travel to the restarted hub in CRUX_HUB_RESTARTS), so a confused loop stays slow and stops.
+export const RESTARTS_MAX = 3, RESTARTS_WINDOW_MS = 15 * 60 * 1000;
+export function makeRestartHub({ hub, push, restart, bootAt = Date.now(), now = () => Date.now(), minUpMs = 60 * 1000, delayMs = 1500, env = process.env, warn = s => console.warn(s) }) {
   let going = false;
   return async (project, agent, reason) => {
     reason = String(reason || '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -408,6 +451,9 @@ export function makeRestartHub({ hub, push, restart, bootAt = Date.now(), now = 
     if (going) return 'The hub is already restarting.';
     const up = now() - bootAt;
     if (up < minUpMs) return `The hub started ${Math.max(1, Math.round(up / 1000))} seconds ago. Wait a minute before restarting it again.`;
+    const recent = String(env.CRUX_HUB_RESTARTS || '').split(',').map(Number).filter(t => Number.isFinite(t) && now() - t < RESTARTS_WINDOW_MS);
+    if (recent.length >= RESTARTS_MAX) return `The hub was restarted ${recent.length} times in the last 15 minutes with restart_hub. Ask {{who}} to restart it from the hub menu if it is really needed.`;
+    env.CRUX_HUB_RESTARTS = [...recent, now()].join(',');
     going = true;
     hub.notice(project, 'orchestrator', `${agent.name} restarted the hub: ${reason}`);
     try {

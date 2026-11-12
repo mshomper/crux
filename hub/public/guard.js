@@ -21,12 +21,15 @@ export function platform(nav = globalThis.navigator || {}) {
   return { ios, word: 'your passkey', glyph: 'key', name: 'Browser' };
 }
 
-// Where the hub printed the pairing code (GET /api/auth/status codeWhere).
-export function codeWhereText(st = {}) {
-  if (st.codeWhere === 'window') return 'the hub\'s own window on the PC (Crux Hub, on the taskbar)';
-  if (st.codeWhere === 'log') return `${st.log || 'the hub\'s log'}, in the .crux-hub folder in your user folder on the PC`;
-  return 'what the hub printed on the PC';
+// Where a pairing code comes from, for this hub and this device (GET /api/auth/status: codeWhere 'window' | 'none',
+// devices = how many are paired). The hub shows a code only in its own window, never in a file (decision 47 review).
+const WINDOW = 'the hub\'s own window on the PC (Crux Hub, on the taskbar)';
+export function codeHelp(st = {}) {
+  const win = st.codeWhere === 'window';
+  if (!st.devices) return { text: `The code is in ${WINDOW}.`, print: win };
+  return { text: `Get a code on a device already paired: hub menu, Devices, Pair another device.${win ? ` Lost a passkey? The code in ${WINDOW} works too.` : ''}`, print: false };
 }
+export const START_OVER_NO_WINDOW = 'Starting over needs the hub in a window. Delete devices.json in the .crux-hub folder in your user folder, then double-click Restart Crux Hub.vbs: with no device paired, the hub opens in a window with a code. Every device then pairs again.';
 
 // ---------- the panels, as HTML (testable without a browser) ----------
 const head = (iconId, title) => `<header class="ps-head">${ic(iconId)}<h2 id="g-title">${esc(title)}</h2>
@@ -39,13 +42,18 @@ const glyph = (id, live = false) => `<span class="g-glyph ${live ? 'live' : ''}"
 export function pairPanel(s) {
   const p = s.plat, st = s.st || {};
   let body;
+  const pc = st.pcUrl || `http://localhost:${st.port || 4747}`;
   if (s.step === 'noname') {
-    body = `<div class="g-hero">${glyph('key')}<div><p class="g-lead">Passkeys need the hub's name, not a number.</p>
-      <p class="g-sub">Open the hub at <b>localhost</b> to pair this PC.</p></div></div>
-      <a class="btn primary g-wide" href="http://localhost:${esc(st.port || 4747)}/">${ic('external')}Open http://localhost:${esc(st.port || 4747)}</a>`;
+    body = `<div class="g-hero">${glyph('key')}<div><p class="g-lead">This PC pairs at the hub's own name</p>
+      <p class="g-sub">Passkeys need a name, and on this PC the hub keeps its cookie on ${esc(pc.replace(/^http:\/\//, ''))} only, so other programs never receive it.</p></div></div>
+      <a class="btn primary g-wide" href="${esc(pc)}/">${ic('external')}Open ${esc(pc)}</a>`;
+  } else if (s.step === 'nowindow') {
+    body = `<div class="g-hero">${glyph('pc')}<div><p class="g-lead">Start the hub in a window to pair the first device</p>
+      <p class="g-sub">The hub shows the first pairing code only in its own window, never in a file. Double-click <b>Restart Crux Hub.vbs</b> in the hub folder: with no device paired yet, it restarts the hub in a window (Crux Hub, on the taskbar). Then reload this page.</p></div></div>
+      <button type="button" class="btn ghost g-wide" data-g-close>Close</button>`;
   } else if (s.step === 'nokey') {
     body = `<div class="g-hero">${glyph('key')}<div><p class="g-lead">This browser cannot make passkeys here.</p>
-      <p class="g-sub">Use Edge or Chrome on the PC at http://localhost:${esc(st.port || 4747)}, or the Crux app on your phone's home screen (its Tailscale address).</p></div></div>`;
+      <p class="g-sub">Use Edge or Chrome on the PC at ${esc(pc)}, or the Crux app on your phone's home screen (its Tailscale address).</p></div></div>`;
   } else if (s.step === 'done') {
     body = `<div class="g-hero g-done">${glyph('check')}<div><p class="g-lead">Paired</p><p class="g-sub">${esc(s.label)} can now answer cards, pick and send. Big changes still ask for ${esc(p.word)}.</p></div></div>`;
   } else if (s.step === 'make') {
@@ -56,23 +64,24 @@ export function pairPanel(s) {
       <button type="button" class="btn primary g-big" data-g-make ${s.busy ? 'disabled' : ''}>${ic(p.glyph)}Use ${esc(p.word)}</button>
       <button type="button" class="btn ghost g-wide" data-g-back>${ic('back')}Back</button>`;
   } else {
+    const help = codeHelp(st);
     body = `${steps(1)}
       <div class="g-hero">${glyph('key')}<div><p class="g-lead">Changes from this device need a passkey first</p>
         <p class="g-sub">Pair once with ${esc(p.word)}. After that, answers, picks and messages need no taps; only big changes ask again.</p></div></div>
       ${p.ios && !s.standalone ? warnLine('Pair from the Crux app on your home screen: Safari and the home-screen app keep separate sign-ins.') : ''}
       <label class="g-field"><span class="g-cap">${ic('lock')}Pairing code</span>
         <input class="g-code" data-g-code type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="9" placeholder="XXXX-XXXX" value="${esc(s.code || '')}" aria-describedby="g-code-where"></label>
-      <p class="g-hint" id="g-code-where">${p.glyph === 'face' || /Android/.test(p.name)
-        ? `Get a code on your paired PC: hub menu, Devices, Pair another device. Or use the code in ${esc(codeWhereText(st))}.`
-        : `The code is in ${esc(codeWhereText(st))}. Or, on a device already paired: hub menu, Devices, Pair another device.`} Never send it to an agent.
-        <button type="button" class="ps-reset" data-g-print title="The hub prints a fresh code in its own window or log; the old one stops working">${ic('reset')}Print a new code</button></p>
+      <p class="g-hint" id="g-code-where">${esc(help.text)} Never send it to an agent.
+        ${help.print ? `<button type="button" class="ps-reset" data-g-print title="The hub shows a fresh code in its own window; the old one stops working">${ic('reset')}Show a new code</button>` : ''}</p>
       <label class="g-field"><span class="g-cap">${ic(p.glyph === 'face' ? 'phone' : 'pc')}Name for this device</span>
         <input data-g-label type="text" autocomplete="off" maxlength="40" value="${esc(s.label || p.name)}"></label>
       ${s.error ? warnLine(s.error) : ''}
       <button type="button" class="btn primary g-big" data-g-next ${s.busy ? 'disabled' : ''}>${ic('chev')}Next</button>
-      <details class="g-fold"><summary>${ic('help')}<span>Lost a passkey?</span>${ic('chev', 'ps-chev')}</summary>
-        <p>Use the code from the hub's own window (not one from another device) and start over: every paired device is unpaired, then this one pairs. Your phone gets a notification.</p>
-        <button type="button" class="btn deny g-wide" data-g-startover ${s.busy ? 'disabled' : ''}>${ic('unlink')}Unpair every device, then pair this one</button></details>`;
+      ${st.devices ? `<details class="g-fold"><summary>${ic('help')}<span>Lost a passkey?</span>${ic('chev', 'ps-chev')}</summary>
+        ${st.codeWhere === 'window'
+          ? `<p>Use the code from the hub's own window (not one from another device) and start over: every paired device is unpaired, then this one pairs. Your phone gets a notification.</p>
+        <button type="button" class="btn deny g-wide" data-g-startover ${s.busy ? 'disabled' : ''}>${ic('unlink')}Unpair every device, then pair this one</button>`
+          : `<p>${esc(START_OVER_NO_WINDOW)}</p>`}</details>` : ''}`;
   }
   return `${head('key', 'Pair this device')}<div class="ps-body g-body">${body}</div>`;
 }
@@ -161,8 +170,9 @@ export class GuardUI {
     if (!this.st) await this.check();
     const named = this.st ? this.st.webauthn : !/^\d+(\.\d+){3}$|^\[/.test(location.hostname);
     const can = typeof PublicKeyCredential !== 'undefined' && isSecureContext;
+    const noWindow = this.st && !this.st.devices && this.st.codeWhere !== 'window';   // the first device needs the hub in a window
     this.kind = 'pair';
-    this.s = { step: !named ? 'noname' : !can ? 'nokey' : 'code', st: this.st, plat: this.plat, label: this.plat.name, standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true };
+    this.s = { step: !named ? 'noname' : !can ? 'nokey' : noWindow ? 'nowindow' : 'code', st: this.st, plat: this.plat, label: this.plat.name, standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true };
     this.show(this.panel, () => pairPanel(this.s));
     this.panel.onclick = e => this.pairClick(e);
     this.panel.oninput = e => { if (e.target.matches('[data-g-code]')) this.s.code = e.target.value; if (e.target.matches('[data-g-label]')) this.s.label = e.target.value; };
@@ -177,7 +187,7 @@ export class GuardUI {
     if (e.target.closest('[data-g-make]')) return this.pairMake();
     if (e.target.closest('[data-g-print]')) {
       const r = await raw('/api/pair/code', {});
-      this.host.toast(r.json.printed ? `A new code is in ${codeWhereText(this.st)}.` : r.ok ? `Wait ${r.json.waitSec || 15} seconds before asking again.` : (r.json.error || 'The hub did not answer.'), 'info');
+      this.host.toast(r.json.printed ? `A new code is in ${WINDOW}.` : r.json.waitSec ? `Wait ${r.json.waitSec} seconds before asking again.` : r.ok ? 'No new code: the hub shows one only in its window, and only for the first device.' : (r.json.error || 'The hub did not answer.'), 'info');
     }
   }
   async pairNext(startOver) {

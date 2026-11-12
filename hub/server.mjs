@@ -13,8 +13,8 @@ import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs'
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild } from './lib/relaunch.mjs';
-import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, addressOf, cleanLabel, makeAlert, dropUnbackedTrusted, makeRestartHub } from './lib/guard.mjs';
+import { launchSpec, saveLaunch, startHub, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild } from './lib/relaunch.mjs';
+import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
 
@@ -66,12 +66,15 @@ hub.on(ev => { if (ev.logged) push.handle(ev, { approvals: hub.approvals, decisi
 const hosts = extraHosts();
 
 // The write guard (decision 47 B): paired devices, their passkeys, and alerts on any change to those or to the push
-// devices. The pairing code goes to this process's own output only: its window, or hub-<port>.log after a restart.
-const guard = new Guard({ port });
+// devices. A pairing code is shown only when this process runs in a window (stdout is a TTY), never in a log file.
+const guard = new Guard({ port, interactive: !!process.stdout.isTTY });
 const alert = makeAlert({ hub, push });
 push.onDropped = subs => { for (const s of subs) alert({ title: `Notifications stopped: ${s.label || 'a device'}`, note: `${s.label || 'A device'} stopped getting the hub's notifications: its browser dropped the subscription.` }); };
 if (testPair) guard.testPair();
-const CODE_WHERE = process.stdout.isTTY ? 'window' : process.env.CRUX_HUB_RESTARTED === '1' ? 'log' : 'output';
+// Anything an agent wrote (decision pages and their pictures, the roll-up, posted visuals) runs, if at all, in a
+// sandbox with no origin of its own, so its scripts can never call the hub as you (decision 47 review). Links that
+// open a new tab still work; that tab stays sandboxed too. Thread attachments keep their stricter rule (no scripts).
+const AGENT_CONTENT = { 'content-security-policy': 'sandbox allow-scripts allow-popups', 'x-content-type-options': 'nosniff' };
 // A project left at Trusted with no raise from a paired device drops to Auto now, with a note and a push.
 dropUnbackedTrusted({ hub, guard, push });
 // restart_hub, the orchestrator's own way to restart (no HTTP; its curl to /api/restart is a hard stop).
@@ -107,12 +110,12 @@ const clients = new Set();
 hub.on(ev => { const line = `data: ${JSON.stringify(ev)}\n\n`; for (const res of clients) res.write(line); });
 
 function send(res, code, body, type = 'application/json', extra = {}) {
-  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', ...extra });
+  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...extra });
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
-function serveFile(res, file) {
+function serveFile(res, file, extra = {}) {
   if (!existsSync(file) || !statSync(file).isFile()) return send(res, 404, { error: 'Not found' });
-  send(res, 200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream');
+  send(res, 200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream', extra);
 }
 // Uploads carry a file as base64 text (about 4/3 of its size); everything else stays small.
 const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_UPLOAD * 4 / 3) + 64 * 1024 };
@@ -225,21 +228,19 @@ const routes = {
   'POST /api/entry-status': ({ project, id, status }) => ({ entryId: hub.project(project).board.setEntryStatus(String(id || ''), status === 'active' ? 'active' : 'done', 'you').entryId }),
 
   // ---------- decision 47: pairing, step-up and the device list ----------
-  // Whether this device is paired, and where the pairing code is printed. Never the code itself.
-  'GET /api/auth/status': (_, { req }) => ({ ...guard.status(req.headers), codeWhere: CODE_WHERE, log: `hub-${port}.log` }),
+  // Whether this device is paired, whether the hub has a window to show a code in, and the PC's own address. Never a code.
+  'GET /api/auth/status': (_, { req }) => guard.status(req.headers),
   'GET /api/devices': (_, { req }) => ({ devices: guard.list(req.headers), push: push.list() }),
-  // The three steps open to a device with no cookie: print a new code (in the hub's own output), check a code and get
-  // the passkey options, and hand in the new passkey (which sets the cookie).
+  // The three steps open to a device with no cookie: a fresh code for the first device (into the hub's window only;
+  // nothing once a device is paired), check a code and get the passkey options, and hand in the new passkey (which
+  // sets the cookie).
   'POST /api/pair/code': () => guard.askForCode(),
   'POST /api/pair/options': ({ code, label, startOver }, { req }) => guard.pairOptions({ headers: req.headers, code, label, startOver: startOver === true }),
   'POST /api/pair/finish': async ({ credential }, ctx) => {
     const r = guard.pairFinish({ headers: ctx.req.headers, credential });
     ctx.headers['set-cookie'] = r.cookie;
-    const d = r.device;
-    await alert(r.startOver
-      ? { title: 'Every device was unpaired', note: `Every paired device was unpaired (${r.removed.map(x => x.label).join(', ') || 'none'}) with the code from the hub's window, and ${d.label} (${d.rpId}) paired in their place. If this was not you, stop the hub and check who can reach this PC.` }
-      : { title: `New device paired: ${d.label}`, note: `${d.label} (${d.rpId}) was paired with the hub, using ${r.via}. If this was not you, unpair it under Devices in the hub menu.` });
-    return { ok: true, device: { id: d.id, label: d.label } };
+    await alert(pairAlert(r));
+    return { ok: true, device: { id: r.device.id, label: r.device.label } };
   },
   // A paired device, after its step-up: a one-time code to type on the new device.
   'POST /api/pair/issue': (_, { device }) => guard.issueCode(device),
@@ -305,13 +306,13 @@ const server = createServer(async (req, res) => {
 
     // Crux decision pages for each project: /p/<project>/<file>
     const m = /^\/p\/([^/]+)\/([\w.-]+\.html)$/.exec(url.pathname);
-    if (m) return serveFile(res, hub.project(decodeURIComponent(m[1])).board.pageFile(m[2]));   // unmerged picks first (decision 35)
+    if (m) return serveFile(res, hub.project(decodeURIComponent(m[1])).board.pageFile(m[2]), AGENT_CONTENT);   // unmerged picks first (decision 35)
     // Their pictures (decision 43): /p/<project>/images/<file>, the cards' galleries and the pages' relative links.
     const im = /^\/p\/([^/]+)\/images\/([\w-][\w.-]*\.(?:png|jpg|gif|webp))$/.exec(url.pathname);
     if (im) {
       const file = hub.project(decodeURIComponent(im[1])).board.imageFile(im[2]);
       if (!file) return send(res, 404, { error: 'Not found' });
-      res.writeHead(200, { 'content-type': TYPES[extname(file)], 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'same-origin' });
+      res.writeHead(200, { 'content-type': TYPES[extname(file)], 'cache-control': 'no-cache', 'cross-origin-resource-policy': 'same-origin', ...AGENT_CONTENT });
       return res.end(readFileSync(file));
     }
 
@@ -326,7 +327,7 @@ const server = createServer(async (req, res) => {
       const file = join(crux, 'index.html');
       if (!existsSync(file)) return send(res, 404, 'No all-projects page yet: it appears after your first Crux decision.', 'text/plain; charset=utf-8');
       const html = readFileSync(file, 'utf8').replace(/file:\/\/\/[^"'\\\s)<>]+/g, hubUrl);
-      return send(res, 200, html, TYPES['.html']);
+      return send(res, 200, html, TYPES['.html'], AGENT_CONTENT);
     }
 
     // Any project's Crux pages under the roll-up folders: only .html and .md files inside a .decisions folder, and the
@@ -342,21 +343,24 @@ const server = createServer(async (req, res) => {
       if (file.endsWith('.html')) {
         try { refreshPages(dirname(file)); } catch (e) { console.warn('Crux page refresh failed:', e.message); }
         const md = file.replace(/\.html$/, '.md');
-        if (!existsSync(file) && existsSync(md)) return serveFile(res, md);
+        if (!existsSync(file) && existsSync(md)) return serveFile(res, md, AGENT_CONTENT);
       }
-      return serveFile(res, file);
+      return serveFile(res, file, AGENT_CONTENT);
     }
 
-    // Visuals agents posted: /media/<project>/<file>. Pages run sandboxed, away from the hub's own origin.
+    // Visuals agents posted: /media/<project>/<file>. Pages and SVG pictures run sandboxed, away from the hub's origin.
     const v = /^\/media\/([^/]+)\/([\w.-]+)$/.exec(url.pathname);
     if (v) {
       const file = hub.memory.mediaPath(decodeURIComponent(v[1]), v[2]);
       if (!existsSync(file)) return send(res, 404, { error: 'Not found' });
-      const headers = { 'content-type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream', 'cache-control': 'no-store' };
-      if (extname(file).toLowerCase() === '.html') headers['content-security-policy'] = 'sandbox allow-scripts';
-      res.writeHead(200, headers);
+      res.writeHead(200, { 'content-type': TYPES[extname(file).toLowerCase()] || 'application/octet-stream', 'cache-control': 'no-store', ...AGENT_CONTENT });
       return res.end(readFileSync(file));
     }
+
+    // On this PC the live hub lives at crux.localhost: a page load at plain localhost:4747 moves there, so the
+    // device cookie is set, and sent, only on that name (decision 47 review).
+    const moveTo = pcRedirect({ method: req.method, path: url.pathname, url: req.url, host: req.headers.host, port });
+    if (moveTo) { res.writeHead(302, { location: moveTo, 'cache-control': 'no-store' }); return res.end(); }
 
     const pub = join(here, 'public');
     const file = normalize(join(pub, url.pathname === '/' ? 'index.html' : url.pathname));
@@ -382,14 +386,16 @@ server.on('error', e => {
 server.on('listening', () => {
   // A test hub is shown at 127.0.0.1: the live hub's device cookie belongs to localhost, and browsers send a host's
   // cookies to every port on it, so a test hub opened at 127.0.0.1 never receives it (decision 47).
-  console.log(port === 4747 ? `Crux hub: http://localhost:${port}  (phone: tailscale serve --bg ${port}, see README)` : `Crux hub: http://127.0.0.1:${port}  (a test hub; passkeys need http://localhost:${port})`);
+  console.log(port === 4747 ? `Crux hub: ${guard.pcUrl}  (phone: tailscale serve --bg ${port}, see README)` : `Crux hub: http://127.0.0.1:${port}  (a test hub; passkeys need http://localhost:${port})`);
   console.log(`Projects: ${[...hub.projects.values()].map(p => p.name).join(', ')}`);
   console.log(`Orchestrator hands off at ${hub.retireAt}% context (hub default; projects may set their own).`);
   saveLaunch(launchSpec({ port }));   // so the restart script can start it the same way
-  // Decision 47: with no device paired yet, the one-time pairing code, here in the hub's own output only.
+  // Decision 47: a pairing code only ever appears here, and only when this is a window you can see (never in a log).
+  const paired = guard.paired();
   if (guard.testToken) console.log('Test hub: one fake device is paired (--test-pair); the page gets its cookie.');
-  else if (!guard.paired().length) guard.printCode('at start, no device is paired yet');
-  else console.log(`Paired devices: ${guard.paired().map(d => `${d.label} (${d.rpId})`).join(', ')}. To pair another, use Devices in the hub menu on one of them, or "Print a new code" on the new device.`);
+  else if (guard.interactive) guard.printCode(paired.length ? 'at start; for a new device, Devices on a paired one is simpler' : 'at start, no device is paired yet');
+  else if (!paired.length) console.log('No device is paired yet, and this hub has no window, so it shows no pairing code. Start it in a window (Restart Crux Hub.vbs, or Crux Hub.cmd when it is stopped) to pair the first device.');
+  if (paired.length) console.log(`Paired devices: ${paired.map(d => `${d.label} (${d.rpId})`).join(', ')}. To pair another, use Devices in the hub menu on one of them.`);
 });
 server.listen(port, '127.0.0.1');
 
@@ -408,7 +414,9 @@ function restart() {
   for (const res of clients) { try { res.end(); } catch { } }
   clients.clear();
   stopAgents();
-  try { startDetached(launchSpec({ port })); }
+  // With no device paired yet the live hub reopens in a window, the only place it shows the first pairing code.
+  // Test hubs never open a window.
+  try { startHub(launchSpec({ port }), { window: port === 4747 && !guard.paired().length }); }
   catch (e) { console.error(`Could not start the new hub: ${e.message}`); restarting = false; hub.stopping = false; server.listen(port, '127.0.0.1'); return; }
   setTimeout(() => process.exit(0), 300);
 }

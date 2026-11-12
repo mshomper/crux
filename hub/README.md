@@ -35,7 +35,7 @@ npm start -- ~/path/to/project-a
 
 `CRUX_HUB_USE_API_KEY=1` is required: without it the hub removes `ANTHROPIC_API_KEY` from what its agents see, and they will not use the key. To keep the key across sessions, set both as user environment variables (Windows: Settings, search "environment variables"). The API-key start-up is read from the code (`lib/agent.mjs`) and has not yet been tested end to end on a fresh machine.
 
-Then open http://localhost:4747. With no folders given, it uses `~/crux/hub.json` (`{ "projects": ["C:/path/a"] }`) or the current folder. Each project should be a git repo (see "Where your picks land").
+Then open http://crux.localhost:4747 (http://localhost:4747 takes you there; see "Paired devices" for the first pairing). With no folders given, it uses `~/crux/hub.json` (`{ "projects": ["C:/path/a"] }`) or the current folder. Each project should be a git repo (see "Where your picks land").
 
 Options: `--port 4747`, `--retire-at 60` (the starting hub default for when the orchestrator hands off, in % of context; once changed in the hub menu's Whole hub panel the saved value wins, and each project can set its own), `--no-agents` (a test hub: messages are kept but no agent starts; also automatic when `CRUX_HUB_DATA` points inside the temp folder, and `CRUX_HUB_AGENTS=1` overrides both), `--test-pair` (a test hub only: one fake device counts as paired and the page gets its cookie, for screenshots and tests; the hub refuses to start with it on port 4747, with real agents, or with its data folder outside the temp folder).
 
@@ -61,14 +61,16 @@ In the box at the bottom, Enter sends; Alt+Enter or Shift+Enter starts a new lin
 
 ### Windows shortcuts
 
-- **`hub\Crux Hub.cmd`**: double-click to open the hub at http://localhost:4747, starting it first if it is not running. It reads the projects from `~/crux/hub.json` and leaves the hub running in a minimized window; close that window to stop it. It does not set your API key, so set the two variables as user environment variables first.
+- **`hub\Crux Hub.cmd`**: double-click to open the hub at http://crux.localhost:4747, starting it first if it is not running. It reads the projects from `~/crux/hub.json` and leaves the hub running in a minimized window; close that window to stop it. It does not set your API key, so set the two variables as user environment variables first.
 - **`hub\Restart Crux Hub.vbs`**: see below.
 
 ## Paired devices: only you can make changes
 
 Any program on this PC can reach the hub's address, so the hub only takes changes from devices you have paired (decision 47). Reading is open; anything that acts as you (Allow and Deny, picks, messages, answers, starting or retiring agents, settings, the board, notifications, restart) needs a paired device. A program that tries without one gets "This device is not paired" and nothing changes.
 
-**Pair the PC (once).** Open http://localhost:4747 (passkeys need the name `localhost`, not `127.0.0.1`). A **Pair this device** panel opens. Type the pairing code the hub printed when it started: in its own window (Crux Hub, on the taskbar), or, if it was restarted from the menu, in `hub-4747.log` in the `.crux-hub` folder in your user folder. Press **Next**, then **Use Windows Hello**. That's it: from then on this browser makes changes with no taps.
+**On the PC the hub's address is now http://crux.localhost:4747.** Opening http://localhost:4747 takes you there by itself. Browsers treat any `*.localhost` name as this PC and as secure, and the device cookie set on `crux.localhost` is never sent to other programs' servers on `localhost:<port>`. (Your pins and drafts start fresh once at the new address.)
+
+**Pair the PC (once).** The hub shows a pairing code only in its own window, never in a file. So the first time, the hub must be running in a window: double-click `hub\Restart Crux Hub.vbs` (with no device paired yet it restarts the hub in a minimized window, **Crux Hub** on the taskbar), or `hub\Crux Hub.cmd` when the hub is stopped. Open http://crux.localhost:4747: **Pair this device** opens. Type the code from the hub's window, press **Next**, then **Use Windows Hello**. From then on this browser makes changes with no taps. If the page says "Start the hub in a window to pair the first device", the hub is running without a window: double-click Restart Crux Hub.vbs.
 
 **Pair the phone.** On the PC: hub menu (three dots), **Devices**, **Pair another device**, confirm with Windows Hello. A code shows for 10 minutes. On the phone, open Crux from the home screen (not a Safari tab: they keep separate sign-ins), type the code in Pair this device, press **Next**, then **Use Face ID**. The PC and the phone each have their own passkey, because a passkey belongs to the address it was made on.
 
@@ -78,27 +80,31 @@ Any program on this PC can reach the hub's address, so the hub only takes change
 
 **Trusted.** A raise to Trusted keeps its Face ID or Windows Hello confirmation as the record. At every start, a project at Trusted whose record does not check out against a paired passkey (for example, one set to Trusted by editing a file, or raised before hub 0.16) drops back to Auto, with a notification and a note. The notification for a raise has **Undo** where the phone shows notification buttons, and the orchestrator thread has an **Undo: back to Auto** button under the raise either way.
 
-**The pairing code** works once, for 30 minutes. The hub prints one at start only while no device is paired; on any device, **Print a new code** in the Pair panel prints a fresh one (the old one stops working). It never appears on the page or in any reply from the hub. Five wrong codes in a row cancel every code for a minute. Never send the code to anyone, and never paste it to an agent.
+**The pairing code** works once, for 30 minutes. It appears only in the hub's own window, at start (and on **Show a new code** in the Pair panel while no device is paired yet). It is never written to a file, the hub's log included, and never appears on the page or in any reply from the hub. A hub running without a window shows no code at all. Once a device is paired, new devices get their code from Devices on a paired device; asking the hub for a fresh code then does nothing. Five wrong codes within ten minutes cancel every code for a minute. Never send a code to anyone, and never paste it to an agent.
 
 **Lost a passkey** (a new PC, Windows Hello reset, a phone wiped):
-1. On the device you want to use, open the hub. Pair this device opens (or tap the key mark at the top of the thread list).
-2. Press **Print a new code**, then read the code in the hub's window or in `hub-4747.log` in your `.crux-hub` folder.
-3. To add this device and keep the others: type the code, **Next**, then make the passkey. Afterwards, unpair the lost one under Devices.
-4. To start over: type the code, open **Lost a passkey?** and press **Unpair every device, then pair this one**. Every paired device is unpaired, this one pairs, and your phone is told. Pair your other devices again from Devices.
+- **If another device is still paired:** on it, Devices, **Pair another device**; pair the new one with that code, then unpair the lost one.
+- **If the hub runs in a window** (started with Crux Hub.cmd): close that window and double-click Crux Hub.cmd again. The new window shows a code. On the device you want to use, type it in Pair this device. To keep the other devices, press **Next**; to start over, open **Lost a passkey?** and press **Unpair every device, then pair this one** (your phone is told).
+- **Otherwise:** delete `devices.json` in the `.crux-hub` folder in your user folder, then double-click Restart Crux Hub.vbs. With no device paired, the hub opens in a window with a code; pair this device, then the others from Devices. Projects at Trusted drop to Auto at that start (their records went with the file); raise them again.
 
-Only the code from the hub's own window can start over; a code from another device cannot. With no device paired at all, simply restart the hub: it prints a code at start.
+Only the code from the hub's own window can start over; a code from another device cannot.
+
+**After this update (first restart).** Until a device is paired, the hub refuses every change, so plan the first restart for when you are at the PC: the hub opens in a window (or double-click Restart Crux Hub.vbs if the page says to start it in a window), pair the PC at http://crux.localhost:4747, then pair the phone from Devices. Your phone's existing notifications keep working meanwhile.
 
 **Where it lives.** `~/.crux-hub/devices.json` holds each device's name, address, a SHA-256 of its device token (never the token itself), its passkey's public key and id, and the Trusted records. The token sits in an HttpOnly, SameSite=Strict cookie (Secure over https) named for the hub's port, so page scripts cannot read it and other sites cannot send it.
 
 **What it does not stop.** A program running as you that sets out to edit `~/.crux-hub` or the hub's code, or to lift the browser's cookie, can still get round it (decision 47 says so plainly; running agents under their own Windows account is parked until the always-on box). What it stops: a script or a misled agent answering its own permission cards, speaking as you, picking for you, adding its own "phone", or raising a project, in one request. A real attempt takes several deliberate steps, and pairing anything new notifies your phone.
 
-**Test hubs.** Open a test hub at `http://127.0.0.1:<port>` (it prints that address): browsers send a host's cookies to every port on it, so a test hub opened at `localhost` would receive the PC's device cookie. A test hub cannot use that cookie's passkey, since a confirmation is checked against the exact address, port included. Start a test hub with `--test-pair` to make changes in it without pairing.
+**Agent-written pages are sandboxed.** Decision pages and their pictures, the All decisions roll-up, and pictures and pages agents post open in a browser sandbox with no origin of their own, so nothing in them can make a change as you. Links that open a new tab still work; storing page state does not (the pages do without it).
+
+**Test hubs** print `http://127.0.0.1:<port>` and pair at `http://localhost:<port>`; neither name ever receives the live hub's cookie, which lives on `crux.localhost`. Never open a test hub at `crux.localhost:<port>`. A test hub could not use that cookie's passkey anyway: a confirmation is checked against the exact address, port included. Start a test hub with `--test-pair` to make changes in it without pairing; test hubs never open a window.
 
 ## Restart the hub
 
 - **From the hub:** click the three dots next to "Crux Hub" at the top of the thread list, then **Restart hub** and **Restart**.
-- **By the orchestrator:** after merging, the orchestrator restarts the hub with its `restart_hub` tool (one-line reason), which goes through the hub itself; you get a notification "The hub is restarting" and a note in its thread. Not within a minute of a start. A POST to `/api/restart` from a command is a hard stop and needs a paired device anyway. The hub stops and starts again in the background, with no window; the page says "Restarting..." and reconnects by itself. Agents that were working stop and pick up again on their next message, as after any restart.
-- **When the hub is stuck or stopped (Windows):** double-click `hub\Restart Crux Hub.vbs`. It stops whatever is listening on port 4747, starts the hub again the way it was last started (same folder and projects), with no window, and opens it in your browser. If the hub does not come back, it says so.
+- **By the orchestrator:** after merging, the orchestrator restarts the hub with its `restart_hub` tool (one-line reason), which goes through the hub itself; you get a notification "The hub is restarting" and a note in its thread. Not within a minute of a start, and at most 3 times in 15 minutes. A POST to `/api/restart` from a command is a hard stop and needs a paired device anyway.
+- **While no device is paired** (the first time, or after deleting `devices.json`), any restart of the hub on 4747 opens it in a minimized window instead, the only place it shows a pairing code. The hub stops and starts again in the background, with no window; the page says "Restarting..." and reconnects by itself. Agents that were working stop and pick up again on their next message, as after any restart.
+- **When the hub is stuck or stopped (Windows):** double-click `hub\Restart Crux Hub.vbs`. It stops whatever is listening on port 4747, starts the hub again the way it was last started (same folder and projects), with no window (in a minimized window while no device is paired), and opens it in your browser. If the hub does not come back, it says so.
 
 To put it on your desktop: in File Explorer, open the `hub` folder of your Crux clone, right-click **Restart Crux Hub.vbs**, choose **Show more options**, then **Send to > Desktop (create shortcut)**. Rename the shortcut to "Restart Crux Hub" if you like. For the Crux icon: right-click the shortcut, **Properties > Change Icon... > Browse...**, and pick `hub\public\icons\crux.ico`. You can also drag the shortcut to the taskbar or Start to pin it.
 
@@ -213,7 +219,7 @@ The orchestrator sees the list and picks a type for each worker, or follows your
 
 Agents run through the Claude Agent SDK on this PC. With `CRUX_HUB_USE_API_KEY=1` they use your Anthropic API key, and Anthropic bills the tokens they use to that key. Several agents at once use more, faster. (Without the switch, agents fall back to whatever Claude Code sign-in is already on the PC; that is for your own personal use only, and the hub neither offers nor manages it.)
 
-**Spend estimate.** The usage panel shows estimated spend today and since the hub started, per model and per agent. With an API key, open it by adding `?usagepanel` to the hub's address (http://localhost:4747/?usagepanel). Spend is estimated from list prices, not a bill; your Anthropic Console has the real figures.
+**Spend estimate.** The usage panel shows estimated spend today and since the hub started, per model and per agent. With an API key, open it by adding `?usagepanel` to the hub's address (http://crux.localhost:4747/?usagepanel). Spend is estimated from list prices, not a bill; your Anthropic Console has the real figures.
 
 **Plan meters (decision 36).** Only in the personal-use case above, the strip above the conversation shows meters (click them for the usage panel) for the plan's 5-hour, 7-day and Fable weekly windows, with percent used and time to reset; they turn amber at a warning or 80% and up, and red only when work is blocked. They come from the Agent SDK's usage call (marked experimental by the SDK), asked of one live agent every 5 minutes, plus the `rate_limit_event` agents stream. With an API key, plan limits do not apply, so the meters hide and the orchestrator thread gets one notice. With no agent running, the last reading stays, dimmed, with the time it was read.
 
