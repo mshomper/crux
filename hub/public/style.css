@@ -335,7 +335,10 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 @media (max-width:720px){.perm-line{flex-wrap:wrap}.perm-line .pl-cmd,.perm-line .pl-why{flex-basis:100%}}
 .route-note{display:flex;gap:7px;align-items:flex-start;margin:6px 0 0;font-size:12.5px;color:var(--muted)}
 .route-note .icon{flex:none;width:14px;height:14px;margin-top:2px;color:var(--accent)}
-.route-note.stop .icon{color:var(--warn)}
+/* A hard stop sits right under the headline, in full-strength text with its label in red (decision 31: your call). */
+.route-note.stop{margin:0 0 10px;font-size:13.5px;color:var(--text)}
+.route-note.stop .icon{color:var(--bad)}
+.route-note.stop b{color:var(--bad);font-weight:600}
 .routed-label{margin-top:10px}
 .notice{align-self:center;font-size:12.5px;color:var(--faint);text-align:center;display:flex;gap:10px;align-items:center}
 .notice::before,.notice::after{content:"";flex:1;height:1px;background:var(--line)}

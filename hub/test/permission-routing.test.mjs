@@ -239,7 +239,7 @@ test('auto mode (decision 34): contained work is allowed at once, only unclear r
   writeFileSync(join(p.dir, '.crux-hub.json'), '{ "permissions": "auto" }');
   assert.equal(hub.permissionMode(p), 'auto');
   const before = p.log.events.length;
-  for (const c of ['npm run build', 'rm -rf hub/tmp', 'git commit -m "x"', 'git push -u origin feat/routing', 'node server.mjs --port 4748']) {
+  for (const c of ['npm run build', 'rm -rf hub/tmp', 'git commit -m "x"', 'git push -u origin feat/routing', 'CRUX_HUB_DATA=/tmp/crux-x/data node server.mjs --port 4748']) {
     assert.equal((await ask(hub, p, w, c)).behavior, 'allow', c);
   }
   assert.equal((await hub.requestApproval(p, w, 'Edit', { file_path: join(p.dir, 'hub', 'a.mjs') })).behavior, 'allow');
