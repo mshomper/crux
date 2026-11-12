@@ -5,9 +5,11 @@
 // 1600 px, strips text and camera metadata, and rewrites the entry to its "file". Run by the build script and by the
 // hub before it commits records.
 // Safety: a source must really be inside an allowed folder (real paths, so no ../, symlink or junction escapes);
-// sizes are checked before reading and pixel counts before decoding. A picture that cannot be placed gets
-// "skipped" with the reason, is reported once, and is not tried again until that note is removed.
-// No dependencies: PNGs are decoded and re-encoded with Node's own zlib. JPEGs lose their metadata segments.
+// sizes are checked before reading and pixel counts before decoding. A picture that is refused gets "skipped" with
+// the reason, is reported once, and is not tried again until that note is removed; one not found yet is noted as
+// "missing", reported once, and tried again on every run.
+// No dependencies: PNGs are decoded and re-encoded with Node's own zlib. PNGs and JPEGs lose their text and camera
+// metadata; GIF and WebP are copied as they are.
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, realpathSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, resolve, isAbsolute, basename, extname, dirname, sep } from 'node:path';
 import { inflateSync, deflateSync } from 'node:zlib';
@@ -68,8 +70,10 @@ function head(file, n = 32) {
   try { const b = Buffer.alloc(n); return b.subarray(0, readSync(fd, b, 0, n, 0)); } finally { closeSync(fd); }
 }
 
-class Skip extends Error {}
-const skip = why => { throw new Skip(why); };
+// retry: a picture that may still turn up (not found yet). It is noted as "missing" and tried again on every run,
+// but reported only the first time. Every other refusal is marked "skipped" and not tried again.
+class Skip extends Error { constructor(why, retry = false) { super(why); this.retry = retry; } }
+const skip = (why, retry) => { throw new Skip(why, retry); };
 
 // A short file-name part from the caption or the source name.
 function slugOf(img, src) {
@@ -109,13 +113,14 @@ export function placeImages(dir, { attachments: att = null, roots = null, maxWid
         return placed;
       } catch (e) {
         if (!(e instanceof Skip)) throw e;
+        if (e.retry && img.missing) return img;   // still missing, already reported
         left.push(`${basename(src)} (${e.message})`);
         dirty = true;
-        return { ...img, skipped: e.message };
+        return e.retry ? { ...img, missing: e.message } : { ...img, skipped: e.message };
       }
     });
     const where = `D${pad(d.id)}`;
-    if (left.length) warnings.push(`${where}: ${left.length === 1 ? 'a picture was' : `${left.length} pictures were`} left out: ${left.join('; ')}. Fix it and remove its "skipped" note to try again.`);
+    if (left.length) warnings.push(`${where}: ${left.length === 1 ? 'a picture was' : `${left.length} pictures were`} left out: ${left.join('; ')}. Missing files are tried again on each commit; for the others, fix it and remove its "skipped" note.`);
     if (waiting.length) warnings.push(`${where}: ${waiting.length === 1 ? 'a hub picture id waits' : `${waiting.length} hub picture ids wait`} for the hub, which copies them in when it commits the record.`);
     if (dirty) { writeFileSync(join(dir, f), JSON.stringify(d, null, 1) + '\n'); changed.push(f); }
   }
@@ -128,7 +133,7 @@ function placeOne(img, src, dir, store, roots, { maxWidth, maxBytes, maxPngInput
   if (['.svg', '.html', '.htm'].includes(ext)) skip(`an ${ext === '.svg' ? 'SVG drawing' : 'HTML page'}; take a PNG screenshot of it and list that`);
   const hubId = ATTACHMENT.test(src);
   const file = hubId ? join(store, src) : isAbsolute(src) ? src : resolve(dir, src);
-  if (!existsSync(file) || !statSync(file).isFile()) skip('not found');
+  if (!existsSync(file) || !statSync(file).isFile()) skip('not found', true);
   if (!insideAny(file, hubId ? [store] : roots)) skip(hubId ? 'outside the hub\'s picture folder' : 'outside the project folder; post it with post_visual, or save it inside the project, and list that');
   const kind = sniffImage(head(file));
   if (!kind) skip('not a PNG, JPEG, GIF or WebP picture; save it as PNG');
@@ -152,7 +157,7 @@ function placeOne(img, src, dir, store, roots, { maxWidth, maxBytes, maxPngInput
   const name = freeName(join(dir, IMAGE_DIR), `${pad(id)}-${slugOf(img, file)}`, kind, buf);
   mkdirSync(join(dir, IMAGE_DIR), { recursive: true });
   if (!existsSync(join(dir, IMAGE_DIR, name))) writeFileSync(join(dir, IMAGE_DIR, name), buf);
-  const { from, visual, file: _f, skipped, ...rest } = img;
+  const { from, visual, file: _f, skipped, missing, ...rest } = img;
   return { file: `${IMAGE_DIR}/${name}`, caption: String(img.caption || ''), ...(img.option ? { option: String(img.option) } : {}), ...rest };
 }
 
@@ -211,6 +216,7 @@ export function imageProblems(d, dir, file) {
   for (const img of Array.isArray(d?.images) ? d.images : []) {
     if (isPlaced(img)) { if (!existsSync(join(dir, img.file))) out.push(`${file} lists ${img.file}, which is missing`); }
     else if (sourceOf(img) && img.skipped) out.push(`${file}: picture ${sourceOf(img)} left out: ${img.skipped}`);
+    else if (sourceOf(img) && img.missing) out.push(`${file}: picture ${sourceOf(img)} not found yet (tried again on each build)`);
     else if (sourceOf(img)) out.push(`${file} lists a picture not copied in yet: ${sourceOf(img)}`);
     else out.push(`${file} has a picture entry without a file`);
   }

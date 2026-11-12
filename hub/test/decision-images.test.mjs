@@ -132,20 +132,27 @@ test('the copy step: pictures that cannot be placed are marked skipped and repor
   assert.match(first.warnings[0], /^D0003: 4 pictures were left out: gone\.png \(not found\); notes\.txt \(not a PNG, JPEG, GIF or WebP picture; save it as PNG\); big\.png \(.* after shrinking, over the 100 bytes limit\); mock\.svg \(an SVG drawing; take a PNG screenshot of it and list that\)/);
   assert.match(first.warnings[1], /hub picture id waits for the hub/);
   const imgs = readRecord(dir, 3).images;
-  assert.deepEqual(imgs.map(i => !!i.skipped), [true, true, true, true, false], 'the hub id is not marked: the hub can still copy it');
+  assert.deepEqual(imgs.map(i => i.missing || null), ['not found', null, null, null, null], 'a missing file is noted, not skipped');
+  assert.deepEqual(imgs.map(i => !!i.skipped), [false, true, true, true, false], 'the hub id is not marked: the hub can still copy it');
   assert.equal(existsSync(join(dir, 'images')), false);
-  // The next run (the next commit) says nothing new about the skipped ones.
+  // The next run (the next commit) says nothing new about either.
   const again = placeImages(dir, { maxBytes: 100 });
   assert.deepEqual(again.changed, []);
   assert.equal(again.warnings.length, 1);
   assert.match(again.warnings[0], /hub picture id/);
-  // Removing the note retries it.
-  const r = readRecord(dir, 3);
+  // The missing file turns up: the next run places it, with no note left.
   writeFileSync(join(root, 'gone.png'), solid(5, 5, [1, 1, 1]));
-  delete r.images[0].skipped;
+  placeImages(dir, { maxBytes: 100 });
+  assert.deepEqual(readRecord(dir, 3).images[0], { file: 'images/0003-gone.png', caption: 'gone' });
+  // A refused one is tried again only once its note is removed.
+  writeFileSync(join(root, 'notes.txt'), solid(5, 5, [2, 2, 2]));
+  placeImages(dir);
+  assert.ok(readRecord(dir, 3).images[1].skipped, 'still skipped while the note stays');
+  const r = readRecord(dir, 3);
+  delete r.images[1].skipped;
   writeFileSync(join(dir, '0003-d3.json'), JSON.stringify(r));
   placeImages(dir);
-  assert.equal(readRecord(dir, 3).images[0].file, 'images/0003-gone.png');
+  assert.equal(readRecord(dir, 3).images[1].file, 'images/0003-text.png');
 });
 
 test('the copy step: only the project folder (real paths) and the hub picture folder; no ../, symlink or junction escapes', t => {
