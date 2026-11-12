@@ -78,10 +78,19 @@ export class DecisionsDesk {
     this.tryGit(['merge', '--ff-only', '-q', `${this.remote}/${this.base}`]);
   }
 
+  // sync(), before a pick and before committing drafts. Where the branch still tracks its pages, a build (the crux
+  // skill runs one after drafting) has rewritten them, and those edits would block the fast-forward that brings main's
+  // untracking (decision 41). The pages are generated, and commit() rebuilds them from the records right after, so they
+  // are put back to the branch's copy first. Records are never touched.
+  catchUp() {
+    if (this.tryGit(['ls-files', '--', '.decisions/*.html'])) this.tryGit(['checkout', '-q', '--', '.decisions/*.html']);
+    this.sync();
+  }
+
   // Write records (file name -> record object or text), build the pages, commit, then push and update the PR.
   record(files, message) {
     this.ensure();
-    this.sync();
+    this.catchUp();
     mkdirSync(this.decisionsDir, { recursive: true });
     for (const [name, body] of Object.entries(files)) {
       writeFileSync(join(this.decisionsDir, name), typeof body === 'string' ? body : JSON.stringify(body, null, 1) + '\n');
@@ -89,11 +98,13 @@ export class DecisionsDesk {
     return this.commit(message);
   }
 
-  // Drafts the orchestrator wrote into the worktree: commit them when its turn ends.
+  // Drafts the orchestrator wrote into the worktree: commit them when its turn ends, after catching up with main
+  // (a fast-forward only, as before a pick: skipped while earlier records wait in an open pull request).
   commitPending(message = 'Record drafts') {
     if (!this.ready()) return null;
-    const changed = this.tryGit(['status', '--porcelain', '--', '.decisions']);
-    if (!changed) return null;
+    if (!this.tryGit(['status', '--porcelain', '--', '.decisions'])) return null;
+    this.catchUp();
+    if (!this.tryGit(['status', '--porcelain', '--', '.decisions'])) return null;   // only rewritten pages, now put back
     return this.commit(message);
   }
 

@@ -106,12 +106,55 @@ test('the hub rebuilds stale pages on load and before it serves one; a page it c
   assert.equal(p.board.pageFile('0002-d2.html'), join(d, '0002-d2.md'), 'the .md record when there is no page');
 });
 
-test('the records worktree carries the .gitignore and commits the records, never the pages', t => {
-  const root = temp(t);
-  // The real build runs here; point its roll-up at this temp folder, never at ~/crux.
+// The real build runs in these tests; point its roll-up at the test's temp folder, never at ~/crux.
+function quietRollup(t, root) {
   const env = { home: process.env.CRUX_HOME, roots: process.env.CRUX_ROOTS };
   process.env.CRUX_HOME = join(root, 'crux-home'); process.env.CRUX_ROOTS = join(root, 'no-roots');
   t.after(() => { for (const [k, v] of [['CRUX_HOME', env.home], ['CRUX_ROOTS', env.roots]]) v === undefined ? delete process.env[k] : process.env[k] = v; });
+}
+
+test('drafts catch up with main before they are committed, so the records branch picks up the untracked pages', t => {
+  const root = temp(t);
+  quietRollup(t, root);
+  const bare = join(root, 'remote.git');
+  git(root, 'init', '-q', '--bare', '-b', 'main', bare);
+  const seed = join(root, 'seed');
+  git(root, 'init', '-q', '-b', 'main', seed);
+  for (const [k, v] of [['user.name', 'Test'], ['user.email', 'test@example.com']]) git(seed, 'config', k, v);
+  const sd = decisionsIn(seed, [record(1)]);
+  writeFileSync(join(sd, '0001-d1.html'), 'committed page');   // before decision 41: pages tracked on main
+  writeFileSync(join(seed, '.gitignore'), '.crux/\n');
+  git(seed, 'add', '.'); git(seed, 'commit', '-q', '-m', 'seed'); git(seed, 'remote', 'add', 'origin', bare); git(seed, 'push', '-q', 'origin', 'main');
+  const dir = join(root, 'proj');
+  git(root, 'clone', '-q', bare, dir);
+  for (const [k, v] of [['user.name', 'Test'], ['user.email', 'test@example.com']]) git(dir, 'config', k, v);
+  const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }), noAgents: true });
+  const p = hub.project('proj');
+  p.desk.local = true;
+  const log = console.log; console.log = () => {};   // the "pages still committed" line
+  try { p.desk.ensure(); } finally { console.log = log; }
+  const wt = p.desk.dir;
+  const before = git(wt, 'rev-parse', 'HEAD');
+  // Main untracks its pages (this pull request merging).
+  git(seed, 'rm', '-q', '--cached', '.decisions/0001-d1.html');
+  writeFileSync(join(sd, '.gitignore'), '*.html\n');
+  git(seed, 'add', '.'); git(seed, 'commit', '-q', '-m', 'Untrack pages'); git(seed, 'push', '-q', 'origin', 'main');
+  // The orchestrator drafts a record and its build rewrites the still-tracked page.
+  writeFileSync(join(wt, '.decisions', '0002-d2.json'), JSON.stringify(record(2), null, 1));
+  writeFileSync(join(wt, '.decisions', '0001-d1.html'), 'rewritten by a build');
+  assert.ok(p.desk.commitPending('Record drafts'));
+  assert.equal(git(wt, 'log', '-1', '--format=%s'), 'Record drafts');
+  git(wt, 'merge-base', '--is-ancestor', before, 'HEAD');           // throws if the branch was rewritten
+  git(wt, 'merge-base', '--is-ancestor', 'origin/main', 'HEAD');    // throws if it did not catch up
+  const tracked = git(wt, 'ls-files', '.decisions').split('\n');
+  assert.ok(tracked.includes('.decisions/0002-d2.json') && tracked.includes('.decisions/.gitignore'), tracked.join(', '));
+  assert.ok(!tracked.some(f => f.endsWith('.html')), 'no page tracked on the records branch');
+  assert.ok(existsSync(join(wt, '.decisions', '0001-d1.html')) && existsSync(join(wt, '.decisions', '0002-d2.html')), 'pages rebuilt on disk');
+});
+
+test('the records worktree carries the .gitignore and commits the records, never the pages', t => {
+  const root = temp(t);
+  quietRollup(t, root);
   const bare = join(root, 'remote.git');
   git(root, 'init', '-q', '--bare', '-b', 'main', bare);
   const dir = join(root, 'proj');
