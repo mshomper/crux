@@ -50,17 +50,18 @@ export function checkRequest({ method = 'GET', path = '/', headers = {} }, { ext
   return null;
 }
 
-// Images pasted into threads (decision 23) are read only by the hub's own page. On top of checkRequest (the Host
+// Images and documents attached in threads (decision 23) are read only by the hub's own page. On top of checkRequest (the Host
 // rule), a read must not come from another site: browsers say so in Sec-Fetch-Site, and an Origin, when sent,
 // must be one of the hub's addresses. The response also carries Cross-Origin-Resource-Policy: same-origin.
 export function checkAttachmentRead(headers = {}, { extra = [] } = {}) {
+  const NO = 'Attachments open only from the hub’s own page';
   const site = headers['sec-fetch-site'];
-  if (site && !['same-origin', 'none'].includes(site)) return 'Images are only shown on the hub’s own page';
+  if (site && !['same-origin', 'none'].includes(site)) return NO;
   const origin = headers.origin;
   if (origin !== undefined && origin !== 'null') {
     let o;
     try { o = new URL(origin); } catch { return 'Bad origin'; }
-    if (!allowedHost(hostName(o.host), extra) || hostName(o.host) !== hostName(headers.host)) return 'Images are only shown on the hub’s own page';
-  } else if (origin === 'null') return 'Images are only shown on the hub’s own page';
+    if (!allowedHost(hostName(o.host), extra) || hostName(o.host) !== hostName(headers.host)) return NO;
+  } else if (origin === 'null') return NO;
   return null;
 }

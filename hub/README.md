@@ -102,9 +102,17 @@ This needs the project to be a git repo with git installed. `gh`, signed in, is 
 
 Pin a thread (the pin in its header, or on its row in the list when you point at it) to keep it open as a column; the next thread you open goes beside it, up to three columns (decision 39). The column you click or type in has the keyboard: a cyan line along its top and a lit message box. A red count in a column's header means a card waits for you there. When the columns do not fit (a narrow window, or the board open), the extra ones fold to a slim rail with their red counts; one click shows a folded one in place of the column you used least recently. With three pinned, opening a fourth thread takes the place of the keyboard column. Pins are remembered on that device, per project. On a phone, one thread at a time as before.
 
-## Pictures in threads
+## Pictures and files in threads
 
-Paste, drop or attach images in any thread; agents see them. Agents can post pictures (PNG, JPEG, GIF, WebP, SVG) or a small self-contained HTML page into their thread with `post_visual`; HTML pages run in a sandbox. Messages render Markdown. The hub also serves every project's Crux pages and an All projects view, so decision pages open inside it.
+Paste, drop or attach files in any thread, in every open column (the clip beside the message box opens a file picker). Each column keeps its own tray until you send.
+
+- **Images** (PNG, JPEG, GIF, WebP, up to 10 MB each) show as thumbnails; agents see them.
+- **PDFs and text files** (up to 25 MB each) show as file chips: an icon, the name (cut in the middle when long), its kind and size. Text files are `.txt`, `.md`, `.csv`, `.tsv`, `.json`, `.jsonl`, `.yaml`/`.yml`, `.xml`, `.log`, `.ini`/`.toml`/`.cfg` and common source files (`.js`, `.mjs`, `.ts`, `.py`, `.html`, `.css`, `.sh`, `.ps1`, `.bat`, `.c`/`.cpp`/`.h`, `.rs`, `.go`, `.java`, `.m`, `.sql`). Agents get each file's saved path and original name and open it themselves; the contents are not pasted into the message. Click a chip in a sent message to download the file.
+- Up to 6 attachments per message, images and documents together.
+- The hub checks what a file is from its bytes as well as its name: a PDF must start like one, and a text file must be UTF-8 text (or UTF-16 with a byte-order mark, which is saved as UTF-8) with no binary data. A program renamed `.txt` is refused, and so is a CSV that is not UTF-8 (in Excel, save as "CSV UTF-8"). Word, Excel and PowerPoint files are refused with a hint to export to PDF or CSV; SVG pictures and anything else are refused with a list of what is accepted.
+- An attached document never opens as a page inside the hub: it always downloads, as plain text or PDF, so an uploaded `.html` file cannot run.
+
+Agents can post pictures (PNG, JPEG, GIF, WebP, SVG) or a small self-contained HTML page into their thread with `post_visual`; HTML pages run in a sandbox. Messages render Markdown. The hub also serves every project's Crux pages and an All projects view, so decision pages open inside it.
 
 ## On your phone (Tailscale)
 
@@ -172,7 +180,7 @@ Agents run through the Claude Agent SDK on this PC. With `CRUX_HUB_USE_API_KEY=1
 | --- | --- |
 | `<project>/.crux/events.jsonl` | Append-only log: messages, summaries, picks, board entries, agent sessions. Threads and board entries are rebuilt from it. It holds everything said in every thread, so it can contain private material: keep it out of public repos (add `.crux/` to `.gitignore`, as this repo does). Commit it only to a private repo, if you want the memory to travel. |
 | `<project>/.crux/events.jsonl` (usage) | `usage` events, one per agent result: what it added per model (input, output, cache tokens and estimated cost; the SDK reports running totals, so only the difference is kept) plus the totals, to resume from. `plan_usage` events: the plan windows, written only when they change by 2 points or more, or a status changes. |
-| `<project>/.crux/attachments/` | Images pasted, dropped or attached in threads (decision 23). Named by a hash of their bytes; message events carry only id, type and size. PNG, JPEG, GIF, WebP, up to 10 MB each, 6 per message. Served at `/att/<project>/<id>` to the hub's own page only. Agents receive them as image blocks; images over about 3.7 MB are pointed to by path instead. |
+| `<project>/.crux/attachments/` | Images, PDFs and text files pasted, dropped or attached in threads (decision 23). Named by a hash of their bytes with an extension the hub picks from what the file is (`png`, `jpg`, `gif`, `webp`, `pdf`, or `txt` for every text file); the uploaded name is never used as a path. Message events carry only id, type, size and the original name as display text (folders and control characters removed, at most 120 characters). Images up to 10 MB, documents up to 25 MB, 6 attachments per message. Served at `/att/<project>/<id>` to the hub's own page only: images inline; documents always as a download (`Content-Disposition: attachment`, `text/plain` or `application/pdf`, `nosniff`, sandboxed). Agents receive images as image blocks (over about 3.7 MB, by path), and every attachment's saved path and original name. |
 | `<project>/.claude/worktrees/decisions/` | The `docs/decisions` worktree where picks and drafted records land (see "Where your picks land"). |
 | `<project>/.claude/settings.local.json` | Rules you saved with **Always** on a permission card (Claude Code's own file). |
 | `~/crux/` (or `CRUX_HOME`) | Your profile and its lessons, and `media/`, the pictures agents post with `post_visual`. Keep it private. |

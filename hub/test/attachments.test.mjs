@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
-import { Attachments, decodeDataUrl, sniffType, userContent, MAX_BYTES, INLINE_BYTES } from '../lib/attachments.mjs';
+import { Attachments, decodeDataUrl, sniffType, userContent, servedHeaders, cleanName, MAX_BYTES, MAX_DOC_BYTES, INLINE_BYTES, TEXT_EXTS, NAME_MAX } from '../lib/attachments.mjs';
 import { checkAttachmentRead, checkRequest } from '../lib/access.mjs';
 
 // No SDK: start() hands the agent an inbox that records what it would receive.
@@ -53,14 +53,158 @@ test('storage: content-hash names under .crux/attachments, stored once', () => {
 
 test('wrong type and oversize are refused with plain words', () => {
   const { p } = setup();
-  assert.throws(() => p.attachments.save(Buffer.from('<svg/>'), '"logo.svg"'), /"logo.svg" is not a PNG, JPEG, GIF or WebP image/);
+  assert.throws(() => p.attachments.save(Buffer.from('<svg/>'), 'logo.svg'), /"logo.svg" is an SVG picture, which can't be attached; save it as PNG/);
   assert.throws(() => p.attachments.save(Buffer.alloc(0)), /empty/);
   const big = Buffer.concat([PNG, Buffer.alloc(MAX_BYTES)]);
-  assert.throws(() => p.attachments.save(big, '"huge.png"'), /"huge.png" is 10 MB; images must be 10 MB or less/);
-  // An upload too big is refused from its length, before decoding.
-  assert.throws(() => decodeDataUrl('data:image/png;base64,' + 'A'.repeat(Math.ceil(MAX_BYTES * 4 / 3) + 100)), /images must be 10 MB or less/);
-  assert.throws(() => decodeDataUrl('hello'), /did not arrive as a picture/);
+  assert.throws(() => p.attachments.save(big, 'huge.png'), /"huge.png" is 10 MB; images must be 10 MB or less/);
+  // An upload too big for any kind is refused from its length, before decoding.
+  assert.throws(() => decodeDataUrl('data:application/pdf;base64,' + 'A'.repeat(Math.ceil(MAX_DOC_BYTES * 4 / 3) + 100)), /PDFs and text files must be 25 MB or less, images 10 MB/);
+  assert.throws(() => decodeDataUrl('hello'), /did not arrive in one piece/);
   assert.deepEqual(decodeDataUrl('data:image/png;base64,' + PNG.toString('base64')).buf, PNG);
+});
+
+// ---------- documents: PDFs and text-type files ----------
+const PDF = Buffer.from('%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n', 'latin1');
+const CSV = Buffer.from('part,load_N,ok\nstem,2300,yes\ncup,1800,yes\n');
+
+test('PDFs are known by their header, text by its bytes and name', () => {
+  const { p, dir } = setup();
+  const pdf = p.attachments.save(PDF, 'Report Q3.pdf');
+  assert.match(pdf.id, /^[a-f0-9]{32}\.pdf$/);
+  assert.deepEqual(pdf, { id: pdf.id, type: 'application/pdf', size: PDF.length, name: 'Report Q3.pdf' });
+  // A PDF with the wrong name is still a PDF: the bytes decide.
+  assert.equal(p.attachments.save(PDF, 'scan.bin').type, 'application/pdf');
+  const csv = p.attachments.save(CSV, 'loads.csv');
+  assert.match(csv.id, /^[a-f0-9]{32}\.txt$/, 'text is stored as .txt, whatever its name');
+  assert.equal(csv.type, 'text/plain');
+  assert.deepEqual(readFileSync(join(dir, '.crux', 'attachments', csv.id)), CSV);
+  for (const ext of TEXT_EXTS) assert.equal(p.attachments.save(Buffer.from(`hello ${ext} é ✓\n`), `x.${ext}`).type, 'text/plain', ext);
+  // Upper-case extensions count too.
+  assert.equal(p.attachments.save(CSV, 'LOADS.CSV').type, 'text/plain');
+});
+
+test('an HTML file is kept as plain text, never as a page', () => {
+  const { p } = setup();
+  const html = Buffer.from('<!doctype html><script>alert(document.cookie)</script><svg onload="alert(1)"></svg>');
+  const ref = p.attachments.save(html, 'evil.html');
+  assert.match(ref.id, /\.txt$/);
+  assert.equal(ref.type, 'text/plain');
+  const h = servedHeaders(ref.id);
+  assert.equal(h['content-type'], 'text/plain; charset=utf-8');
+  assert.equal(h['content-disposition'], 'attachment');
+  assert.equal(h['x-content-type-options'], 'nosniff');
+  assert.match(h['content-security-policy'], /sandbox/);
+  assert.match(h['content-security-policy'], /default-src 'none'/);
+});
+
+test('served headers: images show, documents download, never html or svg', () => {
+  const { p } = setup();
+  const ids = [p.attachments.save(PNG).id, p.attachments.save(JPEG).id, p.attachments.save(PDF, 'a.pdf').id, p.attachments.save(CSV, 'a.csv').id];
+  const [png, jpg, pdf, txt] = ids.map(servedHeaders);
+  assert.equal(png['content-type'], 'image/png'); assert.ok(!png['content-disposition']);
+  assert.equal(jpg['content-type'], 'image/jpeg'); assert.ok(!jpg['content-disposition']);
+  assert.equal(pdf['content-type'], 'application/pdf'); assert.equal(pdf['content-disposition'], 'attachment');
+  assert.equal(txt['content-type'], 'text/plain; charset=utf-8'); assert.equal(txt['content-disposition'], 'attachment');
+  for (const h of [png, jpg, pdf, txt]) {
+    assert.equal(h['x-content-type-options'], 'nosniff');
+    assert.equal(h['cross-origin-resource-policy'], 'same-origin');
+    assert.doesNotMatch(h['content-type'], /html|svg/);
+  }
+  // No stored id can ever be html or svg: the id rule only knows the hub's own extensions.
+  for (const ext of ['html', 'htm', 'svg', 'xml', 'csv', 'js']) assert.ok(!Attachments.validId('a'.repeat(32) + '.' + ext), ext);
+});
+
+test('refused: binary renamed .txt, Office files, SVG, unknown kinds, oversize PDFs, non-UTF-8 text', () => {
+  const { p } = setup();
+  const binary = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00]);   // the start of a .exe
+  assert.throws(() => p.attachments.save(binary, 'notes.txt'), /"notes.txt" is not really a text file \(it holds binary data\)/);
+  // PNG bytes named .txt are an image (the bytes decide); a zip named .txt is binary.
+  assert.equal(p.attachments.save(PNG, 'shot.txt').type, 'image/png');
+  const zip = Buffer.concat([Buffer.from('PK\x03\x04', 'latin1'), Buffer.alloc(20)]);
+  assert.throws(() => p.attachments.save(zip, 'report.txt'), /not really a text file/);
+  assert.throws(() => p.attachments.save(zip, 'report.docx'), /"report.docx" is a Word file; export it to PDF first/);
+  assert.throws(() => p.attachments.save(zip, 'loads.xlsx'), /"loads.xlsx" is an Excel file; save it as CSV or PDF first/);
+  assert.throws(() => p.attachments.save(zip, 'deck.pptx'), /"deck.pptx" is a PowerPoint file; export it to PDF first/);
+  assert.throws(() => p.attachments.save(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'), 'logo.svg'), /SVG picture/);
+  assert.throws(() => p.attachments.save(zip, 'archive.zip'), /"archive.zip" can't be attached\. Attach images \(PNG, JPEG, GIF, WebP\), PDFs, or text files/);
+  assert.throws(() => p.attachments.save(Buffer.from('plain words'), 'README'), /can't be attached/, 'text with no known extension');
+  assert.throws(() => p.attachments.save(Buffer.from('plain words')), /"?That file"? can't be attached/);
+  const bigPdf = Buffer.concat([PDF, Buffer.alloc(MAX_DOC_BYTES)]);
+  assert.throws(() => p.attachments.save(bigPdf, 'big.pdf'), /"big.pdf" is 25 MB; PDFs and text files must be 25 MB or less/);
+  const latin1 = Buffer.from('name,city\nJos\xe9,M\xfcnchen\n', 'latin1');
+  assert.throws(() => p.attachments.save(latin1, 'excel.csv'), /not saved as UTF-8 text.*CSV UTF-8/);
+  // A text file a little over 10 MB is fine: the image limit is not the document limit.
+  assert.equal(p.attachments.save(Buffer.alloc(MAX_BYTES + 10, 'a'), 'big.log').type, 'text/plain');
+});
+
+test('UTF-16 text with a byte-order mark is accepted and stored as UTF-8', () => {
+  const { p } = setup();
+  const words = 'part,load\nstem,2300 N ✓\n';
+  const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(words, 'utf16le')]);
+  const be = Buffer.from(le); be.swap16();   // FE FF, then big-endian
+  for (const [buf, name] of [[le, 'le.csv'], [be, 'be.txt']]) {
+    const ref = p.attachments.save(buf, name);
+    assert.equal(ref.type, 'text/plain', name);
+    assert.equal(p.attachments.read(ref.id).toString('utf8'), words, name);
+  }
+  // UTF-16 without a byte-order mark has NUL bytes: refused as binary.
+  assert.throws(() => p.attachments.save(Buffer.from(words, 'utf16le'), 'nobom.txt'), /binary/);
+});
+
+test('original names are display text only: no folders, no control characters, a sensible length', () => {
+  assert.equal(cleanName('C:\\Users\\me\\Desktop\\loads.csv'), 'loads.csv');
+  assert.equal(cleanName('../../etc/passwd.txt'), 'passwd.txt');
+  assert.equal(cleanName('a\u0000b\nc\u202e.txt'), 'abc.txt');
+  assert.equal(cleanName('   spaced    out .md '), 'spaced out .md');
+  assert.equal(cleanName('...hidden.txt'), 'hidden.txt');
+  assert.equal(cleanName(''), null);
+  assert.equal(cleanName('///'), null);
+  assert.equal(cleanName(undefined), null);
+  const long = 'x'.repeat(300) + '-final-report.pdf';
+  const c = cleanName(long);
+  assert.equal(c.length, NAME_MAX);
+  assert.ok(c.endsWith('-final-report.pdf'), 'the end and its extension are kept');
+  assert.ok(c.includes('…'));
+  // The stored path never uses the name.
+  const { p } = setup();
+  const ref = p.attachments.save(CSV, '..\\..\\events.jsonl.csv');
+  assert.equal(ref.name, 'events.jsonl.csv');
+  assert.match(p.attachments.path(ref.id), /attachments[\\/][a-f0-9]{32}\.txt$/);
+});
+
+test('the agent gets each file\'s saved path, name and kind, never the contents', () => {
+  const { hub, p } = setup();
+  const img = p.attachments.save(PNG, 'chart.png'), pdf = p.attachments.save(PDF, 'Report Q3.pdf'), csv = p.attachments.save(CSV, 'loads.csv');
+  hub.fromYou(p, 'orchestrator', 'Check these', [{ id: img.id, name: img.name }, { id: pdf.id, name: pdf.name }, { id: csv.id, name: 'loads.csv' }]);
+  const ev = p.log.events.findLast(e => e.type === 'message' && e.from === 'you');
+  assert.deepEqual(ev.attachments.map(a => [a.type, a.name]), [['image/png', 'chart.png'], ['application/pdf', 'Report Q3.pdf'], ['text/plain', 'loads.csv']]);
+  const content = p.orchestrator().inbox.items.at(-1).message.content;
+  assert.deepEqual(content.map(b => b.type), ['image', 'text'], 'only the image is a block');
+  const t = content[1].text;
+  assert.match(t, /^\[An image is attached above; 2 files are attached, not shown here; open them from the path with Read\. Saved in /);
+  assert.ok(t.includes(`Image 1 "chart.png": ${p.attachments.path(img.id)}`));
+  assert.ok(t.includes(`PDF "Report Q3.pdf" (1 KB): ${p.attachments.path(pdf.id)}`));
+  assert.ok(t.includes(`Text file "loads.csv" (1 KB): ${p.attachments.path(csv.id)}`));
+  assert.ok(!t.includes('stem,2300'), 'the CSV is not pasted in');
+  assert.ok(!t.includes('%PDF'), 'nor the PDF');
+  assert.match(t, /Check these$/);
+  // A document alone: no image blocks, one text block.
+  const only = userContent('', [p.attachments.ref(pdf.id, 'a.pdf')], p.attachments);
+  assert.equal(only.length, 1);
+  assert.match(only[0].text, /^\[A file is attached, not shown here; open it from the path with Read\./);
+  // The event log never holds the contents either.
+  const line = readFileSync(join(p.dir, '.crux', 'events.jsonl'), 'utf8');
+  assert.ok(!line.includes('stem,2300') && !line.includes('%PDF'));
+});
+
+test('at most 6 attachments per message, images and documents together', () => {
+  const { hub, p } = setup();
+  const docs = [0, 1, 2, 3].map(i => p.attachments.save(Buffer.from(`row ${i}\n`), `f${i}.csv`));
+  const imgs = [p.attachments.save(PNG), p.attachments.save(JPEG), p.attachments.save(GIF)];
+  const six = [...docs.map(d => ({ id: d.id, name: d.name })), imgs[0].id, imgs[1].id];
+  hub.fromYou(p, 'orchestrator', 'six', six);
+  assert.equal(p.log.events.findLast(e => e.type === 'message' && e.from === 'you').attachments.length, 6);
+  assert.throws(() => hub.fromYou(p, 'orchestrator', 'seven', [...six, imgs[2].id]), /Up to 6 attachments per message/);
 });
 
 test('ids are checked, so a path cannot escape the folder', () => {
@@ -85,7 +229,7 @@ test('the message event carries ids, type and size only, never image data', () =
   hub.fromYou(p, 'orchestrator', 'No pictures');
   assert.ok(!('attachments' in p.log.events.findLast(e => e.type === 'message' && e.from === 'you')));
   assert.throws(() => hub.fromYou(p, 'orchestrator', 'x', ['f'.repeat(32) + '.png']), /missing/);
-  assert.throws(() => hub.fromYou(p, 'orchestrator', 'x', Array(7).fill(a.id)), /Up to 6 images/);
+  assert.throws(() => hub.fromYou(p, 'orchestrator', 'x', Array(7).fill(a.id)), /Up to 6 attachments/);
 });
 
 test('the agent receives image content blocks, then the text', () => {

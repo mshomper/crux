@@ -106,7 +106,7 @@ html[data-hud] .mode-switch.auto{border-color:rgba(142,168,255,.5)}
 html[data-hud] :is(input,textarea,select){border-radius:2px}
 html[data-hud] .composer textarea{background:var(--hud-deep);border-color:var(--hud-edge)}
 html[data-hud] :is(.composer textarea,.dialog input,.dialog textarea,.dialog select):focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.22),0 0 18px -6px rgba(111,227,255,.5)}
-html[data-hud] :is(.qbox,.qquick,.cb-chip,.qchip,.tag,.tthumb,.seg,.segopt > span){border-radius:3px}
+html[data-hud] :is(.qbox,.qquick,.cb-chip,.qchip,.tag,.tthumb,.fchip,.seg,.segopt > span){border-radius:3px}
 html[data-hud] .mchip{border-radius:4px}
 
 /* ---------- menus, dialogs, toasts: glass panels with an edge ---------- */
