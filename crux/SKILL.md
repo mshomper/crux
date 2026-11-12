@@ -51,9 +51,20 @@ Write, in chat:
 - The question, one line.
 - Two or three options, each as: letter, name, one sentence, main cost.
 - Your recommendation, one sentence of why, and your confidence: strong, lean, or toss-up. For a toss-up, name the condition that decides it.
+- If you showed pictures for it (mockups, screenshots, charts), attach them to the message or post them, and name them in the record's `images` list (see "Pictures" below).
 - Then stop and wait.
 
-After the pick, still write the record (section 4) with `"mode": "quick"` and no sketches.
+After the pick, still write the record (section 4) with `"mode": "quick"` and no sketches, keeping its `images`.
+
+### Pictures (any mode)
+
+Every decision that was shown with pictures carries them, so its card, page and `.md` show what the call was made from.
+
+- List each picture in the record's `images` field: `{ "from": "...", "caption": "One line on what it shows", "option": "B" }`. `from` is the id `post_visual` returned in the Crux hub, or the path of a PNG, JPEG, GIF or WebP file inside the project folder or one of its worktrees. Files elsewhere (a temp folder, say) are refused: post them with `post_visual` first, or save them inside the project. Leave out `option` for a picture that covers the whole question.
+- The build script (or the hub, when it commits the record) copies each one into `.decisions/images/NNNN-name.png`, shrinks PNGs wider than 1600 px, strips text and camera metadata from PNGs and JPEGs (GIF and WebP are copied as they are), and rewrites the entry to `{ "file": "images/NNNN-name.png", ... }`. Never write into `images/` yourself and never edit a `file` entry by hand.
+- A picture that is refused (outside the project, not an image, an interlaced PNG wider than 1600 px, over 3 MB after shrinking) gets a `"skipped"` note with the reason, and the build lists it under "Problems to fix". It is not tried again: fix it, then delete the `"skipped"` note. A file not found yet gets a `"missing"` note and is tried again on every build and commit.
+- SVG and HTML mockups: take a PNG screenshot and list that.
+- **Public repos**: the pictures go into git with the record and become public. Mockups use fake, neutral data (made-up names, projects and numbers); never real people, clients, employer work, private paths or anything confidential. Check a repo's visibility before adding a screenshot of real work.
 
 ### Full mode (visual page)
 
@@ -67,6 +78,7 @@ For each decision, write one JSON file `.decisions/NNNN-short-slug.json` (next f
 - Pros and cons are specific enough to argue with. Your recommended option gets the same scrutiny as the rest.
 - **Criteria**: three to six dimensions that decide this question, each option scored 1 (weak), 2 (fair), or 3 (strong), with a one-line note where a score is not obvious.
 - Fill `depends_on` with numbers of earlier decisions this one builds on, and `conflicts` with any active decision it would contradict.
+- Mockups and screenshots beyond the sketches go in `images` (see "Pictures" above), each with its option letter. Fake, neutral data in public repos.
 
 Then run the build script from this skill's folder:
 
@@ -74,7 +86,7 @@ Then run the build script from this skill's folder:
 node <this skill's folder>/scripts/build.mjs .decisions
 ```
 
-It writes `NNNN-slug.html` (the page), `NNNN-slug.md` (the readable record) and `index.html`, plus a `.gitignore` in `.decisions` that keeps the pages out of git. Commit only the `.json` and `.md` records; never commit or force-add the `.html` pages or `index.html`, which are rebuilt from the records. If the repo you are working in is a worktree (its path contains `.claude/worktrees/`, or `git rev-parse --git-common-dir` points outside it), say so in one line with the full path of `.decisions/`, and note that the records reach the main copy when the branch is merged. Offer to merge when the work is done. Tell the user the page path in one line, plus a one-line summary of each option. Then stop and wait.
+It copies the record's pictures into `.decisions/images/`, then writes `NNNN-slug.html` (the page), `NNNN-slug.md` (the readable record) and `index.html`, plus a `.gitignore` in `.decisions` that keeps the pages out of git. Commit only the `.json` and `.md` records and their pictures in `images/`; never commit or force-add the `.html` pages or `index.html`, which are rebuilt from the records. If the repo you are working in is a worktree (its path contains `.claude/worktrees/`, or `git rev-parse --git-common-dir` points outside it), say so in one line with the full path of `.decisions/`, and note that the records reach the main copy when the branch is merged. Offer to merge when the work is done. Tell the user the page path in one line, plus a one-line summary of each option. Then stop and wait.
 
 ### Deep additions (only when `deep` was given)
 
@@ -110,7 +122,7 @@ The user can also reply to a decision with "park", "drop", "reject" or "edit", i
 - **Park** an open decision (`/crux park 0007 until <date>` or `when <trigger>`): set `status` to `parked` and `revisit` to `{ "date": "YYYY-MM-DD" }` or `{ "trigger": "plain words" }`. Ask for one if neither was given. Parked decisions are not waiting for a call and never count as stale. Section 0 reopens them.
 - **Drop** an open decision (`/crux drop 0007`, "we're not doing this"): set `status` to `rejected`, with `reason` from their words. Kept as history; never proposed again.
 - **Reject** a found decision: same as drop. Kept so Crux Dig never drafts it again.
-- **Clear** (`/crux clear`, optionally followed by numbers): removes drafts nobody has acted on, meaning `found` records and `open` ones without a `chosen` pick. List exactly which files will go, wait for a yes, then delete each one's `.json`, `.html` and `.md` and rebuild. Never delete `decided`, `rejected`, `superseded` or `parked` records, even if asked to clear everything; offer to supersede or drop them instead. Numbers are not reused.
+- **Clear** (`/crux clear`, optionally followed by numbers): removes drafts nobody has acted on, meaning `found` records and `open` ones without a `chosen` pick. List exactly which files will go, wait for a yes, then delete each one's `.json`, `.html` and `.md`, plus the pictures its `images` list points at, and rebuild. Never delete `decided`, `rejected`, `superseded` or `parked` records, even if asked to clear everything; offer to supersede or drop them instead. Numbers are not reused.
 
 Rebuild after any of these.
 
@@ -167,9 +179,15 @@ Decisions: read .decisions/*.md before planning work. Do not contradict an activ
   "decided_on": null,
   "superseded_by": null,
   "challenge": null,
-  "settles": [ { "key": "length unit", "value": "millimetres" } ]
+  "settles": [ { "key": "length unit", "value": "millimetres" } ],
+  "images": [
+    { "from": "C:/repo/.claude/worktrees/mock/mockup-b.png", "caption": "Option B on a phone", "option": "B" },
+    { "file": "images/0007-current-layout.png", "caption": "Today's layout" }
+  ]
 }
 ```
+
+`images` is optional. An entry with `from` is still to be copied in; the build turns it into a `file` entry, or marks it `"skipped"` with the reason.
 
 Deep mode adds these fields (leave them out otherwise):
 
@@ -208,6 +226,7 @@ Findings from `/crux-dig` also carry `deliberate` (`yes`, `likely`, `unclear`), 
 ## Rules
 
 - Never build, edit, or install anything as part of this skill except files in `.decisions/` and the CLAUDE.md line the user approved.
+- Pictures in a public repo's records show fake, neutral data only.
 - Never ask the user to justify a pick. Record a reason only when they give one.
 - Plain language in questions to the user: no variable names or symbols.
 - Keep chat messages short. The page carries the detail.

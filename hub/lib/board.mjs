@@ -7,6 +7,7 @@ import { join, resolve, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { refreshPages } from '../../crux/scripts/build.mjs';
+import { placeImages, placedImages } from '../../crux/scripts/images.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BUILD = resolve(here, '../../crux/scripts/build.mjs');
@@ -87,8 +88,17 @@ export class Board {
       return d;
     }
     writeFileSync(join(this.decisionsDir, name), JSON.stringify(d, null, 1) + '\n');
+    try { placeImages(this.decisionsDir, { attachments: join(this.dir, '.crux', 'attachments'), roots: [this.dir] }); }   // decision 43
+    catch (e) { console.warn('Copying decision pictures failed:', e.message); }
     this.rebuild();
     return d;
+  }
+
+  // A record picture to serve (decision 43): the worktree's copy first, else the main folder's. Names only, no folders.
+  imageFile(name) {
+    if (!/^[\w.-]+\.(png|jpg|gif|webp)$/.test(String(name)) || String(name).startsWith('.')) return null;
+    const f = this.desk?.image(name) || join(this.decisionsDir, 'images', name);
+    return existsSync(f) ? f : null;
   }
 
   rebuild() {
@@ -172,6 +182,7 @@ export class Board {
         id: d.id, slug: d.slug, title: d.title, status: d.status, chosen: d.chosen, recommended: d.recommended,
         confidence: d.confidence, context: d.context, recommendation: d.recommendation,
         options: (d.options || []).map(o => ({ key: o.key, name: o.name, summary: o.summary })),
+        images: placedImages(d),   // decision 43: { file: "images/...", caption, option? }, served at /p/<project>/images/
         page: `${String(d.id).padStart(4, '0')}-${d.slug}.html`
       })),
       entries: this.entries()
