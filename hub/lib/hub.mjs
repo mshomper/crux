@@ -11,7 +11,7 @@ import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
-import { classify, rulesEntry, touchesSecrets, defaultRules } from './permission-rules.mjs';
+import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool } from './permission-rules.mjs';
 import { HubSettings } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
@@ -512,7 +512,8 @@ export class Hub {
     if (route === 'allow' && this.permissionMode(p) === 'auto') return { allow: true };
     // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,
     // they are allowed and logged in its thread for Matt to audit.
-    if (route === 'unsure' && agent.role === 'orchestrator' && this.permissionMode(p) === 'auto') return { allow: true, logged: unsure };
+    // Never a connector (Matt's mail, calendar, drive): the orchestrator's own reads of those come to Matt as a card.
+    if (route === 'unsure' && agent.role === 'orchestrator' && this.permissionMode(p) === 'auto' && !connectorTool(toolName)) return { allow: true, logged: unsure };
     if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
     const orch = p.orchestrator();

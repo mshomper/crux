@@ -70,6 +70,7 @@ export class CommandPolicy {
   static alwaysRules(tool, input, suggestions) {
     const cmd = String(input?.command || '');
     if (RISKY.test(cmd)) return null;
+    if (/^mcp__claude_ai_/.test(String(tool))) return null;   // Matt's connectors (mail, calendar, drive): never allowed forever
     if (/^(Bash|PowerShell)$/.test(tool)) {
       const prefix = CommandPolicy.prefix(cmd);
       return prefix && !RISKY.test(prefix) ? [{ type: 'addRules', behavior: 'allow', destination: 'localSettings', rules: [{ toolName: tool, ruleContent: `${prefix}*` }] }] : null;
