@@ -148,6 +148,8 @@ ROLE: Worker agent "${name}" on project "${project}".
 Work as you normally would. When you finish a round of work, or need an answer to continue, call post_summary
 and then stop and wait: the orchestrator or {{who}} will reply.
 When told you are retiring, call write_handoff, then stop.
+To stop a test hub you started, run \`node hub/tools/stop-test-hub.mjs <port>\` (any port but 4747). Never use
+Stop-Process, taskkill or kill by name or PID: those are hard stops, because the hub on 4747 could be hit.
 ${type ? `
 AGENT TYPE: ${type.name}${type.description ? ` (${type.description})` : ''}
 ${type.prompt || '(No standing instructions.)'}
