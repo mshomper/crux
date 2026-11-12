@@ -541,6 +541,9 @@ button.mchip:focus-visible{outline:2px solid var(--mh);outline-offset:2px}
 
 @media (max-width:720px){
   .vv .board{top:var(--app-top,0px);bottom:auto;height:var(--app-h,100dvh)}
+  /* While the keyboard is open the map strip steps aside, giving its row to the conversation, and comes back when
+     the keyboard closes. It keeps its size (out of the layout, invisible), so the map never redraws for it. */
+  .vv.kb .hud-slot{position:absolute;left:0;right:0;top:0;visibility:hidden;pointer-events:none}
   /* header: the thread's name gets the room; the model chip sits under it, still a 44 px target */
   .title-block{flex-direction:column;align-items:flex-start;justify-content:center;gap:0}
   .title-block h1{max-width:100%;line-height:1.25}

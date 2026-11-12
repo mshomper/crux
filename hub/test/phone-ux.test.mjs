@@ -29,6 +29,16 @@ test('the page and the app root never scroll sideways', () => {
   assert.doesNotMatch(css, /width:100vw/, 'no full-viewport widths, which overflow by the scrollbar');
 });
 
+test('on a phone the map strip steps aside while the keyboard is open, without changing size', () => {
+  const css = pub('style.css');
+  const phone = css.slice(css.lastIndexOf('@media (max-width:720px){'));
+  const rule = /\.vv\.kb \.hud-slot\{([^}]*)\}/.exec(phone);
+  assert.ok(rule, 'inside the phone block, only while the keyboard is open');
+  assert.match(rule[1], /position:absolute/, 'out of the layout, so its row closes');
+  assert.match(rule[1], /visibility:hidden/);
+  assert.doesNotMatch(rule[1], /display:none|height:0/, 'keeps its size, so the map does not redraw');
+});
+
 test('phone hints are a word or two on one line; the long ones stay on wide screens', () => {
   for (const thread of ['needs', 'orchestrator', 'phone-polish-with-a-long-name']) {
     const h = composerHint({ thread, narrow: true, fine: false });
