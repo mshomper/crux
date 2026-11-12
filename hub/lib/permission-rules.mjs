@@ -161,6 +161,8 @@ const LOCAL_OK = {
   wget: new Set('q quiet S server-response T timeout t tries header O output-document post-data body-data method -nv no-verbose'.split(' ')),
   iwr: new Set(['Uri', 'Method', 'Body', 'ContentType', 'Headers', 'UseBasicParsing', 'TimeoutSec', 'OutFile', 'ErrorAction'])
 };
+// Environment settings that make git run another program or point it at another repo.
+const GIT_RUNS_VARS = /^(git_(pager|editor|sequence_editor|external_diff|ssh|ssh_command|askpass|proxy_command|exec_path|dir|work_tree|config\w*|index_file|template_dir|alternate_object_directories|object_directory|namespace|common_dir)|pager|editor|visual|lessopen|lessclose|ssh_askpass)$/i;
 // The only environment settings allowed in front of a request to this machine (VAR=value, export, $env:).
 const LOCAL_ENV_OK = new Set(['crux_hub_data', 'crux_home', 'no_color']);
 // pip install / uninstall / download / wheel. place: a folder it writes to (must be inside); target: --target and the
@@ -353,6 +355,9 @@ class Check {
 
   command(cmd, ps) {
     if (!cmd.trim()) return this.unsure('An empty command');
+    // PowerShell reads curly quotes as quotes (‘ ’ ‚ ‛ as ', “ ” „ as "): read them the same way, so a quote the hub
+    // missed cannot hide where a value ends (follow-up to PR #51).
+    if (ps) cmd = cmd.replace(/[‘’‚‛]/g, "'").replace(/[“”„]/g, '"');
     if (ps) {
       // Variables the command sets itself ($s = ...) are its own, not the environment's.
       this.localVars ||= new Set();
@@ -391,6 +396,7 @@ class Check {
   headOf(text) {
     const w = tokens(text).map(t => t.text);
     let k = 0; while (k < w.length - 1 && /^\w+=/.test(w[k])) k++;
+    k = unwrap(w, k);   // timeout 60 bash ..., nohup sh ..., command curl ..., sudo bash ..., busybox sh ...
     // A PowerShell assignment: $s = irm URL, $s =irm URL, $s=irm URL: the program is what comes after the =.
     if (/^\$[\w:]+$/.test(w[k] || '') && w[k + 1] === '=') k += 2;
     else if (/^\$[\w:]+$/.test(w[k] || '') && /^=./.test(w[k + 1] || '')) { w[k + 1] = w[k + 1].slice(1); k += 1; }
@@ -422,8 +428,13 @@ class Check {
     }
     // A command or process substitution that downloads, feeding a program that runs scripts:
     // sh -c "$(curl URL)", bash <(curl URL), source <(curl URL), . <(curl URL), node -e "$(curl URL)".
-    const fetchingSub = substitutions(s).some(inner => DOWNLOAD_TEXT.test(inner) || splitParts(inner, ps).some(p => DOWNLOADERS.has(this.headOf(p).head)));
+    const subs = substitutions(s);
+    const fetchingSub = subs.some(inner => DOWNLOAD_TEXT.test(inner) || splitParts(inner, ps).some(p => DOWNLOADERS.has(this.headOf(p).head)));
     if (fetchingSub && heads.some(h => INTERPRETERS.has(h) || /^(eval|exec|xargs)$/.test(h))) this.stop('Runs what it downloads (a download inside a command substitution)');
+    // A download that reaches a program running scripts inside a process substitution: curl URL | tee >(sh).
+    if (downloads && /[>]\(\s*(\S+)/.test(s) && [...s.matchAll(/>\(\s*([^\s)]+)/g)].some(m => INTERPRETERS.has(basename(m[1]).toLowerCase().replace(/\.exe$/, '')))) {
+      this.stop('Runs what it downloads (a script runner inside a process substitution)');
+    }
     for (const { text, op } of parts) {
       const { head, args } = this.headOf(text);
       if (DOWNLOADERS.has(head)) {
@@ -431,10 +442,18 @@ class Check {
         const web = !urls.length || urls.some(u => !localAddress(u));
         fetched = fetched === 'web' || web ? 'web' : 'local';
       }
-      // A download piped into a program that writes it to a file (| tee a.sh, | Out-File a.ps1): that file counts
-      // as downloaded, so running it later in the command is caught.
-      if (fetched && op === '|' && /^(tee|tee-object|out-file|set-content|sc|add-content|ac)$/.test(head)) {
-        for (const a of args.filter(x => !x.startsWith('-'))) { const p = this.abs(a, this.projectDir); if (typeof p === 'string') this.downloaded?.add(norm(p)); }
+      // A download piped into a program that writes it to a file (| tee a.sh, | Out-File a.ps1, | cat > a.sh,
+      // | tr -d x > a.sh, ... &> a.sh): that file counts as downloaded, so running it later in the command is caught.
+      if (fetched && op === '|') {
+        const files = /^(tee|tee-object|out-file|set-content|sc|add-content|ac)$/.test(head) ? args.filter(x => !x.startsWith('-')) : [];
+        const w = tokens(text);
+        for (let i = 0; i < w.length - 1; i++) if (w[i].op && !w[i].text.startsWith('<') && !/&\d$/.test(w[i].text)) files.push(w[i + 1].text);
+        for (const a of files) { const p = this.abs(a, this.projectDir); if (typeof p === 'string') this.downloaded?.add(norm(p)); }
+      }
+      // xargs runs the program after it with the piped text as its words: curl URL | xargs sh -c.
+      if (head === 'xargs' && op === '|') {
+        const i = args.findIndex(x => !x.startsWith('-'));
+        if (i >= 0 && INTERPRETERS.has(basename(args[i]).toLowerCase())) { if (fetched) this.stop(`Runs what it downloads (a download piped into xargs ${args[i]})`); continue; }
       }
       if (op !== '|' || !INTERPRETERS.has(head)) continue;
       const script = stdinScript(head, args);
@@ -739,6 +758,10 @@ class Check {
     if (DOWNLOADERS.has(head) && this.fileUrls?.length) return this.stop(`Reads a file on this computer through a file:// address (${this.fileUrls[0].slice(0, 80)})`);
     // PowerShell's $PSDefaultParameterValues can give Invoke-RestMethod an address or a method no word shows.
     if (DOWNLOADERS.has(head) && /\$PSDefaultParameterValues/i.test(this.cmdText || '')) return this.stop(`${head} in a command that sets $PSDefaultParameterValues (hidden options)`);
+    // curl and wget find settings files through HOME, USERPROFILE, APPDATA, CURL_HOME, XDG_CONFIG_HOME, WGETRC and
+    // SYSTEMWGETRC. A command that runs one and names any of them anywhere (for HOME in .; printf -v HOME; read HOME;
+    // declare HOME=.) is a stop: there are too many ways to set a variable to follow each one.
+    if ((head === 'curl' || head === 'wget') && configHomeNamed(this.cmdText || '')) return this.stop(`${head} in a command that names a variable curl or wget reads its settings through (${configHomeNamed(this.cmdText)})`);
     // Requests to this machine (any port) pass on an allow-list (fourth review of PR #51): every option on LOCAL_OK, no
     // environment setting in front but LOCAL_ENV_OK, and the target taken only from the addresses themselves (curl and
     // wget: their positional words; iwr / irm: -Uri or the first positional word). To the hub on 4747, or to this
@@ -790,9 +813,20 @@ class Check {
     if (this.trusted && WEB_READ.has(head)) return this.webRead(head, args, cwd);
     if (this.trusted && /^(ping|nslookup|test-netconnection|tnc)$/.test(head)) return;   // only looks an address up
     if (NETWORK.has(head)) return this.stop(`Reaches the network (${head})`);
+    // Programs on the read list that can also run commands or write files (awk system(), sed e / w, rg --pre, sort
+    // --compress-program, find -delete, xxd and uniq output files, ...): judged here; true when that settled it.
+    if (this.readerExec(head, args, cwd) !== false) return;
+    // A downloaded file moved or copied keeps counting as downloaded: curl -o a.sh URL; mv a.sh b.sh; bash b.sh.
+    if (/^(mv|cp|move|copy|move-item|mi|copy-item|cpi|rename-item|rni|ren)$/.test(head) && this.downloaded?.size && positional.length >= 2) {
+      const items = this.items(positional), dst = items.at(-1);
+      const got = x => { const a = this.abs(x, cwd); return typeof a === 'string' && this.downloaded.has(norm(a)); };
+      for (const src of items.slice(0, -1).filter(got)) {
+        for (const p of [this.abs(dst, cwd), this.abs(join(dst, basename(src)), cwd)]) if (typeof p === 'string') this.downloaded.add(norm(p));
+      }
+    }
     // Programs that write: a target outside the project folder or a temp folder is a hard stop.
     const recursive = args.some(a => /^(-recurse|--recursive|-[rf]*r[rf]*)$/i.test(a));
-    const writes = WRITE_ALL.has(head) ? positional : WRITE_LAST.has(head) ? positional.slice(-1) : head === 'sed' && args.some(a => /^-i/.test(a)) ? positional.slice(-1) : null;
+    const writes = WRITE_ALL.has(head) ? positional : WRITE_LAST.has(head) ? positional.slice(-1) : null;
     if (writes) {
       for (const t of this.items(writes)) {
         if (recursive && this.unresolved(t)) { this.stop(`Writes recursively through a path the hub cannot resolve (${head} ${t})`); continue; }
@@ -806,6 +840,13 @@ class Check {
     if (INSTALL.has(head)) return this.stop(SYSTEM_WIDE.has(head) ? `Installs software system-wide (${head})` : `Installs software (${head})`);
     if (head === 'uv' || head === 'poetry') return this.pyProject(head, args, cwd);
     if (/^(env|printenv|set|get-credential|get-secret)$/.test(head)) return this.stop(`Reads environment variables or credentials (${head})`);
+    // sh -c 'SCRIPT', bash -lc "SCRIPT" and eval "SCRIPT": the script is read like any command, so a hard stop inside
+    // (curl URL | sh, git push --force) is caught. The whole thing still goes to the orchestrator, as before.
+    if (/^(sh|bash|zsh|dash)$/.test(head)) {
+      const i = args.findIndex(a => /^-[a-z]*c[a-z]*$/i.test(a));
+      if (i >= 0 && args[i + 1] != null) this.innerCommand(args[i + 1]);
+    }
+    if (head === 'eval' && args.length) this.innerCommand(args.join(' '));
     if (INDIRECT.has(head)) return this.unsure(`Runs commands the hub cannot read (${head})`);
     // R004: deleting inside the project folder or a temp folder is contained; anywhere else is a hard stop.
     if (DELETE.has(head)) {
@@ -820,6 +861,16 @@ class Check {
     }
     if (head === 'find') {
       if (args.some(a => /^-(exec|execdir|ok|okdir)$/.test(a))) this.unsure('find runs other commands (-exec)');
+      // -delete deletes under the folders it starts from; -fprint, -fprint0, -fprintf and -fls write a file.
+      const starts = []; for (const a of args) { if (/^[-(!]/.test(a)) break; starts.push(a); }
+      if (args.includes('-delete')) {
+        for (const s of starts.length ? starts : ['.']) {
+          const w = this.where(s, cwd);
+          if (w === 'outside') this.stop(`Deletes files outside the project or a temp folder (find ${s} -delete)`);
+          else if (w === 'tmp' && !this.ownTemp(s, cwd)) this.unsure(`Deletes in a temp folder that is not this agent's own (find ${s} -delete)`, true);
+        }
+      }
+      args.forEach((a, i) => { if (/^-(fprint0?|fprintf|fls)$/.test(a) && args[i + 1]) this.path(args[i + 1], cwd, { write: true }); });
       return;
     }
     if (SAFE.has(head) || head === 'strings' || head === 'cygpath' || /^get-[a-z]+$/.test(head) || /^(format|select|sort|measure|where|group|convertto|convertfrom|out-string)-?/.test(head) && !/^out-file$/.test(head)) return;   // reads, wherever it reads from
@@ -920,6 +971,16 @@ class Check {
     const [sub, ...rest] = a;
     const flag = (...fs) => rest.some(x => fs.includes(x));
     if (!sub) return;
+    // Settings that make git run another program or work on another repo (follow-up to PR #51): GIT_PAGER=sh,
+    // GIT_EXTERNAL_DIFF, GIT_SSH_COMMAND, GIT_DIR=..., EDITOR, LESSOPEN. GIT_PAGER / PAGER set to cat or nothing are fine.
+    const genv = [...this.env()].find(([k, v]) => GIT_RUNS_VARS.test(k) && !(/^(git_)?pager$/i.test(k) && /^(cat|less|)$/.test(String(v ?? 'x'))));
+    if (genv) return this.stop(`git with ${genv[0].toUpperCase()} set in front (it can make git run another program or use another repo)`);
+    // git grep -O / --open-files-in-pager runs a program on the matches; --output writes a file anywhere.
+    if (sub === 'grep' && rest.some(x => /^(-O|--open-files-in-pager)/.test(x))) return this.stop('git grep runs another program (-O)');
+    rest.forEach((x, i) => {
+      const v = /^(--output|--output-directory|-o)$/.test(x) && /^(diff|log|show|format-patch|range-diff|whatchanged)$/.test(sub) ? rest[i + 1] : /^--(output|output-directory)=(.+)$/.exec(x)?.[2];
+      if (v != null) this.path(v, cwd, { write: true });
+    });
     if (sub === 'merge') return this.merge('Merges branches (git merge)');
     // In a repo outside the project folder (git -C ../other, or after cd ..), only reading is fine.
     if (this.where(cwd, cwd) === 'outside' && !GIT_READ.has(sub) && sub !== 'branch' || (sub === 'branch' && this.where(cwd, cwd) === 'outside' && rest.some(x => !x.startsWith('-')))) {
@@ -1084,6 +1145,85 @@ class Check {
       const port = Number(args[args.indexOf(file) + 1]);
       if (!Number.isInteger(port) || port <= 0 || port > 65535 || port === 4747) this.stop('Stops a hub without a port other than 4747');
     }
+  }
+
+  // A script handed to sh -c or eval, read as its own command; what it finds about addresses stays with it.
+  innerCommand(script) {
+    const saved = { urls: this.urlsHere, local: this.localUrls, files: this.fileUrls };
+    this.command(String(script), false);
+    this.urlsHere = saved.urls; this.localUrls = saved.local; this.fileUrls = saved.files;
+  }
+
+  // Programs on the read list that can also run commands or write files (follow-up to PR #51). Returns false when the
+  // program goes on to the usual checks (a plain read); anything else means this settled it (stopped, sent on, or allowed).
+  readerExec(head, args, cwd) {
+    if (/^(g|m|n)?awk$/.test(head)) {
+      const progs = []; let fromFile = false, i = 0;
+      for (; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--') { i++; break; }
+        if (/^(-l|--load)/.test(a)) return void this.stop(`${head} loads an extension library (${a})`);
+        if (/^(-f|-E|-i|--file|--exec|--include)$/.test(a)) { fromFile = true; i++; continue; }
+        if (/^(-f|-E|-i).|^--(file|exec|include)=/.test(a)) { fromFile = true; continue; }
+        if (/^(-e|--source)$/.test(a)) { progs.push(args[++i] || ''); continue; }
+        if (/^--source=/.test(a)) { progs.push(a.slice(9)); continue; }
+        if (/^-(F|v)$/.test(a)) { i++; continue; }
+        if (a.startsWith('-')) continue;   // -F: attached, -vX=1, --posix, ...
+        break;
+      }
+      if (!progs.length && !fromFile) progs.push(args[i] || '');
+      const p = progs.join('\n');
+      // system(), getline (reads a command's output), print | "cmd", |& (coprocess), print > "file", @load.
+      if (/\bsystem\s*\(|\bgetline\b|\|&|@load\b|\bprintf?\b[^;{}]*[|>]/.test(p)) return void this.stop(`${head} runs a command or writes a file from its program (${p.slice(0, 60)})`);
+      if (fromFile) return void this.unsure(`${head} runs a program from a file the hub cannot read`, true);
+      return true;
+    }
+    if (head === 'sed') {
+      const scripts = []; const files = []; let fromFile = false, inPlace = false;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (/^(-e|--expression)$/.test(a)) { scripts.push(args[++i] || ''); continue; }
+        if (/^--expression=/.test(a)) { scripts.push(a.slice(13)); continue; }
+        if (/^-e./.test(a)) { scripts.push(a.slice(2)); continue; }
+        if (/^(-f|--file)$/.test(a)) { fromFile = true; i++; continue; }
+        if (/^-f.|^--file=/.test(a)) { fromFile = true; continue; }
+        if (/^(-l|--line-length)$/.test(a)) { i++; continue; }
+        if (/^--in-place/.test(a) || (/^-[a-zA-Z]*i/.test(a) && !a.startsWith('--'))) { inPlace = true; continue; }
+        if (a.startsWith('-')) continue;
+        files.push(a);
+      }
+      if (!scripts.length && !fromFile) scripts.push(files.shift() ?? '');
+      const bad = scripts.find(sedRunsOrWrites);
+      if (bad != null) return void this.stop(`sed runs a command or writes a file from its script (${bad.slice(0, 60)})`);
+      if (fromFile) return void this.unsure('sed runs a script from a file the hub cannot read', true);
+      // sed -i writes every file it is given: each must be inside the project or a temp folder.
+      if (inPlace) for (const f of files) {
+        if (this.where(f, cwd) === 'outside') this.stop(`Writes outside the project folder (sed -i ${f})`);
+        else if (this.where(f, cwd) === 'tmp') this.noteTemp(f, cwd);
+      }
+      return true;
+    }
+    if (head === 'rg') {
+      const run = args.find(a => /^--(pre|hostname-bin)(=|$)/.test(a));
+      if (run) return void this.stop(`rg runs another program on each file (${run})`);
+      return false;
+    }
+    if (head === 'sort') {
+      if (args.some(a => /^--compress-program(=|$)/.test(a))) return void this.stop('sort runs another program (--compress-program)');
+      args.forEach((a, i) => {   // -o FILE, -oFILE, --output=FILE, and -T / --temporary-directory: what it writes
+        const v = /^(-o|-T|--output|--temporary-directory)$/.test(a) ? args[i + 1] : (/^-[oT](.+)$/.exec(a)?.[1] ?? /^--(output|temporary-directory)=(.+)$/.exec(a)?.[2]);
+        if (v != null) this.path(v, cwd, { write: true });
+      });
+      return false;
+    }
+    if (head === 'xxd' || head === 'uniq') {   // a second file name is where they write
+      const pos = args.filter(a => !a.startsWith('-') || a === '-');
+      if (pos[1] && pos[1] !== '-') this.path(pos[1], cwd, { write: true });
+      return false;
+    }
+    if (head === 'tree') { args.forEach((a, i) => { if (a === '-o' && args[i + 1]) this.path(args[i + 1], cwd, { write: true }); }); return false; }
+    if (head === 'date' && args.some(a => /^(-s|--set)(=|$)/.test(a))) return void this.stop('Changes the system clock (date --set)');
+    return false;
   }
 
   // A merge comes to the owner as a card unless THE MERGE RULE (top of this file) says otherwise for this level.
@@ -1341,6 +1481,46 @@ class Check {
   }
 }
 
+// True when a sed script runs a command or writes a file: the e command or the s///e flag (GNU sed runs the text as
+// a shell command), the w / W commands or the s///w flag (write a file). Text after a, i and c, and regular
+// expressions, are skipped so their letters do not count.
+function sedRunsOrWrites(script) {
+  let s = String(script);
+  // s/re/repl/flags and y/a/b/ with any delimiter: keep only s's flags.
+  s = s.replace(/(^|[;\n{}!\s\d$/,])s(.)((?:\\.|(?!\2)[^\n])*)\2((?:\\.|(?!\2)[^\n])*)\2([^;\n}]*)/g, (all, pre, d, re, rep, flags) => `${pre}\u0001${flags.trim()}\u0002`);
+  s = s.replace(/(^|[;\n{}!\s\d$/,])y(.)((?:\\.|(?!\2)[^\n])*)\2((?:\\.|(?!\2)[^\n])*)\2/g, '$1Y');
+  if (/\u0001[^\u0002]*[ew]/.test(s)) return true;   // s///e runs the result; s///w writes it to a file
+  s = s.replace(/\u0001[^\u0002]*\u0002/g, 'S');
+  // Addresses /re/ and \cREc become A; a, i and c take the rest of the line as text.
+  s = s.replace(/\/((?:\\.|[^/\n])*)\//g, 'A').replace(/\\(.)((?:\\.|(?!\1).)*)\1/g, 'A');
+  s = s.replace(/(^|[;\n{])(\s*(?:A|\d+|\$)?\s*(?:,\s*(?:A|\d+|\$|[+~]\d+))?\s*!?\s*)[aic](\\?\s|\\\n)[^\n]*/g, '$1$2T');
+  return /(^|[;\n{}])\s*(?:A|\d+|\$)?\s*(?:,\s*(?:A|\d+|\$|[+~]\d+))?\s*!?\s*[ewW](\s|;|$|\n|})/.test(s);
+}
+
+// The variables curl and wget read their settings files through, named anywhere in a command: as a shell name
+// (HOME, in capitals: bash names are case-sensitive, so a path like /home/x does not count), as $env:home in
+// PowerShell or %home% in cmd (both case-insensitive). The name found, or null.
+const CONFIG_HOME_NAMES = 'HOME|USERPROFILE|APPDATA|CURL_HOME|XDG_CONFIG_HOME|WGETRC|SYSTEMWGETRC|HOMEDRIVE|HOMEPATH';
+function configHomeNamed(text) {
+  const m = new RegExp(`(?:^|[^\\w$:%])\\$?\\{?(${CONFIG_HOME_NAMES})(?!\\w)`).exec(text)
+    || new RegExp(`\\$env:(${CONFIG_HOME_NAMES})(?!\\w)|%(${CONFIG_HOME_NAMES})%`, 'i').exec(text);
+  return m ? (m[1] || m[2]).toUpperCase() : null;
+}
+
+// Programs that only run the program after them (timeout 60 X, nohup X, command X, sudo X, busybox X, nice -n 5 X,
+// stdbuf -oL X, time X, exec X): the index in w of the program that really runs, from k.
+const WRAPPERS = /^(timeout|nohup|command|builtin|exec|sudo|doas|busybox|nice|ionice|stdbuf|time|chronic|unbuffer|setsid|winpty)$/;
+function unwrap(w, k) {
+  for (let guard = 0; guard < 8 && WRAPPERS.test(String(w[k] || '').toLowerCase()) && k < w.length - 1; guard++) {
+    const name = String(w[k]).toLowerCase();
+    k++;
+    // Their own options, and the values those take (sudo -u root, nice -n 5, timeout -s KILL 60, stdbuf -o L).
+    while (k < w.length - 1 && /^-/.test(w[k])) k += /^-(u|g|n|s|k|o|e|i|c|p|C|h)$/.test(w[k]) ? 2 : 1;
+    if (name === 'timeout' && /^\d+(\.\d+)?[smhd]?$/.test(w[k] || '') && k < w.length - 1) k++;   // the duration
+  }
+  return k;
+}
+
 // curl -w / --write-out given a format read from a file (@file) or one that writes to a file (%output{...}): the
 // offending value, else null.
 function writeOutFile(r) {
@@ -1444,6 +1624,8 @@ export function splitParts(s, ps = false, withOps = false) {
     const brace = (c === '{' && /[\s|(;]/.test(prev(i))) || (c === '}' && /[\s|);]|^$/.test(s[i + 1] ?? '')) || c === '(' && /[\s|;=]/.test(prev(i)) || c === ')';
     if (c === '\n' || c === '\r' || c === ';' || c === '|' || c === '&' || brace) {
       if (c === '&' && /[<>]/.test(prev(i))) { cur += c; continue; } // 2>&1
+      if (c === '&' && s[i + 1] === '>') { cur += c; continue; }       // &> file, &>> file: a redirection, not & then >
+
       nextOp = (c === '|' || c === '&') && s[i + 1] === c ? c + c : c;
       if (cur.trim()) { push(); op = nextOp; }
       else if (!out.length || op === '' || nextOp === '|') op = nextOp === '|' ? '|' : op || nextOp;   // "(iwr x).Content | iex": the pipe still counts
@@ -1474,7 +1656,10 @@ export function tokens(part, ps = false) {
     }
     if (c === '>' || c === '<') {   // a redirection is its own word, even when written hard against a file name
       let op = c;
-      if (cur && !cur.quoted && /^\d$/.test(cur.text)) { op = cur.text + c; cur = null; } else push();
+      if (cur && !cur.quoted && c === '>' && /&$/.test(cur.text)) {   // &> file, also written hard against a word
+        cur.text = cur.text.slice(0, -1); if (cur.text) push(); else cur = null; op = '&>';
+      } else if (cur && !cur.quoted && /^\d$/.test(cur.text)) { op = cur.text + c; cur = null; } else push();   // 2>
+
       if (part[i + 1] === c) op += part[++i];
       if (part[i + 1] === '&' && /\d/.test(part[i + 2] || '')) { op += part.slice(i + 1, i + 3); i += 2; }
       out.push({ text: op, quoted: false, vars: false, op: true });
