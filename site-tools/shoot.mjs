@@ -55,10 +55,13 @@ try {
   await S('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: dpr, mobile: W <= 720 });
   if (W <= 720) await S('Emulation.setTouchEmulationEnabled', { enabled: true });
   if (opt.motion) await S('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: String(opt.motion) }] });
+  if (opt.noscript) await S('Emulation.setScriptExecutionDisabled', { value: true });   // the page's own scripts are off
   await S('Page.navigate', { url });
   for (let i = 0; i < 100 && !events.some(e => e.method === 'Page.loadEventFired'); i++) await sleep(100);
   await sleep(wait);
   if (typeof opt.eval === 'string') { await S('Runtime.evaluate', { expression: opt.eval, awaitPromise: true }); await sleep(400); }
+  // --print "js": run it in the page (it may return a promise) and print what it returns
+  if (typeof opt.print === 'string' && !opt.noscript) { const r = await S('Runtime.evaluate', { expression: opt.print, awaitPromise: true, returnByValue: true }); console.log(typeof r.result.value === 'string' ? r.result.value : JSON.stringify(r.result.value, null, 1)); }
   const m = await S('Runtime.evaluate', { expression: 'JSON.stringify({h:Math.ceil(document.documentElement.scrollHeight),sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth})', returnByValue: true });
   const dim = JSON.parse(m.result.value);
   const h = opt.view ? H : Math.min(dim.h, 16000);
