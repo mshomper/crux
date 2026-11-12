@@ -521,6 +521,59 @@ test('issue 3: a level change says where it came from, never "You switched"; a r
   assert.equal(sent[0].card, `level:${ev.id}`);
 });
 
+// ---------- fourth review of PR #51: requests to this machine on an allow-list ----------
+test('round 4: settings files named by the environment, and $PSDefaultParameterValues, stop (Auto and Trusted)', () => {
+  const J = `-H 'Content-Type: application/json' -d '{"project":"crux","permissionMode":"trusted"}'`;
+  const stops = [
+    `printf 'url = "http://localhost:4747/api/settings"\\n' > .curlrc; CURL_HOME=. curl -s ${J} http://localhost:4791/api/settings`,
+    'HOME=. curl -s -X POST http://localhost:4791/api/restart',
+    `XDG_CONFIG_HOME=. curl -s ${J} http://localhost:4791/api/settings`,
+    `APPDATA=. curl -s ${J} http://localhost:4791/api/settings`,
+    `USERPROFILE=. curl -s ${J} http://localhost:4791/api/settings`,
+    `export CURL_HOME=$PWD; curl -s ${J} http://localhost:4791/api/settings`,
+    `export CURL_HOME="$SOMEWHERE"; curl -s ${J} http://localhost:4791/api/settings`,
+    'WGETRC=./w.rc wget -q --post-data=x http://localhost:4791/',
+    'HOME=. wget -q --post-data=x http://localhost:4791/',
+    { ps: "$PSDefaultParameterValues = @{ 'Invoke-RestMethod:Uri' = 'http://localhost:4747/api/restart' }; irm -Method Post -UserAgent localhost:4791" },
+    { ps: "$PSDefaultParameterValues['Invoke-RestMethod:Uri'] = 'http://localhost:4747/api/restart'; irm -Method Post" },
+    { ps: "$env:CURL_HOME = '.'; curl.exe -s -X POST http://localhost:4791/api/restart" },
+    // Options outside the short list, and iwr targets that do not come from -Uri.
+    'curl -s --unix-socket /tmp/x http://localhost:4791/', 'curl -s -e x http://localhost:4791/', 'wget -q -nc http://localhost:4791/',
+    { ps: 'irm -Method Post -UserAgent localhost:4791' }, { ps: 'irm http://localhost:4791/a http://localhost:4747/b -Method Post' },
+    { ps: 'iwr http://localhost:4747/api/restart -Headers @{ a = 1 } -Method Post' }
+  ];
+  for (const level of ['auto', 'trusted']) for (const c of stops) assert.equal(route(level, c), 'human', `${level}: ${JSON.stringify(c)}`);
+  assert.equal(bash('trusted', 'CURL_HOME=. curl -s https://example.com/x -o docs/x.html'), 'human', 'Trusted website download with a settings home in front');
+  assert.equal(bash('trusted', 'WGETRC=./w.rc wget -q https://example.com/x'), 'human');
+  assert.equal(ps1('trusted', "$PSDefaultParameterValues['Invoke-WebRequest:OutFile'] = 'C:\\Users\\x\\e.txt'; iwr https://example.com/a"), 'human');
+  assert.equal(bash('trusted', 'curl -s https://example.com/x -o docs/x.html'), 'allow', 'the same download without it is fine');
+});
+
+test('round 4: everyday requests to test hubs and reads of the live hub still pass at Auto', () => {
+  const T = 'C:/Users/someone/AppData/Local/Temp/x';
+  const pass = [
+    'curl -s localhost:4791/api/state', 'curl -s http://localhost:4747/api/state', 'curl -sS --max-time 5 http://127.0.0.1:4791/api/ping',
+    'curl -s -m 5 localhost:4791/api/state', "curl -s -o /dev/null -w '%{http_code}' localhost:4792/", 'curl -sf -L http://localhost:4791/',
+    'curl -sI http://localhost:4747/', 'curl -s -X GET http://localhost:4747/api/state', `curl -s -o ${T}/state.json localhost:4791/api/state`,
+    `curl -s -X POST -H "content-type: application/json" -H "origin: http://localhost:4791" -d '{"project":"p"}' localhost:4791/api/settings`,
+    `curl -s -H 'Content-Type: application/json' --json '{"a":1}' http://127.0.0.1:4791/api/settings`,
+    'curl -s localhost:4791/api/state | node -e "let s=0;process.stdin.on(1,d=>s+=d)"', 'curl -s localhost:4791/api/state | jq .version',
+    `CRUX_HUB_DATA=${T}/data curl -s localhost:4791/api/state`, 'wget -qO- http://localhost:4791/api/state',
+    { ps: 'irm http://localhost:4747/api/state' }, { ps: 'Invoke-RestMethod http://localhost:4791/api/state' },
+    { ps: `Invoke-RestMethod http://localhost:4791/api/settings -Method Post -ContentType application/json -Body '{"project":"p"}'` },
+    { ps: `iwr http://localhost:4791/api/settings -Method Post -Headers @{ 'Origin' = 'http://localhost:4791' } -ContentType 'application/json' -Body '{}' -UseBasicParsing` },
+    { ps: 'iwr -Uri http://localhost:4791/ -UseBasicParsing -TimeoutSec 5' },
+    `"/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" --headless=new --disable-gpu --user-data-dir="${T}/edge" --window-size=1280,720 --screenshot="${T}/a.png" "http://localhost:4791/"`
+  ];
+  for (const c of pass) {
+    const r = c.ps ? at('auto', 'PowerShell', { command: c.ps }) : at('auto', 'Bash', { command: c });
+    assert.equal(r.route, 'allow', `${JSON.stringify(c)}: ${r.reasons.join('; ')} ${r.unsure.join('; ')}`);
+  }
+  // A change to the live hub still stops, in the same everyday shapes.
+  assert.equal(bash('auto', `curl -s -X POST -H "content-type: application/json" -d '{}' localhost:4747/api/settings`), 'human');
+  assert.equal(ps1('auto', `Invoke-RestMethod http://localhost:4747/api/settings -Method Post -Body '{}'`), 'human');
+});
+
 test('a click on the backdrop closes the card only when the press started there too', async () => {
   const handlers = {};
   const el = { className: '', classList: { toggle() {} }, setAttribute() {}, addEventListener: (t, f) => { handlers[t] = f; }, open: true, closed: 0, close() { this.closed++; } };

@@ -73,10 +73,11 @@ export function localAddress(word) {
 // not know is listed in unknown, so the caller can stop rather than guess.
 //   spec: { short: { o: 'out' }, long: { output: 'out' }, valued: ['out'], whole: { '-nv': 'ok' } }
 //      or { ps: { OutFile: 'out', Method: 'method' }, valued: [...] }
-//   -> { flags: [{ name, value, raw }], positional: [words], unknown: [raw flags] }
+//   -> { flags: [{ name, value, raw, key }], positional: [words], unknown: [raw flags] }
+//   key: the option's own name (its letter, its long name, or the full PowerShell parameter name), for allow-lists.
 export function readFlags(args, { short = {}, long = {}, valued = [], whole = {}, ps = null } = {}) {
   const V = new Set(valued), out = { flags: [], positional: [], unknown: [] };
-  const add = (name, value, raw) => out.flags.push({ name, value, raw });
+  const add = (name, value, raw, key) => out.flags.push({ name, value, raw, key });
   for (let i = 0; i < args.length; i++) {
     const a = String(args[i]);
     if (a === '--') { out.positional.push(...args.slice(i + 1)); break; }
@@ -88,23 +89,23 @@ export function readFlags(args, { short = {}, long = {}, valued = [], whole = {}
       const hits = names.filter(n => n.toLowerCase().startsWith(key));
       const name = exact || (hits.length === 1 ? hits[0] : null);
       if (!name) { out.unknown.push(a); continue; }
-      add(ps[name], V.has(ps[name]) ? (m[2] ?? args[++i]) : (m[2] ?? true), a);
+      add(ps[name], V.has(ps[name]) ? (m[2] ?? args[++i]) : (m[2] ?? true), a, name);
       continue;
     }
-    if (whole[a]) { add(whole[a], true, a); continue; }
+    if (whole[a]) { add(whole[a], true, a, a); continue; }
     if (/^--[^-]/.test(a)) {
       const k = a.slice(2).split('=')[0], eq = a.includes('=') ? a.slice(a.indexOf('=') + 1) : undefined;
       const name = long[k];
       if (!name) { out.unknown.push(a); continue; }
-      add(name, V.has(name) ? (eq ?? args[++i]) : (eq ?? true), a);   // a switch given =x keeps x (--global=true)
+      add(name, V.has(name) ? (eq ?? args[++i]) : (eq ?? true), a, k);   // a switch given =x keeps x (--global=true)
       continue;
     }
     if (/^-[^-]/.test(a)) {
       for (let j = 1; j < a.length; j++) {
         const name = short[a[j]];
         if (!name) { out.unknown.push(`-${a[j]}`); continue; }
-        if (V.has(name)) { const rest = a.slice(j + 1); add(name, rest !== '' ? rest : args[++i], a); break; }
-        add(name, true, a);
+        if (V.has(name)) { const rest = a.slice(j + 1); add(name, rest !== '' ? rest : args[++i], a, a[j]); break; }
+        add(name, true, a, a[j]);
       }
       continue;
     }
@@ -149,6 +150,19 @@ const IWR_FLAGS = {
 };
 // Environment settings that send a program's web requests somewhere else.
 const PROXY_VARS = /^(https?_proxy|all_proxy|ftp_proxy|socks_proxy|socks5_proxy)$/i;
+// Environment settings that make curl or wget read a settings file the hub cannot see (like -K): a stop in front of
+// a website download at Trusted.
+const CONFIG_HOME_VARS = /^(curl_home|home|xdg_config_home|appdata|userprofile|wgetrc|systemwgetrc|homedrive|homepath)$/i;
+// Requests to this machine (any port) pass only with options on these short lists (fourth review of PR #51): every
+// option is first resolved against the program's full list (so -Me is Method, never a shortened something else), then
+// its own name must be here. -X / -d / --json and -Method / -Body change things, so only towards a test hub's port.
+const LOCAL_OK = {
+  curl: new Set('s silent S show-error f fail fail-with-body L location i include I head N no-buffer m max-time connect-timeout retry w write-out A user-agent b cookie u user H header o output X request d data data-raw data-binary data-urlencode json G get compressed'.split(' ')),
+  wget: new Set('q quiet S server-response T timeout t tries header O output-document post-data body-data method -nv no-verbose'.split(' ')),
+  iwr: new Set(['Uri', 'Method', 'Body', 'ContentType', 'Headers', 'UseBasicParsing', 'TimeoutSec', 'OutFile', 'ErrorAction'])
+};
+// The only environment settings allowed in front of a request to this machine (VAR=value, export, $env:).
+const LOCAL_ENV_OK = new Set(['crux_hub_data', 'crux_home', 'no_color']);
 // pip install / uninstall / download / wheel. place: a folder it writes to (must be inside); target: --target and the
 // like (also a place); machine: installs for the user or the machine, or into another Python.
 const PIP_FLAGS = (() => {
@@ -231,6 +245,7 @@ export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = 
   c.fresh = new Set();   // temp folders $(mktemp) makes in this very command: its own, but not worth remembering by name
   c.envSet = new Map();  // environment settings the command makes for what follows (export X=, $env:X =)
   c.downloaded = new Set();   // files this command downloads: running one later in it is a stop
+  c.cmdText = String(input.command || '');   // the whole command, for checks that look at all of it ($PSDefaultParameterValues)
   const out = classifyWith(c, tool, input);
   return { ...out, tempMade: [...c.tempMade] };
 }
@@ -523,7 +538,11 @@ class Check {
     const set = (key, vals) => {
       if (vals.length === 1 && vals[0] === 'SHORTCUT') { this.vars.delete(key); return true; }   // a COM object, not text
       const ok = vals.length && vals.every(v => v != null && okValue(v));
-      if (!ok) { this.vars.delete(key); (this.localVars ||= new Set()).add(key); return false; }   // known only at run time
+      if (!ok) {   // known only at run time; an environment setting is still noted by name (its value unknown)
+        this.vars.delete(key); (this.localVars ||= new Set()).add(key);
+        if (key.startsWith('env:') || exported) this.envSet.set(key.replace(/^env:/, ''), null);
+        return false;
+      }
       if (vals.some(v => SECRET.test(norm(v)))) this.stop(`Touches secrets or credentials: ${vals.join(' ')}`);
       if (/(^|:)\w*port\w*$/.test(key) && vals.includes('4747')) this.stop("Sets a port to the hub's own 4747");
       this.vars.set(key, vals);
@@ -558,7 +577,11 @@ class Check {
           if (a && b && /^\$\{?env:(temp|tmp)\}?$|^[a-z]:[\\/]/i.test(a) && !/\$/.test(b)) { val = `${a}\\${b}`; joined = true; }
         }
         if (val != null && (last.quoted || joined || /^\d+$/.test(val))) pairs = [[`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase(), val]];
-        else if (m[3] !== undefined || words[1]?.text === '=' || /^=/.test(words[1]?.text || '')) { this.vars.delete(`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase()); return false; }
+        else if (m[3] !== undefined || words[1]?.text === '=' || /^=/.test(words[1]?.text || '')) {
+          this.vars.delete(`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase());
+          if (m[1]) this.envSet.set(m[2].toLowerCase(), null);   // $env:X = <something not literal>: still an environment setting
+          return false;
+        }
       }
     } else {
       const ws = t0 === 'export' ? words.slice(1) : words;
@@ -710,25 +733,44 @@ class Check {
     // hub on 4747 changes it: a hard stop. Sending data to a test hub is left to the orchestrator.
     // A downloader pointed at a file on this computer (curl file:///c/Users/me/.ssh/id_rsa -o k.txt) copies it: a stop.
     if (DOWNLOADERS.has(head) && this.fileUrls?.length) return this.stop(`Reads a file on this computer through a file:// address (${this.fileUrls[0].slice(0, 80)})`);
-    // Read through readFlags, so no spelling (-sd, -d'{..}', -sXPOST, -Me POST, -Meth Post) slips past: to the hub on
-    // 4747, or to this machine with no port named, only a plain GET is fine; anything the hub cannot read in full is a
-    // stop there, at every level.
+    // PowerShell's $PSDefaultParameterValues can give Invoke-RestMethod an address or a method no word shows.
+    if (DOWNLOADERS.has(head) && /\$PSDefaultParameterValues/i.test(this.cmdText || '')) return this.stop(`${head} in a command that sets $PSDefaultParameterValues (hidden options)`);
+    // Requests to this machine (any port) pass on an allow-list (fourth review of PR #51): every option on LOCAL_OK, no
+    // environment setting in front but LOCAL_ENV_OK, and the target taken only from the addresses themselves (curl and
+    // wget: their positional words; iwr / irm: -Uri or the first positional word). To the hub on 4747, or to this
+    // machine with no port, only a plain GET; changes only towards a test hub's port.
     if (/^(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)$/.test(head) && !this.urlsHere.length && this.localUrls.length) {
-      const r = this.webFlags(head, args);
-      // Whatever the port: an option the hub cannot read, options from a file or standard input (-K -, --variable,
-      // wget -e) and addresses from a file (-i, -i -) could send the request anywhere, the hub on 4747 included.
-      if (r.unknown.length || r.config || r.inputs.length) {
-        return this.stop(`${head} to this machine with an option the hub cannot check, or with options or addresses read from a file (${r.unknown[0] || r.config || r.inputs[0]})`);
-      }
-      // Every place the request may really go: the addresses in its words, the ones its options name (-Uri:x), and
-      // proxies, --connect-to and --resolve. A place off this machine is the network.
-      const places = [...this.localUrls, ...r.addrs, ...r.routes];   // every positional word of curl / wget / iwr is an address
-      const away = places.find(a => !localAddress(a));
-      if (away && !this.trusted) return this.stop(`Reaches the network (${away.slice(0, 80)})`);
+      const fam = head === 'curl' ? 'curl' : head === 'wget' ? 'wget' : 'iwr';
+      const r = readFlags(fam === 'iwr' ? joinHashtables(args) : args, webFlags(fam));
+      const why = m => this.stop(`${head} to this machine ${m}`);
+      const envBad = [...this.env().keys()].find(k => !LOCAL_ENV_OK.has(k));
+      if (envBad) return why(`with ${envBad.toUpperCase()} set in front (only ${[...LOCAL_ENV_OK].map(k => k.toUpperCase()).join(', ')} may be)`);
+      if (r.unknown.length) return why(`with an option the hub cannot check (${r.unknown[0]})`);
+      const off = r.flags.find(f => !LOCAL_OK[fam].has(f.key));
+      if (off) return why(`with an option outside the short safe list (${off.raw})`);
+      const vals = n => r.flags.filter(f => f.name === n).map(f => f.value);
+      if (r.flags.some(f => f.value === undefined)) return why('with an option that has nothing after it');
+      if (fam === 'curl' && vals('header').some(h => typeof h !== 'string' || h.startsWith('@'))) return why('with headers read from a file (-H @file)');
+      let targets;
+      if (fam === 'iwr') {
+        const uris = [...vals('url'), ...r.positional.slice(0, 1)];
+        if (r.positional.length > 1 || r.positional.some(p => /^@/.test(p))) return why(`with words the hub cannot place (${r.positional.slice(1).join(' ') || r.positional[0]})`);
+        if (uris.length !== 1 || typeof uris[0] !== 'string') return why('without exactly one -Uri');
+        targets = uris;
+      } else targets = r.positional;
+      if (!targets.length) return why('without an address');
+      // A target off this machine is the network (Auto) or a website download (Trusted).
+      const away = targets.find(a => !localAddress(a));
+      if (away && !this.trusted) return this.stop(`Reaches the network (${String(away).slice(0, 80)})`);
       if (away) return this.webRead(head, args, cwd);
-      const live = places.some(u => localAddress(u)?.live !== false);   // port 4747 as a number, no port, or unreadable
-      if (live && r.sends) return this.stop('Sends a change to the hub on port 4747 (or to this machine with no port named)');
+      const methods = vals('method');
+      const sends = vals('send').length > 0 || methods.some(m => typeof m !== 'string' || !/^(GET|HEAD)$/i.test(m));
+      const live = targets.some(u => localAddress(u)?.live !== false);   // port 4747 as a number, no port, or unreadable
+      if (live && sends) return this.stop('Sends a change to the hub on port 4747 (or to this machine with no port named)');
+      const saves = [...vals('out'), ...vals('doc')];
       // A test hub (any other port on this machine) is contained: only where it saves is checked.
+      const intoHere = fam === 'wget' && !vals('doc').length;
+      r.saves = saves; r.dirs = []; r.intoHere = intoHere;
       for (const o of [...r.saves, ...r.dirs]) {
         if (o === true || o == null) { this.stop(`${head} saves to a file the hub cannot read`); continue; }
         if (o === '-' || /^(\/dev\/null|nul|\$null)$/i.test(o)) continue;
@@ -1112,6 +1154,10 @@ class Check {
   // Trusted (decision 45): reading or downloading from a website, saved only into the project or a temp folder.
   // Sending anything (a form, a file, a POST) or passing credentials is not reading: a stop.
   webRead(head, args, cwd) {
+    // curl and wget read settings files found through the environment (CURL_HOME/.curlrc, HOME, XDG_CONFIG_HOME,
+    // APPDATA, USERPROFILE, WGETRC): set in front of them, that is -K by another name.
+    const home = (head === 'curl' || head === 'wget') && [...this.env().keys()].find(k => CONFIG_HOME_VARS.test(k));
+    if (home) return this.stop(`${head} with ${home.toUpperCase()} set in front: it reads a settings file the hub cannot check`);
     const r = this.webFlags(head, args);
     if (r.unknown.length) return this.stop(`${head} with an option the hub cannot check (${r.unknown[0]})`);
     if (r.config) return this.stop(`${head} reads its options from a file or command the hub cannot check (${r.config})`);
@@ -1141,7 +1187,7 @@ class Check {
   // { unknown, config, sends, creds, inputs, saves: [files], dirs: [folders], intoHere, urls }.
   webFlags(head, args) {
     const fam = head === 'curl' ? 'curl' : head === 'wget' ? 'wget' : 'iwr';
-    const r = readFlags(args, webFlags(fam));
+    const r = readFlags(fam === 'iwr' ? joinHashtables(args) : args, webFlags(fam));
     // PowerShell splatting (iwr @p): the options sit in a variable the hub cannot read.
     if (fam === 'iwr') for (const p of r.positional) if (/^@\w/.test(p)) r.unknown.push(p);
     const vals = n => r.flags.filter(f => f.name === n).map(f => f.value);
@@ -1279,6 +1325,23 @@ class Check {
   }
 }
 
+// PowerShell words with a hashtable rejoined: ['-Headers', '@{', 'a', '=', "'b'", '}', '-Method', 'Post'] ->
+// ['-Headers', "@{ a = 'b' }", '-Method', 'Post'].
+function joinHashtables(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (!String(args[i]).startsWith('@{')) { out.push(args[i]); continue; }
+    let depth = 0, j = i, text = [];
+    for (; j < args.length; j++) {
+      const a = String(args[j]); text.push(a);
+      depth += (a.match(/\{/g) || []).length - (a.match(/\}/g) || []).length;
+      if (depth <= 0) break;
+    }
+    out.push(text.join(' ')); i = j;
+  }
+  return out;
+}
+
 // "localhost:4791:[::1]:4747" -> ['localhost', '4791', '[::1]', '4747']: colon-separated fields, brackets kept whole.
 function splitHostFields(v) {
   const out = []; let cur = '', br = false;
@@ -1344,13 +1407,17 @@ function tmpJoin(code, name, tmp) {
 // Split at ; && || | & newlines and PowerShell { } ( ) blocks, never inside quotes.
 // withOps: each part comes back as { text, op } where op is the separator just before it ('|' for a pipe).
 export function splitParts(s, ps = false, withOps = false) {
-  const out = []; let cur = '', q = null, op = '', nextOp = '';
+  const out = []; let cur = '', q = null, op = '', nextOp = '', ht = 0;
   const prev = i => s[i - 1] ?? ' ';
   const push = () => { out.push({ text: cur.trim(), op }); cur = ''; };
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (q) { cur += c; if (c === q && (q === "'" || prev(i) !== '\\')) q = null; continue; }
     if (c === '"' || c === "'") { q = c; cur += c; continue; }
+    // A PowerShell hashtable @{ a = 1; b = 2 } is one value: its ; and } do not end the command, so the options
+    // after it (-Method Post) stay with the command they belong to.
+    if (ps && c === '{' && prev(i) === '@') { ht++; cur += c; continue; }
+    if (ht > 0) { if (c === '}') ht--; cur += c; continue; }
     if (c === '\\' && !ps && s[i + 1] === '\n') { i++; continue; } // line continuation
     const brace = (c === '{' && /[\s|(;]/.test(prev(i))) || (c === '}' && /[\s|);]|^$/.test(s[i + 1] ?? '')) || c === '(' && /[\s|;=]/.test(prev(i)) || c === ')';
     if (c === '\n' || c === '\r' || c === ';' || c === '|' || c === '&' || brace) {
