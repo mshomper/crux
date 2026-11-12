@@ -517,8 +517,10 @@ export class Hub {
     if (route === 'unsure' && agent.role === 'orchestrator' && this.permissionMode(p) === 'auto' && !connectorTool(toolName) && !/^mcp__(?!crux__)/.test(toolName)) return { allow: true, logged: unsure };
     if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
+    // A resting orchestrator (asleep since a restart, or between turns) is woken by the request, so the card does not
+    // jump to your phone just because it was asleep. It still comes to you on escalate or after the timeout.
     const orch = p.orchestrator();
-    if (!orch || !orch.live || orch.retiring || ['error', 'retired'].includes(orch.state)) return { to: null, stops: [], rules: rules.entryId };
+    if (!orch || orch.retiring || ['error', 'retired'].includes(orch.state)) return { to: null, stops: [], rules: rules.entryId };
     return { to: orch.name, stops: [], rules: rules.entryId, unsure };
   }
 

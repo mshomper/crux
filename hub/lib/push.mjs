@@ -55,9 +55,20 @@ export function stillOpen(card, { approvals, decisionOpen, decisionStatus, event
   return false;
 }
 
-export function payloadOf(card) {
+// close: notifications already sent for cards that have since been settled; the phone clears them from its lock
+// screen when this push arrives (sw.js). A push of its own just to clear one is not sent: iPhone drops a device
+// that receives pushes it does not show.
+export function payloadOf(card, close = []) {
   const url = `/?project=${encodeURIComponent(card.project)}&card=${encodeURIComponent(card.card)}`;
-  return { kind: card.kind, title: card.title, body: card.body, card: card.card, project: card.project, url };
+  return { kind: card.kind, title: card.title, body: card.body, card: card.card, project: card.project, url, ...(close.length ? { close } : {}) };
+}
+
+// The card an event settles, if a notification may already be out for it.
+export function settledCard(ev) {
+  if (ev.type === 'approval_result') return `approval:${ev.approval}`;
+  if (ev.type === 'pick') return `decision:${ev.decision}`;
+  if (ev.type === 'question_dismissed' && ev.index == null) return `question:${ev.question}`;
+  return null;
 }
 
 export class Push {
@@ -68,6 +79,7 @@ export class Push {
     this.timers = timers;
     this.presences = new Map();
     this.sent = new Set();
+    this.settled = new Set();   // cards notified about and then settled: cleared from the phone with the next push
     this.subsFile = join(dir, 'push-subscriptions.json');
     this.subs = existsSync(this.subsFile) ? safeJson(this.subsFile, []) : [];
   }
@@ -119,6 +131,8 @@ export class Push {
   // Called for every logged hub event. `ctx` gives the live state: approvals, decisionOpen(project, id),
   // decisionStatus(project, id) and events(project).
   handle(ev, ctx) {
+    const done = settledCard(ev);
+    if (done && this.sent.has(done)) { this.settled.add(done); if (this.settled.size > 50) this.settled.delete(this.settled.values().next().value); }
     if (!this.subs.length) return;
     const decisionOpen = id => ctx.decisionOpen(ev.project, id);
     const decisionStatus = id => ctx.decisionStatus?.(ev.project, id);
@@ -129,7 +143,9 @@ export class Push {
         if (!stillOpen(card, { approvals: ctx.approvals, decisionOpen, decisionStatus, events: ctx.events(ev.project) })) return;
         if (isLooking(card, this.presences.values())) return;
         this.sent.add(card.card);
-        this.send(payloadOf(card)).catch(e => console.warn(`Push failed: ${e.message}`));
+        const close = [...this.settled];
+        this.settled.clear();
+        this.send(payloadOf(card, close)).catch(e => console.warn(`Push failed: ${e.message}`));
       };
       card.delayMs ? this.timers.setTimeout(go, card.delayMs) : go();
     }

@@ -84,5 +84,17 @@ export function initPhone({ button, view, openCard }) {
     if (u.search && location.search) history.replaceState(null, '', location.pathname);
   }
 
-  return { viewChanged: report, openFromLocation: () => fromUrl(location.href) };
+  // ---------- stale notifications: a card settled elsewhere (on the PC, by the orchestrator) leaves the lock screen ----------
+  // waiting(tag) says whether the card a notification points at still waits for you. Run when the page shows and
+  // whenever the hub settles something.
+  let staleTimer = 0;
+  function clearSettled(waiting) {
+    clearTimeout(staleTimer);
+    staleTimer = setTimeout(async () => {
+      if (!reg?.getNotifications) return;
+      for (const n of await reg.getNotifications().catch(() => [])) if (n.tag && !waiting(n.tag)) n.close();
+    }, 300);
+  }
+
+  return { viewChanged: report, openFromLocation: () => fromUrl(location.href), clearSettled };
 }

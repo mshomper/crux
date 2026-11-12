@@ -27,7 +27,16 @@ export function fitViewport(vv, prev = {}, editing = false) {
   };
 }
 
-export const isEditable = el => !!el && (el.isContentEditable || el.matches?.('textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=file])'));
+// iPhone Safari zooms in on a tapped box whose text it judges too small. maximum-scale=1 stops that automatic
+// zoom, and only on iPhone and iPad: Safari there has ignored it for your own pinch-zoom since iOS 10, so you can
+// still zoom with two fingers. Elsewhere (Android) it would block pinch-zoom, so it is never added there.
+export const isIOS = (ua = '', platform = '', touchPoints = 0) => /iP(hone|ad|od)/.test(ua) || (platform === 'MacIntel' && touchPoints > 1);
+export function noFocusZoom(content, ios) {
+  if (!ios || /maximum-scale/.test(content)) return content;
+  return `${content}, maximum-scale=1`;
+}
+
+export const isEditable =el => !!el && (el.isContentEditable || el.matches?.('textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=file])'));
 
 // Writes --app-h and --app-top on the root element and the classes "vv" (fitting is on) and "kb" (keyboard open).
 export class ViewportFit {
