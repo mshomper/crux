@@ -4,13 +4,14 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
+import { DecisionsDesk } from './decisions-desk.mjs';
 import { Agent } from './agent.mjs';
 import { Memory, VISUAL_TYPES } from './memory.mjs';
 import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
-import { classify, rulesEntry, touchesSecrets } from './permission-rules.mjs';
+import { classify, rulesEntry, touchesSecrets, defaultRules } from './permission-rules.mjs';
 import { HubSettings } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE } from './prompts.mjs';
@@ -22,7 +23,9 @@ export class Project {
     this.dir = resolve(dir);
     this.name = basename(this.dir);
     this.log = new EventLog(this.dir);
-    this.board = new Board(this.dir, this.log);
+    // Decision 35: picks and drafts land in a standing worktree on docs/decisions, never in this folder.
+    this.desk = new DecisionsDesk({ projectDir: this.dir });
+    this.board = new Board(this.dir, this.log, { desk: this.desk });
     this.attachments = new Attachments(this.dir);
     this.agents = new Map();
     this.generation = 0;
@@ -49,7 +52,7 @@ export class Hub {
     this.projects = new Map();
     for (const dir of projects) this.addProject(dir);
     // After listeners are attached: deliver any message of yours that a restart cut off.
-    setTimeout(() => { for (const p of this.projects.values()) this.redeliver(p); }, 0);
+    setTimeout(() => { for (const p of this.projects.values()) { this.redeliver(p); this.rulesHint(p); } }, 0);
   }
 
   // A message you sent within the last 10 minutes that its agent never acted on (no event from that agent since)
@@ -92,6 +95,8 @@ export class Hub {
     this.projects.set(p.name, p);
     this.restore(p);
     p.log.on(ev => this.emit({ ...ev, project: p.name, logged: true }));
+    p.desk.notice = text => this.notice(p, 'orchestrator', text);
+    if (this.noAgents) p.desk.local = true;   // a test hub never pushes decision records to the real GitHub
     return p;
   }
 
@@ -371,11 +376,14 @@ export class Hub {
     const privateNotes = norm(join(this.memory.profileDir, 'private.md'));
     const readsPrivate = (file && file === privateNotes) || /private\.md/i.test(String(input.command || input.pattern || ''));
     if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input)) return { behavior: 'allow', updatedInput: input };
-    const decisions = norm(join(p.dir, '.decisions')) + '/';
+    // Decision 35: the orchestrator writes records in the decisions worktree, never in the main folder's .decisions.
+    const records = p.desk.usable() ? p.desk.decisionsDir : join(p.dir, '.decisions');
+    const decisions = norm(records) + '/';
     if (['Write', 'Edit', 'MultiEdit'].includes(toolName) && agent.role === 'orchestrator') {
-      return file.startsWith(decisions)
-        ? { behavior: 'allow', updatedInput: input }
-        : { behavior: 'deny', message: 'The orchestrator only writes Crux decision records (.decisions/). Send other file changes to a worker with message_agent or start_worker.' };
+      if (file.startsWith(decisions)) { p.desk.usable() && p.desk.ensure(); return { behavior: 'allow', updatedInput: input }; }
+      return file.startsWith(norm(join(p.dir, '.decisions')) + '/')
+        ? { behavior: 'deny', message: `Decision records go in the decisions worktree, not the main folder: write it as ${join(records, file.split('/').pop())}. The hub commits it to the docs/decisions branch when your turn ends.` }
+        : { behavior: 'deny', message: `The orchestrator only writes Crux decision records (${records}). Send other file changes to a worker with message_agent or start_worker.` };
     }
     const cmd = String(input.command || '').trim();
     if (/^(Bash|PowerShell)$/.test(toolName) && /^node\s+("[^"]*[\\/]crux[\\/]scripts[\\/](build|rollup)\.mjs"|\S*[\\/]crux[\\/]scripts[\\/](build|rollup)\.mjs)(\s+("[^"]*"|[\w.\\/:-]+))?$/.test(cmd)) {
@@ -427,7 +435,7 @@ export class Hub {
   // Auto mode (decision 34, R004): only requests the hub cannot classify go to the orchestrator.
   // Standard mode (decision 21): everything that is not a hard stop goes to the orchestrator.
   routeFor(p, agent, toolName, input) {
-    const rules = rulesEntry(p.board);
+    const rules = this.rulesFor(p);
     agent.tempDirs ||= new Set();
     const { route, reasons, unsure, tempMade } = classify({ tool: toolName, input, projectDir: p.dir, agent: agent.name, madeTemp: agent.tempDirs });
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
@@ -460,7 +468,22 @@ export class Hub {
     this.notice(p, 'orchestrator', mode === 'auto'
       ? `${by === 'you' ? 'You' : by} switched ${p.name} to Auto: work that stays in the project or a temp folder runs without asking; unclear requests go to the orchestrator, hard stops to you.`
       : `${by === 'you' ? 'You' : by} switched ${p.name} to Ask: anything beyond reading goes to the orchestrator first, hard stops to you.`);
+    if (mode === 'auto') this.rulesHint(p);
     return mode;
+  }
+
+  // The rules the orchestrator answers under: the board's entry; in Auto mode with no entry, the hub's built-in
+  // defaults (R005's text with this project's folders); in Ask mode with no entry, none (everything comes to you).
+  rulesFor(p) {
+    return rulesEntry(p.board) || (this.permissionMode(p) === 'auto' ? defaultRules(p.dir) : null);
+  }
+
+  // Once per project: in Auto with no rules entry, suggest the orchestrator draft one for Matt.
+  rulesHint(p) {
+    if (rulesEntry(p.board) || this.permissionMode(p) !== 'auto' || p.log.ofType('rules_hint').length) return false;
+    p.log.append('rules_hint', { thread: 'orchestrator' });
+    this.notice(p, 'orchestrator', `${p.name} has no permission rules entry on its board, so the orchestrator answers unclear requests under the hub's built-in defaults (the crux rules, with this project's folders). Orchestrator: draft a rules entry for {{who}} to approve.`);
+    return true;
   }
 
   timeoutLabel() { const s = this.settings.get('permissionTimeoutSec'); return s % 60 ? `${s} seconds` : `${s / 60} minute${s === 60 ? '' : 's'}`; }
@@ -468,7 +491,7 @@ export class Hub {
   // What the orchestrator gets: the request id, the worker and its goal, the tool and its full input, and the rules.
   // The rules text is in its instructions; it is repeated here only when the board's rules changed since it started.
   permissionMessage(p, orch, id, worker, toolName, input, rulesId, unsure = []) {
-    const rules = rulesEntry(p.board);
+    const rules = this.rulesFor(p);
     const changed = rules && orch.rulesSeen !== `${rules.entryId}@${rules.ts}`;
     const shown = toolName === 'Bash' || toolName === 'PowerShell' ? `Command:\n${input.command}${input.description ? `\nIts description: ${input.description}` : ''}` : `Input:\n${JSON.stringify(input, null, 1)}`;
     return [
@@ -478,6 +501,7 @@ export class Hub {
       `Tool: ${toolName}`,
       shown,
       unsure?.length ? `The hub found no hard stop, but could not classify it: ${unsure.join('; ')}.` : 'The hub found no hard stop in it.',
+      rules?.isDefault ? 'This project\'s board has no permission rules entry, so you are working from the hub\'s built-in defaults (in your instructions).' : '',
       `Decide under ${rulesId}: call answer_permission with request_id "${id}", answer allow, deny or escalate, and a one-line reason. Do it now, with no other text; after ${this.timeoutLabel()} it goes to {{who}}.`,
       changed ? `\nThe rules changed since you started. Current rules (${rules.entryId}):\n${rules.body}` : ''
     ].join('\n');
@@ -557,6 +581,11 @@ export class Hub {
       return;
     }
     if (agent.retiring === 'overlap') return;
+    // Decision 35: drafts the orchestrator wrote into the decisions worktree are committed and pushed now.
+    if (agent.role === 'orchestrator') {
+      try { p.desk.commitPending(`Record drafts from ${agent.name}`); }
+      catch (e) { this.notice(p, 'orchestrator', `Could not commit the decision drafts: ${e.message.split('\n')[0]}`); }
+    }
     if (agent.predecessor && !agent.tookOver) { // the successor's first turn is over: the overlap ends
       agent.tookOver = true;
       const old = p.agents.get(agent.predecessor);
@@ -692,7 +721,7 @@ export class Hub {
       board: p.board.snapshot(),
       pack: this.memory.packName(p.name),
       pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id),
-      permissionRules: rulesEntry(p.board)?.entryId || null,
+      permissionRules: this.rulesFor(p)?.entryId || null,
       permissionMode: this.permissionMode(p)
     }));
   }

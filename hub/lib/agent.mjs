@@ -89,10 +89,10 @@ export class Agent {
     const type = this.type ? this.hub.agentTypes(p).get(this.type) : null;
     const mem = { index: p.board.index(), core: m.core(), pack: m.pack(p.name), conventions: m.conventions() };
     // The permission rules it starts with, read from the board (decision 21). The hub repeats them in a request if they change.
-    const rules = this.role === 'orchestrator' ? rulesEntry(p.board) : null;
+    const rules = this.role === 'orchestrator' ? (this.hub.rulesFor ? this.hub.rulesFor(p) : rulesEntry(p.board)) : null;
     if (rules) this.rulesSeen = `${rules.entryId}@${rules.ts}`;
     const append = m.personalize(this.role === 'orchestrator'
-      ? orchestratorPrompt({ project: p.name, handoff: p.board.latestHandoff(), generation: this.generation, types: this.hub.agentTypes(p).list(), permissionRules: rules, routing: this.hub.settings?.get('routePermissions') !== false, ...mem })
+      ? orchestratorPrompt({ project: p.name, handoff: p.board.latestHandoff(), generation: this.generation, types: this.hub.agentTypes(p).list(), permissionRules: rules, routing: this.hub.settings?.get('routePermissions') !== false, recordsDir: p.desk?.usable?.() ? p.desk.decisionsDir : '.decisions', ...mem })
       : workerPrompt({ project: p.name, name: this.name, task: this.task, handoff: this.handoffEntry ? p.board.read(this.handoffEntry) : null, type, ...mem }));
     // A type's tools are limits, as in Claude Code: they set which built-in tools it has. They do not skip
     // permission cards. The board tools are always there.

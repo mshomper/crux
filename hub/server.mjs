@@ -185,7 +185,7 @@ const server = createServer(async (req, res) => {
 
     // Crux decision pages for each project: /p/<project>/<file>
     const m = /^\/p\/([^/]+)\/([\w.-]+\.html)$/.exec(url.pathname);
-    if (m) return serveFile(res, join(hub.project(decodeURIComponent(m[1])).board.decisionsDir, m[2]));
+    if (m) return serveFile(res, hub.project(decodeURIComponent(m[1])).board.pageFile(m[2]));   // unmerged picks first (decision 35)
 
     // Pages ask this to know the hub is running, so they can show a link back to it (they may be opened as files).
     if (url.pathname === '/api/ping') {

@@ -13,27 +13,41 @@ export const ENTRY_KINDS = ['requirement', 'convention', 'memo', 'handoff'];
 const PREFIX = { requirement: 'R', convention: 'C', memo: 'M', handoff: 'H' };
 
 export class Board {
-  constructor(projectDir, log) {
+  // desk: the project's DecisionsDesk (decision 35). Records are read from the main folder and from the desk's
+  // worktree (unmerged picks and drafts, which win); picks are written only through the desk.
+  constructor(projectDir, log, { desk = null } = {}) {
     this.dir = projectDir;
     this.decisionsDir = join(projectDir, '.decisions');
     this.log = log;
+    this.desk = desk;
   }
 
   // ---------- decisions (Crux records) ----------
-  decisions() {
-    if (!existsSync(this.decisionsDir)) return [];
-    return readdirSync(this.decisionsDir).filter(f => f.endsWith('.json')).map(f => {
+  readDir(dir) {
+    if (!dir || !existsSync(dir)) return [];
+    return readdirSync(dir).filter(f => f.endsWith('.json')).map(f => {
       try {
-        const d = JSON.parse(readFileSync(join(this.decisionsDir, f), 'utf8'));
+        const d = JSON.parse(readFileSync(join(dir, f), 'utf8'));
         d._file = f;
         return d;
       } catch { return null; }
-    }).filter(Boolean).sort((a, b) => a.id - b.id);
+    }).filter(d => d && Number.isFinite(Number(d.id)));
+  }
+
+  decisions() {
+    const byId = new Map();
+    for (const d of this.readDir(this.decisionsDir)) byId.set(Number(d.id), d);
+    if (this.desk?.ready()) for (const d of this.readDir(this.desk.decisionsDir)) byId.set(Number(d.id), { ...d, _pending: true });
+    return [...byId.values()].sort((a, b) => a.id - b.id);
   }
 
   decision(id) { return this.decisions().find(d => d.id === Number(id)); }
 
-  // Writes only the user's fields (status, chosen, reason, decided_on), then rebuilds the pages.
+  // A decision page to serve: the worktree's copy when it has one, else the main folder's.
+  pageFile(name) { return this.desk?.page(name) || join(this.decisionsDir, name); }
+
+  // Writes only the user's fields (status, chosen, reason, decided_on), then rebuilds the pages: through the desk's
+  // worktree and branch when the project is a git repo (never into the main folder), else in place.
   pick(id, choice, reason) {
     const d = this.decision(id);
     if (!d) throw new Error(`No decision ${id}`);
@@ -47,9 +61,13 @@ export class Board {
     }
     d.reason = reason || d.reason || '';
     d.decided_on = new Date().toISOString().slice(0, 10);
-    const file = join(this.decisionsDir, d._file);
-    delete d._file;
-    writeFileSync(file, JSON.stringify(d, null, 1) + '\n');
+    const name = d._file;
+    delete d._file; delete d._pending;
+    if (this.desk?.usable()) {
+      d._landed = this.desk.record({ [name]: d }, `Record pick: D${String(d.id).padStart(4, '0')} ${d.chosen || d.status}`);
+      return d;
+    }
+    writeFileSync(join(this.decisionsDir, name), JSON.stringify(d, null, 1) + '\n');
     this.rebuild();
     return d;
   }
