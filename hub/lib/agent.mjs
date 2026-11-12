@@ -81,10 +81,19 @@ export class Agent {
       if (!this.toldNoAgents) { this.toldNoAgents = true; this.hub.notice(this.project, this.thread, `Test hub: ${this.name} does not start here, so messages to it are kept but not read.`); }
       return;
     }
-    const message = this.userMessage(textMsg, attachments);   // built first: a missing image fails before start-up
+    const message = this.userMessage(this.withNotes(textMsg), attachments);   // built first: a missing image fails before start-up
     if (!this.q) this.start();
     this.inbox.push(message);
     this.setState('working');
+  }
+
+  // Notes the hub wants this agent to read, without waking it for them: they ride in front of its next message.
+  noteForNextTurn(text) { (this.notes ||= []).push(text); }
+  withNotes(textMsg) {
+    if (!this.notes?.length) return textMsg;
+    const out = `${this.notes.join('\n')}\n\n${textMsg || ''}`;
+    this.notes = [];
+    return out;
   }
 
   // The SDK user message (decision 23): images go in as image content blocks, so the agent sees them.
