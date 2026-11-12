@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "context": "Matt wants personal projects to give agents more room than work repos. Today each repo is Ask or Auto (decision 34); in Auto, contained work runs on its own, and the hard stops (rules entry R005) are the same in every repo and fixed in code. This decision sets what a third level, Trusted, adds. Whatever is picked, some stops stay at every level (Claude's judgement): force push, rewriting pushed history, deleting branches, pushing straight to main (C005), writes outside the project or its worktrees and temp folders (including ~/.claude and ~/crux), secrets, stopping or restarting the live hub, system-wide installers, and any send, share or delete through mail, calendar or drive (R006). Trusted can be set only from the hub page, never from the repo's own .crux-hub.json, so a cloned repo cannot trust itself. Amends decision 34 and rules entry R005; option B would also change the core rule that merges are always Matt's (decision 22).",
  "depends_on": [
   21,
@@ -62,9 +62,9 @@
  "recommended": "A",
  "recommendation": "A removes the cards that slow personal projects without touching the merge rule you settled; B can follow later for a project where you want it.",
  "confidence": "lean",
- "chosen": null,
+ "chosen": "B",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-12",
  "superseded_by": null,
  "challenge": null,
  "settles": [

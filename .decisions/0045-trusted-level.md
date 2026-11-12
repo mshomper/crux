@@ -1,10 +1,14 @@
 # 0045 How much more may agents do in a project you trust?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-12
 - Lenses: architecture
 - Builds on: 0021, 0022, 0034
 - Settles: agent permission levels = per repo: Ask, Auto, or Trusted (set only from the hub page); fixed stops at every level: force push, history rewrite, branch deletion, push to main, writes outside the project, secrets, the live hub, system-wide installs, outward connector actions
+
+## Decision
+
+**B: A, plus the orchestrator merges after a review.** As A, and in a Trusted project the orchestrator may merge a code pull request once a reviewer has passed it and the tests are green, reporting it in one line. You click-test on main afterwards.
 
 ## Context
 
@@ -20,7 +24,7 @@ Trusted = Auto, plus installing packages into the project (npm, pip) and reading
 - Con: A package or a download can carry bad code into the project; you see it at review, not before
 - Effort: Small to medium
 
-### B: A, plus the orchestrator merges after a review
+### B: A, plus the orchestrator merges after a review (chosen)
 
 As A, and in a Trusted project the orchestrator may merge a code pull request once a reviewer has passed it and the tests are green, reporting it in one line. You click-test on main afterwards.
 - Pro: Personal projects move without waiting for your merge word
