@@ -4,8 +4,9 @@
 // Each running hub writes how it was started to <data>/launch-<port>.json, and a restarted hub's output goes to
 // <data>/hub-<port>.log. <data> is CRUX_HUB_DATA or ~/.crux-hub, outside every repo, as for the hub's settings.
 import { spawn, execFile } from 'node:child_process';
-import { openSync, closeSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { openSync, closeSync, writeFileSync, readFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { join, dirname, resolve, relative } from 'node:path';
+import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -23,6 +24,21 @@ export function testHubWithoutAgents({ args = [], env = process.env, tmp = tmpdi
   if (args.includes('--no-agents')) return true;
   const norm = s => resolve(String(s)).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
   return !!env.CRUX_HUB_DATA && (norm(env.CRUX_HUB_DATA) + '/').startsWith(norm(tmp) + '/');
+}
+
+// A short fingerprint of the page's files (every file under public/, names and contents). It changes whenever
+// any page file does, so an open page can tell that it is out of date.
+export function pageBuild(dir) {
+  const h = createHash('sha256');
+  const walk = d => {
+    for (const name of readdirSync(d).sort()) {
+      const f = join(d, name);
+      if (statSync(f).isDirectory()) walk(f);
+      else { h.update(relative(dir, f).replace(/\\/g, '/')); h.update('\0'); h.update(readFileSync(f)); h.update('\0'); }
+    }
+  };
+  try { walk(dir); } catch { return 'unknown'; }
+  return h.digest('hex').slice(0, 12);
 }
 
 // How this process was started: the same node, flags, script, arguments and folder.

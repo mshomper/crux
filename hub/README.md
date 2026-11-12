@@ -33,6 +33,8 @@ In the box at the bottom, Enter sends; Alt+Enter or Shift+Enter starts a new lin
 
 To put it on your desktop: in File Explorer, open the `hub` folder of your Crux clone, right-click **Restart Crux Hub.vbs**, choose **Show more options**, then **Send to > Desktop (create shortcut)**. Rename the shortcut to "Restart Crux Hub" if you like. For the Crux icon: right-click the shortcut, **Properties > Change Icon... > Browse...**, and pick `hub\public\icons\crux.ico`. You can also drag the shortcut to the taskbar or Start to pin it.
 
+After any restart (the menu, the script, a crash or a Windows restart), agents that were in the middle of a turn, or had a message they never got to, wake on their own, in every project, a few seconds apart; resting agents stay asleep until their next message. A turn left unfinished for more than a day is not resumed. The Restart confirm and the script both say who will be resumed. An open hub page that reconnects to a hub with new page files reloads itself, keeping your view, and says "Updated to" the new version; the phone's home-screen app does the same.
+
 A hub started this way writes what it prints to `hub-4747.log` in `~/.crux-hub/`, and each running hub notes how it was started in `launch-4747.json` there, so a restart starts it the same way. Your start-with-Windows setup is not changed: it keeps starting the hub at sign-in as before.
 
 ## On your phone (Tailscale)

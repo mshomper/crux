@@ -152,6 +152,11 @@ ${memoryBlock(mem)}
 ${handoff ? `You are continuing the work of an earlier agent. ${handoffBlock(handoff, 'worker')}` : ''}`;
 }
 
+// Sent after a hub restart to an agent that was in the middle of a turn (M014).
+export const RESUME_MESSAGE = `[From the hub] The hub restarted while you were working, which stopped your last turn part-way.
+Carry on where you left off: check the state of what you were doing (files, branches, test runs) before repeating
+any step, then continue. If you had finished, post your summary as usual.`;
+
 export const RETIRE_MESSAGE = role => `You are retiring; a new agent will take over ${role === 'orchestrator' ? 'the orchestrator role' : 'your task'}.
 Call write_handoff now. The hub fills in the facts it knows (agents, last summaries, open cards, waiting decisions);
 you write the judgement only it cannot know, under every heading: what is in flight and why, promises made to

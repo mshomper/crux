@@ -1,5 +1,5 @@
 // The live map's line work, drawn on a 2D canvas under the particles:
-// edges that thicken with traffic, the core's rings (context used, handoff mark, rotating scales),
+// edges that thicken with traffic, the core's rotating scales (no context meter: M013),
 // station rings, red halos where something needs you, and pings where pulses land.
 
 import { clamp, lerp } from './map-layout.js';
@@ -114,25 +114,7 @@ export class HudPainter {
     }
     c.restore();
 
-    // context ring: how much of its context window the holder has used, with the handoff mark
-    const R2 = r * 1.36, lw = lerp(2.2, 4, e);
-    c.lineWidth = lw;
-    c.strokeStyle = 'rgba(255,255,255,0.07)';
-    c.beginPath(); c.arc(x, y, R2, 0, TAU); c.stroke();
-    if (info.ctx != null && !vacant) {
-      const end = -Math.PI / 2 + TAU * clamp(info.ctx / 100, 0, 1) * b;
-      c.save();
-      c.shadowColor = rgb(col, 0.9); c.shadowBlur = 10 + e * 8;
-      c.strokeStyle = rgb(col, 0.95);
-      c.beginPath(); c.arc(x, y, R2, -Math.PI / 2, end); c.stroke();
-      c.fillStyle = rgb(COLORS.white, 0.95);
-      c.beginPath(); c.arc(x + Math.cos(end) * R2, y + Math.sin(end) * R2, lw * 0.8, 0, TAU); c.fill();
-      c.restore();
-    }
-    const ha = -Math.PI / 2 + TAU * clamp(info.retireAt / 100, 0, 1);
-    c.strokeStyle = rgb(COLORS.amber, 0.9);
-    c.lineWidth = 1.6;
-    c.beginPath(); c.moveTo(x + Math.cos(ha) * (R2 - lw - 3), y + Math.sin(ha) * (R2 - lw - 3)); c.lineTo(x + Math.cos(ha) * (R2 + lw + 4), y + Math.sin(ha) * (R2 + lw + 4)); c.stroke();
+    // (No context ring, track or handoff tick any more: Matt, 2026-11-11. M013 shows context in the particles.)
 
     // outer scale: three arcs turning one way, a dotted ring turning the other
     const R3 = r * 1.6;
@@ -253,11 +235,6 @@ export class HudPainter {
           else if (k < n) { c.save(); c.shadowColor = rgb(hue, 0.9); c.shadowBlur = 6; c.fillStyle = rgb(hue, 0.95 * fade); c.fill(); c.restore(); }
           else { c.fillStyle = rgb(hue, 0.22 * fade); c.fill(); }
         }
-      }
-      if (st.kind === 'worker' && st.ctx != null) {
-        c.lineWidth = 2;
-        c.strokeStyle = rgb(col, 0.9 * fade);
-        c.beginPath(); c.arc(s.x, s.y, R, -Math.PI / 2, -Math.PI / 2 + TAU * clamp(st.ctx / 100, 0, 1)); c.stroke();
       }
       if (youRed) {
         const k = 0.5 + 0.5 * Math.sin(t * 4.2);

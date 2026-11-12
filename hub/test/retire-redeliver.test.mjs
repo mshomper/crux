@@ -61,8 +61,8 @@ test('answered, old, or quick-pick messages are not delivered again', async () =
     ev('agent_created', 60, { agent: 'orchestrator-1', role: 'orchestrator', generation: 1, thread: 'orchestrator' }),
     ev('message', 5, { thread: 'orchestrator', from: 'you', text: 'answered one' }),
     ev('message', 4, { thread: 'orchestrator', from: 'orchestrator-1', text: 'done' }),
-    ev('agent_created', 60, { agent: 'w1', role: 'worker', thread: 'w1' }),
-    ev('message', 30, { thread: 'w1', from: 'you', text: 'too old' }),
+    ev('agent_created', 26 * 60, { agent: 'w1', role: 'worker', thread: 'w1' }),
+    ev('message', 25 * 60, { thread: 'w1', from: 'you', text: 'too old' }),   // older than the 24-hour resume window (M014)
     ev('agent_created', 60, { agent: 'w2', role: 'worker', thread: 'w2' }),
     ev('message', 3, { thread: 'w2', from: 'you', text: 'all' }),
     ev('pick', 3, { decision: 1, thread: 'orchestrator' })

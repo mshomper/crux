@@ -14,7 +14,7 @@ import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules } from './permission-rules.mjs';
 import { HubSettings } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
-import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE } from './prompts.mjs';
+import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
 import { answerMessage } from '../public/questions.js';
 
@@ -36,6 +36,9 @@ export class Project {
 }
 
 const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 60 * 1000;
+// After a restart (M014): how old an unfinished turn or unread message may be and still be resumed, and the gap
+// between agents waking.
+export const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000, RESUME_GAP_MS = 4000;
 
 export class Hub {
   // defaults: { orchestrator: { type, model, effort }, worker: {...} } from ~/crux/hub.json (decision 20).
@@ -53,38 +56,100 @@ export class Hub {
     this.approvals = new Map();
     this.projects = new Map();
     for (const dir of projects) this.addProject(dir);
-    // After listeners are attached: deliver any message of yours that a restart cut off.
-    setTimeout(() => { for (const p of this.projects.values()) { this.redeliver(p); this.rulesHint(p); } }, 0);
+    // After listeners are attached: wake the agents a restart interrupted (M014), every project, a few seconds apart.
+    this.resumed = [];
+    setTimeout(() => {
+      for (const p of this.projects.values()) this.rulesHint(p);
+      this.resumeAll();
+    }, 0);
   }
 
-  // A message you sent within the last 10 minutes that its agent never acted on (no event from that agent since)
-  // most likely died with a restart. Deliver it again, with a note, rather than leave you waiting on silence.
+  // ---------- after a restart (M014) ----------
+  // A message to an agent (from you, or the orchestrator's brief to a worker) that the agent never acted on
+  // (no event from it since) most likely died with a restart. Within RESUME_WINDOW_MS it is delivered again.
   undelivered(p, now = Date.now()) {
     const evs = p.log.events;
     const out = [];
-    for (const thread of new Set(evs.filter(e => e.type === 'message' && e.from === 'you').map(e => e.thread))) {
-      const i = evs.findLastIndex(e => e.type === 'message' && e.from === 'you' && e.thread === thread);
-      const m = evs[i];
-      if (!m || now - Date.parse(m.ts) > 10 * 60 * 1000) continue;
+    const orchNames = new Set([...p.agents.values()].filter(a => a.role === 'orchestrator').map(a => a.name));
+    for (const thread of new Set(evs.filter(e => e.type === 'message' && e.thread).map(e => e.thread))) {
       const agent = thread === 'orchestrator' ? p.orchestrator() : p.agents.get(thread);
       if (thread !== 'orchestrator' && (!agent || agent.state === 'retired')) continue;
-      const names = new Set([agent?.name, ...(thread === 'orchestrator' ? [...p.agents.values()].filter(a => a.role === 'orchestrator').map(a => a.name) : [])].filter(Boolean));
-      // Starting up (agent_created, agent_session) is not acting on it; a reply, summary, card or pick is.
-      const actedOn = evs.slice(i + 1).some(e => e.type === 'pick' || (!['agent_created', 'agent_session', 'notice'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
+      const names = thread === 'orchestrator' ? orchNames : new Set([agent.name]);
+      // Messages into the thread: yours, or (in a worker's thread) the orchestrator's. A successor's question to
+      // its predecessor is answered within the overlap, not resent.
+      const incoming = e => e.type === 'message' && e.thread === thread && !names.has(e.from) && (e.from === 'you' || (thread !== 'orchestrator' && orchNames.has(e.from)));
+      const i = evs.findLastIndex(incoming);
+      const m = evs[i];
+      if (!m || now - Date.parse(m.ts) > RESUME_WINDOW_MS) continue;
+      // Starting up (agent_created, agent_session, agent_busy) is not acting on it; a reply, summary, card or pick is.
+      const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
       if (!actedOn) out.push(m);
     }
     return out;
   }
 
-  redeliver(p) {
-    for (const m of this.undelivered(p)) {
-      const when = new Date(m.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      this.notice(p, m.thread, `The hub restarted before your message from ${when} reached its agent, so it was delivered again.`);
-      try {
-        if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(m.text, m.attachments);
-        else p.agents.get(m.thread)?.send(m.text, m.attachments);
-      } catch (e) { this.notice(p, m.thread, `Could not deliver it again: ${e.message}`); }
+  // Who wakes after a restart, and why: an agent whose last logged turn had not ended (it was working when the hub
+  // stopped), within RESUME_WINDOW_MS, or one with a message it never acted on. Resting agents stay asleep.
+  // Workers come first, then the orchestrator, so their news reaches it.
+  resumePlan(p, now = Date.now()) {
+    const busy = new Map();
+    for (const e of p.log.events) if (e.type === 'agent_busy') busy.set(e.agent, e);
+    const plan = [];
+    const messages = new Map(this.undelivered(p, now).map(m => [m.thread, m]));
+    for (const a of p.agents.values()) {
+      if (a.state === 'retired' || (a.role === 'orchestrator' && a !== p.orchestrator())) continue;
+      const m = messages.get(a.thread);
+      const b = busy.get(a.name);
+      if (m) plan.push({ agent: a.name, thread: a.thread, why: 'message', message: m, wasWorking: !!b?.busy && Date.parse(b.ts) >= Date.parse(m.ts) });
+      else if (b?.busy && now - Date.parse(b.ts) <= RESUME_WINDOW_MS) plan.push({ agent: a.name, thread: a.thread, why: 'working' });
+      messages.delete(a.thread);
     }
+    // A message of yours to the orchestrator role with no holder yet: the next holder takes it.
+    const orphan = messages.get('orchestrator');
+    if (orphan) plan.push({ agent: null, thread: 'orchestrator', why: 'message', message: orphan });
+    return plan.sort((x, y) => (x.thread === 'orchestrator') - (y.thread === 'orchestrator'));
+  }
+
+  // Every project's plan, started RESUME_GAP_MS apart so a dozen agents do not all start at once.
+  resumeAll(now = Date.now()) {
+    const all = [...this.projects.values()].flatMap(p => this.resumePlan(p, now).map(r => ({ ...r, project: p.name })));
+    this.resumed = all.map(({ project, agent, thread, why }) => ({ project, agent: agent || 'orchestrator', thread, why }));
+    all.forEach((r, i) => {
+      const t = setTimeout(() => this.resumeOne(this.project(r.project), r), i * RESUME_GAP_MS);
+      t.unref?.();
+    });
+    // A turn marked unfinished but too old to resume is closed, so it is not picked up at a later start.
+    for (const p of this.projects.values()) {
+      const planned = new Set(all.filter(r => r.project === p.name).map(r => r.agent));
+      const last = new Map();
+      for (const e of p.log.events) if (e.type === 'agent_busy') last.set(e.agent, e);
+      for (const [name, e] of last) if (e.busy && !planned.has(name)) { p.log.append('agent_busy', { agent: name, busy: false, stale: true }); const a = p.agents.get(name); if (a) a.busyLogged = false; }
+    }
+    return this.resumed;
+  }
+
+  // Only the unread messages, at once (used by tests and kept for callers of the older name).
+  redeliver(p) { for (const r of this.resumePlan(p).filter(r => r.why === 'message')) this.resumeOne(p, r); }
+
+  resumeOne(p, r) {
+    try {
+      if (r.why === 'message') {
+        const m = r.message;
+        const when = new Date(m.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        const whose = m.from === 'you' ? 'your message' : `the message from ${m.from}`;
+        this.notice(p, m.thread, r.wasWorking
+          ? `The hub restarted while ${r.agent} was working on ${whose} from ${when}, so it was sent again.`
+          : `The hub restarted before ${whose} from ${when} reached its agent, so it was delivered again.`);
+        const text = m.from === 'you' ? m.text : `[From the orchestrator, ${m.from}]\n${m.text}`;
+        if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(text, m.attachments);
+        else p.agents.get(m.thread)?.send(text, m.attachments);
+      } else {
+        const a = p.agents.get(r.agent);
+        if (!a || a.state === 'retired' || a.live) return;
+        this.notice(p, a.thread, `The hub restarted while ${a.name} was working; it was asked to carry on.`);
+        a.send(RESUME_MESSAGE);
+      }
+    } catch (e) { this.notice(p, r.thread, `Could not resume after the restart: ${e.message}`); }
   }
 
   // ---------- plumbing ----------
@@ -124,6 +189,8 @@ export class Hub {
         if ('agentType' in ev) a.type = ev.agentType || null;
       } else if (ev.type === 'agent_retired' && p.agents.has(ev.agent)) {
         p.agents.get(ev.agent).state = 'retired';
+      } else if (ev.type === 'agent_busy' && p.agents.has(ev.agent)) {
+        p.agents.get(ev.agent).busyLogged = !!ev.busy;
       }
     }
     // A handoff cut short by a restart: the overlap is over, so the predecessor is done.
