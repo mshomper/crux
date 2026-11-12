@@ -35,20 +35,19 @@ export class Memory {
   private() { return read(join(this.profileDir, 'private.md')).trim(); }
   conventions() { return read(join(this.home, 'conventions.md')).trim(); }
 
-  // Which pack a project folder uses: packs/_index.md may map folder names ("- f13ld.md: f13ld.lab, f13ld.*"),
-  // otherwise the folder name itself, and any f13ld.* folder uses the f13ld pack.
+  // Which pack a project folder uses: packs/_index.md may map folder names ("- demo.md: demo.lab, demo.*"),
+  // otherwise the folder name itself.
   packName(project) {
     const name = project.toLowerCase();
     for (const line of read(join(this.packsDir, '_index.md')).split('\n')) {
-      // "- f13ld.md: f13ld.lab, f13ld.*" or a table row "| `f13ld.md` | `f13ld.lab`, `f13ld.*` | ... |"
+      // "- demo.md: demo.lab, demo.*" or a table row "| `demo.md` | `demo.lab`, `demo.*` (alpha, beta) | ... |"
       const m = /^\s*\|\s*`?([\w.-]+)\.md`?\s*\|\s*([^|]+)\|/.exec(line) || /([\w.-]+)\.md\b.*?:\s*(.+)$/.exec(line);
       if (!m) continue;
-      const globs = m[2].split(/[,;]/).map(s => s.replace(/[`*_]/g, '').trim().toLowerCase()).filter(Boolean);
-      if (globs.some(g => g === name || (m[2].includes(g + '.*') && name.startsWith(g + '.')))) return m[1];
+      // Notes in brackets are for people, not folder names. "demo.*" matches any folder starting "demo.".
+      const globs = m[2].replace(/\([^)]*\)/g, '').split(/[,;]/).map(s => s.replace(/[`_]/g, '').trim().toLowerCase()).filter(Boolean);
+      if (globs.some(g => g === name || (g.endsWith('.*') && name.startsWith(g.slice(0, -1))))) return m[1];
     }
-    if (existsSync(join(this.packsDir, `${name}.md`))) return name;
-    if (name.startsWith('f13ld') && existsSync(join(this.packsDir, 'f13ld.md'))) return 'f13ld';
-    return null;
+    return existsSync(join(this.packsDir, `${name}.md`)) ? name : null;
   }
   pack(project) { const n = this.packName(project); return n ? read(join(this.packsDir, `${n}.md`)).trim() : ''; }
   packs() { try { return readdirSync(this.packsDir).filter(f => f.endsWith('.md') && !f.startsWith('_')).map(f => f.slice(0, -3)); } catch { return []; } }

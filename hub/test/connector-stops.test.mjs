@@ -88,7 +88,7 @@ test('a worker\'s connector read goes to the orchestrator; the orchestrator\'s o
   const { hub, p, w, orch } = setup(true);
   hub.requestApproval(p, w, G + 'search_threads', { query: 'invoice' });
   assert.equal(last(p, 'approval').routedTo, orch.name);
-  assert.match(sent.at(-1)[1], /Reads Matt's Gmail/);
+  assert.match(sent.at(-1)[1], /Reads the user's Gmail/, 'no profile here, so no name');
   const before = p.log.ofType('permission_answer').length;
   hub.requestApproval(p, orch, G + 'search_threads', { query: 'invoice' });
   assert.equal(last(p, 'approval').agent, orch.name, 'a card for Matt');
