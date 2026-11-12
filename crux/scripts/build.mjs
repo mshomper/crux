@@ -2,45 +2,106 @@
 // Builds decision pages, Markdown records and the index from .decisions/*.json.
 // Usage: node build.mjs [decisions-folder]   (default: ./.decisions)
 // Also refreshes the cross-project roll-up (see rollup.mjs).
+// Decision 41: only the .json and .md records go into git. The pages (*.html, index.html) are rebuilt locally and
+// ignored by a .gitignore inside .decisions, which this script writes whenever it builds a folder named .decisions.
 // No dependencies. Needs Node 18 or newer (already present wherever Claude Code runs).
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs';
+import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rollup } from './rollup.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tpl = join(here, '..', 'template');
-const dir = resolve(process.argv[2] || '.decisions');
-if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-const css = readFileSync(join(tpl, 'shared.css'), 'utf8');
-const pageTpl = readFileSync(join(tpl, 'page.html'), 'utf8').replace('/*{{CSS}}*/', css);
-const indexTpl = readFileSync(join(tpl, 'index.html'), 'utf8').replace('/*{{CSS}}*/', css);
 
 const pad = n => String(n).padStart(4, '0');
 const safeJson = v => JSON.stringify(v).replace(/</g, '\\u003c');
 const fill = (t, data) => t.replace('/*{{DATA}}*/', () => safeJson(data));
+const isRecord = d => typeof d?.id === 'number' && !!d.title && Array.isArray(d.options);
+const mtime = f => { try { return statSync(f).mtimeMs; } catch { return -1; } };
 
-const problems = [];
-const decisions = [];
-for (const f of readdirSync(dir).filter(f => f.endsWith('.json')).sort()) {
-  try {
-    const d = JSON.parse(readFileSync(join(dir, f), 'utf8'));
-    if (typeof d.id !== 'number' || !d.title || !Array.isArray(d.options)) throw new Error('needs id (number), title and options');
-    d._file = f.replace(/\.json$/, '.html');
-    decisions.push(d);
-  } catch (e) {
-    problems.push(`${f}: ${e.message}`);
-  }
+// A .decisions folder ignores its generated pages. Adds the line to an existing .gitignore, never rewrites the others.
+// Only for folders named .decisions, so a folder like example/demo-decisions keeps its committed pages.
+export function ensureGitignore(dir) {
+  if (basename(resolve(dir)) !== '.decisions') return false;
+  const file = join(dir, '.gitignore');
+  if (pagesLocal(dir)) return false;
+  const cur = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  const head = cur ? cur + (cur.endsWith('\n') ? '' : '\n') : '# Pages are built locally from the .json records (Crux decision 41)\n';
+  writeFileSync(file, head + '*.html\n');
+  return true;
 }
 
-const links = Object.fromEntries(decisions.map(d => [d.id, d._file]));
-const seen = new Map();
-for (const d of decisions) {
-  if (seen.has(d.id)) problems.push(`Number ${pad(d.id)} is used twice: ${seen.get(d.id)} and ${d._file}`);
-  seen.set(d.id, d._file);
-  for (const n of [...(d.depends_on || []), ...(d.conflicts || [])]) if (!links[n]) problems.push(`${d._file} refers to missing decision ${pad(n)}`);
-  if (d.status === 'decided' && !d.options.some(o => o.key === d.chosen)) problems.push(`${d._file} is decided but its chosen option "${d.chosen}" does not exist`);
+// True when a record's page is missing or older than its .json, or index.html is missing or older than the newest .json.
+export function pagesStale(dir) {
+  let files;
+  try { files = readdirSync(dir).filter(f => f.endsWith('.json')); } catch { return false; }
+  let newest = -1;
+  for (const f of files) {
+    const t = mtime(join(dir, f));
+    const page = mtime(join(dir, f.replace(/\.json$/, '.html')));
+    if (page < 0) {
+      let rec = null;
+      try { rec = JSON.parse(readFileSync(join(dir, f), 'utf8')); } catch { }
+      if (isRecord(rec)) return true;   // a file that is not a record never gets a page, so it never counts as stale
+      continue;
+    }
+    if (page < t) return true;
+    newest = Math.max(newest, t);
+  }
+  return newest >= 0 && mtime(join(dir, 'index.html')) < newest;
+}
+
+// True when the folder's .gitignore keeps its pages out of git (decision 41 is in place there).
+export function pagesLocal(dir) {
+  try { return /^\*\.html\s*$/m.test(readFileSync(join(dir, '.gitignore'), 'utf8')); } catch { return false; }
+}
+
+// The refresh the hub and the roll-up run before they link to a page. Only where the pages are local, so a repo that
+// still commits its pages never sees a change in git. Returns true if it rebuilt; throws if the build fails.
+export function refreshPages(dir) {
+  if (!pagesLocal(dir) || !pagesStale(dir)) return false;
+  build(dir, { pagesOnly: true });
+  return true;
+}
+
+// Build one folder. pagesOnly writes just the pages and index.html (the refresh after a pull): no .md, no .gitignore.
+// Returns { count, problems }.
+export function build(dir, { pagesOnly = false } = {}) {
+  dir = resolve(dir);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const css = readFileSync(join(tpl, 'shared.css'), 'utf8');
+  const pageTpl = readFileSync(join(tpl, 'page.html'), 'utf8').replace('/*{{CSS}}*/', css);
+  const indexTpl = readFileSync(join(tpl, 'index.html'), 'utf8').replace('/*{{CSS}}*/', css);
+
+  const problems = [];
+  const decisions = [];
+  for (const f of readdirSync(dir).filter(f => f.endsWith('.json')).sort()) {
+    try {
+      const d = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+      if (!isRecord(d)) throw new Error('needs id (number), title and options');
+      d._file = f.replace(/\.json$/, '.html');
+      decisions.push(d);
+    } catch (e) {
+      problems.push(`${f}: ${e.message}`);
+    }
+  }
+
+  const links = Object.fromEntries(decisions.map(d => [d.id, d._file]));
+  const seen = new Map();
+  for (const d of decisions) {
+    if (seen.has(d.id)) problems.push(`Number ${pad(d.id)} is used twice: ${seen.get(d.id)} and ${d._file}`);
+    seen.set(d.id, d._file);
+    for (const n of [...(d.depends_on || []), ...(d.conflicts || [])]) if (!links[n]) problems.push(`${d._file} refers to missing decision ${pad(n)}`);
+    if (d.status === 'decided' && !d.options.some(o => o.key === d.chosen)) problems.push(`${d._file} is decided but its chosen option "${d.chosen}" does not exist`);
+  }
+
+  if (!pagesOnly) ensureGitignore(dir);
+  for (const d of decisions) {
+    writeFileSync(join(dir, d._file), fill(pageTpl, { ...d, _links: links }));
+    if (!pagesOnly) writeFileSync(join(dir, d._file.replace(/\.html$/, '.md')), markdown(d));
+  }
+  writeFileSync(join(dir, 'index.html'), fill(indexTpl, decisions.map(({ sketch, ...d }) => ({ ...d, options: d.options.map(({ sketch, ...o }) => o) }))));
+  return { count: decisions.length, problems };
 }
 
 function markdown(d) {
@@ -95,14 +156,14 @@ function markdown(d) {
   return L.join('\n');
 }
 
-for (const d of decisions) {
-  writeFileSync(join(dir, d._file), fill(pageTpl, { ...d, _links: links }));
-  writeFileSync(join(dir, d._file.replace(/\.html$/, '.md')), markdown(d));
+// Run as a script: build the folder, then refresh the cross-project roll-up (skipped quietly if no project folder is found).
+// The skill folder is usually a link, so compare real paths: Node gives import.meta.url as the resolved one.
+const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
+const same = (x, y) => process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+if (process.argv[1] && same(real(process.argv[1]), real(fileURLToPath(import.meta.url)))) {
+  const dir = resolve(process.argv[2] || '.decisions');
+  const { count, problems } = build(dir);
+  console.log(`Built ${count} decision(s) and index.html in ${dir}`);
+  if (problems.length) { console.log('Problems to fix:'); for (const p of problems) console.log(`- ${p}`); process.exitCode = 1; }
+  try { rollup(); } catch (e) { console.log(`Roll-up failed: ${e.message}`); }
 }
-writeFileSync(join(dir, 'index.html'), fill(indexTpl, decisions.map(({ sketch, ...d }) => ({ ...d, options: d.options.map(({ sketch, ...o }) => o) }))));
-
-console.log(`Built ${decisions.length} decision(s) and index.html in ${dir}`);
-if (problems.length) { console.log('Problems to fix:'); for (const p of problems) console.log(`- ${p}`); process.exitCode = 1; }
-
-// Refresh the cross-project roll-up (skipped quietly if no project folder is found).
-try { rollup(); } catch (e) { console.log(`Roll-up failed: ${e.message}`); }

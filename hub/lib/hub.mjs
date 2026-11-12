@@ -180,6 +180,7 @@ export class Hub {
     p.log.on(ev => this.emit({ ...ev, project: p.name, logged: true }));
     p.desk.notice = text => this.notice(p, 'orchestrator', text);
     if (this.noAgents) p.desk.local = true;   // a test hub never pushes decision records to the real GitHub
+    p.board.freshPages();   // decision 41: pages are local, so rebuild any a pull left missing or stale
     return p;
   }
 
