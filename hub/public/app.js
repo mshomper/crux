@@ -457,17 +457,22 @@ function decisionCard(p, d) {
   </article>`;
 }
 
+// The agent's own one-line description of a request (the Bash or PowerShell description, or the SDK's), else ''.
+function approvalHeadline(ev) { return String(ev.input?.description || ev.description || '').trim().split('\n')[0].slice(0, 160); }
+
 function approvalCard(ev) {
   const live = S.pending.has(ev.approval);
   const p = proj();
   const result = p.events.find(e => e.type === 'approval_result' && e.approval === ev.approval);
   const input = ev.input?.command || ev.input?.file_path || JSON.stringify(ev.input, null, 1);
-  // Plain words first: what it will do (the hub reads the command), what it touches, and the agent's own reason.
+  // Plain words first: the agent's own description leads when it gave one; then what the hub reads in the command
+  // (its own check on that description), the tags, and the command itself.
   const plain = ev.summary?.plain;
-  const why = ev.input?.description && ev.input.description !== plain && !String(input).startsWith(ev.input.description.replace(/…$/, '')) ? ev.input.description : '';
+  const desc = approvalHeadline(ev);
+  const hubReads = desc && plain && plain.toLowerCase() !== desc.toLowerCase() ? plain : '';
   if (!live && !S.open.has(ev.approval)) {
     // Answered: one line. Click to see it again.
-    const what = plain || ev.input?.description || ev.description || String(input).split('\n')[0];
+    const what = desc || plain || String(input).split('\n')[0];
     return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${esc(ev.agent)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
   }
   // Why it is with you (decision 21): a hard stop the hub found, the orchestrator escalating, or no answer in time.
@@ -478,10 +483,10 @@ function approvalCard(ev) {
   const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
   const raw = `<pre>${esc(input)}</pre>`;
   return `<article class="card approval ${live ? '' : 'answered'}" data-card="approval:${esc(ev.approval)}" ${live ? 'tabindex="0"' : `data-expand="${esc(ev.approval)}"`}>
-    <div class="card-head">${icon('shield')}<h3>${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}</h3>${live ? '<span class="keys">A allow · D deny</span>' : ''}</div>
+    <div class="card-head">${icon('shield')}<h3>${desc ? `${esc(ev.agent)}: ${esc(desc)}` : `${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}`}</h3>${live ? '<span class="keys">A allow · D deny</span>' : ''}</div>
+    ${hubReads ? `<p class="muted why">The hub reads: ${esc(hubReads)}</p>` : ''}
     ${tags ? `<div class="tags">${tags}</div>` : ''}
     ${routeNote}
-    ${why ? `<p class="muted why">Why: ${esc(why)}</p>` : (!plain && ev.description ? `<p class="muted">${esc(ev.description)}</p>` : '')}
     ${plain ? `<div class="raw">${fold('cmd:' + ev.approval, raw, String(input).length > 120 || String(input).includes('\n'))}</div>` : raw}
     <div class="row">${live
       // M008 10: Allow and Deny side by side; Always allow is a quieter text button that says which rule it saves.
