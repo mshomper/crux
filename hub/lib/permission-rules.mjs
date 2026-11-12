@@ -614,6 +614,23 @@ export function touchesSecrets(tool, input = {}) {
   return false;
 }
 
+// The hub's built-in rules for a project in Auto mode whose board has no rules entry yet: R005's text, with this
+// project's own folders. The orchestrator is told it is working from these, and is asked to draft a real entry.
+export const DEFAULT_RULES_ID = 'the hub\'s default rules';
+export function defaultRules(projectDir, tmp = tmpdir()) {
+  const dir = resolve(projectDir);
+  return {
+    entryId: DEFAULT_RULES_ID, isDefault: true, ts: 'default', from: 'the Crux hub (built in, from R005 on the crux board)',
+    title: 'Default agent permission rules (built in)',
+    body: [
+      `These are the hub's built-in default rules, used because this project's board has no permission rules entry. Matt may replace them with an entry of his own at any time.`,
+      `AUTO MODE. The hub allows at once, with no prompt: anything whose effects stay inside the project folder (${dir}), an agent's own worktree (${join(dir, '.claude', 'worktrees')}\\...) or a temp folder the agent made under ${tmp}. That covers reading, searching, editing, creating and deleting files there; build, test, lint and running scripts and node; running installed programs by any path; local git, including read-only commands like merge-base and merge-tree; fetch, pull and ls-remote from the repo's own GitHub remote; git push of a feature branch; gh pr create, list, view and checks; starting and stopping test hubs on ports other than 4747; reading files anywhere except secrets.`,
+      `HARD STOPS, always to Matt: the git merge subcommand into main or shared branches, and gh pr merge, unless Matt asks for that merge in chat; pushing to main or master; force-push; deleting branches (local or remote); history rewrites of pushed commits; package installs or dependency changes; writes, deletes or moves outside the project folder, worktree or own temp folder (including ~/.claude and ~/crux); network access other than GitHub and reading docs; stopping or restarting the hub on port 4747; secrets (~/.ssh, .env files, ~/.crux-hub keys, credential stores).`,
+      `UNCLEAR requests (including commands the hub can't read in full) come to the orchestrator (answer_permission), which allows them if they are contained and part of the task, and otherwise escalates; Matt gets them after 2 minutes. When unsure, escalate.`
+    ].join('\n')
+  };
+}
+
 // The newest active "permission rules" requirement on a board, or null (no rules: nothing is routed).
 export function rulesEntry(board) {
   return board.entries().filter(e => e.kind === 'requirement' && e.status === 'active' && /permission rules/i.test(e.title || '')).at(-1) || null;
