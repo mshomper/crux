@@ -80,6 +80,8 @@ export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = 
   c.agent = String(agent || '').toLowerCase();
   c.madeTemp = new Set([...madeTemp].map(norm));
   c.tempMade = new Set();
+  c.fresh = new Set();   // temp folders $(mktemp) makes in this very command: its own, but not worth remembering by name
+  c.envSet = new Map();  // environment settings the command makes for what follows (export X=, $env:X =)
   const out = classifyWith(c, tool, input);
   return { ...out, tempMade: [...c.tempMade] };
 }
@@ -130,6 +132,7 @@ class Check {
     s = s.replace(/\$\{?(?:env:)?(appdata|localappdata|userprofile|home)\}?(?![\w:])|%(appdata|localappdata|userprofile|home)%/gi,
       (m, a, b) => join(this.home, ...VAR_PATHS[(a || b).toLowerCase()]).replace(/\\/g, '/'));
     if (/^~(?=[\\/]|$)/.test(s)) s = this.home + s.slice(1);
+    s = s.replace(/\$\{?PWD\}?(?!\w)/g, String(cwd).replace(/\\/g, '/'));   // the folder the step runs in
     if (/^\/dev\/null$|^nul$/i.test(s)) return 'null';
     if (/^\/tmp(\/|$)/.test(s)) return s === '/tmp' ? this.tmp : join(this.tmp, s.slice(5));
     const m = /^\/([a-z])(\/.*)?$/i.exec(s);           // Git Bash: /c/Users/... is C:/Users/...
