@@ -5,6 +5,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
 import { rulesEntry, CONNECTOR_SERVERS } from './permission-rules.mjs';
+import { UsageLedger, baselineFor } from './usage.mjs';
 
 class Inbox {
   constructor() { this.items = []; this.waiters = []; this.closed = false; }
@@ -57,7 +58,8 @@ export class Agent {
     this.thread = role === 'orchestrator' ? 'orchestrator' : name;
     this.q = null;
     this.inbox = null;
-    this.cost = 0;
+    this.cost = 0;                 // estimated spend logged by this hub process (decision 36)
+    this.ledger = new UsageLedger();
     this.contextPct = null;
   }
 
@@ -129,6 +131,7 @@ export class Agent {
   start() {
     const p = this.project;
     this.inbox = new Inbox();
+    this.beginRun();
     const options = this.options();
     options.env = cleanEnv();
     this.restartWhenIdle = false;
@@ -180,8 +183,10 @@ export class Agent {
         for (const b of blocks.filter(b => b.type === 'tool_use')) {
           this.hub.emit({ type: 'activity', project: this.project.name, thread: this.thread, agent: this.name, text: describeTool(b) });
         }
+      } else if (m.type === 'rate_limit_event') {
+        this.hub.usage?.rateLimit(m.rate_limit_info, this.project);
       } else if (m.type === 'result') {
-        this.cost += m.total_cost_usd || 0;
+        this.logUsage(m);
         try { this.contextPct = Math.round((await q.getContextUsage()).percentage); } catch { /* older CLI */ }
         if (/not logged in/i.test(m.result || '')) {
           this.hub.notice(this.project, this.thread, 'Claude Code is not signed in on this machine. Stop the hub, run "npm run login" in the hub folder, sign in with your Claude plan, then start the hub again.');
@@ -192,6 +197,29 @@ export class Agent {
         this.hub.onIdle(this.project, this);
       }
     }
+  }
+
+  // A new query starts: its running totals start over, and the session it resumes (if any) is remembered, since
+  // that session's first result already carries its earlier turns (decision 36).
+  beginRun() {
+    this.ledger = new UsageLedger();
+    this.sessionAtStart = this.sessionId;
+  }
+
+  // Decision 36: one usage event per result, with what this result added per model. The result's modelUsage holds
+  // running totals for the whole query, so the ledger keeps the last totals and only the difference is logged.
+  // `cost` is this agent's estimated spend since the hub started counting it (not total_cost_usd added up again).
+  logUsage(m) {
+    const usage = m.modelUsage;
+    if (!usage || !Object.keys(usage).length) return;
+    const p = this.project;
+    const fresh = !this.sessionAtStart;
+    const baseline = this.ledger.totals ? null : baselineFor(p.log, this.name, this.sessionAtStart);
+    const r = this.ledger.record(usage, { baseline, fresh });
+    if (!Object.keys(r.delta).length && !r.baseline) { this.hub.usage?.note(); return; }
+    this.cost += r.costUSD;
+    p.log.append('usage', { agent: this.name, project: p.name, sessionId: this.sessionId, models: r.delta, costUSD: r.costUSD, totals: r.totals, ...(r.baseline ? { baseline: true } : {}), ...(r.reset ? { reset: true } : {}) });
+    this.hub.usage?.note();
   }
 
   close() {

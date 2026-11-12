@@ -45,6 +45,7 @@ if (!projects.length) projects = [process.cwd()];
 const settings = new HubSettings({ initial: hubCfg });
 const hub = new Hub({ projects, retireAt, defaults: hubCfg.defaults, settings, noAgents });
 if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
+hub.usage.start();   // decision 36: the plan meters, asked of any live agent every few minutes
 
 // Phone notifications (decision 19): a card that needs you becomes a push to every subscribed phone.
 const push = new Push();
@@ -95,7 +96,7 @@ async function body(req, limit = 1e6) {
 }
 
 const routes = {
-  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed }),
+  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt }),
   // Restart from the hub's own menu: answer first, then hand over to a fresh hub started the same way (M010).
   'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },
   // The off switch for decision 21: false sends every permission request to you.
