@@ -152,8 +152,17 @@ test('routing is on by default and can start off from hub.json', () => {
   assert.equal(last(p, 'approval').routedTo, null);
 });
 
-test('no orchestrator, one not running, no rules on the board, or a request from the orchestrator itself: a card, as before', () => {
-  for (const opts of [{ orchestrator: false }, { live: false }, { rules: false }]) {
+test('a resting orchestrator (asleep since a restart) is woken by the request; no phone push', () => {
+  const { hub, p, orch, w } = setup({ live: false });
+  ask(hub, p, w, 'npm run build');
+  const ap = last(p, 'approval');
+  assert.equal(ap.routedTo, orch.name);
+  assert.deepEqual(sent.map(s => s[0]), [orch.name], 'the request wakes it');
+  assert.deepEqual(cardsFor({ ...ap, project: 'proj' }), []);
+});
+
+test('no orchestrator, no rules on the board, or a request from the orchestrator itself: a card, as before', () => {
+  for (const opts of [{ orchestrator: false }, { rules: false }]) {
     const { hub, p, w } = setup(opts);
     ask(hub, p, w, 'npm run build');
     assert.equal(last(p, 'approval').routedTo, null, JSON.stringify(opts));

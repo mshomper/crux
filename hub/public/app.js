@@ -5,8 +5,12 @@ import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js
 import { robot } from './robots.js';
 import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
 import { enterAction, insertLineBreak, composerHint, replyHint, filterHint } from './composer-keys.js';
-import { ViewportFit } from './viewport.js';
+import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
+import { PhoneCheck } from './debug-phone.js';
 import { UsageUI } from './usage-ui.js';
+
+// iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
+{ const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
 import { boardView, groupBoard, SECTIONS } from './board.js';
 const EFFORT_SHORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'x-high', max: 'max' };
 const $ = s => document.querySelector(s);
@@ -75,6 +79,7 @@ async function load() {
   if (!proj()) return render();
   S.current = proj().name;
   render();
+  phone.clearSettled(cardWaiting);   // fresh state: notifications for cards settled meanwhile leave the lock screen
 }
 
 let refreshTimer;
@@ -97,6 +102,7 @@ function connect() {
       // Agents write decision records straight to .decisions/; a summary is the signal to re-read the board.
       if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'summary', 'project_settings'].includes(ev.type)) refreshSoon();
       if (ev.type === 'message' && ev.from !== 'you') delete S.activity[key(p.name, ev.thread)];
+      if (['approval_result', 'pick', 'question_dismissed', 'message'].includes(ev.type)) queueMicrotask(() => phone.clearSettled(cardWaiting));
     } else if (ev.type === 'agent_state') {
       const a = p.agents.find(a => a.name === ev.agent);
       if (a) { a.state = ev.state; a.contextPct = ev.contextPct; }
@@ -160,9 +166,13 @@ function renderHubMenu() {
     ? `<div class="hm-confirm"><b>Restart the hub now?</b>
         <p class="faint">${busy.length ? `${list} ${busy.length === 1 ? 'is' : 'are'} working; ${busy.length === 1 ? 'it resumes' : 'they resume'} on ${busy.length === 1 ? 'its' : 'their'} own after the restart${busy.length > 1 ? ', a few seconds apart' : ''}.` : 'No agent is working, so none needs resuming; resting agents wake on their next message.'} The page reconnects by itself.</p>
         <div class="row"><button class="btn primary" data-restart-go>${icon('restart')}Restart</button><button class="btn ghost" data-hub-menu-close>Cancel</button></div></div>`
-    : `<button class="hm-item" role="menuitem" data-restart>${icon('restart')}<span><b>Restart hub</b><span class="faint">Stops and starts the server; agents resume</span></span></button>`;
+    : `<button class="hm-item" role="menuitem" data-restart>${icon('restart')}<span><b>Restart hub</b><span class="faint">Stops and starts the server; agents resume</span></span></button>
+       <button class="hm-item" role="menuitem" data-phone-check>${icon('pulse')}<span><b>${phoneCheck.on ? 'Hide phone check' : 'Phone check'}</b><span class="faint">${phoneCheck.on ? 'Turns the screen numbers off' : 'Live screen numbers, for a screenshot'}</span></span></button>`;
   el.hidden = false;
 }
+// Phone check (debug-phone.js): off unless ?debug=phone or the menu turns it on; remembered on this device.
+const phoneCheck = new PhoneCheck({ version: () => S.version || '' });
+if (PhoneCheck.wanted()) phoneCheck.start();
 function closeHubMenu() { if (!S.hubMenu) return; S.hubMenu = null; renderHubMenu(); }
 
 async function restartHub() {
@@ -202,6 +212,7 @@ $('#hub-menu-btn').addEventListener('click', () => { S.hubMenu = S.hubMenu ? nul
 $('#hub-menu').addEventListener('click', e => {
   if (e.target.closest('[data-restart]')) { S.hubMenu = 'confirm'; renderHubMenu(); $('#hub-menu [data-restart-go]')?.focus(); }
   else if (e.target.closest('[data-restart-go]')) act(restartHub);
+  else if (e.target.closest('[data-phone-check]')) { phoneCheck.toggle(); closeHubMenu(); }
   else if (e.target.closest('[data-hub-menu-close]')) closeHubMenu();
 });
 const key = (p, t) => `${p}::${t}`;
@@ -315,10 +326,19 @@ function draftChanged(box) {
   if (ev && btn) { const n = filledAnswers(ev).length; btn.disabled = !n; btn.querySelector('.qcount').textContent = sendLabel(n, ev.open.length); }
   for (const b of box.closest('.qrow')?.querySelectorAll('.qquick') || []) { const on = box.value === b.dataset.word; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
 }
+// A text box grows and shrinks with its text without the list moving (phone pass 2). Measuring collapses the box
+// for an instant, which can pull the list's scroll position; it is put back before the screen paints. The list
+// only follows when the box really changed height (a line added or removed) and you were at the latest message.
 function growBox(box, max) {
+  const feed = $('#feed');
+  const top = feed.scrollTop, atBottom = feed.scrollHeight - top - feed.clientHeight < 2;
+  const was = box.style.height;
   box.style.height = 'auto';
-  box.style.height = Math.min(box.scrollHeight + 2, max) + 'px';
+  const h = Math.min(box.scrollHeight + 2, max) + 'px';
+  box.style.height = h;
   box.style.overflowY = box.scrollHeight > max ? 'auto' : 'hidden';
+  feed.scrollTop = atBottom && h !== was && !feed.contains(box) ? feed.scrollHeight : top;
+  return h !== was;
 }
 function threadEvents(p, t) {
   const agentThread = new Map(p.agents.map(a => [a.name, a.thread]));
@@ -601,10 +621,20 @@ function placeModelMenu() {
 function closeModelMenu() { if (!S.mmenu) return; const n = S.mmenu; S.mmenu = null; renderHead(); renderModelMenu(); document.querySelector(`[data-mchip="${CSS.escape(n)}"]`)?.focus(); }
 
 // ---------- render: main ----------
+// The list is redrawn only when what it shows changed. Live updates (an agent's activity line, its state) arrive
+// many times a minute; rebuilding every message and image for each made the list jump while you typed (phone pass 2).
+function setFeed(feed, html) {
+  const key = `${S.current}::${S.thread}::${html}`;
+  if (feed._shown === key) { delete feed.dataset.rebuilt; return false; }
+  feed._shown = key;
+  feed.innerHTML = html;
+  feed.dataset.rebuilt = '1';
+  return true;
+}
 function renderFeed() {
   const p = proj();
   const feed = $('#feed');
-  if (!p) { feed.innerHTML = `<div class="empty"><h2>No projects</h2><p>Start the hub with a project folder: <code>node server.mjs C:/path/to/project</code></p></div>`; return; }
+  if (!p) { setFeed(feed, `<div class="empty"><h2>No projects</h2><p>Start the hub with a project folder: <code>node server.mjs C:/path/to/project</code></p></div>`); return; }
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
   // A card you are answering from the keyboard keeps its focus through the redraw (M008 14).
   const focusedCard = document.activeElement?.matches?.('#feed .card[data-card]') ? document.activeElement.dataset.card : null;
@@ -614,6 +644,7 @@ function renderFeed() {
     // A reply box being typed in keeps its focus and cursor through the redraw.
     const typing = document.activeElement?.matches?.('.qbox') ? { k: document.activeElement.dataset.answer, a: document.activeElement.selectionStart, b: document.activeElement.selectionEnd } : null;
     queueMicrotask(() => {
+      if (!feed.dataset.rebuilt) return;   // nothing was redrawn: the boxes are the same ones, untouched
       for (const box of feed.querySelectorAll('.qbox')) if (box.value) growBox(box, 140);
       const box = typing && [...feed.querySelectorAll('.qbox')].find(x => x.dataset.answer === typing.k);
       if (box) { box.focus({ preventScroll: true }); box.setSelectionRange(typing.a, typing.b); }
@@ -632,7 +663,7 @@ function renderFeed() {
     html += aps.map(approvalCard).join('') + qs.map(questionCard).join('') + (ls.length ? lessonsCard(ls) : '') + ds.map(d => decisionCard(p, d)).join('');
     // Requests the orchestrator is answering: not yours to act on, shown so you can watch or step in.
     if (routed.length) html += `<div class="side-label routed-label">With the orchestrator</div>` + routed.map(approvalCard).join('');
-    feed.innerHTML = html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
+    setFeed(feed, html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`);
   } else {
     const evs = threadEvents(p, S.thread);
     const html = evs.map(ev => {
@@ -652,9 +683,9 @@ function renderFeed() {
         default: return '';
       }
     }).join('');
-    feed.innerHTML = html || (S.thread === 'orchestrator'
+    setFeed(feed, html || (S.thread === 'orchestrator'
       ? `<div class="empty"><h2>Talk to the orchestrator</h2><p>It reads the memory board, starts agents, answers their questions and brings decisions to you. Say what you want done on ${esc(p.name)}.</p></div>`
-      : `<div class="empty"><p>No messages yet.</p></div>`);
+      : `<div class="empty"><p>No messages yet.</p></div>`));
     S.seen[key(p.name, S.thread)] = evs.length;
     store.set('seen', S.seen);
   }
@@ -829,6 +860,14 @@ function lockOn(el) {
   setTimeout(() => el.classList.remove('flash'), 2400);
 }
 const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: S.thread }), openCard });
+// Does the card a phone notification points at still wait for you, in any project? (Tags are card ids.)
+function cardWaiting(tag) {
+  const [kind, id] = [tag.slice(0, tag.indexOf(':')), tag.slice(tag.indexOf(':') + 1)];
+  return S.projects.some(p => kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
+    : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
+      : kind === 'question' ? openQuestions(p).some(q => q.id === id) : true);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.projects.length) phone.clearSettled(cardWaiting); });
 
 // The project menu and the model menu close on a click anywhere else, or Escape.
 document.addEventListener('pointerdown', e => {
@@ -850,7 +889,12 @@ addEventListener('resize', () => { placeModelMenu(); autosize(); });
 let feedAtBottom = true;
 $('#feed').addEventListener('scroll', () => { const f = $('#feed'); feedAtBottom = f.scrollHeight - f.scrollTop - f.clientHeight < 80; }, { passive: true });
 if (matchMedia('(pointer: coarse)').matches) new ViewportFit(document.documentElement, {
-  onChange: () => { if (feedAtBottom && S.thread !== 'needs') $('#feed').scrollTop = $('#feed').scrollHeight; placeModelMenu(); }
+  // Follow only when the visible height or the keyboard changed; Safari nudging the view while you type does not
+  // move the list (phone pass 2).
+  onChange: (now, was) => {
+    if ((now.height !== was.height || now.keyboard !== was.keyboard) && feedAtBottom && S.thread !== 'needs') $('#feed').scrollTop = $('#feed').scrollHeight;
+    placeModelMenu();
+  }
 }).start();
 
 // On a phone the notifications bell lives beside the hub menu above the thread list (set up once), which leaves
@@ -1096,12 +1140,7 @@ $('#input').addEventListener('keydown', e => {
   if (what === 'newline') insertLineBreak(e.target);
   else $('#composer').requestSubmit();
 });
-function autosize() {
-  const i = $('#input');
-  i.style.height = 'auto';
-  i.style.height = Math.min(i.scrollHeight + 2, 200) + 'px';
-  i.style.overflowY = i.scrollHeight > 200 ? 'auto' : 'hidden';
-}
+function autosize() { growBox($('#input'), 200); }
 $('#input').addEventListener('input', autosize);
 
 $('#route-perms').addEventListener('click', () => act(async () => {

@@ -58,6 +58,10 @@ Notifications arrive when a permission request waits for Allow, a decision is re
 
 On the phone, the boxes are sized so iPhone does not zoom in when you tap one, the message box stays just above the keyboard, and opening a thread does not pop the keyboard up; tap the box when you want to type. The longer typing hints (Alt+Enter, "all", "4A 7B") are left off; the quick-reply chips above the box do the picking.
 
+**Phone check:** if something on the phone looks wrong (a zoom, a jump), open the hub menu (the three dots above the thread list) and tap **Phone check**, or add `?debug=phone` to the address in Safari. A small panel at the top shows live numbers: the visible area and its zoom, anything sticking out past the screen edge, the tapped box and its text size, and a count of jumps with what changed in each. Take a screenshot and send it. Tap **Hide phone check** in the menu (or use `?debug=off`) to turn it off; it is remembered on that phone until then. It never takes a tap.
+
+Permission requests the orchestrator is handling never buzz the phone; a push goes out only when one becomes yours (a hard stop, the orchestrator sends it to you, or it has no answer after 2 minutes). When a card you were notified about is settled elsewhere, its notification is cleared as soon as the hub page opens on the phone, or with the next notification.
+
 The notification keys and the list of subscribed phones are kept in `~/.crux-hub/` (outside every repo). Tap the bell again to turn notifications off on a device. If the PC sleeps, the hub cannot be reached and no notifications go out.
 
 ## Agent types, models and effort
