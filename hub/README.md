@@ -87,11 +87,16 @@ The orchestrator sees the list and picks a type for each worker, or follows your
 
 Agents run through the Claude Agent SDK on this machine's Claude Code login, so they draw from your Claude plan's limits, the same pool as your own Claude Code sessions. Several agents at once use those limits faster. An `ANTHROPIC_API_KEY` in your environment is ignored unless you set `CRUX_HUB_USE_API_KEY=1`.
 
+**Meters (decision 36).** The strip above the conversation carries small meters for your plan's 5-hour window, 7-day window and Fable's weekly window (copper), each with percent used and time to reset. They turn amber at a warning or 80% and up, and red only when work is blocked. Click them for the usage panel: plan windows with reset times, and estimated spend today and since the hub started, per model and per agent, with Fable's share. Spend is estimated from list prices, not a bill. The core has no meters of its own.
+
+Where the numbers come from: every 5 minutes the hub asks one live agent for the plan windows, through the Agent SDK's usage call (marked experimental by the SDK), and it also listens for the `rate_limit_event` agents stream. If that call fails or plan limits do not apply (an API key), the meters hide and the orchestrator thread gets one notice; they come back by themselves. With no agent running, the last reading stays, dimmed, with the time it was read.
+
 ## What it writes
 
 | Where | What |
 | --- | --- |
 | `<project>/.crux/events.jsonl` | Append-only log: messages, summaries, picks, board entries, agent sessions. Threads and board entries are rebuilt from it. Commit it if you want the memory to travel with the repo. |
+| `<project>/.crux/events.jsonl` (usage) | `usage` events, one per agent result: what it added per model (input, output, cache tokens and estimated cost; the SDK reports running totals, so only the difference is kept) plus the totals, to resume from. `plan_usage` events: the plan windows, written only when they change by 2 points or more, or a status changes. |
 | `<project>/.crux/attachments/` | Images pasted, dropped or attached in threads, and PNG/JPEG/GIF/WebP screenshots agents post (decision 23). Named by a hash of their bytes; message events carry only id, type and size. PNG, JPEG, GIF, WebP, up to 10 MB each, 6 per message. Served at `/att/<project>/<id>` to the hub's own page only. Agents receive them as image blocks; images over about 3.7 MB are pointed to by path instead. |
 | `~/.crux-hub/` | Notification keys (`vapid.json`) and subscribed phones (`push-subscriptions.json`). Never in a repo. |
 | `<project>/.decisions/*.json` | Your picks (status, choice, reason, date) on Crux records, then the Crux pages are rebuilt. Claude still writes everything else in a record. |

@@ -6,6 +6,7 @@ import { robot } from './robots.js';
 import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
 import { enterAction, insertLineBreak, composerHint, replyHint, filterHint } from './composer-keys.js';
 import { ViewportFit } from './viewport.js';
+import { UsageUI } from './usage-ui.js';
 import { boardView, groupBoard, SECTIONS } from './board.js';
 const EFFORT_SHORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'x-high', max: 'max' };
 const $ = s => document.querySelector(s);
@@ -37,6 +38,14 @@ const fineMq = matchMedia('(pointer: fine)');
 const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches) el?.focus(); };
 const map = new LiveMap($('#hud'), { open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t) });
 
+// Decision 36: plan meters in the strip (not on the core) and the usage panel behind them.
+const usageUI = new UsageUI($('#hud'), {
+  source: () => ({
+    rows: S.projects.flatMap(p => p.events.filter(e => e.type === 'usage').map(ev => ({ project: p.name, ev }))),
+    bootAt: S.bootAt, multi: S.projects.length > 1
+  })
+});
+
 // ---------- data ----------
 async function api(path, body) {
   const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
@@ -46,12 +55,14 @@ async function api(path, body) {
 }
 
 async function load() {
-  const { projects, retireAt, models, settings, boot, version, build } = await api('/api/state');
+  const { projects, retireAt, models, settings, boot, version, build, usage, bootAt } = await api('/api/state');
   // The hub now serves different page files (a restart onto new code): reload, so the new page runs (M014+).
   if (S.build && build && build !== S.build) return reloadForUpdate(version);
   S.build ||= build;
   S.version ||= version;
   S.boot = boot;
+  S.bootAt = bootAt;
+  usageUI.setPlan(usage);
   map.retireAt = retireAt;
   S.settings = settings || {};
   S.models = models || [];
@@ -75,6 +86,8 @@ function connect() {
   es = new EventSource('/api/stream');
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
+    // Plan numbers belong to the hub, not a project: the live copy (no project) and the logged one both land here.
+    if (ev.type === 'plan_usage') { if (!ev.logged) usageUI.setPlan(ev); return; }
     const p = S.projects.find(x => x.name === ev.project);
     if (!p) return;
     if (ev.logged) {
@@ -752,6 +765,7 @@ function renderBoard() {
 function render() {
   renderProjects(); renderThreads(); renderHead(); renderFeed(); renderBoard(); renderModelMenu();
   map.update(proj(), pendingForYou(proj()));
+  usageUI.draw();
   $('#app').classList.toggle('with-board', !$('#board').hidden);
   $('#open-board').classList.toggle('on', !$('#board').hidden);
 }
@@ -1157,5 +1171,7 @@ function startView() {
   if (p && needsCount(p)) { S.thread = 'needs'; S.justSwitched = true; store.set('thread', 'needs'); $('#app').classList.remove('show-side'); render(); }
   else $('#app').classList.add('show-side');
 }
-load().then(() => { startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); })
+// ?usagepanel opens the usage panel on load (for screenshots and click-tests); ?usagepanel=session starts on the session totals.
+const openUsage = new URLSearchParams(location.search).get('usagepanel');   // read first: opening a card rewrites the address
+load().then(() => { startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); if (openUsage !== null) { if (openUsage === 'session') usageUI.range = 'session'; usageUI.open(); } })
   .catch(() => { if (phoneStart) $('#app').classList.add('show-side'); connect(); });
