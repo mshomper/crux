@@ -3,7 +3,8 @@ import { LiveMap } from './map.js';
 import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { openQuestions as askedOpen, pageStatus, isYesNo } from './questions.js';
-import { enterAction, insertLineBreak } from './composer-keys.js';
+import { enterAction, insertLineBreak, composerHint, replyHint, filterHint } from './composer-keys.js';
+import { ViewportFit } from './viewport.js';
 import { boardView, groupBoard, SECTIONS } from './board.js';
 const EFFORT_SHORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'x-high', max: 'max' };
 const $ = s => document.querySelector(s);
@@ -29,6 +30,10 @@ const S = {
 };
 
 const proj = () => S.projects.find(p => p.name === S.current) || S.projects[0];
+// Phone width, and whether there is a mouse (no keyboard popping up when a thread opens, no focus jumps).
+const phoneMq = matchMedia('(max-width: 720px)');
+const fineMq = matchMedia('(pointer: fine)');
+const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches) el?.focus(); };
 const map = new LiveMap($('#hud'), { open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t) });
 
 // ---------- data ----------
@@ -256,7 +261,7 @@ function questionCard(ev) {
     const yn = isYesNo(q.text) ? ['Yes', 'No'].map(w => `<button class="qquick ${draft === w ? 'on' : ''}" data-quick="${esc(k)}" data-word="${w}" aria-pressed="${draft === w}">${w}</button>`).join('') : '';
     return `<div class="qrow">
       <p class="qtext">${esc(q.text)}</p>
-      <div class="qreply">${yn}<textarea class="qbox" rows="1" data-answer="${esc(k)}" data-q="${esc(ev.id)}" aria-label="Your answer" placeholder="${ev.open.length > 1 ? 'Answer this one' : 'Your answer'}">${esc(draft)}</textarea>
+      <div class="qreply">${yn}<textarea class="qbox" rows="1" enterkeyhint="send"data-answer="${esc(k)}" data-q="${esc(ev.id)}" aria-label="Your answer" placeholder="${replyHint({ narrow: phoneMq.matches, several: ev.open.length > 1 })}">${esc(draft)}</textarea>
         <button class="btn ghost icon-only qx" data-dismiss="${esc(ev.id)}" data-index="${q.i}" aria-label="Dismiss this question" title="Dismiss this question: it leaves Needs you, and ${esc(ev.from)} is not told">${icon('x')}</button></div>
     </div>`;
   }).join('');
@@ -695,13 +700,10 @@ function renderHead() {
   const retired = a && a.state === 'retired' && t !== 'orchestrator';
   $('#input').disabled = !!retired;
   $('#attach').disabled = !!retired;
-  // The hint fits its box (M008 9): on a phone just who you are writing to; the quick-reply chips above the
-  // box show the short picks. The new-line hint only where there is a real keyboard and room for it.
-  const narrow = matchMedia('(max-width: 720px)').matches;
-  const keys = !narrow && matchMedia('(pointer: fine)').matches ? ' Alt+Enter for a new line.' : '';
-  $('#input').placeholder = retired ? 'This agent has retired.' : t === 'needs' || t === 'orchestrator'
-    ? (narrow ? 'Message the orchestrator' : `Message the orchestrator. Short replies like "all" or "4A 7B" pick decisions.${keys}`)
-    : (narrow ? `Message ${t}` : `Message ${t} directly.${keys}`);
+  // The hint fits its box on one line (M008 9, phone pass): on a phone one word, since the header says who you are
+  // writing to and the quick-reply chips above the box show the short picks (composer-keys.js).
+  $('#input').placeholder = composerHint({ thread: t, retired: !!retired, narrow: phoneMq.matches, fine: fineMq.matches });
+  $('#board-filter').placeholder = filterHint({ narrow: phoneMq.matches });
   renderQuick(p, t, retired);
   const act = p && S.activity[key(p.name, t === 'needs' ? 'orchestrator' : t)];
   $('#activity').textContent = act || '';
@@ -781,7 +783,7 @@ function selectThread(t) {
   $('#app').classList.remove('show-side');
   render();
   phone.viewChanged();
-  $('#input').focus();
+  focusIfDesk($('#input'));   // on a phone, opening a thread does not pop the keyboard up
 }
 
 // Open the card a notification points at (card = "approval:<id>", "decision:<n>" or "question:<event id>").
@@ -827,6 +829,24 @@ addEventListener('keydown', e => {
   if (!$('#board').hidden && !document.querySelector('dialog[open]')) setBoard(false);   // Escape closes the board too
 });
 addEventListener('resize', () => { placeModelMenu(); autosize(); });
+
+// Phones and tablets: the hub fills the visible part of the screen, so the composer stays above the keyboard
+// (viewport.js). A conversation you were reading at its latest message stays there as the keyboard opens.
+let feedAtBottom = true;
+$('#feed').addEventListener('scroll', () => { const f = $('#feed'); feedAtBottom = f.scrollHeight - f.scrollTop - f.clientHeight < 80; }, { passive: true });
+if (matchMedia('(pointer: coarse)').matches) new ViewportFit(document.documentElement, {
+  onChange: () => { if (feedAtBottom && S.thread !== 'needs') $('#feed').scrollTop = $('#feed').scrollHeight; placeModelMenu(); }
+}).start();
+
+// On a phone the notifications bell lives beside the hub menu above the thread list (set up once), which leaves
+// the conversation header room for the thread's name.
+function placeBell() {
+  const bell = $('#phone-alerts');
+  if (phoneMq.matches) $('.side-head').insertBefore(bell, $('.hub-menu-wrap'));
+  else $('.head-actions').insertBefore(bell, $('#open-board'));
+}
+placeBell();
+phoneMq.addEventListener('change', () => { placeBell(); render(); });
 $('#feed').addEventListener('scroll', () => placeModelMenu(), { passive: true });
 
 // A change in the model menu applies at once.
@@ -883,7 +903,7 @@ document.addEventListener('click', e => {
   const qq = e.target.closest('[data-quick]');
   if (qq) {
     const box = [...document.querySelectorAll('.qbox')].find(x => x.dataset.answer === qq.dataset.quick);
-    if (box) { box.value = box.value === qq.dataset.word ? '' : qq.dataset.word; draftChanged(box); box.focus(); }
+    if (box) { box.value = box.value === qq.dataset.word ? '' : qq.dataset.word; draftChanged(box); focusIfDesk(box); }   // a thumb on Yes needs no keyboard
     return;
   }
   const sa = e.target.closest('[data-send-answers]');
@@ -932,7 +952,7 @@ $('#quick').addEventListener('click', e => {
   const box = $('#input'), words = box.value.trim().split(/\s+/).filter(Boolean);
   const w = c.dataset.quickText;
   box.value = (w === 'all' ? ['all'] : words.includes(w) ? words.filter(x => x !== w) : [...words.filter(x => x !== 'all'), w]).join(' ');
-  autosize(); box.focus();
+  autosize(); focusIfDesk(box);
 });
 $('#attach').addEventListener('click', () => $('#file-pick').click());
 $('#file-pick').addEventListener('change', e => { addImages([...e.target.files]); e.target.value = ''; });
@@ -940,7 +960,7 @@ $('#tray').addEventListener('click', e => {
   const x = e.target.closest('[data-untray]'); if (!x) return;
   const [t] = tray.splice(Number(x.dataset.untray), 1);
   if (t) URL.revokeObjectURL(t.url);
-  renderTray(); $('#input').focus();
+  renderTray(); focusIfDesk($('#input'));
 });
 $('#input').addEventListener('paste', e => {
   if ($('#input').disabled) return;
