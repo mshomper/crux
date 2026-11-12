@@ -148,7 +148,7 @@ export function unansweredQuestions(events, { thread = 'orchestrator', decisionS
     }
     if (!dismissedAll) last.questions.forEach((q, i) => {
       if (gone.has(i) || answeredByPicks(q, decisionStatus)) return;
-      out.push(`${clip(q, 300)} (asked ${time(last.ts)} by ${last.from}${typedAfter ? '; {{who}} wrote in the thread after it, so check his messages above' : ''})`);
+      out.push(`${clip(q, 300)} (asked ${time(last.ts)} by ${last.from}${typedAfter ? '; {{who}} wrote in the thread after it, so check those messages above' : ''})`);
     });
   }
   const tagged = sums.filter(e => Array.isArray(e.open_questions)).at(-1);

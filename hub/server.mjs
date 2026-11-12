@@ -61,7 +61,7 @@ let roots = [join(homedir(), 'Documents', 'GitHub')];
 try { const c = JSON.parse(readFileSync(join(crux, 'config.json'), 'utf8')); if (Array.isArray(c.roots) && c.roots.length) roots = c.roots; } catch { }
 roots = roots.map(r => resolve(r)).filter(r => existsSync(r));
 const slash = s => s.replace(/\\/g, '/');
-// file:///C:/.../GitHub/AcuLoad/.decisions/0002-x.html  ->  /files/0/AcuLoad/.decisions/0002-x.html
+// file:///C:/.../GitHub/my-project/.decisions/0002-x.html  ->  /files/0/my-project/.decisions/0002-x.html
 function hubUrl(fileUrl) {
   let path;
   try { path = slash(decodeURIComponent(new URL(fileUrl).pathname)).replace(/^\/([A-Za-z]:)/, '$1'); } catch { return fileUrl; }
