@@ -13,10 +13,12 @@ export function enterAction(e) {
 
 // The hint inside the message box. On a phone it is one or two words on one line ("Message"); the longer hints
 // (picking with "all" or "4A 7B", Alt+Enter) are for wide screens, and Alt+Enter only where there is a real keyboard.
-// The quick-reply chips above the box carry the picks on a phone.
-export function composerHint({ thread, retired = false, narrow = false, fine = true }) {
+// The quick-reply chips above the box carry the picks on a phone. In a narrow column beside others (decision 39)
+// the hint says only who you are writing to, so it never runs past the box.
+export function composerHint({ thread, retired = false, narrow = false, fine = true, compact = false }) {
   if (retired) return narrow ? 'Retired' : 'This agent has retired.';
   if (narrow) return 'Message';
+  if (compact) return thread === 'needs' || thread === 'orchestrator' ? 'Message the orchestrator' : `Message ${thread}`;
   const keys = fine ? ' Alt+Enter for a new line.' : '';
   return thread === 'needs' || thread === 'orchestrator'
     ? `Message the orchestrator. Short replies like "all" or "4A 7B" pick decisions.${keys}`

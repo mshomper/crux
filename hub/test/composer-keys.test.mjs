@@ -1,7 +1,16 @@
 // Enter sends; Alt+Enter and Shift+Enter make a new line (Matt, 2026-11-11).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enterAction, insertLineBreak } from '../public/composer-keys.js';
+import { enterAction, insertLineBreak, composerHint } from '../public/composer-keys.js';
+
+test('a narrow column beside others gets the short hint: who you are writing to, nothing more', () => {
+  assert.equal(composerHint({ thread: 'orchestrator', compact: true }), 'Message the orchestrator');
+  assert.equal(composerHint({ thread: 'needs', compact: true }), 'Message the orchestrator', 'Needs you sends to the orchestrator');
+  assert.equal(composerHint({ thread: 'route-finder', compact: true }), 'Message route-finder');
+  assert.equal(composerHint({ thread: 'route-finder', compact: true, retired: true }), 'This agent has retired.');
+  assert.equal(composerHint({ thread: 'route-finder', compact: true, narrow: true }), 'Message', 'the phone form wins');
+  assert.match(composerHint({ thread: 'route-finder' }), /Alt\+Enter/, 'a single wide column keeps the full hint');
+});
 
 const key = (k, mods = {}) => ({ key: k, altKey: false, shiftKey: false, ctrlKey: false, metaKey: false, ...mods });
 
