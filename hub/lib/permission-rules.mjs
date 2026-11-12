@@ -129,7 +129,7 @@ const CURL_FLAGS = flagSpec({
   'H header': 'header', 'K config variable': 'config',
   // Where the request really goes: a proxy, --connect-to (the address after the last two colons), --resolve, --url.
   'x proxy preproxy socks4 socks4a socks5 socks5-hostname': 'proxy', 'connect-to': 'connectto', resolve: 'resolve', url: 'url',
-  's silent S show-error L location f fail fail-with-body k insecure v verbose i include I head G get # progress-bar N no-buffer compressed g globoff 4 6 R remote-time create-dirs http1.1 http2 q no-progress-meter ssl-no-revoke Z parallel location-trusted': 'ok',
+  's silent S show-error L location f fail fail-with-body k insecure v verbose i include I head G get # progress-bar N no-buffer compressed g globoff 4 6 R remote-time create-dirs http1.0 http1.1 http2 q no-progress-meter ssl-no-revoke Z parallel location-trusted': 'ok',
   'A user-agent e referer m max-time connect-timeout retry retry-delay retry-max-time r range w write-out C continue-at limit-rate z time-cond max-filesize max-redirs': 'okv'
 }, ['out', 'outdir', 'send', 'method', 'creds', 'header', 'config', 'proxy', 'connectto', 'resolve', 'url', 'okv']);
 const WGET_FLAGS = { ...flagSpec({
@@ -157,7 +157,7 @@ const CONFIG_HOME_VARS = /^(curl_home|home|xdg_config_home|appdata|userprofile|w
 // option is first resolved against the program's full list (so -Me is Method, never a shortened something else), then
 // its own name must be here. -X / -d / --json and -Method / -Body change things, so only towards a test hub's port.
 const LOCAL_OK = {
-  curl: new Set('s silent S show-error f fail fail-with-body L location i include I head N no-buffer m max-time connect-timeout retry w write-out A user-agent b cookie u user H header o output X request d data data-raw data-binary data-urlencode json G get compressed'.split(' ')),
+  curl: new Set('s silent S show-error f fail fail-with-body L location i include I head N no-buffer m max-time connect-timeout retry w write-out A user-agent b cookie u user H header o output X request d data data-raw data-binary data-urlencode json G get compressed http1.0 http1.1 http2'.split(' ')),
   wget: new Set('q quiet S server-response T timeout t tries header O output-document post-data body-data method -nv no-verbose'.split(' ')),
   iwr: new Set(['Uri', 'Method', 'Body', 'ContentType', 'Headers', 'UseBasicParsing', 'TimeoutSec', 'OutFile', 'ErrorAction'])
 };
@@ -246,6 +246,7 @@ export function classify({ tool, input = {}, projectDir, tmp = tmpdir(), home = 
   c.envSet = new Map();  // environment settings the command makes for what follows (export X=, $env:X =)
   c.downloaded = new Set();   // files this command downloads: running one later in it is a stop
   c.cmdText = String(input.command || '');   // the whole command, for checks that look at all of it ($PSDefaultParameterValues)
+  c.assigned = new Set();     // every shell variable the command assigns, exported or not (see envNames)
   const out = classifyWith(c, tool, input);
   return { ...out, tempMade: [...c.tempMade] };
 }
@@ -496,7 +497,7 @@ class Check {
 
   // One simple command. Returns the working folder for the next one (only cd changes it).
   part(raw, cwd, ps) {
-    const words = tokens(raw);
+    const words = tokens(raw, ps);
     if (!words.length) return cwd;
     if (this.defineVars(words, ps, cwd)) return cwd;
     const sets = this.bind(words);
@@ -586,6 +587,9 @@ class Check {
     } else {
       const ws = t0 === 'export' ? words.slice(1) : words;
       if (ws.length && ws.every(w => /^[A-Za-z_]\w*=/.test(w.text))) pairs = ws.map(w => [w.text.split('=')[0].toLowerCase(), w.text.slice(w.text.indexOf('=') + 1)]);
+      // Exported or not, a shell assignment counts as an environment setting for curl and wget: HOME, USERPROFILE and
+      // APPDATA are already in the environment, so HOME=. changes what the next curl reads (fifth review of PR #51).
+      if (pairs) for (const [k] of pairs) this.assigned.add(k);
     }
     if (!pairs) return false;
     if (SECRET_VAR.test(pairs.map(p => p[0]).join(' ')) && pairs.some(p => /\$/.test(p[1]))) { for (const w of words) this.word(w, cwd); return false; }
@@ -741,9 +745,10 @@ class Check {
     // machine with no port, only a plain GET; changes only towards a test hub's port.
     if (/^(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)$/.test(head) && !this.urlsHere.length && this.localUrls.length) {
       const fam = head === 'curl' ? 'curl' : head === 'wget' ? 'wget' : 'iwr';
-      const r = readFlags(fam === 'iwr' ? joinHashtables(args) : args, webFlags(fam));
+      const r = readFlags(args, webFlags(fam));
       const why = m => this.stop(`${head} to this machine ${m}`);
-      const envBad = [...this.env().keys()].find(k => !LOCAL_ENV_OK.has(k));
+      if (args.some(openHashtable)) return why('with a hashtable whose braces do not close');
+      const envBad = this.envNames(head).find(k => !LOCAL_ENV_OK.has(k));
       if (envBad) return why(`with ${envBad.toUpperCase()} set in front (only ${[...LOCAL_ENV_OK].map(k => k.toUpperCase()).join(', ')} may be)`);
       if (r.unknown.length) return why(`with an option the hub cannot check (${r.unknown[0]})`);
       const off = r.flags.find(f => !LOCAL_OK[fam].has(f.key));
@@ -751,6 +756,8 @@ class Check {
       const vals = n => r.flags.filter(f => f.name === n).map(f => f.value);
       if (r.flags.some(f => f.value === undefined)) return why('with an option that has nothing after it');
       if (fam === 'curl' && vals('header').some(h => typeof h !== 'string' || h.startsWith('@'))) return why('with headers read from a file (-H @file)');
+      const wOut = fam === 'curl' && writeOutFile(r);
+      if (wOut) return why(`with -w writing to a file or read from one (${wOut})`);
       let targets;
       if (fam === 'iwr') {
         const uris = [...vals('url'), ...r.positional.slice(0, 1)];
@@ -856,8 +863,13 @@ class Check {
   items(list) { return this.ps ? list.flatMap(t => t.split(',')).filter(Boolean) : list; }
   // Environment settings the next program sees: export X= and $env:X = earlier in the command, X=v in front of it.
   env() { return new Map([...(this.envSet || []), ...(this.envNow || [])]); }
+  // The names of every environment setting a downloader may see: env() plus, for curl and wget, every shell
+  // assignment earlier in the command (HOME=.; curl ...), exported or not.
+  envNames(head) { return [...new Set([...this.env().keys(), ...(/^(curl|wget)$/.test(head) ? this.assigned || [] : [])])]; }
 
   word(w, cwd) {
+    // A PowerShell hashtable (one word, as written): every word inside it is checked like any other.
+    if (w.hashtable) { for (const x of tokens(w.text.replace(/^@\{|\}$/g, ' ').replace(/[;=]/g, ' '))) this.word(x, cwd); return; }
     const t = w.text;
     if (w.vars) {
       // Every variable named in the word: $X, ${X}, $env:X, %X%.
@@ -1156,7 +1168,7 @@ class Check {
   webRead(head, args, cwd) {
     // curl and wget read settings files found through the environment (CURL_HOME/.curlrc, HOME, XDG_CONFIG_HOME,
     // APPDATA, USERPROFILE, WGETRC): set in front of them, that is -K by another name.
-    const home = (head === 'curl' || head === 'wget') && [...this.env().keys()].find(k => CONFIG_HOME_VARS.test(k));
+    const home = (head === 'curl' || head === 'wget') && this.envNames(head).find(k => CONFIG_HOME_VARS.test(k));
     if (home) return this.stop(`${head} with ${home.toUpperCase()} set in front: it reads a settings file the hub cannot check`);
     const r = this.webFlags(head, args);
     if (r.unknown.length) return this.stop(`${head} with an option the hub cannot check (${r.unknown[0]})`);
@@ -1187,9 +1199,11 @@ class Check {
   // { unknown, config, sends, creds, inputs, saves: [files], dirs: [folders], intoHere, urls }.
   webFlags(head, args) {
     const fam = head === 'curl' ? 'curl' : head === 'wget' ? 'wget' : 'iwr';
-    const r = readFlags(fam === 'iwr' ? joinHashtables(args) : args, webFlags(fam));
-    // PowerShell splatting (iwr @p): the options sit in a variable the hub cannot read.
+    const r = readFlags(args, webFlags(fam));
+    // PowerShell splatting (iwr @p): the options sit in a variable the hub cannot read. A hashtable that does not
+    // close could swallow what follows it.
     if (fam === 'iwr') for (const p of r.positional) if (/^@\w/.test(p)) r.unknown.push(p);
+    for (const a of args) if (openHashtable(a)) r.unknown.push(String(a).slice(0, 40));
     const vals = n => r.flags.filter(f => f.name === n).map(f => f.value);
     const methods = vals('method');
     const out = {
@@ -1203,8 +1217,10 @@ class Check {
       urls: [...r.positional, ...vals('url')].map(String).filter(u => /^[a-z]+:\/\//i.test(u))
     };
     if (out.config === true) out.config = '?';
-    // curl -H @file reads its headers from a file, like --config: the hub cannot see what it sends.
+    // curl -H @file reads its headers from a file, like --config: the hub cannot see what it sends. -w @file reads its
+    // format from a file, and -w '%output{file}' writes to any file: the same.
     if (fam === 'curl' && !out.config) { const h = vals('header').find(v => typeof v === 'string' && v.startsWith('@')); if (h) out.config = `-H ${h}`; }
+    if (fam === 'curl' && !out.config) { const w = writeOutFile(r); if (w) out.config = `-w ${w}`; }
     if (out.dirs.some(d => typeof d !== 'string')) out.saves.push(true);   // a folder option with nothing after it
     // wget saves under the address's name unless -O names the file; curl only with -O (into --output-dir when given).
     out.intoHere = fam === 'wget' ? !vals('doc').length : fam === 'curl' ? vals('remote').length > 0 : false;
@@ -1325,22 +1341,28 @@ class Check {
   }
 }
 
-// PowerShell words with a hashtable rejoined: ['-Headers', '@{', 'a', '=', "'b'", '}', '-Method', 'Post'] ->
-// ['-Headers', "@{ a = 'b' }", '-Method', 'Post'].
-function joinHashtables(args) {
-  const out = [];
-  for (let i = 0; i < args.length; i++) {
-    if (!String(args[i]).startsWith('@{')) { out.push(args[i]); continue; }
-    let depth = 0, j = i, text = [];
-    for (; j < args.length; j++) {
-      const a = String(args[j]); text.push(a);
-      depth += (a.match(/\{/g) || []).length - (a.match(/\}/g) || []).length;
-      if (depth <= 0) break;
-    }
-    out.push(text.join(' ')); i = j;
-  }
-  return out;
+// curl -w / --write-out given a format read from a file (@file) or one that writes to a file (%output{...}): the
+// offending value, else null.
+function writeOutFile(r) {
+  const w = r.flags.find(f => (f.key === 'w' || f.key === 'write-out') && (typeof f.value !== 'string' || f.value.startsWith('@') || /%output/i.test(f.value)));
+  return w ? String(w.value ?? '(nothing)').slice(0, 60) : null;
 }
+
+// The index of the } that closes the { at s[open], counting braces outside quotes only ('{' and "{" are text);
+// -1 when it never closes.
+function hashtableEnd(s, open) {
+  let depth = 0, q = null;
+  for (let j = open; j < s.length; j++) {
+    const d = s[j];
+    if (q) { if (d === q && !(q === '"' && s[j - 1] === '`')) q = null; continue; }
+    if (d === "'" || d === '"') { q = d; continue; }
+    if (d === '{') depth++;
+    else if (d === '}' && --depth === 0) return j;
+  }
+  return -1;
+}
+// True when a word written as a PowerShell hashtable (@{...}) does not close.
+const openHashtable = w => String(w).startsWith('@{') && hashtableEnd(String(w), 1) < 0;
 
 // "localhost:4791:[::1]:4747" -> ['localhost', '4791', '[::1]', '4747']: colon-separated fields, brackets kept whole.
 function splitHostFields(v) {
@@ -1435,12 +1457,21 @@ export function splitParts(s, ps = false, withOps = false) {
 }
 
 // Words with quotes removed. quoted: any quotes; vars: a $ or %VAR% outside single quotes (it would expand).
-export function tokens(part) {
+// ps: a PowerShell hashtable @{ a = 'b'; c = '{' } is one word, kept as written (quotes and all); its braces are
+// counted with quotes respected, and one that does not close is marked unbalanced.
+export function tokens(part, ps = false) {
   const out = []; let cur = null;
   const push = () => { if (cur) out.push(cur); cur = null; };
   for (let i = 0; i < part.length; i++) {
     const c = part[i];
     if (/\s/.test(c)) { push(); continue; }
+    if (ps && !cur && c === '@' && part[i + 1] === '{') {
+      const end = hashtableEnd(part, i + 1);
+      const text = part.slice(i, end < 0 ? part.length : end + 1);
+      out.push({ text, quoted: true, vars: /\$/.test(text), hashtable: true, unbalanced: end < 0 });
+      i = end < 0 ? part.length : end;
+      continue;
+    }
     if (c === '>' || c === '<') {   // a redirection is its own word, even when written hard against a file name
       let op = c;
       if (cur && !cur.quoted && /^\d$/.test(cur.text)) { op = cur.text + c; cur = null; } else push();

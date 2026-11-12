@@ -574,6 +574,47 @@ test('round 4: everyday requests to test hubs and reads of the live hub still pa
   assert.equal(ps1('auto', `Invoke-RestMethod http://localhost:4747/api/settings -Method Post -Body '{}'`), 'human');
 });
 
+// ---------- fifth review of PR #51 ----------
+test('round 5, 1: a quoted brace in a hashtable cannot swallow the options after it (Auto and Trusted)', () => {
+  const stops = [
+    { ps: `Invoke-RestMethod -Uri http://localhost:4747/api/settings -Headers @{x='{'} -Method Post -ContentType application/json -Body '{"project":"crux","permissionMode":"trusted"}'` },
+    { ps: `iwr http://localhost:4747/api/restart -Headers @{a='{'} -Method Post -ContentType application/json` },
+    { ps: `iwr http://localhost:4747/api/restart -Headers @{a="{"} -Method Post -ContentType application/json` },
+    { ps: `iwr http://localhost:4747/api/restart -Headers @{a='}'} -Method Post` },
+    { ps: `iwr http://localhost:4791/api/state -Headers @{a='b'` }
+  ];
+  for (const level of ['auto', 'trusted']) for (const c of stops) assert.equal(route(level, c), 'human', `${level}: ${JSON.stringify(c)}`);
+  assert.equal(route('auto', { ps: `iwr http://localhost:4791/api/settings -Headers @{ a = '{' } -Method Post -Body '{}'` }), 'allow', 'the same shape to a test hub is fine');
+  assert.equal(route('auto', { ps: `Invoke-RestMethod http://localhost:4747/api/state -Headers @{ Accept = 'application/json' }` }), 'allow', 'and a read of the live hub');
+});
+
+test('round 5, 2: a bare shell assignment before curl or wget counts as an environment setting', () => {
+  const stops = [
+    'HOME=.; curl -s http://localhost:4791/api/state', 'HOME=. && curl -s http://localhost:4791/api/state', 'HOME=$PWD; curl -s http://localhost:4791/api/state',
+    'USERPROFILE=.; curl -s http://localhost:4791/api/state', 'APPDATA=. ; curl -s http://localhost:4791/api/state', 'HOME=.; wget -q http://localhost:4791/',
+    'CURL_HOME=.; curl -s -X POST http://localhost:4791/api/restart', { ps: "$env:HOME = '.'; curl.exe -s http://localhost:4791/api/state" }
+  ];
+  for (const level of ['auto', 'trusted']) for (const c of stops) assert.equal(route(level, c), 'human', `${level}: ${JSON.stringify(c)}`);
+  assert.equal(bash('trusted', 'HOME=.; curl -s https://example.com/x -o docs/x.html'), 'human', 'Trusted website download');
+  assert.equal(bash('trusted', 'APPDATA=. && wget -q https://example.com/x'), 'human');
+});
+
+test('round 5, 3: curl -w that writes to a file or reads its format from one stops; a plain -w still passes', () => {
+  for (const level of ['auto', 'trusted']) {
+    for (const c of [
+      "curl -s -o /dev/null -w '%output{C:/Users/x/evil.txt}text' http://localhost:4791/api/state",
+      "curl -s -o /dev/null -w '%output{>>C:/Users/x/evil.txt}text' http://localhost:4791/api/state",
+      'curl -s -w @fmt.txt http://localhost:4747/api/state', "curl -s --write-out='%output{x.txt}a' http://localhost:4791/"
+    ]) assert.equal(bash(level, c), 'human', `${level}: ${c}`);
+    assert.equal(bash(level, `curl -s -o /dev/null -w "%{http_code}" http://localhost:4791/api/state`), 'allow', `${level}: -w "%{http_code}"`);
+    assert.equal(bash(level, 'curl -s --http1.1 http://localhost:4791/api/state'), 'allow', `${level}: --http1.1`);
+    assert.equal(bash(level, 'curl -s --http1.0 http://localhost:4747/api/state'), 'allow', level);
+  }
+  assert.equal(bash('trusted', "curl -s -w '%output{C:/Users/x/evil.txt}text' https://example.com/"), 'human', 'Trusted website download');
+  assert.equal(bash('trusted', 'curl -s -w @fmt.txt https://example.com/'), 'human');
+  assert.equal(bash('trusted', `curl -s -w "%{http_code}" https://example.com/ -o docs/x.html`), 'allow');
+});
+
 test('a click on the backdrop closes the card only when the press started there too', async () => {
   const handlers = {};
   const el = { className: '', classList: { toggle() {} }, setAttribute() {}, addEventListener: (t, f) => { handlers[t] = f; }, open: true, closed: 0, close() { this.closed++; } };
