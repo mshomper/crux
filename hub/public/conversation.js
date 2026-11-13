@@ -101,10 +101,14 @@ export class Conversation {
       this.renderTray(); host.focusBox(this.input);
     });
     // A touch, wheel or key in the list is you scrolling: a late put-back (settle) then leaves the list to you.
+    // So is the list moving by itself somewhere we did not put it (a fling still gliding after the finger lifted).
+    // A jump to the very top is not: that is the iPhone's reset, which the late put-back is there to undo.
     this.touched = 0;
+    this.wrote = null;          // where settle last put the list
     for (const t of ['touchstart', 'pointerdown', 'wheel', 'keydown']) this.feed.addEventListener(t, () => { this.touched++; }, { passive: true });
     this.feed.addEventListener('scroll', () => {
       const f = this.feed;
+      if (this.wrote !== null && f.scrollTop > 1 && Math.abs(f.scrollTop - this.wrote) > 1) this.touched++;
       this.atBottom = f.scrollHeight - f.scrollTop - f.clientHeight < 80;
       host.scrolled(this);
     }, { passive: true });
@@ -204,9 +208,10 @@ export class Conversation {
   // Do it now, and (when `later`) once more on the next frame and a moment after, unless you have touched the list
   // in between: the iPhone can still move a list once the new part is laid out or its pictures arrive.
   settle(fn, later) {
-    fn();
+    const put = () => { fn(); this.wrote = this.feed.scrollTop; };
+    put();
     if (!later) return;
-    const at = this.touched, again = () => { if (this.touched === at && this.feed.isConnected) fn(); };
+    const at = this.touched, again = () => { if (this.touched === at && this.feed.isConnected) put(); };
     globalThis.requestAnimationFrame?.(again);
     setTimeout(again, 250);
   }

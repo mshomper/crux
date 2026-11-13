@@ -9,7 +9,7 @@ import * as AP from './all-projects.js';
 import { enterAction, insertLineBreak, replyHint, filterHint } from './composer-keys.js';
 import { Columns } from './columns.js';
 import { growBox } from './conversation.js';
-import { patchList } from './list-patch.js';
+import { patchKeep } from './list-patch.js';
 import { IMG_TYPES, fileChip, plainName } from './files.js';
 import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
@@ -496,9 +496,9 @@ function renderThreads() {
   if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread), agent: a })).join('');
   html += retiredSection(p, workers);
   // Redrawn on every update (an agent's state, its activity): only the rows that changed are swapped, so the list
-  // never jumps to its top on the phone (list-patch.js).
+  // never jumps to its top on the phone, and the row you were looking at stays put (list-patch.js).
   const list = $('#threads');
-  if (list.dataset.html !== html) { list.dataset.html = html; patchList(list, html); }
+  if (list.dataset.html !== html) { list.dataset.html = html; patchKeep(list, html); }
 }
 
 // Retired workers (read-only threads): one folded row, "Retired (N)" with N the recent ones; compact rows inside,
@@ -888,7 +888,7 @@ function renderBoard() {
   const foot = p.board.decisions.length ? `<a class="board-page" href="/p/${encodeURIComponent(p.name)}/index.html" target="_blank" rel="noopener">${icon('page')}Full Crux board for ${esc(p.name)}${icon('external')}</a>` : '';
   const out = (html || empty) + foot;
   const body = $('#board-body');
-  if (body.dataset.html !== out) { body.dataset.html = out; patchList(body, out); }
+  if (body.dataset.html !== out) { body.dataset.html = out; patchKeep(body, out); }
 }
 
 function render() {

@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { installDom, templateFrom, FakeEl } from './fake-dom.mjs';
-import { patchList, anchorOf, backTo } from '../public/list-patch.js';
+import { patchList, patchKeep, anchorOf, backTo } from '../public/list-patch.js';
 
 installDom();
 const { Conversation } = await import('../public/conversation.js');
@@ -76,6 +76,7 @@ function column(thread = 'route-finder') {
   const host = { head: t => ({ title: t, sub: '', chips: [], waiting: 0 }), feed: () => S.html, scrolled() { }, focused() { }, action() { }, focusBox() { } };
   const c = new Conversation({ project: 'p', thread, template: TEMPLATE, host, compose: { text: '', tray: [] } });
   const feed = c.feed;
+  c.el._connected = true;               // on the page
   feed.clientHeight = 800;
   const ins = feed.insertBefore.bind(feed);
   feed.insertBefore = (el, ref) => { const r = ins(el, ref); feed.scrollHeight = feed.children.length * 100; feed.scrollTop = 0; return r; };   // the iPhone
@@ -112,11 +113,59 @@ test('Needs you and All projects (read from the top) stay where you are as cards
   assert.equal(feed.scrollTop, 900);
 });
 
+const later = () => new Promise(r => setTimeout(r, 300));   // past the late put-backs (next frame, 250 ms)
+const glide = (feed, to) => { feed.scrollTop = to; feed.dispatchEvent({ type: 'scroll' }); };
+
+test('a fling still gliding when an update lands is left alone by the late put-backs; an iPhone reset is undone', async () => {
+  const { c, feed, draw } = column();
+  draw(thread(40));
+  feed.scrollTop = 1500; c.atBottom = false;
+  draw(thread(41));
+  assert.equal(feed.scrollTop, 1500, 'put back at once');
+  glide(feed, 1720);                    // the list keeps gliding after the finger lifted: no touch event, only scrolls
+  await later();
+  assert.equal(feed.scrollTop, 1720, 'the glide is not yanked back');
+  draw(thread(42));
+  glide(feed, 0);                       // whereas the iPhone sending it to its top after the redraw
+  await later();
+  assert.equal(feed.scrollTop, 1720, 'is undone by the late put-back');
+});
+
+test('at the latest message, a reader who flicks up just as a message arrives is not pulled back down', async () => {
+  const { feed, draw } = column();
+  draw(thread(40));
+  feed.scrollTop = feed.scrollHeight - feed.clientHeight;
+  draw(thread(41));
+  assert.equal(feed.scrollTop, feed.scrollHeight, 'followed at once');
+  glide(feed, 2600);                    // flicked up
+  await later();
+  assert.equal(feed.scrollTop, 2600);
+});
+
+test('the thread list and the board keep the row you were looking at when a row is added above it', () => {
+  const rows = new FakeEl('nav');       // the page stand-in, given a screen: rows 100 px high, the list's top edge at 50
+  rows.clientHeight = 400; rows.scrollTop = 0; rows._connected = true;
+  Object.defineProperty(rows, 'scrollHeight', { get: () => rows.children.length * 100 });
+  rows.getBoundingClientRect = () => ({ top: 50 });
+  const place = () => rows.children.forEach((el, i) => { el.getBoundingClientRect = () => { const y = 50 + i * 100 - rows.scrollTop; return { top: y, bottom: y + 100, height: 100 }; }; });
+  const ins = rows.insertBefore.bind(rows);
+  rows.insertBefore = (el, ref) => { const r = ins(el, ref); place(); return r; };
+  patchKeep(rows, thread(20)); place();
+  rows.scrollTop = 640;
+  const seen = rows.children[6];
+  patchKeep(rows, msg('new') + thread(20));   // a row added at the top
+  assert.equal(rows.children[7], seen);
+  assert.equal(rows.scrollTop, 740, 'the list moves down by the new row, so the row you saw stays put on screen');
+  rows.scrollTop = 0;
+  patchKeep(rows, msg('newer') + msg('new') + thread(20));
+  assert.equal(rows.scrollTop, 0, 'at its top it stays at its top');
+});
+
 test('every list that updates on its own changes in place: columns, the thread list and the board', () => {
   const conv = pub('conversation.js'), app = pub('app.js');
   assert.match(conv, /patchList\(feed, html\)/);
   assert.doesNotMatch(conv, /feed\.innerHTML =/);
-  assert.match(app, /patchList\(list, html\)/, 'the thread list');
-  assert.match(app, /patchList\(body, out\)/, 'the board');
+  assert.match(app, /patchKeep\(list, html\)/, 'the thread list, with the row you see kept in place');
+  assert.match(app, /patchKeep\(body, out\)/, 'the board, the same');
   assert.doesNotMatch(app, /\$\('#threads'\)\.innerHTML = html/);
 });

@@ -38,6 +38,15 @@ export function patchList(list, html, doc = list.ownerDocument || globalThis.doc
   return { kept: a + b, added: next.length - a - b, removed: cur.length - a - b };
 }
 
+// patchList for a list that scrolls itself (the thread list, the board): scrolled down, the row at the top of the
+// screen stays where it was, even when a row is added or removed above it. At its top it stays at its top.
+export function patchKeep(list, html) {
+  const a = list.clientHeight > 0 && list.scrollTop > 1 ? anchorOf(list) : null;
+  const r = patchList(list, html);
+  if (a) backTo(list, a);
+  return r;
+}
+
 // The first item still showing at the top of the list, and how far below the list's top edge it starts.
 export function anchorOf(list) {
   const box = list.getBoundingClientRect();
