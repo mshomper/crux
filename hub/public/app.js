@@ -21,6 +21,8 @@ import { picturesButton, installPictures } from './pictures.js';
 import { levelChip, LEVELS as LEVEL_INFO, SettingsCards } from './project-settings.js';
 import { GuardUI } from './guard.js';
 import { briefButton, installBrief } from './brief.js';
+import { installKeepScroll } from './keep-scroll.js';
+installKeepScroll();   // a pop-up opening or closing leaves the thread where it was (the iPhone sent it to the top)
 installPictures();   // decision 43: the pictures button on decision cards opens a gallery
 // Decision 50: the brief button on decision cards opens the brief, loaded from the card's own project.
 const briefPop = installBrief(document, (project, id) => api(`/api/brief?project=${encodeURIComponent(project)}&id=${encodeURIComponent(id)}`));
