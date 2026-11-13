@@ -20,7 +20,10 @@ import { routeSwitch } from './route-switch.js';
 import { picturesButton, installPictures } from './pictures.js';
 import { levelChip, LEVELS as LEVEL_INFO, SettingsCards } from './project-settings.js';
 import { GuardUI } from './guard.js';
+import { briefButton, installBrief } from './brief.js';
 installPictures();   // decision 43: the pictures button on decision cards opens a gallery
+// Decision 50: the brief button on decision cards opens the brief, loaded from the card's own project.
+installBrief(document, (project, id) => api(`/api/brief?project=${encodeURIComponent(project)}&id=${encodeURIComponent(id)}`));
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
 { const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
@@ -527,9 +530,9 @@ function decisionCard(p, d) {
   const keys = open ? (d.options || []).map(o => o.key).join(' ') : found ? 'Y confirm · N reject' : '';
   return `<article class="card decision ${open || found ? '' : 'done'}" data-card="decision:${d.id}" ${open || found ? 'tabindex="0"' : ''}>
     <div class="card-head"><h3>D${pad(d.id)} · ${esc(d.title)}</h3>${keys ? `<span class="keys">${open ? `Keys ${esc(keys)}` : keys}</span>` : ''}<span class="chip ${esc(d.status)}">${esc(d.status)}</span></div>
-    ${d.context ? `<p class="ctx">${esc(d.context)}</p>` : ''}
+    ${d.lead ? `<p class="lead-line">${esc(d.lead)}</p>` : d.context ? `<p class="ctx">${esc(d.context)}</p>` : ''}
     ${found ? '' : `<div class="options">${opts}</div>`}
-    <div class="foot">${foot}<span class="spacer"></span>${picturesButton(p.name, d)}<a href="/p/${encodeURIComponent(p.name)}/${esc(d.page)}" target="_blank" rel="noopener" class="row">${icon('page')}Full page</a></div>
+    <div class="foot">${foot}<span class="spacer"></span>${briefButton(p.name, d)}${picturesButton(p.name, d)}<a href="/p/${encodeURIComponent(p.name)}/${esc(d.page)}" target="_blank" rel="noopener" class="row">${icon('page')}Full page</a></div>
   </article>`;
 }
 

@@ -50,10 +50,13 @@ export function sniffImage(buf) {
 // An entry that is already in place: { file: "images/..." } and nothing left to copy.
 export const isPlaced = img => !!img && typeof img === 'object' && !img.from && PLACED.test(String(img.file || ''));
 
-// The pictures of a record that are in place, as { file, caption, option }: what pages, cards and the .md show.
+// What a picture shows, for its label in the brief (decision 50): anything else is left out.
+export const IMAGE_KINDS = ['schematic', 'screenshot', 'mockup', 'chart'];
+
+// The pictures of a record that are in place, as { file, caption, option?, kind? }: what pages, cards and the .md show.
 export function placedImages(d) {
   return (Array.isArray(d?.images) ? d.images : []).filter(isPlaced)
-    .map(i => ({ file: i.file, caption: String(i.caption || ''), ...(i.option ? { option: String(i.option) } : {}) }));
+    .map(i => ({ file: i.file, caption: String(i.caption || ''), ...(i.option ? { option: String(i.option) } : {}), ...(IMAGE_KINDS.includes(i.kind) ? { kind: i.kind } : {}) }));
 }
 
 // Where a not-yet-placed entry's picture comes from: "from", else a "file" or "visual" that is not an images/ name.

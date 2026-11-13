@@ -45,6 +45,15 @@ Arguments: **$ARGUMENTS**
 
 ## 3. Build each decision
 
+### The brief (every mode)
+
+Every record carries a short brief written for the user, so the decision card can open on the answer instead of the background (decision 50). Write it when you draft the record:
+
+- `lead`: one or two sentences. What the user is deciding and what you recommend, with your confidence. Plain words, no decision numbers, memo ids or code names. Example: "Pick where the watering times are saved. I recommend B, one shared schedule file: it keeps beds on one tap in step and survives a reinstall. Confidence: lean."
+- `for_you`: two to four short lines on what the pick means for the user: what they will see or do differently, any setup they would have to do, and anything that is hard to undo later. Each is a string, or `{ "text": "...", "kind": "setup" }` or `"kind": "undo"` for those two (the default kind is a change they will notice).
+- `context` stays the background for later sessions: history, related decisions, constraints. The brief shows it last, folded.
+- Give each picture a `kind` (`schematic`, `screenshot`, `mockup` or `chart`) and the `option` it shows, so it sits beside that option in the brief.
+
 ### Quick mode (in chat, no page)
 
 Write, in chat:
@@ -54,13 +63,13 @@ Write, in chat:
 - If you showed pictures for it (mockups, screenshots, charts), attach them to the message or post them, and name them in the record's `images` list (see "Pictures" below).
 - Then stop and wait.
 
-After the pick, still write the record (section 4) with `"mode": "quick"` and no sketches, keeping its `images`.
+When you invoked Crux yourself in the Crux hub, write the record (with its brief) as you draft, so the card can show it. Otherwise, after the pick, still write the record (section 4) with `"mode": "quick"` and no sketches, keeping its `images` and writing its `lead` and `for_you`.
 
 ### Pictures (any mode)
 
 Every decision that was shown with pictures carries them, so its card, page and `.md` show what the call was made from.
 
-- List each picture in the record's `images` field: `{ "from": "...", "caption": "One line on what it shows", "option": "B" }`. `from` is the id `post_visual` returned in the Crux hub, or the path of a PNG, JPEG, GIF or WebP file inside the project folder or one of its worktrees. Files elsewhere (a temp folder, say) are refused: post them with `post_visual` first, or save them inside the project. Leave out `option` for a picture that covers the whole question.
+- List each picture in the record's `images` field: `{ "from": "...", "caption": "One line on what it shows", "option": "B", "kind": "mockup" }`. `kind` is `schematic`, `screenshot`, `mockup` or `chart`. `from` is the id `post_visual` returned in the Crux hub, or the path of a PNG, JPEG, GIF or WebP file inside the project folder or one of its worktrees. Files elsewhere (a temp folder, say) are refused: post them with `post_visual` first, or save them inside the project. Leave out `option` for a picture that covers the whole question.
 - The build script (or the hub, when it commits the record) copies each one into `.decisions/images/NNNN-name.png`, shrinks PNGs wider than 1600 px, strips text and camera metadata from PNGs and JPEGs (GIF and WebP are copied as they are), and rewrites the entry to `{ "file": "images/NNNN-name.png", ... }`. Never write into `images/` yourself and never edit a `file` entry by hand.
 - A picture that is refused (outside the project, not an image, an interlaced PNG wider than 1600 px, over 3 MB after shrinking) gets a `"skipped"` note with the reason, and the build lists it under "Problems to fix". It is not tried again: fix it, then delete the `"skipped"` note. A file not found yet gets a `"missing"` note and is tried again on every build and commit.
 - SVG and HTML mockups: take a PNG screenshot and list that.
@@ -70,6 +79,7 @@ Every decision that was shown with pictures carries them, so its card, page and 
 
 For each decision, write one JSON file `.decisions/NNNN-short-slug.json` (next free number, four digits) using the schema in section 7. Requirements:
 
+- **The brief first**: `lead` and `for_you` (see "The brief" above).
 - **Two to four options.** Use fewer when fewer real options exist. Never pad with straw men.
 - **Every option gets a sketch**: a small inline SVG that makes the difference visible. The lens file says what kind of sketch fits. Sketch rules:
   - `viewBox` around `0 0 320 180`, no fixed width or height attributes.
@@ -153,7 +163,13 @@ Decisions: read .decisions/*.md before planning work. Do not contradict an activ
   "mode": "full",
   "lenses": ["solver", "architecture"],
   "status": "open",
-  "context": "Two or three sentences: what is being decided and why it matters now.",
+  "lead": "One or two plain sentences for the user: what they are deciding and what you recommend.",
+  "for_you": [
+    "What the user will see or do differently",
+    { "text": "A setup step they would have to do", "kind": "setup" },
+    { "text": "What is hard to undo later", "kind": "undo" }
+  ],
+  "context": "Two or three sentences: what is being decided and why it matters now (the background later sessions read).",
   "depends_on": [3],
   "conflicts": [],
   "options": [
@@ -181,13 +197,15 @@ Decisions: read .decisions/*.md before planning work. Do not contradict an activ
   "challenge": null,
   "settles": [ { "key": "length unit", "value": "millimetres" } ],
   "images": [
-    { "from": "C:/repo/.claude/worktrees/mock/mockup-b.png", "caption": "Option B on a phone", "option": "B" },
+    { "from": "C:/repo/.claude/worktrees/mock/mockup-b.png", "caption": "Option B on a phone", "option": "B", "kind": "mockup" },
     { "file": "images/0007-current-layout.png", "caption": "Today's layout" }
   ]
 }
 ```
 
 `images` is optional. An entry with `from` is still to be copied in; the build turns it into a `file` entry, or marks it `"skipped"` with the reason.
+
+`lead` and `for_you` are expected on every new record (decision 50). Records written before them still work: the brief is then laid out from the other fields, opening with the recommendation. The build puts both at the top of the `.md` and the page.
 
 Deep mode adds these fields (leave them out otherwise):
 

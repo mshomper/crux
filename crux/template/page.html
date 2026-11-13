@@ -49,6 +49,9 @@
 .mini li{display:flex;gap:6px;align-items:flex-start}
 .mini .icon{width:14px;height:14px;margin-top:3px;color:var(--muted)}
 .mini.risk .icon{color:var(--warn)}
+.lead{font-size:16px;line-height:1.55;border-left:3px solid var(--accent);padding:10px 14px;background:var(--surface);margin:0 0 12px}
+.foryou{font-size:14.5px;margin:4px 0 0}
+.foryou li.undo .icon{color:var(--warn)}
 .est{display:grid;gap:2px;font-size:13.5px}
 .est .basis{font-size:12.5px;color:var(--muted)}
 .ev{display:grid;gap:10px}
@@ -110,7 +113,12 @@ function fileOf(n){ return (D._links || {})[n] || 'index.html'; }
 
 let h = `<div class="row" style="justify-content:space-between"><a class="brand" href="index.html"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><g fill="none" stroke="var(--muted)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M24 44V27M24 27L10 12M24 27V9"/><circle cx="10" cy="10" r="3"/><circle cx="24" cy="6" r="3"/></g><path d="M24 27L38 12" stroke="var(--accent)" stroke-width="3.4" stroke-linecap="round"/><circle cx="39" cy="10" r="4.5" fill="var(--accent)"/><circle cx="24" cy="27" r="3" fill="var(--accent)"/></svg><b>Crux</b></a><span class="row" style="gap:14px"><nav class="hub-nav"><a id="hub-link" class="hub" hidden href="http://localhost:4747/" title="Back to the Crux hub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h10a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2H8.5L5 16.5V14H4a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2z"/><path d="M18.5 8.5H20a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2h-1v2.5L15.5 18H12"/></svg>Open hub</a></nav><a class="row muted" href="index.html" style="gap:4px;text-decoration:none;font-size:14px">${I.back}All decisions</a></span></div>`;
 h += `<div class="row" style="margin-top:14px"><span class="muted">${pad(D.id)}</span><span class="chip ${esc(D.status)}">${esc(D.status)}</span><span class="chip">${I.clock}${esc(D.date)}</span>${(D.lenses||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join('')}${D.deep?'<span class="chip deep-chip">deep</span>':''}</div>`;
-h += `<h1>${esc(D.title)}</h1><p>${esc(D.context)}</p>`;
+h += `<h1>${esc(D.title)}</h1>`;
+// Decision 50: the brief written for you, before the background.
+const forYou = (Array.isArray(D.for_you) ? D.for_you : []).map(x => typeof x === 'string' ? { text: x } : (x || {})).filter(x => typeof x.text === 'string' && x.text.trim());
+if (typeof D.lead === 'string' && D.lead.trim()) h += `<p class="lead">${esc(D.lead)}</p>`;
+if (forYou.length) h += `<div class="sub">For you</div><ul class="mini foryou">${forYou.map(x => `<li class="${x.kind === 'undo' ? 'undo' : ''}">${x.kind === 'undo' ? I.alert : x.kind === 'setup' ? I.edit : I.dot}<span>${x.kind === 'undo' ? '<b>Hard to undo:</b> ' : x.kind === 'setup' ? '<b>Setup:</b> ' : ''}${esc(x.text)}</span></li>`).join('')}</ul>`;
+h += `${(D.lead || forYou.length) ? '<div class="sub" style="margin-top:14px">Background</div>' : ''}<p>${esc(D.context)}</p>`;
 if ((D.depends_on||[]).length) h += `<p class="muted row" style="gap:6px">${I.link}Builds on ${refLinks(D.depends_on)}</p>`;
 if ((D.conflicts||[]).length) h += `<div class="callout bad"><b>Conflicts with active decision ${refLinks(D.conflicts)}.</b> Picking against it means superseding that decision.</div>`;
 if (D.deliberate || D.holding_up || D.open_item){

@@ -24,7 +24,11 @@ Rules:
   solver or physics change, change across several modules, product direction) go through Crux: draft the decision
   with the crux skill (/crux quick or full) so it lands in .decisions/, and list it under decisions_needed.
   Name the pictures you showed for it in the record's "images" list (post_visual ids, or paths inside the project), so its
-  card carries them (decision 43). {{Who}} picks; you never act on an option before that.
+  card carries them (decision 43). Write its brief for {{who}} too (decision 50): "lead", the question and your
+  recommendation in one or two plain sentences (no decision numbers or code names), and "for_you", two to four lines
+  on what changes for {{who}}, any setup ({ "text", "kind": "setup" }) and anything hard to undo ("kind": "undo").
+  Give each picture a "kind" (schematic, screenshot, mockup, chart) and its option letter, so it sits beside that option.
+  {{Who}} picks; you never act on an option before that.
 - Commands {{who}} may have to approve are shown on a card. Keep them readable:
   - give every Bash or PowerShell call a description in plain words for {{who}}: what it does and why, no code;
   - one purpose per command; don't chain unrelated steps (a branch switch, an install and a check are three calls);
@@ -145,6 +149,7 @@ You coordinate worker agents. You do not edit code yourself.
   Pictures a decision was shown with go in the record's "images" list ({ "from", "caption", "option" }), where
   "from" is a post_visual id or a file path inside the project folder or its worktrees (others are refused); the hub
   copies them into .decisions/images when it commits (decision 43). In a public repo, mockups show fake, neutral data only.
+  Every record you write carries its brief ("lead" and "for_you", decision 50), as in the rules above.
   Every other file change goes to a worker.
 - When you finish a round of coordination, call post_summary so {{who}} sees where things stand. Every round, also
   fill its handoff_notes briefly (in flight and why, promises, risks, next steps: a line or two each): the hub keeps
