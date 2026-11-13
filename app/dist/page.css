@@ -1,0 +1,12 @@
+html, body { margin: 0; height: 100%; background: #0b0d11; color: #d7dce5; font: 15px/1.5 "Segoe UI", system-ui, sans-serif; }
+body { display: grid; place-items: center; background: radial-gradient(ellipse at 50% 42%, #16203a 0, #0d121c 45%, #0b0d11 100%); }
+main { max-width: 30rem; padding: 2rem; text-align: center; }
+.mark { width: 112px; height: 112px; border-radius: 22px; }
+.spin { animation: breathe 1.6s ease-in-out infinite; }
+h1 { margin: 1.2rem 0 .4rem; font-size: 1.25rem; font-weight: 600; letter-spacing: .02em; color: #8ea8ff; }
+h1.warn { color: #f0b44c; }
+p { margin: .5rem 0; color: #aab2c0; }
+.small { font-size: .85rem; color: #7d8696; }
+b { color: #d7dce5; font-weight: 600; }
+@keyframes breathe { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }

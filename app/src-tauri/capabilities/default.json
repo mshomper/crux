@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "no-native-access",
+  "description": "Grants nothing. The window shows the hub's own page (an outside address, so no remote entry here) and two static start-up pages with no scripts: no page may call native features (decision 49, CVE-2026-42184).",
+  "windows": ["main"],
+  "permissions": []
+}
