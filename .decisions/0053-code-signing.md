@@ -1,7 +1,7 @@
 # 0053 How should the Windows installer be signed?
 
-- Status: open
-- Date: 2026-11-13
+- Status: decided
+- Date: 2026-11-13, decided 2026-11-13
 - Lenses: architecture
 - Builds on: 0052
 - Settles: Windows code signing = Microsoft Artifact Signing (individual), wired into the Tauri release build
@@ -15,6 +15,10 @@ For you:
 - The warning shows your name instead of 'Unknown publisher'; it still appears for a few weeks until Windows trusts the app
 - Setup: You sign up for an Azure subscription and an ID check (one evening); an agent wires it into the release build
 - Hard to undo: A monthly charge you can cancel any time; unsigned releases keep working
+
+## Decision
+
+**C: Stay unsigned for now.** Keep releasing unsigned; the docs tell users to choose More info, Run anyway. Try a free Microsoft Store listing later.
 
 ## Context
 
@@ -37,7 +41,7 @@ A standard code-signing certificate from a seller such as Sectigo, about $150-30
 - Con: About twice the price, plus a token to manage
 - Effort: Small to medium
 
-### C: Stay unsigned for now
+### C: Stay unsigned for now (chosen)
 
 Keep releasing unsigned; the docs tell users to choose More info, Run anyway. Try a free Microsoft Store listing later.
 - Pro: Free
