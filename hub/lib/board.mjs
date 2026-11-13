@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { refreshPages } from '../../crux/scripts/build.mjs';
 import { placeImages, placedImages } from '../../crux/scripts/images.mjs';
+import { leadOf, briefData } from '../../crux/scripts/brief.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BUILD = resolve(here, '../../crux/scripts/build.mjs');
@@ -199,12 +200,19 @@ export class Board {
     return this.entries().find(e => e.entryId.toUpperCase() === String(id).toUpperCase()) || null;
   }
 
+  // A decision's brief for the card's pop-up (decision 50): plain data, sketches as pictures. Null for an unknown id.
+  brief(id) {
+    const d = this.decision(id);
+    return d ? { ...briefData(d), page: `${String(d.id).padStart(4, '0')}-${d.slug}.html` } : null;
+  }
+
   // What the interface shows in the board panel.
   snapshot() {
     return {
       decisions: this.decisions().map(d => ({
         id: d.id, slug: d.slug, title: d.title, status: d.status, chosen: d.chosen, recommended: d.recommended,
         confidence: d.confidence, context: d.context, recommendation: d.recommendation,
+        lead: leadOf(d),   // decision 50: the card opens on the written answer; the rest of the brief loads on request
         options: (d.options || []).map(o => ({ key: o.key, name: o.name, summary: o.summary })),
         images: placedImages(d),   // decision 43: { file: "images/...", caption, option? }, served at /p/<project>/images/
         page: `${String(d.id).padStart(4, '0')}-${d.slug}.html`

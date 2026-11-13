@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { rollup } from './rollup.mjs';
 import { placeImages, placedImages, imageProblems } from './images.mjs';
+import { leadOf, forYouOf } from './brief.mjs';
+
+const FOR_YOU_LABEL = { change: '', setup: 'Setup: ', undo: 'Hard to undo: ' };
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tpl = join(here, '..', 'template');
@@ -168,6 +171,13 @@ function markdown(d) {
   if (d.log_refs?.length) L.push(`- In the repo's log: ${d.log_refs.map(r => `${r.file} ${r.entry || ''}`.trim()).join('; ')}`);
   if (d.settles?.length) L.push(`- Settles: ${d.settles.map(x => `${x.key} = ${x.value}`).join('; ')}`);
   L.push('');
+  // Decision 50: the brief written for the human comes first, so GitHub and a phone open on the answer.
+  const lead = leadOf(d), forYou = forYouOf(d);
+  if (lead || forYou.length) {
+    L.push(`## In short`, '');
+    if (lead) L.push(lead, '');
+    if (forYou.length) { L.push('For you:', ''); for (const x of forYou) L.push(`- ${FOR_YOU_LABEL[x.kind]}${x.text}`); L.push(''); }
+  }
   if (d.status === 'decided' && chosen) {
     L.push(`## Decision`, '', `**${d.chosen}: ${chosen.name}.** ${chosen.summary || ''}`);
     if (d.reason) L.push('', `Reason: ${d.reason}`);

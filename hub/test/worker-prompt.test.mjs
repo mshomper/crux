@@ -8,6 +8,9 @@ test('every worker is told post_summary must carry the results', () => {
   const p = workerPrompt(base);
   assert.match(p, /only way your results reach the orchestrator/);
   assert.match(p, /not seen/);
+  assert.match(p, /Never run checkout, switch or reset in the main project folder/);
+  assert.match(p, /git show origin\/<branch>/);
+  assert.match(p, /\.claude\/worktrees\//);
   assert.doesNotMatch(p, /REVIEW REPORT/);
 });
 
