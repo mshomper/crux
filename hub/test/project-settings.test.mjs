@@ -471,7 +471,7 @@ test('issue 1, hub side: a local Host must carry the hub\'s own port; the server
   assert.equal(checkRequest({ method: 'GET', path: '/', headers: { host: 'machine.tail1234.ts.net' } }, { port: 4747 }), null, 'the phone through tailscale serve');
   const src = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
   assert.match(src, /if \(!String\(req\.url \|\| ''\)\.startsWith\('\/'\)\) return send\(res, 400/, 'server.mjs refuses a request line that is not a path');
-  assert.match(src, /checkRequest\(\{ method: req\.method, path: url\.pathname, headers: req\.headers \}, \{ extra: hosts, port \}\)/, 'and passes its own port');
+  assert.match(src, /checkRequest\(\{ method: req\.method, path: url\.pathname, headers: req\.headers \}, \{ extra: hosts, port(: req\.socket\.localPort)? \}\)/, 'and passes its own port (the port the request reached)');
 });
 
 test('issue 2: PowerShell download cradles run as code stop at Trusted', () => {

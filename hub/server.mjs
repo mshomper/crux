@@ -13,8 +13,8 @@ import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs'
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startHub, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild } from './lib/relaunch.mjs';
-import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild } from './lib/relaunch.mjs';
+import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
 
@@ -29,6 +29,10 @@ const args = process.argv.slice(2);
 const flag = (name, dflt) => { const i = args.indexOf(name); if (i < 0) return dflt; const v = args[i + 1]; args.splice(i, 2); return v; };
 const port = Number(flag('--port', process.env.CRUX_HUB_PORT || 4747));
 const retireAt = Number(flag('--retire-at', 60));
+// The phone's port (Matt, 2026-11-12): tailscale serve points here (`tailscale serve --bg 4748`), and nothing that
+// arrives on it is ever taken as this PC. 4748 for the live hub; test hubs only when given --remote-port.
+const remotePortArg = flag('--remote-port', process.env.CRUX_HUB_REMOTE_PORT || (port === 4747 ? '4748' : ''));
+const remotePort = remotePortArg && Number(remotePortArg) !== port ? Number(remotePortArg) : null;
 // Test hubs (--no-agents, or hub data in a temp folder) log messages but start no real agents.
 const noAgents = testHubWithoutAgents({ args, env: process.env });
 if (args.includes('--no-agents')) args.splice(args.indexOf('--no-agents'), 1);
@@ -67,7 +71,9 @@ const hosts = extraHosts();
 
 // The write guard (decision 47 B): paired devices, their passkeys, and alerts on any change to those or to the push
 // devices. A pairing code is shown only when this process runs in a window (stdout is a TTY), never in a log file.
-const guard = new Guard({ port, interactive: !!process.stdout.isTTY });
+// This PC itself needs no pairing and no step-up (Matt, 2026-11-12); remote devices (the phone) do. A file named
+// guard-off in this folder, or CRUX_HUB_GUARD=off, switches the whole guard off (read at start).
+const guard = new Guard({ port, interactive: !!process.stdout.isTTY, off: guardOff({ env: process.env, hubDir: here }) });
 const alert = makeAlert({ hub, push });
 push.onDropped = subs => { for (const s of subs) alert({ title: `Notifications stopped: ${s.label || 'a device'}`, note: `${s.label || 'A device'} stopped getting the hub's notifications: its browser dropped the subscription.` }); };
 if (testPair) guard.testPair();
@@ -75,17 +81,20 @@ if (testPair) guard.testPair();
 // sandbox with no origin of its own, so its scripts can never call the hub as you (decision 47 review). Links that
 // open a new tab still work; that tab stays sandboxed too. Thread attachments keep their stricter rule (no scripts).
 const AGENT_CONTENT = { 'content-security-policy': 'sandbox allow-scripts allow-popups', 'x-content-type-options': 'nosniff' };
-// A project left at Trusted with no raise from a paired device drops to Auto now, with a note and a push.
-dropUnbackedTrusted({ hub, guard, push });
+// A project left at Trusted with no raise on record (from this PC or a paired device) drops to Auto now, with a note
+// and a push. Not with the guard off.
+if (!guard.off) dropUnbackedTrusted({ hub, guard, push });
 // restart_hub, the orchestrator's own way to restart (no HTTP; its curl to /api/restart is a hard stop).
 hub.restartHub = makeRestartHub({ hub, push, restart: () => restart(), bootAt: hub.bootAt });
-// After a settings change: a raise to Trusted keeps its signed step-up; a lower level lets it go.
+// After a settings change: a raise to Trusted keeps its signed step-up, or a plain record when it came from this PC;
+// a lower level lets it go.
 const AFTER = {
-  'POST /api/settings': ({ project }, { stepUp }) => {
+  'POST /api/settings': ({ project, permissionMode }, { stepUp, device }) => {
     if (!project) return;
     const p = hub.project(project), key = projectKey(p.dir);
     if (hub.permissionMode(p) !== 'trusted') guard.clearRaise(key);
-    else if (stepUp?.ok && scopeHas(stepUp.proof.scope, 'trusted')) guard.recordRaise(key, stepUp.proof);
+    else if (stepUp?.ok && stepUp.proof && scopeHas(stepUp.proof.scope, 'trusted')) guard.recordRaise(key, stepUp.proof);
+    else if (device?.local && permissionMode === 'trusted') guard.recordRaise(key, { local: true, at: new Date().toISOString(), purpose: 'project', scope: `${projectScope(p.dir)};trusted` });
   }
 };
 
@@ -230,8 +239,8 @@ const routes = {
 
   // ---------- decision 47: pairing, step-up and the device list ----------
   // Whether this device is paired, whether the hub has a window to show a code in, and the PC's own address. Never a code.
-  'GET /api/auth/status': (_, { req }) => guard.status(req.headers),
-  'GET /api/devices': (_, { req }) => ({ devices: guard.list(req.headers), push: push.list() }),
+  'GET /api/auth/status': (_, { req, local }) => guard.status(req.headers, { local }),
+  'GET /api/devices': (_, { req, local }) => ({ devices: guard.list(req.headers, { local }), push: push.list() }),
   // The three steps open to a device with no cookie: a fresh code for the first device (into the hub's window only;
   // nothing once a device is paired), check a code and get the passkey options, and hand in the new passkey (which
   // sets the cookie).
@@ -246,6 +255,8 @@ const routes = {
   // A paired device, after its step-up: a one-time code to type on the new device.
   'POST /api/pair/issue': (_, { device }) => guard.issueCode(device),
   'POST /api/auth/challenge': ({ purpose, scope }, { req, device }) => guard.challenge({ headers: req.headers, device, purpose, scope }),
+  // This PC's first big change: the options to set up its passkey (Windows Hello), bound to that change. PC only.
+  'POST /api/pc/enroll': ({ purpose, scope }, { req, device }) => guard.pcEnrollOptions({ headers: req.headers, device, purpose, scope }),
   'POST /api/devices/remove': async ({ id }, ctx) => {
     const d = guard.remove(id);
     const you = d === ctx.device;
@@ -255,14 +266,18 @@ const routes = {
   }
 };
 
-const server = createServer(async (req, res) => {
+// One handler for both listeners: the PC port and the phone's port (remotePort). Which port a request reached is the
+// socket's own, which no client can fake.
+async function handle(req, res) {
   // A full address in the request line (GET http://localhost:4791/... as a proxy is sent) is never one of the hub's
   // pages: refused, so no proxy trick can reach it (review of PR #51).
   if (!String(req.url || '').startsWith('/')) return send(res, 400, { error: 'Requests must name a path on this hub' });
   const url = new URL(req.url, 'http://localhost');
-  // Only this machine (on this hub's own port) and the tailnet address get in, and only the hub's own pages may change anything.
-  const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts, port });
+  // Only this machine (on the port it reached) and the tailnet address get in, and only the hub's own pages may change anything.
+  const refused = checkRequest({ method: req.method, path: url.pathname, headers: req.headers }, { extra: hosts, port: req.socket.localPort });
   if (refused) return send(res, 403, { error: refused });
+  // This PC itself (Matt, 2026-11-12): loopback, the PC port, no proxy headers, the PC's own Host and Origin.
+  const local = fromThisPC(req, { pcPort: port, remotePort });
   try {
     if (url.pathname === '/api/stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
@@ -277,16 +292,23 @@ const server = createServer(async (req, res) => {
     if (route) {
       // Decision 47: every change needs a paired device's cookie (checked before the body is read), except the three
       // steps of pairing. The few big changes also need a fresh step-up, made for exactly that change.
-      const ctx = { req, device: null, stepUp: null, headers: {} };
+      const ctx = { req, local, device: null, stepUp: null, headers: {} };
       if (req.method === 'POST' && !OPEN_POSTS.has(url.pathname)) {
-        ctx.device = guard.deviceFor(req.headers);
+        ctx.device = guard.deviceFor(req.headers, { local });
         if (!ctx.device) return send(res, 401, { error: NOT_PAIRED, pair: true });
       }
       const input = req.method === 'POST' ? await body(req, BODY_LIMIT[url.pathname]) : Object.fromEntries(url.searchParams);
-      const need = ctx.device ? stepUpNeed(key, input, hub) : null;
+      // Big changes ask for Face ID or Windows Hello, from the phone and from this PC alike (Matt, 2026-11-12). Not with
+      // the guard off; and showing a code to pair the phone needs none on the PC. A PC with no passkey yet sets one up
+      // with that same prompt (no code); where Windows Hello is not available it goes ahead, with a push.
+      let need = ctx.device && !ctx.device.off ? stepUpNeed(key, input, hub) : null;
+      if (need && ctx.device.local && key === 'POST /api/pair/issue') need = null;
+      if (need && ctx.device.local && !guard.pcHasPasskey()) need = { ...need, enroll: true };
       if (need) {
         ctx.stepUp = guard.verifyStepUp({ headers: req.headers, device: ctx.device, stepUp: input.stepUp, need });
         if (!ctx.stepUp.ok) return send(res, 403, { error: ctx.stepUp.error, stepUp: need });
+        if (ctx.stepUp.fallback) alert({ title: 'Big change on the PC without Windows Hello', note: `${need.why} was made on this PC without Windows Hello: the browser has none to offer and this PC has no passkey yet.` });
+        if (ctx.stepUp.enrolled) alert({ title: 'Windows Hello set up for big changes on the PC', note: `This PC set up its passkey (${ctx.stepUp.holder.rpId}) for big changes, with: ${need.why}.` });
       }
       const out = await route(input, ctx);
       AFTER[key]?.(input, ctx);
@@ -360,24 +382,33 @@ const server = createServer(async (req, res) => {
 
     // On this PC the live hub lives at crux.localhost: a page load at plain localhost:4747 moves there, so the
     // device cookie is set, and sent, only on that name (decision 47 review).
-    const moveTo = pcRedirect({ method: req.method, path: url.pathname, url: req.url, host: req.headers.host, port });
+    const moveTo = req.socket.localPort === port && pcRedirect({ method: req.method, path: url.pathname, url: req.url, host: req.headers.host, port });
     if (moveTo) { res.writeHead(302, { location: moveTo, 'cache-control': 'no-store' }); return res.end(); }
 
     const pub = join(here, 'public');
     const file = normalize(join(pub, url.pathname === '/' ? 'index.html' : url.pathname));
     if (!file.startsWith(pub)) return send(res, 403, { error: 'Forbidden' });
     // A test hub started with --test-pair hands its fake device's cookie to whoever opens the page.
-    if (guard.testToken && (url.pathname === '/' || url.pathname === '/index.html') && !guard.deviceFor(req.headers)) res.setHeader('set-cookie', guard.cookie(guard.testToken, addressOf(req.headers, port).secure));
+    if (guard.testToken && (url.pathname === '/' || url.pathname === '/index.html') && !guard.deviceFor(req.headers, { local })) res.setHeader('set-cookie', guard.cookie(guard.testToken, addressOf(req.headers, port).secure));
     serveFile(res, file);
   } catch (e) {
     if (!res.headersSent) send(res, e instanceof GuardError ? e.status : 400, { error: e.message });
   }
-});
+}
+const server = createServer(handle);
+const remoteServer = remotePort ? createServer(handle) : null;
 
 // A hub started by a restart may find the old one still letting go of the port: it waits up to 20 seconds.
 // Any other start fails at once, so two hubs never end up on one port.
 const waitForPort = process.env.CRUX_HUB_RESTARTED === '1';
 const firstTry = Date.now();
+// The phone's port: if it is taken, the hub still runs for the PC; the phone cannot reach it until it is free.
+remoteServer?.on('error', e => {
+  if (remoteServer.listening) return console.warn(`Phone port: ${e.message}`);
+  if (e.code === 'EADDRINUSE' && Date.now() - firstTry < 20000) return void setTimeout(() => remoteServer.listen(remotePort, '127.0.0.1'), 300);
+  console.warn(`The phone's port ${remotePort} is not available (${e.code || e.message}); the phone cannot reach the hub until it is.`);
+});
+remoteServer?.listen(remotePort, '127.0.0.1');
 server.on('error', e => {
   if (server.listening) return console.warn(`Server: ${e.message}`);
   if (e.code === 'EADDRINUSE' && waitForPort && Date.now() - firstTry < 20000) return void setTimeout(() => server.listen(port, '127.0.0.1'), 300);
@@ -387,16 +418,16 @@ server.on('error', e => {
 server.on('listening', () => {
   // A test hub is shown at 127.0.0.1: the live hub's device cookie belongs to localhost, and browsers send a host's
   // cookies to every port on it, so a test hub opened at 127.0.0.1 never receives it (decision 47).
-  console.log(port === 4747 ? `Crux hub: ${guard.pcUrl}  (phone: tailscale serve --bg ${port}, see README)` : `Crux hub: http://127.0.0.1:${port}  (a test hub; passkeys need http://localhost:${port})`);
+  console.log(port === 4747 ? `Crux hub: ${guard.pcUrl}` : `Crux hub: http://127.0.0.1:${port}  (a test hub; this PC's page: http://localhost:${port})`);
+  if (remotePort) console.log(`Phone port: ${remotePort}. Point Tailscale at it once: tailscale serve reset, then tailscale serve --bg ${remotePort} (see README). Nothing on it is taken as this PC.`);
   console.log(`Projects: ${[...hub.projects.values()].map(p => p.name).join(', ')}`);
   console.log(`Orchestrator hands off at ${hub.retireAt}% context (hub default; projects may set their own).`);
   saveLaunch(launchSpec({ port }));   // so the restart script can start it the same way
-  // Decision 47: a pairing code only ever appears here, and only when this is a window you can see (never in a log).
+  // Decision 47 as amended (Matt, 2026-11-12): this PC needs no pairing; remote devices pair with a code from Devices.
   const paired = guard.paired();
-  if (guard.testToken) console.log('Test hub: one fake device is paired (--test-pair); the page gets its cookie.');
-  else if (guard.interactive) guard.printCode(paired.length ? 'at start; for a new device, Devices on a paired one is simpler' : 'at start, no device is paired yet');
-  else if (!paired.length) console.log('No device is paired yet, and this hub has no window, so it shows no pairing code. Start it in a window (Restart Crux Hub.vbs, or Crux Hub.cmd when it is stopped) to pair the first device.');
-  if (paired.length) console.log(`Paired devices: ${paired.map(d => `${d.label} (${d.rpId})`).join(', ')}. To pair another, use Devices in the hub menu on one of them.`);
+  if (guard.off) console.log('Write guard: OFF (a guard-off file in the hub folder, or CRUX_HUB_GUARD=off). Changes are taken as before decision 47.');
+  else if (guard.testToken) console.log('Test hub: one fake device is paired (--test-pair); the page gets its cookie.');
+  else console.log(`This PC makes changes with no pairing. Remote devices (the phone) pair with a code from Devices in the hub menu on this PC.${paired.length ? ` Paired: ${paired.map(d => `${d.label} (${d.rpId})`).join(', ')}.` : ''}`);
 });
 server.listen(port, '127.0.0.1');
 
@@ -412,13 +443,12 @@ function restart() {
   restarting = true;
   console.log('Restarting...');
   server.close();
+  remoteServer?.close();
   for (const res of clients) { try { res.end(); } catch { } }
   clients.clear();
   stopAgents();
-  // With no device paired yet the live hub reopens in a window, the only place it shows the first pairing code.
-  // Test hubs never open a window.
-  try { startHub(launchSpec({ port }), { window: port === 4747 && !guard.paired().length }); }
-  catch (e) { console.error(`Could not start the new hub: ${e.message}`); restarting = false; hub.stopping = false; server.listen(port, '127.0.0.1'); return; }
+  try { startDetached(launchSpec({ port })); }
+  catch (e) { console.error(`Could not start the new hub: ${e.message}`); restarting = false; hub.stopping = false; server.listen(port, '127.0.0.1'); remoteServer?.listen(remotePort, '127.0.0.1'); return; }
   setTimeout(() => process.exit(0), 300);
 }
 

@@ -1,1 +1,3 @@
 node_modules/
+# The write guard's off switch (README, "Paired devices"): local to one PC, never committed
+guard-off
