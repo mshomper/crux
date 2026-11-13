@@ -161,18 +161,29 @@ ${permissionsBlock(permissionRules, routing)}${typesBlock(types)}${memoryBlock(m
 ${handoffBlock(handoff, 'orchestrator')}`;
 }
 
+const isReviewer = type => !!type && (type.name === 'reviewer' || /\breview/i.test(type.description || ''));
+
+const REVIEWER_BLOCK = `
+REVIEW REPORT: finish with post_summary that lists every finding in "done", one per line, as
+HIGH / MEDIUM / LOW, file:line, and the concrete failure. Add a "no findings" line for each area you checked.
+`;
+
 export function workerPrompt({ project, name, task, handoff, type, ...mem }) {
   return `${SHARED}
 ROLE: Worker agent "${name}" on project "${project}".
 Work as you normally would. When you finish a round of work, or need an answer to continue, call post_summary
 and then stop and wait: the orchestrator or {{who}} will reply.
+post_summary is the only way your results reach the orchestrator and the builder. Put the results themselves in it
+(findings, answers, numbers), not just "done". Text you write only in your thread is not seen.
+Never run checkout, switch or reset in the main project folder. Read a branch with git diff or git show origin/<branch>,
+or in its own worktree under .claude/worktrees/.
 When told you are retiring, call write_handoff, then stop.
 To stop a test hub you started, run \`node hub/tools/stop-test-hub.mjs <port>\` (any port but 4747). Never use
 Stop-Process, taskkill or kill by name or PID: those are hard stops, because the hub on 4747 could be hit.
 ${type ? `
 AGENT TYPE: ${type.name}${type.description ? ` (${type.description})` : ''}
 ${type.prompt || '(No standing instructions.)'}
-` : ''}
+` : ''}${isReviewer(type) ? REVIEWER_BLOCK : ''}
 YOUR TASK:
 ${task || '(Given in the first message.)'}
 ${memoryBlock(mem)}
