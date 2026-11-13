@@ -1,6 +1,6 @@
 # Crux Hub
 
-A small, messaging-style home for your Claude agents, built on Crux's memory board. It runs on your own PC; you use it in a browser tab, or on your phone through a private network.
+A small, messaging-style home for your Claude agents, built on Crux's memory board. It runs on your own PC; you use it in a browser tab or the Windows desktop app, or on your phone through a private network.
 
 - **Needs you** collects every decision and permission request waiting on you. Pick with one click, take every recommendation at once, or reply in a few characters: `all`, `all but 4A`, `4A 7B`, or just `B` when one decision is open. Agents' questions wait there too, each with its own reply box (Yes and No buttons when the question is plainly yes or no). **Send answers** sends every filled box to that agent as one message, each question quoted above its answer. A question leaves Needs you when you answer or dismiss it, when you pick every decision it names ("decision 31", "D0031"), when someone replies in the agent's thread, or when the agent retires.
 - **Orchestrator** is a role, not a session. Whoever holds it reads the board and the latest handoff, starts workers, answers their questions and sends them back. When its context gets full (60% by default), when you press Hand off, or after an idle stretch (60 minutes above 25% context by default, decision 37; set in the hub menu's Whole hub panel and per project on its settings card, 0 minutes turns it off) it hands off and retires; the next holder picks up from there. Each round summary carries brief handoff notes, which the hub keeps as a rolling draft: when that draft is under an hour older than the holder's last turn, the hub publishes the handoff from it without waking the holder, and a holder that has rested an hour or more simply retires, so your next message starts a fresh one. The hub adds the facts: your approvals and instructions since the last handoff, each worker's last summary and last instruction, open PRs and worktrees, unanswered questions, waiting decisions and suggested board tidy-ups.
@@ -93,6 +93,10 @@ In the box at the bottom, Enter sends; Alt+Enter or Shift+Enter starts a new lin
 **Agent-written pages are sandboxed.** Decision pages and their pictures, the All decisions roll-up, and pictures and pages agents post open in a browser sandbox with no origin of their own, so nothing in them can make a change as you. Links that open a new tab still work; storing page state does not (the pages do without it).
 
 **Test hubs** print `http://127.0.0.1:<port>`; on the PC they need no pairing either. `--test-pair` adds one fake paired device for testing the remote path.
+
+## Desktop app (Windows)
+
+A window and a tray icon on top of the hub, in [`../app/`](../app/README.md) (decision 49). It shows the live hub, starts it if it is not running, and has a tray menu (Open, Restart hub, Quit). It can start with Windows, hidden in the tray. It holds no copy of the hub, so a hub update shows in it after a restart, and quitting the app leaves the hub running, so your phone keeps working. Install it from the installer on the [GitHub Releases page](https://github.com/mshomper/crux/releases/latest) (`Crux Hub_<version>_x64-setup.exe`, per-user, no admin; unsigned, so Windows may show "Windows protected your PC": More info, then Run anyway), after setting up the hub once as above. Set the two API-key variables as user environment variables first: the app starts the hub with the environment it has itself. It has no PC notifications yet. [`../app/README.md`](../app/README.md) has the settings and, for developers, how to build it from source.
 
 ## Restart the hub
 
@@ -255,7 +259,7 @@ To stop a test hub you started on another port, run `node tools/stop-test-hub.mj
 ## Not yet
 
 These are decided or planned but not built, so don't count on them:
-- A desktop app wrapper (Tauri: own window, tray icon, installer, start at sign-in). Today the hub is a browser tab or a home-screen web app.
+- PC notifications in the desktop app (see "Desktop app"). Today it shows no desktop notifications, and the installer is unsigned.
 - A channel for ordinary terminal Claude Code sessions to join the board.
 - Answer buttons on lock-screen notifications. A notification opens the card in the hub.
 - Tested setup on Mac and Linux.

@@ -283,7 +283,7 @@
   <header class="sec-head"><span class="num">08</span><p class="k">Crux Hub</p><h2>One chat app. An orchestrator, its workers, and you.</h2></header>
   <div class="split even">
     <div class="prose">
-      <p>The Hub is a small messaging-style app that runs on your own computer and opens in a browser tab. Agents work in your project folder like ordinary Claude Code sessions.</p>
+      <p>The Hub is a small messaging-style app that runs on your own computer and opens in a browser tab, or in its own window with the Windows desktop app. Agents work in your project folder like ordinary Claude Code sessions.</p>
       <p>You talk to the <strong>orchestrator</strong>. It splits the job between <strong>workers</strong>, answers their routine questions, and brings you only what needs your judgement. You can open any worker's thread and talk to it directly.</p>
       <p>When an agent finishes a round it posts a short summary: what it did, what changed, what it needs from you.</p>
       <ul class="legend">
@@ -516,11 +516,60 @@
   </div>
 </section>
 
+<section class="sec" id="desktop">
+  <header class="sec-head"><span class="num">17</span><p class="k">The desktop app</p><h2>The Hub in its own window, with a tray icon, on Windows</h2></header>
+  <div class="stack">
+    <div class="prose">
+      <p>The desktop app is a window and a tray icon that sit on top of the Hub running on your PC. It shows the live Hub, so everything above works the same in it. It does not hold a copy of the Hub or run the agents: the Hub keeps doing that, and the app is another way in, next to your browser tab and your phone.</p>
+    </div>
+    <div class="tiles">
+      <article class="plate tile" data-n="A / Window">
+        <svg class="icon big"><use href="#i-pc"/></svg>
+        <h3>A window and a tray icon</h3>
+        <p>Close the window and it hides in the tray. Click the tray icon to bring it back. Open the app a second time and it just brings the open window forward.</p>
+      </article>
+      <article class="plate tile" data-n="B / Starts the Hub">
+        <svg class="icon big"><use href="#i-next"/></svg>
+        <h3>It starts the Hub for you</h3>
+        <p>If the Hub isn't running when you open the app, the app starts it. The installed app also starts with Windows, hidden in the tray, so the Hub is ready when you sit down. Turn that off in Task Manager, under Startup apps.</p>
+      </article>
+      <article class="plate tile" data-n="C / Stays running">
+        <svg class="icon big"><use href="#i-phone"/></svg>
+        <h3>Quitting leaves the Hub running</h3>
+        <p>Quit stops only the app. The Hub and its agents carry on, so your phone keeps working.</p>
+      </article>
+    </div>
+    <div class="split even">
+      <figure class="plate">
+        <ol class="flow down">
+          <li><span class="node"><svg class="icon"><use href="#i-pc"/></svg></span><b>You open the app</b><span>From the Start menu, or it starts with Windows.</span></li>
+          <li><span class="node"><svg class="icon"><use href="#i-search"/></svg></span><b>It looks for the Hub</b><span>On your own PC, at the usual address.</span></li>
+          <li><span class="node"><svg class="icon"><use href="#i-next"/></svg></span><b>It starts the Hub if it is down</b><span>The same way a restart does.</span></li>
+          <li class="ok"><span class="node"><svg class="icon"><use href="#i-check"/></svg></span><b>You see the live Hub</b><span>The window shows the real thing, not a copy.</span></li>
+        </ol>
+        <figcaption><span>Fig. 20</span>What the app does when it opens</figcaption>
+      </figure>
+      <div class="stack">
+        <div class="prose">
+          <h3>The tray menu</h3>
+          <p>Right-click the tray icon.</p>
+        </div>
+        <dl class="cmds">
+          <div><dt><code>Open Crux Hub</code></dt><dd>Bring the window up</dd></div>
+          <div><dt><code>Restart hub</code></dt><dd>The same restart as the one in the Hub's own menu</dd></div>
+          <div><dt><code>Quit</code></dt><dd>Close the app only; the Hub keeps running</dd></div>
+        </dl>
+        <p class="note">Because the app holds no copy of the Hub, every Hub update shows in it after a restart. The Hub page inside the window gets no access to your PC beyond what a browser tab has, and links to other sites open in your browser. Not in the app yet: notifications on your PC.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- =================================== PART 3: SET UP =================================== -->
 <p class="part" id="setup">Part 3 <span>Set up</span></p>
 
 <section class="sec" id="setup-skill">
-  <header class="sec-head"><span class="num">17</span><p class="k">Set up the skill</p><h2>The skill takes three steps</h2></header>
+  <header class="sec-head"><span class="num">18</span><p class="k">Set up the skill</p><h2>The skill takes three steps</h2></header>
   <div class="split">
     <div class="prose">
       <p>The skill works on its own; you don't need the Hub to use it.</p>
@@ -538,7 +587,7 @@
 </section>
 
 <section class="sec" id="setup-hub">
-  <header class="sec-head"><span class="num">18</span><p class="k">Set up the Hub</p><h2>The Hub takes four more</h2></header>
+  <header class="sec-head"><span class="num">19</span><p class="k">Set up the Hub</p><h2>The Hub takes four more</h2></header>
   <div class="split">
     <div class="prose">
       <p>The Hub runs its agents with <strong>your own Anthropic API key</strong>, from the Anthropic Console. Anthropic bills the tokens they use to that key.</p>
@@ -589,15 +638,47 @@ export CRUX_HUB_USE_API_KEY=1</code></pre></div></li>
   </div>
 </section>
 
+<section class="sec" id="setup-desktop">
+  <header class="sec-head"><span class="num">20</span><p class="k">Set up the desktop app</p><h2>Optional, Windows only: download it and run it</h2></header>
+  <div class="split">
+    <div class="prose">
+      <p>The app is a window on the Hub, not a copy of it, so the Hub still has to be set up once on your PC (the four steps above). After that, the app starts the Hub for you.</p>
+      <!-- DOWNLOAD LINK: points at the Releases page. It only works once a release with the installer is published there. -->
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/mshomper/crux/releases/latest"><svg class="icon"><use href="#i-down"/></svg>Download for Windows</a>
+      </div>
+      <ul class="needs" aria-label="You need">
+        <li>Windows</li><li>The Hub, set up once</li>
+      </ul>
+      <p class="note">The app starts the Hub with the settings it has itself, so set <code>ANTHROPIC_API_KEY</code> and <code>CRUX_HUB_USE_API_KEY</code> as user environment variables first (Windows: Settings, search "environment variables").</p>
+      <p class="note">Developers can build the app from source instead: see the <a href="https://github.com/mshomper/crux/blob/main/app/README.md">app guide</a>.</p>
+    </div>
+    <ol class="steps">
+      <li class="plate"><span class="key">1</span><div><b class="t">Set up the Hub once</b><p>Follow the four Hub steps above, and keep your key in user environment variables as noted here.</p></div></li>
+      <li class="plate"><span class="key">2</span><div><b class="t">Download the installer</b><p>From the Releases page on GitHub, get the file named:</p><pre><code>Crux Hub_&lt;version&gt;_x64-setup.exe</code></pre></div></li>
+      <li class="plate"><span class="key">3</span><div><b class="t">Run it</b><p>It installs for your user only, with no admin rights. The installer is not signed yet, so Windows may show "Windows protected your PC". Choose <strong>More info</strong>, then <strong>Run anyway</strong>.</p><p>Then open Crux Hub from the Start menu. From then on it starts with Windows, hidden in the tray.</p></div></li>
+    </ol>
+  </div>
+  <div class="stack" style="margin-top:26px">
+    <details class="fold">
+      <summary><svg class="icon"><use href="#i-chev"/></svg>Optional settings<span>port, Hub folder</span></summary>
+      <div class="in">
+        <p class="note">Without any settings, the app uses port 4747 and the Hub folder it was last started from. To change either, add this to <code>~/crux/hub.json</code>:</p>
+        <pre><code>{ "app": { "port": 4747, "hubDir": "C:/path/to/crux/hub" } }</code></pre>
+      </div>
+    </details>
+  </div>
+</section>
+
 <section class="sec" id="limits">
-  <header class="sec-head"><span class="num">19</span><p class="k">Honest limits</p><h2>What it is not, yet</h2></header>
+  <header class="sec-head"><span class="num">21</span><p class="k">Honest limits</p><h2>What it is not, yet</h2></header>
   <ul class="limits">
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Early software.</strong> Hub version 0.11. Built and used by one person so far. Expect rough edges.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Early software.</strong> Hub version 0.17. Built and used by one person so far. Expect rough edges.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>It runs on your own PC, for one person.</strong> If the PC sleeps, the agents stop and your phone can't reach the Hub.</span></li>
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Windows first.</strong> Mac and Linux are untested. The restart shortcut and the desktop opener are Windows-only.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Windows first.</strong> Mac and Linux are untested. The restart shortcut, the desktop opener and the desktop app are Windows-only.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>API use is billed per token.</strong> Several agents use more, faster. The spend shown in the Hub is an estimate.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Starting with an API key is new.</strong> The steps above come from the code and have not yet been tested end to end on a fresh machine.</span></li>
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>No desktop app yet.</strong> The Hub is a browser tab, or a home-screen app on your phone. There is no installer and no tray icon.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>The desktop app is unsigned and new.</strong> Windows may warn about it when you run the installer. It shows no notifications on your PC yet, and it is Windows only.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Terminal sessions can't join yet.</strong> Only agents started by the Hub appear in it.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Notifications open the card.</strong> There are no answer buttons on the lock screen. On iPhone they need iOS 16.4 or later and the home-screen app.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Your PC's name becomes public</strong> when you turn on secure addresses for phone access. Pick a neutral name.</span></li>
@@ -614,6 +695,7 @@ export CRUX_HUB_USE_API_KEY=1</code></pre></div></li>
     <a href="https://github.com/mshomper/crux">GitHub</a>
     <a href="https://github.com/mshomper/crux/blob/main/INSTALL.md">Install guide</a>
     <a href="https://github.com/mshomper/crux/blob/main/hub/README.md">Hub guide</a>
+    <a href="https://github.com/mshomper/crux/blob/main/app/README.md">Desktop app guide</a>
     <a class="sp" href="https://notarobot-eng.com">notarobot-eng.com</a>
   </div>
 </footer>

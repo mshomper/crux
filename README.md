@@ -33,6 +33,9 @@ npm start -- /path/to/your/project
 
 Then open http://localhost:4747. API use is billed per token by Anthropic.
 
+**Desktop app (Windows):** a window and tray icon on top of the Hub that starts it for you and can start with Windows. Set up the Hub once as above, then download `Crux Hub_<version>_x64-setup.exe` from [GitHub Releases](https://github.com/mshomper/crux/releases/latest) and run it (per-user, no admin). It is unsigned, so Windows may show "Windows protected your PC": choose More info, then Run anyway. Developers can build it from source: see [app/README.md](app/README.md).
+
+
 ## Learn more
 
 - https://crux.notarobot-eng.com: what Crux and the Hub do, with pictures
@@ -41,7 +44,7 @@ Then open http://localhost:4747. API use is billed per token by Anthropic.
 
 ## Status
 
-Early software. Hub version 0.11. Built and used on Windows first; Mac and Linux are untested. Made for one person, running on your own PC.
+Early software. Hub version 0.17. Built and used on Windows first; Mac and Linux are untested. Made for one person, running on your own PC.
 
 ## License
 
