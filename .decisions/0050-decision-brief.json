@@ -8,7 +8,7 @@
   "data-model",
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "context": "You asked for a button on each decision card that opens an inlined article you can review, because the records make you hunt. What you see today: the card's background text is cut to three lines, and it is written for later agents (history, decision numbers, memo ids), so the cut usually lands before the point. The recommendation's reasons, the pros and cons, the effort and the scores are not on the card at all, only a 'recommended' chip. Pictures sit behind a separate gallery button, away from the option they show, and the sketches and scores are only on the Full page, which opens in a new tab. Nothing in a record is written for you specifically: what changes for you, what you have to set up, what is hard to undo. The pop-up itself is the same in every option (a brief button on the card; a framed panel over the column on the desktop, full screen on the phone; pick or close at its foot). The choice is where its words come from and who writes them. Builds on decisions 12 (main screen), 31 (red is your call), 33 (HUD frame, readable text), 41 (only .json and .md in git) and 43 (pictures travel with the record). Mockups use a made-up project.",
  "depends_on": [
   12,
@@ -128,9 +128,9 @@
  "recommendation": "What makes you hunt is that nothing in a record is written for you; only B fixes that, and its fixed order means you always know where the answer and the cost are. A comes free inside B as the layout for older records.",
  "confidence": "lean",
  "change_mind": "If most of your calls turn out to need long research write-ups, C's freedom is worth the unevenness; if you mainly want old records readable now, start with A and add B later.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "B",
+ "reason": "",
+ "decided_on": "2026-11-13",
  "superseded_by": null,
  "challenge": null,
  "settles": [],

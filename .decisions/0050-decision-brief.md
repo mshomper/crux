@@ -1,9 +1,13 @@
 # 0050 How should a decision card open a readable brief for you?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-13
 - Lenses: data-model, ui
 - Builds on: 0012, 0031, 0033, 0041, 0043
+
+## Decision
+
+**B: A short brief written into the record, fixed shape.** Two new fields in the record's .json, written by the agent when it drafts the decision: a lead (one or two sentences: what you are deciding and what it recommends) and 'for you' (two to four lines: what changes for you, any setup, anything hard to undo). Pictures get a kind (schematic, screenshot, mockup) and an option letter, so each sits beside its option. The hub lays out lead, for you, options with pictures, scores, why, what would change its mind, then the background folded. The card shows the lead. The .md and the page get the lead and 'for you' at the top too. Records without a lead fall back to A's layout.
 
 ## Context
 
@@ -27,7 +31,7 @@ No new writing. The hub lays out the fields every record already has in one pop-
 - Con: Nothing says what changes for you, what you set up, or what is hard to undo
 - Effort: Small: one pop-up module in the hub, a line on the card
 
-### B: A short brief written into the record, fixed shape (recommended)
+### B: A short brief written into the record, fixed shape (chosen) (recommended)
 
 Two new fields in the record's .json, written by the agent when it drafts the decision: a lead (one or two sentences: what you are deciding and what it recommends) and 'for you' (two to four lines: what changes for you, any setup, anything hard to undo). Pictures get a kind (schematic, screenshot, mockup) and an option letter, so each sits beside its option. The hub lays out lead, for you, options with pictures, scores, why, what would change its mind, then the background folded. The card shows the lead. The .md and the page get the lead and 'for you' at the top too. Records without a lead fall back to A's layout.
 
