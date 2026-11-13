@@ -1,0 +1,60 @@
+{
+ "id": 48,
+ "slug": "pc-trusted",
+ "title": "Does the hub PC itself have to pair or log in?",
+ "date": "2026-11-12",
+ "mode": "quick",
+ "lenses": [
+  "architecture"
+ ],
+ "status": "decided",
+ "context": "Decision 47 B made every device pair with a passkey and use Windows Hello or Face ID for big changes. Its first rollout locked Matt out of his own PC. Matt's call: his main PC is password-protected and at his house, he operates from it, and it shouldn't need a login. A local Claude Code session could reach the repo and the hub anyway, so guarding against local agents isn't worth the friction. Amends decision 47: pairing and Face ID stay for remote devices (the phone over Tailscale). The PC's own browser is trusted. An off switch (a guard-off file in the hub folder, or CRUX_HUB_GUARD=off) turns the whole guard off.",
+ "depends_on": [
+  47
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "The PC is trusted; only remote devices pair",
+   "summary": "Requests from the PC's own browser need no device cookie and no step-up. The phone pairs once and uses Face ID for big changes. Off switch in the hub folder.",
+   "pros": [
+    "No login on the machine Matt works from",
+    "The phone, which leaves the house, stays protected"
+   ],
+   "cons": [
+    "A local script can act as Matt again, as before decision 47; Matt accepts that"
+   ],
+   "effort": "Small",
+   "source": "human"
+  },
+  {
+   "key": "B",
+   "name": "Keep decision 47 as built",
+   "summary": "Every device pairs, the PC included.",
+   "pros": [
+    "Covers local scripts"
+   ],
+   "cons": [
+    "Locked Matt out on rollout; friction on his main machine"
+   ],
+   "effort": "None",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "Matt's direct instruction.",
+ "confidence": "strong",
+ "chosen": "A",
+ "reason": "Matt: \"My main PC is where I operate from, I shouldn't have to log in from here.\" and \"There needs to be some reasonableness to device security, since my PC is password protected and at my house.\"",
+ "decided_on": "2026-11-12",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "local tool write authentication",
+   "value": "the machine the tool runs on is trusted (no login, no pairing); remote devices pair once with a passkey and use it for big changes; a file in the tool folder turns the guard off"
+  }
+ ]
+}
