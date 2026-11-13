@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "context": "Decision 4 chose a Tauri window around the hub page with the Node server as a 'sidecar' (a child process the app owns). The plan (memo M028, researcher tauri-plan) found that a true sidecar fits badly: Tauri sidecars are standalone executables, so the Node hub and the Agent SDK would need packaging into one exe (fragile); the hub restarts itself, which slips out of Tauri's hold on it anyway; and quitting or crashing the window app would take the hub, and the phone's access, down with it. Either way the window loads the live hub at http://crux.localhost:4747, so decision 48's PC trust works unchanged, and the page gets no Tauri native access. The app lives in app/ in the crux repo (hub/ stays dependency-free). Build tools: Microsoft C++ Build Tools and Rust (about 9-12 GB, Matt's call). Amends decision 4.",
  "depends_on": [
   4,
@@ -51,9 +51,9 @@
  "recommended": "A",
  "recommendation": "A keeps everything that works today and only adds a window, a tray and PC notifications on top.",
  "confidence": "strong",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-13",
  "superseded_by": null,
  "challenge": null,
  "settles": [

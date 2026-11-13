@@ -1,10 +1,14 @@
 # 0049 Does the Tauri app own the hub, or sit on top of it?
 
-- Status: open
-- Date: 2026-11-12
+- Status: decided
+- Date: 2026-11-12, decided 2026-11-13
 - Lenses: architecture
 - Builds on: 0004, 0019, 0048
 - Settles: desktop app shell = Tauri window that loads the live local server's page and attaches to the server (starting it if down) rather than owning it; quitting the window leaves the server running
+
+## Decision
+
+**A: Sit on top: attach to the hub, start it if it's down.** The app checks the hub at launch and starts it the usual way if it isn't running. Restarts (restart_hub, the menu, the tray) work as today. Quitting the app leaves the hub running, so the phone keeps working.
 
 ## Context
 
@@ -12,7 +16,7 @@ Decision 4 chose a Tauri window around the hub page with the Node server as a 's
 
 ## Options
 
-### A: Sit on top: attach to the hub, start it if it's down (recommended)
+### A: Sit on top: attach to the hub, start it if it's down (chosen) (recommended)
 
 The app checks the hub at launch and starts it the usual way if it isn't running. Restarts (restart_hub, the menu, the tray) work as today. Quitting the app leaves the hub running, so the phone keeps working.
 - Pro: Nothing about how the hub runs or restarts changes
