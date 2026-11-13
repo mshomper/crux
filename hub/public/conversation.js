@@ -4,6 +4,7 @@
 // its thread (kept by the columns, so a draft stays with its thread). What to draw comes from app.js (host).
 import { enterAction, insertLineBreak, composerHint } from './composer-keys.js';
 import { esc, sizeOf, checkFile, fileChip, MAX_FILES, ACCEPT } from './files.js';
+import { patchList, anchorOf, backTo } from './list-patch.js';
 
 const icon = id => `<svg class="icon"><use href="#i-${id}"/></svg>`;
 
@@ -12,11 +13,13 @@ const icon = id => `<svg class="icon"><use href="#i-${id}"/></svg>`;
 
 // The list is redrawn only when what it shows changed. Live updates (an agent's activity line, its state) arrive
 // many times a minute; rebuilding every message and image for each made the list jump while you typed (phone pass 2).
+// When it did change, only the changed messages are swapped (list-patch.js): a whole rebuild sent the iPhone to the
+// top of the thread whenever an update arrived (0.17.2).
 export function setFeed(feed, html, where = '') {
   const key = `${where}::${html}`;
   if (feed._shown === key) { delete feed.dataset.rebuilt; return false; }
   feed._shown = key;
-  feed.innerHTML = html;
+  patchList(feed, html);
   feed.dataset.rebuilt = '1';
   return true;
 }
@@ -97,6 +100,9 @@ export class Conversation {
       if (t?.url) URL.revokeObjectURL(t.url);
       this.renderTray(); host.focusBox(this.input);
     });
+    // A touch, wheel or key in the list is you scrolling: a late put-back (settle) then leaves the list to you.
+    this.touched = 0;
+    for (const t of ['touchstart', 'pointerdown', 'wheel', 'keydown']) this.feed.addEventListener(t, () => { this.touched++; }, { passive: true });
     this.feed.addEventListener('scroll', () => {
       const f = this.feed;
       this.atBottom = f.scrollHeight - f.scrollTop - f.clientHeight < 80;
@@ -165,6 +171,11 @@ export class Conversation {
     let atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
     const saved = this.saved; this.saved = null;
     if (saved) atBottom = saved.bottom;
+    // Reading further up (or anywhere in a list read from the top, past its very top): the item at the top of the
+    // screen is noted, so the list can be put back exactly there after the redraw. A list not laid out (hidden) is left.
+    const following = !needs && atBottom;
+    const hold = !this.justOpened && !saved && !following && feed.clientHeight > 0
+      ? (needs && feed.scrollTop < 2 ? { el: null, off: 0, top: 0 } : anchorOf(feed)) : null;
     // A card you are answering from the keyboard, or a reply box you are typing in, keeps its focus (M008 14).
     const active = document.activeElement, mine = active && feed.contains(active);
     const focusedCard = mine && active.matches('.card[data-card]') ? active.dataset.card : null;
@@ -181,10 +192,23 @@ export class Conversation {
     // Conversations open at their latest message and follow new ones while you are at the bottom.
     // A thread just opened (or clicked again in the list) goes to its latest message, Needs you to its top; a column
     // back from the rail, or moved, is where you left it.
+    // An update that changed the list keeps you where you were: on the latest message (followed, also once its
+    // pictures have loaded), or on the item you were reading. The browser is not trusted to do it (the iPhone does not).
     if (this.justOpened) feed.scrollTop = needs ? 0 : feed.scrollHeight;
     else if (saved) feed.scrollTop = saved.bottom && !needs ? feed.scrollHeight : saved.top;
-    else if (!needs && atBottom) feed.scrollTop = feed.scrollHeight;
+    else if (following) this.settle(() => { if (feed.scrollTop < feed.scrollHeight - feed.clientHeight - 1) feed.scrollTop = feed.scrollHeight; }, rebuilt);
+    else if (hold && rebuilt) this.settle(() => backTo(feed, hold), true);
     this.justOpened = false;
+  }
+
+  // Do it now, and (when `later`) once more on the next frame and a moment after, unless you have touched the list
+  // in between: the iPhone can still move a list once the new part is laid out or its pictures arrive.
+  settle(fn, later) {
+    fn();
+    if (!later) return;
+    const at = this.touched, again = () => { if (this.touched === at && this.feed.isConnected) fn(); };
+    globalThis.requestAnimationFrame?.(again);
+    setTimeout(again, 250);
   }
 
   // Before the column leaves the page (folded) or is moved: remember where the list was.

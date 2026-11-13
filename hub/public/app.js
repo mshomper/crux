@@ -9,6 +9,7 @@ import * as AP from './all-projects.js';
 import { enterAction, insertLineBreak, replyHint, filterHint } from './composer-keys.js';
 import { Columns } from './columns.js';
 import { growBox } from './conversation.js';
+import { patchList } from './list-patch.js';
 import { IMG_TYPES, fileChip, plainName } from './files.js';
 import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
@@ -483,7 +484,7 @@ function renderHubThreads() {
 function renderThreads() {
   renderHubThreads();
   const p = proj();
-  if (!p) { $('#threads').innerHTML = ''; return; }
+  if (!p) { const l = $('#threads'); l.innerHTML = ''; delete l.dataset.html; return; }
   const needs = needsCount(p);
   const orch = orchestrator(p);
   const workers = p.agents.filter(a => a.role === 'worker');
@@ -494,7 +495,10 @@ function renderThreads() {
   html += threadButton({ id: 'orchestrator', name: orch ? `Orchestrator · ${orch.name.replace('orchestrator-', '#')}` : 'Orchestrator', ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator'), agent: orch });
   if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread), agent: a })).join('');
   html += retiredSection(p, workers);
-  $('#threads').innerHTML = html;
+  // Redrawn on every update (an agent's state, its activity): only the rows that changed are swapped, so the list
+  // never jumps to its top on the phone (list-patch.js).
+  const list = $('#threads');
+  if (list.dataset.html !== html) { list.dataset.html = html; patchList(list, html); }
 }
 
 // Retired workers (read-only threads): one folded row, "Retired (N)" with N the recent ones; compact rows inside,
@@ -884,7 +888,7 @@ function renderBoard() {
   const foot = p.board.decisions.length ? `<a class="board-page" href="/p/${encodeURIComponent(p.name)}/index.html" target="_blank" rel="noopener">${icon('page')}Full Crux board for ${esc(p.name)}${icon('external')}</a>` : '';
   const out = (html || empty) + foot;
   const body = $('#board-body');
-  if (body.dataset.html !== out) { body.dataset.html = out; body.innerHTML = out; }
+  if (body.dataset.html !== out) { body.dataset.html = out; patchList(body, out); }
 }
 
 function render() {
