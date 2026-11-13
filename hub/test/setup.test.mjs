@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { Secrets, KEY_SHAPE, keyEnd, checkFolders, saveProjects, readHubConfig, checkKey } from '../lib/setup.mjs';
-import { TarPick, ClaudeDownload, resolveClaude, downloadedPath, installedBinary, expected } from '../lib/claude-code.mjs';
+import { TarPick, ClaudeDownload, resolveClaude, claudeReady, downloadedPath, installedBinary, expected } from '../lib/claude-code.mjs';
 import { HUB_DIR } from '../lib/relaunch.mjs';
 
 const temp = p => mkdtempSync(join(tmpdir(), p));
@@ -83,6 +83,33 @@ test('the download keeps the program only when its checksum matches, in the hub 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a copy already on the PC, or an earlier download, stands in only while the download cannot be reached (decision 54 B)', async () => {
+  const dir = temp('crux-cc-fallback-'), env = { CRUX_HUB_DATA: join(dir, 'data'), PATH: '' };
+  try {
+    const bin = Buffer.from('MZ' + 'new'.repeat(300));
+    const exp = fakeExp(bin, dir);
+    // An earlier version's download is there; the exact one is not.
+    mkdirSync(join(env.CRUX_HUB_DATA, 'claude-code', '9.9.8'), { recursive: true });
+    writeFileSync(join(env.CRUX_HUB_DATA, 'claude-code', '9.9.8', 'claude.exe'), 'MZold');
+    const cc = resolveClaude({ env, exp });
+    assert.equal(cc.source, 'previous');
+    assert.equal(claudeReady(cc, { state: 'idle' }), false, 'online: the exact version is needed before Start');
+    assert.equal(claudeReady(cc, { state: 'error', offline: false }), false, 'a checksum failure is not "offline"');
+    assert.equal(claudeReady(cc, { state: 'error', offline: true }), true, 'offline: the earlier copy stands in');
+    assert.equal(claudeReady({ source: null }, { state: 'error', offline: true }), false, 'nothing to stand in');
+    assert.equal(claudeReady({ source: 'installed', path: 'x' }, { state: 'idle' }), false);
+    // The download that cannot be reached says so.
+    const off = new ClaudeDownload({ env, exp, fetchFn: async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); } });
+    await off.start(); await until(() => off.state().state === 'error');
+    assert.equal(off.state().offline, true);
+    // Once the exact version is in, earlier ones go.
+    const ok = new ClaudeDownload({ env, exp, fetchFn: fakeFetch(gzipSync(tar({ 'package/claude.exe': bin }))) });
+    await ok.start(); await until(() => ok.state().state === 'done');
+    assert.equal(resolveClaude({ env, exp }).source, 'downloaded');
+    assert.ok(!existsSync(join(env.CRUX_HUB_DATA, 'claude-code', '9.9.8')), 'the earlier version was removed');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('the SDK manifest names the program, its size and checksum, and the package it comes from', () => {
   const exp = expected();
   assert.ok(exp, 'the hub SDK is installed');
@@ -146,11 +173,10 @@ test('folders must exist and be full paths; saving keeps the rest of hub.json', 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a test hub playing the desktop app starts with no project, asks for setup, and takes the key from this PC only', async () => {
-  const dir = temp('crux-setup-hub-'), port = 4796;
-  mkdirSync(join(dir, 'home')); writeFileSync(join(dir, 'home', 'hub.json'), '{}');
-  const child = spawn(process.execPath, [join(HUB_DIR, 'server.mjs'), '--port', String(port), '--no-agents'], {
-    env: { ...process.env, CRUX_HUB_DATA: join(dir, 'data'), CRUX_HOME: join(dir, 'home'), CRUX_HUB_BUNDLED: '1', ANTHROPIC_API_KEY: '', CRUX_HUB_USE_API_KEY: '' }, stdio: ['ignore', 'pipe', 'pipe']
+// A throwaway test hub on a port of its own (never 4747), with its data and home in the temp folder.
+async function startHub(port, dir, { env = {}, args = [] } = {}) {
+  const child = spawn(process.execPath, [join(HUB_DIR, 'server.mjs'), '--port', String(port), '--no-agents', ...args], {
+    env: { ...process.env, CRUX_HUB_DATA: join(dir, 'data'), CRUX_HOME: join(dir, 'home'), ANTHROPIC_API_KEY: '', CRUX_HUB_USE_API_KEY: '', CRUX_HUB_BUNDLED: '', ...env }, stdio: ['ignore', 'pipe', 'pipe']
   });
   let err = ''; child.stderr.on('data', c => { err += c; });
   const call = (method, path, { body, extra = {} } = {}) => new Promise((ok, bad) => {
@@ -162,10 +188,34 @@ test('a test hub playing the desktop app starts with no project, asks for setup,
     });
     r.on('error', bad); if (payload) r.write(payload); r.end();
   });
+  let up = false;
+  for (let i = 0; i < 75 && !up; i++) { up = (await call('GET', '/api/ping').catch(() => null))?.status === 200; if (!up) await new Promise(r => setTimeout(r, 200)); }
+  const stop = async () => { child.kill(); await new Promise(r => child.once('exit', r)); };
+  if (!up) { await stop(); throw new Error(`the test hub did not start: ${err}`); }
+  return { call, stop };
+}
+
+test('a hub run from a clone never takes up a saved key: it stays on its own login', async () => {
+  const dir = temp('crux-clone-key-'), port = 4797;
   try {
-    let up = false;
-    for (let i = 0; i < 75 && !up; i++) { up = (await call('GET', '/api/ping').catch(() => null))?.status === 200; if (!up) await new Promise(r => setTimeout(r, 200)); }
-    assert.ok(up, `the hub started with no project (${err})`);
+    mkdirSync(join(dir, 'data')); mkdirSync(join(dir, 'proj'));
+    writeFileSync(join(dir, 'data', 'secrets.json'), JSON.stringify({ anthropicApiKey: KEY }));
+    const { call, stop } = await startHub(port, dir, { args: [join(dir, 'proj')] });
+    try {
+      const s = (await call('GET', '/api/setup')).json;
+      assert.equal(s.bundled, false);
+      assert.equal(s.key.saved, false, 'the saved key was not applied');
+      assert.equal(s.needed, false, 'and no setup screen');
+      assert.equal((await call('POST', '/api/setup/key', { body: { apiKey: KEY } })).status, 404, 'nor can one be set on it');
+    } finally { await stop(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a test hub playing the desktop app starts with no project, asks for setup, and takes the key from this PC only', async () => {
+  const dir = temp('crux-setup-hub-'), port = 4796;
+  mkdirSync(join(dir, 'home')); writeFileSync(join(dir, 'home', 'hub.json'), '{}');
+  const { call, stop } = await startHub(port, dir, { env: { CRUX_HUB_BUNDLED: '1' } });
+  try {
     const s = (await call('GET', '/api/setup')).json;
     assert.equal(s.bundled, true);
     assert.equal(s.needed, true);
@@ -185,8 +235,7 @@ test('a test hub playing the desktop app starts with no project, asks for setup,
     assert.equal(remote.local, false);
     assert.equal(remote.key.end, '', 'the last four only to this PC');
   } finally {
-    child.kill();
-    await new Promise(r => child.once('exit', r));
+    await stop();
     rmSync(dir, { recursive: true, force: true });
   }
 });

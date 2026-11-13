@@ -4,10 +4,13 @@
 ; install folder (its node.exe would be locked otherwise). runtime\stop-bundled-hub.mjs never touches a hub run from a
 ; clone. The app starts the hub again after an update. Hub data (~\.crux-hub, ~\crux, the downloaded Claude Code)
 ; lives outside this folder and is never removed.
+; Inserted once in the install section and once in the uninstall section, so the label is unique in each.
 !macro CRUX_STOP_BUNDLED_HUB
-  IfFileExists "$INSTDIR\runtime\node\node.exe" 0 +3
-    IfFileExists "$INSTDIR\runtime\stop-bundled-hub.mjs" 0 +2
-      nsExec::ExecToLog '"$INSTDIR\runtime\node\node.exe" "$INSTDIR\runtime\stop-bundled-hub.mjs"'
+  IfFileExists "$INSTDIR\runtime\node\node.exe" 0 crux_stop_hub_done
+  IfFileExists "$INSTDIR\runtime\stop-bundled-hub.mjs" 0 crux_stop_hub_done
+  nsExec::ExecToLog '"$INSTDIR\runtime\node\node.exe" "$INSTDIR\runtime\stop-bundled-hub.mjs"'
+  Pop $0   ; the exit code nsExec leaves on the stack
+  crux_stop_hub_done:
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL

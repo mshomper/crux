@@ -77,6 +77,8 @@
 .su-closed{display:grid;justify-items:center;gap:14px;padding:44px 22px;text-align:center;font-size:15px;color:var(--muted)}
 .su-closed p{margin:0}
 .su.closed :is(.su-body-in,.su-foot,.su-x){display:none}
+.su-warn{display:inline-flex;align-items:center;gap:9px;color:var(--text)}
+.su-warn::before{content:"";flex:none;width:15px;height:15px;background:var(--hud-amber);clip-path:polygon(50% 4%,96% 92%,4% 92%)}
 .su-starting{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:14px;background:rgba(8,12,18,.92);font-size:15px;color:var(--hud-ice)}
 
 @media (max-width:560px){

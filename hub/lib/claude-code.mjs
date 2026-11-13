@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { createGunzip } from 'node:zlib';
 import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { existsSync, readFileSync, mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { join, dirname, delimiter } from 'node:path';
 import { homedir } from 'node:os';
 import { dataDir } from './relaunch.mjs';
@@ -64,15 +64,41 @@ export function installedBinary({ env = process.env, home = homedir(), exists = 
   return spots.find(f => exists(f)) || null;
 }
 
+// An earlier download for another SDK version (kept until the new one is in place): the newest one.
+export function previousBinary(exp, env = process.env) {
+  if (!exp) return null;
+  const root = join(dataDir(env), 'claude-code');
+  let dirs = [];
+  try { dirs = readdirSync(root).filter(v => v !== exp.version); } catch { return null; }
+  const newer = (a, b) => b.localeCompare(a, undefined, { numeric: true });
+  for (const v of dirs.sort(newer)) { const f = join(root, v, exp.binary); if (existsSync(f)) return f; }
+  return null;
+}
+
 // The program the agents should run, and where it came from: 'sdk' (the SDK finds it; no path is passed),
-// 'downloaded', 'installed' (offline fallback), or null when there is none yet.
+// 'downloaded' (the exact version), or a fallback: 'previous' (an earlier download) or 'installed' (one already on
+// the PC). Decision 54 B: a fallback is for when the download cannot be reached; it never makes setup complete by
+// itself (claudeReady). null when there is nothing at all.
 export function resolveClaude({ env = process.env, exp = expected() } = {}) {
   if (sdkOwnBinary(exp)) return { source: 'sdk', path: null, version: exp.version };
   const d = downloadedBinary(exp, env);
   if (d) return { source: 'downloaded', path: d, version: exp.version };
+  const p = previousBinary(exp, env);
+  if (p) return { source: 'previous', path: p, version: null };
   const i = installedBinary({ env });
   if (i) return { source: 'installed', path: i, version: null };
   return { source: null, path: null, version: exp?.version || null };
+}
+
+// Whether Claude Code counts as set up: the exact version, or a fallback only while the download cannot be reached.
+export const claudeReady = (cc, download = {}) => cc.source === 'sdk' || cc.source === 'downloaded' || (!!cc.source && download.state === 'error' && !!download.offline);
+
+// After a new download: earlier versions go (one that is still running stays until next time).
+export function removeOlder(exp, env = process.env) {
+  const root = join(dataDir(env), 'claude-code');
+  let dirs = [];
+  try { dirs = readdirSync(root).filter(v => v !== exp.version); } catch { return; }
+  for (const v of dirs) { try { rmSync(join(root, v), { recursive: true, force: true }); } catch { } }
 }
 
 // ---------- the download ----------
@@ -146,12 +172,14 @@ export class ClaudeDownload {
       const sum = hash.digest('hex');
       if (written !== exp.size || sum !== exp.checksum) throw new Error('The downloaded program did not match its checksum, so it was not kept.');
       renameSync(part, dest);
+      removeOlder(exp, this.env);
       this.st.state = 'done';
     } catch (e) {
       if (fd !== null) try { closeSync(fd); } catch { }
       try { rmSync(part, { force: true }); } catch { }
       const net = /fetch failed|ENOTFOUND|ECONN|ETIMEDOUT|EAI_AGAIN|aborted|timeout/i.test(String(e?.cause?.code || e?.message || e));
       this.st.state = 'error';
+      this.st.offline = net;   // only then may a fallback copy stand in (decision 54 B)
       this.st.error = net ? 'Could not reach the download server. Check the internet connection (or a proxy or firewall), then try again.' : String(e.message || e);
     }
   }

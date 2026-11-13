@@ -22,12 +22,17 @@ async function post(path, body = {}) {
 }
 const showErr = (id, msg) => { const el = $(id); el.textContent = msg || ''; el.hidden = !msg; };
 const keyReady = () => !!st?.key.saved;
-const claudeReady = () => !!st?.claude.source;
+// Decision 54 B: the exact version, or a copy already on the PC only while the download cannot be reached.
+const claudeReady = () => !!st?.claude.ready;
 const same = (a, b) => a.length === b.length && a.every((x, i) => x.toLowerCase().replace(/\\/g, '/') === String(b[i]).toLowerCase().replace(/\\/g, '/'));
 
 function render() {
   if (!st) return;
-  if (!st.local) { $('#su').classList.add('closed'); $('#su-remote').hidden = false; return; }
+  if (!st.local) {
+    $('#su').classList.add('closed'); $('#su-remote').hidden = false;
+    $('#su-back').hidden = !st.folders.length;   // with projects there is a hub to go back to
+    return;
+  }
 
   // 1. The key
   const kr = keyReady() && !keyEditing;
@@ -49,12 +54,18 @@ function render() {
   const c = st.claude, d = c.download;
   $('#st-claude').classList.toggle('ready', claudeReady());
   const busy = d.state === 'downloading' || d.state === 'checking';
-  $('#cc-done').hidden = !claudeReady() || c.source === 'installed';
-  $('#cc-done-text').textContent = c.source === 'sdk' ? 'Claude Code is ready (it came with this hub).' : `Claude Code ${c.version} is ready.`;
-  $('#cc-get').hidden = (claudeReady() && c.source !== 'installed') || busy;
-  $('#cc-note').innerHTML = c.source === 'installed'
-    ? `Using the Claude Code already on this PC. For the best match, download version <b>${esc(c.version)}</b> (once, about ${esc(c.sizeMB)} MB on disk).`
-    : `Download Claude Code <b>${esc(c.version || '')}</b> from Anthropic, once (about ${esc(c.sizeMB)} MB on disk).`;
+  const exact = c.source === 'sdk' || c.source === 'downloaded';
+  const standIn = c.fallback && c.ready;   // offline: the copy already on the PC stands in for now
+  $('#cc-done').hidden = !c.ready;
+  $('#cc-done-text').textContent = c.source === 'sdk' ? 'Claude Code is ready (it came with this hub).'
+    : exact ? `Claude Code ${c.version} is ready.`
+    : `The download could not be reached, so for now Crux uses the Claude Code ${c.source === 'previous' ? 'downloaded earlier' : 'already on this PC'}. Try the download again when you are online.`;
+  $('#cc-get').hidden = exact || busy;
+  $('#cc-note').innerHTML = standIn
+    ? `Download version <b>${esc(c.version)}</b> when you are online.`
+    : c.source === 'previous'
+      ? `This version of Crux needs Claude Code <b>${esc(c.version)}</b>. Download it from Anthropic, once (about ${esc(c.sizeMB)} MB on disk).`
+      : `Download Claude Code <b>${esc(c.version || '')}</b> from Anthropic, once (about ${esc(c.sizeMB)} MB on disk).${c.source === 'installed' ? ' The copy already on this PC is used only if the download cannot be reached.' : ''}`;
   $('#cc-btn-text').textContent = d.state === 'error' ? 'Try again' : 'Download';
   $('#cc-prog').hidden = !busy;
   const pct = d.total ? Math.min(100, Math.round(d.received / d.total * 100)) : 0;
@@ -149,5 +160,7 @@ function close() {
 $('#su-x').addEventListener('click', close);
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#su').classList.contains('closed')) close(); });
 $('#su-reopen').addEventListener('click', () => { $('#su').classList.remove('closed'); $('#su-closed').hidden = true; });
+// A phone (or any device but the PC): back to the hub's Needs you and board; setup waits for the PC.
+$('#su-back').addEventListener('click', () => { try { sessionStorage.setItem('crux-hub:setup-closed', '1'); } catch { } location.replace('/'); });
 
 refresh();

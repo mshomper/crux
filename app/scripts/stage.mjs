@@ -28,10 +28,10 @@ const appVersion = JSON.parse(readFileSync(join(app, 'src-tauri', 'tauri.conf.js
 rmSync(staging, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 
-// 1. The hub and the Crux scripts: the files git tracks or would track (new ones not yet committed included), so
-// nothing git ignores (node_modules, logs, a guard-off file) comes along.
+// 1. The hub and the Crux scripts: files git tracks only, so nothing local (logs, a guard-off file, a stray file
+// not yet committed) ever ships. Commit new files before building.
 const SKIP = [/^hub\/test\//, /^hub\/Crux Hub\.cmd$/, /^hub\/Restart Crux Hub\.vbs$/, /^crux\/lenses\//, /^crux\/SKILL\.md$/, /(^|\/)guard-off$/];
-const tracked = execFileSync('git', ['-C', repo, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'hub', 'crux'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+const tracked = execFileSync('git', ['-C', repo, 'ls-files', '-z', '--', 'hub', 'crux'], { encoding: 'utf8' }).split('\0').filter(Boolean);
 let files = 0;
 for (const f of tracked) {
   if (SKIP.some(r => r.test(f))) continue;

@@ -15,7 +15,7 @@ import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
 import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp } from './lib/relaunch.mjs';
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
-import { expected as claudeExpected, resolveClaude, ClaudeDownload } from './lib/claude-code.mjs';
+import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
@@ -62,9 +62,10 @@ if (existsSync(cfg)) {
 }
 if (!projects.length && (!noAgents || tempHome)) projects = (hubCfg.projects || []).map(p => resolve(p)).filter(p => existsSync(p) || !BUNDLED);
 if (!projects.length && !BUNDLED) projects = [process.cwd()];
-// The saved API key (setup screen) becomes the agents' key, unless one is already set in the environment.
+// The saved API key (setup screen) becomes the agents' key, unless one is already set in the environment. Only on
+// the desktop app's own hub: a hub run from a clone never switches from its login to a key someone saved.
 const secrets = new Secrets();
-let keySource = secrets.apply();
+let keySource = BUNDLED ? secrets.apply() : null;
 
 // Hub settings (decision 21: routePermissions, permissionTimeoutSec; decision 44 B: the handoff defaults) start from
 // hub.json and the --retire-at flag, and are saved in ~/.crux-hub; a change made in the page wins from then on.
@@ -80,15 +81,18 @@ hub.claudeCode = () => resolveClaude({ exp: claudeExp }).path;
 // its last four characters.
 function setupState(local) {
   const cc = resolveClaude({ exp: claudeExp });
+  const download = claudeDownload.state();
+  const ccReady = claudeReady(cc, download);
   const hasKey = !!(process.env.ANTHROPIC_API_KEY && process.env.CRUX_HUB_USE_API_KEY === '1');
   const folders = [...hub.projects.values()].map(p => p.dir);
   return {
-    bundled: BUNDLED, local, testHub: hub.noAgents, needed: BUNDLED && (!hasKey || !folders.length || cc.source === null),
+    bundled: BUNDLED, local, testHub: hub.noAgents, needed: BUNDLED && (!hasKey || !folders.length || !ccReady),
     key: { saved: hasKey, from: hasKey ? (keySource === 'environment' ? 'environment' : 'saved') : null, end: local && hasKey ? keyEnd(process.env.ANTHROPIC_API_KEY) : '' },
     folders, configFolders: (readHubConfig(cfg).projects || []),
-    claude: { source: cc.source, version: claudeExp?.version || null, path: local ? cc.path : null, sizeMB: claudeExp ? Math.round(claudeExp.size / 1048576) : null, download: claudeDownload.state() }
+    claude: { source: cc.source, ready: ccReady, fallback: cc.source === 'previous' || cc.source === 'installed', version: claudeExp?.version || null, path: local ? cc.path : null, sizeMB: claudeExp ? Math.round(claudeExp.size / 1048576) : null, download }
   };
 }
+let picking = false;   // one Windows folder picker at a time
 const pcOnly = ctx => {
   if (!BUNDLED) throw new GuardError('Setup belongs to the desktop app\'s own hub.', 404);
   if (!ctx.local) throw new GuardError('Setup is done on the PC the hub runs on.', 403);
@@ -199,7 +203,12 @@ const routes = {
   // Download the exact Claude Code this hub's SDK expects; the page follows its progress through GET /api/setup.
   'POST /api/setup/claude': async (_, ctx) => { pcOnly(ctx); await claudeDownload.start(); return setupState(true); },
   // The Windows folder picker, on this PC's screen.
-  'POST /api/setup/browse': async (_, ctx) => { pcOnly(ctx); return { path: await pickFolder() }; },
+  'POST /api/setup/browse': async (_, ctx) => {
+    pcOnly(ctx);
+    if (picking) throw new Error('The folder picker is already open: look for it in front of the app window.');
+    picking = true;
+    try { return { path: await pickFolder() }; } finally { picking = false; }
+  },
   // The project folders: saved into hub.json, then the hub restarts to load them (the page reconnects by itself).
   'POST /api/setup/folders': ({ folders }, ctx) => {
     pcOnly(ctx);
