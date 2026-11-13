@@ -13,9 +13,9 @@
 // app/scripts/stage.mjs), but not Claude Code, which the hub's first-run screen downloads. The app still only attaches.
 //
 // Settings (all optional) in ~/crux/hub.json, or $CRUX_HOME/hub.json:  { "app": { "port": 4747, "hubDir": "C:/.../hub" } }
-// The hub folder is, in order: app.hubDir (a clone, such as Matt's); the hub that came with the app (runtime/hub);
-// the folder of the hub as last started on that port (~/.crux-hub, or $CRUX_HUB_DATA, launch-<port>.json); the clone
-// this app was built from. Whichever restart.mjs runs, it starts the hub the way it was last started on that port.
+// The hub folder is, in order: app.hubDir; the git clone the hub on that port was last started from (~/.crux-hub,
+// or $CRUX_HUB_DATA, launch-<port>.json), so a clone such as Matt's keeps running with no setup and no hand edit; the
+// hub that came with the app (runtime/hub); the clone this app was built from.
 //
 // Updates (tauri-plugin-updater): checked a minute after launch and once a day against latest.json on GitHub
 // Releases, verified with the public key in tauri.conf.json. A ready update shows as "Install update x.y.z" at the top
@@ -105,8 +105,13 @@ impl Hub {
             .and_then(|s| Path::new(s).parent().map(Path::to_path_buf));
         let runtime = runtime_dir();
         let bundled_hub = runtime.as_ref().map(|r| r.join("hub"));
+        // A hub last started from a git clone (its folder's parent holds .git, as in Matt's crux clone) stays in
+        // charge with no setup: the app keeps using that clone, as 0.1.0 did. The app's own hub is used only when
+        // there is no such clone, or hubDir names it.
+        let from_clone = from_launch.clone().filter(|d| d.parent().map(|p| p.join(".git").exists()).unwrap_or(false));
         let candidates = [
             app.get("hubDir").and_then(|d| d.as_str()).map(PathBuf::from),
+            from_clone,
             bundled_hub.clone(),
             from_launch,
             launch.get("cwd").and_then(|d| d.as_str()).map(PathBuf::from),

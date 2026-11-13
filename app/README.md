@@ -33,7 +33,7 @@ npm run release
 
 ## Settings
 
-Optional, in `~/crux/hub.json` (or `$CRUX_HOME/hub.json`): `{ "app": { "port": 4747, "hubDir": "C:/path/to/crux/hub" } }`. `hubDir` runs a hub from your own clone instead of the app's own. Without it the app uses its own hub (`runtime/hub`); whichever runs, `restart.mjs` starts the hub the way it was last started on that port.
+Optional, in `~/crux/hub.json` (or `$CRUX_HOME/hub.json`): `{ "app": { "port": 4747, "hubDir": "C:/path/to/crux/hub" } }`. The hub folder is, in order: `hubDir`; the git clone the hub on that port was last started from (`~/.crux-hub/launch-<port>.json`), so an existing clone keeps running with no setup and no edit; the app's own hub (`runtime/hub`). Whichever runs, `restart.mjs` starts the hub the way it was last started on that port.
 
 ## Rehearsals
 
