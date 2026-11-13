@@ -1,0 +1,13 @@
+{
+  "name": "crux-hub-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Crux Hub desktop app: a Tauri window and tray icon on top of the local hub (decision 49)",
+  "license": "MIT",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.1"
+  }
+}

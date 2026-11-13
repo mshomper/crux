@@ -1,2 +1,7 @@
 # Crux hub chat logs for this project: private, kept local
 .crux/
+
+# Desktop app (app/): npm packages, Rust build output, and schemas Tauri regenerates at each build
+app/node_modules/
+app/src-tauri/target/
+app/src-tauri/gen/
