@@ -80,7 +80,7 @@
  "settles": [
   {
    "key": "Windows code signing",
-   "value": "Microsoft Artifact Signing (individual), wired into the Tauri release build"
+   "value": "unsigned for now; docs tell users More info, Run anyway; Microsoft Artifact Signing is the first choice if signing is taken up later"
   }
  ],
  "images": []

@@ -4,7 +4,7 @@
 - Date: 2026-11-13, decided 2026-11-13
 - Lenses: architecture
 - Builds on: 0052
-- Settles: Windows code signing = Microsoft Artifact Signing (individual), wired into the Tauri release build
+- Settles: Windows code signing = unsigned for now; docs tell users More info, Run anyway; Microsoft Artifact Signing is the first choice if signing is taken up later
 
 ## In short
 
