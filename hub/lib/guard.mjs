@@ -24,7 +24,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { hostName, isLocalHost } from './access.mjs';
+import { hostName, hostPort, isLocalHost } from './access.mjs';
 import { b64u, unb64u, sha256, verifyRegistration, verifyAssertion, challengeOf, parseAuthData, signatureOk } from './webauthn.mjs';
 import { projectKey } from './settings.mjs';
 
@@ -93,11 +93,48 @@ export function addressOf(headers = {}, port = 4747) {
   return { rpId: host, origin, secure: origin.startsWith('https:'), webauthn: !ip, port: Number(port) };
 }
 
+// ---------- this PC (Matt, 2026-11-12) ----------
+// "My main PC is where I operate from, I shouldn't have to log in from here." A request made on the hub's own PC counts
+// as a paired device: no cookie, no step-up. Pairing and Face ID stay for remote devices (the phone over Tailscale).
+// This amends decision 47: a program on the PC can again make changes as the PC; the guard protects the remote path.
+//
+// Assume an attacker knows this code. Trust never rests on a header alone; all of these must hold:
+// 1. The TCP peer is loopback (the hub listens on 127.0.0.1 only, so this always holds; checked anyway).
+// 2. It reached the PC port, not the phone port (remotePort, 4748 for the live hub): `tailscale serve --bg 4748` sends
+//    the phone there, and the hub never trusts that port. The socket's own local port cannot be faked by a client.
+// 3. No proxy header. tailscale serve (ipn/ipnlocal/serve.go) always sets X-Forwarded-Host, and adds X-Forwarded-For,
+//    X-Forwarded-Proto and, for tailnet users, Tailscale-User-*; it also passes the client's Host through unchanged,
+//    so a Host of crux.localhost can arrive from the tailnet. Any X-Forwarded-*, Forwarded, X-Real-IP or Tailscale-*
+//    header therefore means "remote, must be paired". This covers a serve still pointed at the PC port.
+// 4. Host is exactly crux.localhost:<port> or localhost:<port>.
+// 5. An Origin, when sent (every browser write sends one), is exactly http://crux.localhost:<port> or
+//    http://localhost:<port>: a page on another site, or on another localhost port, is not the PC. Local tools that
+//    send no Origin are fine: they run on the PC anyway.
+const PC_HOSTS = new Set(['crux.localhost', 'localhost']);
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const proxied = headers => Object.keys(headers).some(h => /^(x-forwarded-|tailscale-)/i.test(h) || /^(forwarded|x-real-ip|via)$/i.test(h));
+export function fromThisPC(req, { pcPort, remotePort = null } = {}) {
+  const s = req?.socket || {}, headers = req?.headers || {};
+  if (!LOOPBACK.has(String(s.remoteAddress || ''))) return false;
+  if (remotePort != null && Number(s.localPort) === Number(remotePort)) return false;
+  if (pcPort != null && Number(s.localPort) !== Number(pcPort)) return false;
+  if (proxied(headers)) return false;
+  const host = hostName(headers.host);
+  if (!PC_HOSTS.has(host) || hostPort(headers.host) !== Number(pcPort)) return false;
+  if (headers.origin !== undefined && ![`http://crux.localhost:${pcPort}`, `http://localhost:${pcPort}`].includes(String(headers.origin))) return false;
+  return true;
+}
+export const THIS_PC = Object.freeze({ id: 'pc', label: 'This PC', rpId: '', local: true });
+const GUARD_OFF = Object.freeze({ id: 'off', label: 'This hub (guard off)', rpId: '', local: true, off: true });
+// The off switch: a file named guard-off in the hub folder, or CRUX_HUB_GUARD=off. Read at start.
+export const guardOff = ({ env = process.env, hubDir } = {}) => String(env.CRUX_HUB_GUARD || '').toLowerCase() === 'off' || (!!hubDir && existsSync(join(hubDir, 'guard-off')));
+
 export class Guard {
   // file: null keeps devices in memory only (tests). now: the clock (tests move it). print: where codes go (stdout).
   // interactive: the hub runs in a window you can see (stdout is a TTY); only then is a pairing code ever printed.
-  constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), port = 4747, now = () => Date.now(), print = s => console.log(s), file, interactive = false } = {}) {
-    Object.assign(this, { dir, port: Number(port), now, print, interactive: !!interactive });
+  // off: the whole guard is off (guardOff): every request counts as paired, as before decision 47.
+  constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), port = 4747, now = () => Date.now(), print = s => console.log(s), file, interactive = false, off = false } = {}) {
+    Object.assign(this, { dir, port: Number(port), now, print, interactive: !!interactive, off: !!off });
     this.pcName = pcNameFor(port);
     this.pcUrl = `http://${this.pcName}:${this.port}`;
     this.file = file === undefined ? join(dir, 'devices.json') : file;
@@ -125,7 +162,10 @@ export class Guard {
     writeFileSync(tmp, JSON.stringify({ version: 1, devices: this.devices.filter(d => !d.test), raises: this.raises }, null, 1), { mode: 0o600 });
     renameSync(tmp, this.file);
   }
-  paired() { return this.devices.filter(d => !d.test); }
+  // Remote devices paired with a cookie (the PC's own passkey and the test device are not among them).
+  paired() { return this.devices.filter(d => !d.test && !d.local); }
+  // This PC's own passkey for big changes (set up from the page the first time, no code).
+  pcHasPasskey() { return this.devices.some(d => d.local && d.credential); }
 
   // ---------- the device cookie ----------
   tokenOf(headers = {}) {
@@ -135,7 +175,11 @@ export class Guard {
     }
     return '';
   }
-  deviceFor(headers = {}) {
+  // The device a request comes from: the guard switched off, this PC itself (local: fromThisPC, decided by the server
+  // from the socket and headers), or a paired device by its cookie.
+  deviceFor(headers = {}, { local = false } = {}) {
+    if (this.off) return GUARD_OFF;
+    if (local) return THIS_PC;
     const t = this.tokenOf(headers);
     if (!t || t.length > 200) return null;
     const h = hashToken(t);
@@ -286,11 +330,50 @@ export class Guard {
     const allow = this.devices.filter(d => d.rpId === a.rpId && d.credential).map(d => ({ type: 'public-key', id: d.credential.id, ...(d.credential.transports?.length ? { transports: d.credential.transports } : {}) }));
     return { publicKey: { challenge, rpId: a.rpId, allowCredentials: allow, userVerification: 'required', timeout: STEP_UP_MS } };
   }
-  // need: { purpose, scope }. Returns { ok: true, holder, proof } or { ok: false, error }.
+  // This PC's first big change: options to set up its passkey, bound to that change like a step-up challenge.
+  pcEnrollOptions({ headers = {}, device, purpose, scope = '' }) {
+    if (!device?.local || device.off) throw new GuardError('Only this PC sets up its passkey here.', 403);
+    if (!PURPOSES.has(purpose)) throw new GuardError('Unknown kind of confirmation.', 400);
+    const a = addressOf(headers, this.port);
+    this.sameOrigin(headers, a); this.needName(a);
+    const challenge = b64u(randomBytes(32));
+    this.putChallenge(challenge, { kind: 'create-pc', purpose, scope: cutScope(scope), deviceId: device.id, rpId: a.rpId, origin: a.origin, expires: this.now() + PAIR_MS });
+    return {
+      publicKey: {
+        challenge, rp: { id: a.rpId, name: 'Crux Hub' }, user: { id: b64u(randomBytes(16)), name: 'Crux Hub · This PC', displayName: 'This PC' },
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: { authenticatorAttachment: 'platform', residentKey: 'preferred', requireResidentKey: false, userVerification: 'required' },
+        timeout: 120000, attestation: 'none'
+      }
+    };
+  }
+  // need: { purpose, scope }. Returns { ok: true, holder, proof } or { ok: false, error }. On this PC with no passkey
+  // yet, also { enroll: credential } (setting one up, which counts as the confirmation) or { fallback: true } (the
+  // browser offers no Windows Hello: allowed, and the server pushes an alert).
   verifyStepUp({ headers = {}, device, stepUp, need }) {
     const fail = error => ({ ok: false, error });
     if (!stepUp || typeof stepUp !== 'object') return fail('This change needs Windows Hello or Face ID first.');
     const a = addressOf(headers, this.port);
+    if (stepUp.fallback === true || stepUp.enroll) {
+      if (!device?.local) return fail('Only this PC can do that.');
+      if (this.pcHasPasskey()) return fail('This PC has its passkey: confirm with Windows Hello.');
+      if (stepUp.fallback === true) return { ok: true, fallback: true };
+      const t = this.takeChallenge(stepUp.enroll.clientDataJSON, 'create-pc');
+      if (!t) return fail('That set-up was already used, or the hub never asked for it. Try again.');
+      const { ch, rec } = t;
+      if (rec.expires < this.now()) return fail('That set-up took too long. Try again.');
+      if (rec.purpose !== need.purpose || rec.scope !== need.scope) return fail('That set-up was for a different change.');
+      if (rec.rpId !== a.rpId || rec.origin !== a.origin) return fail('That set-up was made on another address.');
+      let cred;
+      try { cred = verifyRegistration(stepUp.enroll, { challenge: ch, origin: a.origin, rpId: a.rpId }); }
+      catch (e) { return fail(`The passkey was not accepted: ${e.message}.`); }
+      if (this.devices.some(d => d.credential?.id === cred.id)) return fail('That passkey is already known.');
+      const now = iso(this.now());
+      const holder = { id: `d${randomBytes(5).toString('hex')}`, label: 'This PC (Windows Hello)', rpId: a.rpId, origin: a.origin, tokenHash: '', local: true, credential: { ...cred, transports: cleanTransports(stepUp.enroll.transports) }, created: now, lastSeen: now, via: 'set up on this PC' };
+      this.devices.push(holder);
+      this.save();
+      return { ok: true, enrolled: true, holder };
+    }
     const t = this.takeChallenge(stepUp.clientDataJSON, 'get');
     if (!t) return fail('That confirmation was already used, or the hub never asked for it. Confirm again.');
     const { ch, rec } = t;
@@ -320,6 +403,7 @@ export class Guard {
     if (!r || typeof r !== 'object') return false;
     try {
       if (r.purpose !== 'project' || !scopeHas(r.scope, projectTag(key)) || !scopeHas(r.scope, 'trusted')) return false;
+      if (r.local === true) return true;   // raised from this PC, which needs no passkey (Matt, 2026-11-12)
       const holder = this.devices.find(d => d.id === r.deviceId && d.rpId === r.rpId && d.credential?.id === r.credentialId);
       if (!holder) return false;
       const cdBytes = unb64u(r.clientDataJSON), adBytes = unb64u(r.authenticatorData);
@@ -332,14 +416,15 @@ export class Guard {
   }
 
   // ---------- the device list ----------
-  status(headers = {}) {
-    const a = addressOf(headers, this.port), me = this.deviceFor(headers);
-    return { paired: !!me, device: me ? { id: me.id, label: me.label, test: !!me.test } : null, address: a.rpId, webauthn: a.webauthn && !(a.rpId === 'localhost' && this.pcName !== 'localhost'),
+  status(headers = {}, opts = {}) {
+    const a = addressOf(headers, this.port), me = this.deviceFor(headers, opts);
+    return { paired: !!me, device: me ? { id: me.id, label: me.label, test: !!me.test, local: !!me.local } : null, address: a.rpId, webauthn: a.webauthn && !(a.rpId === 'localhost' && this.pcName !== 'localhost'),
       passkeyHere: this.devices.some(d => d.rpId === a.rpId && d.credential), devices: this.paired().length, port: this.port, pcUrl: this.pcUrl, codeWhere: this.interactive ? 'window' : 'none' };
   }
-  list(headers = {}) {
-    const me = this.deviceFor(headers);
-    return this.devices.map(d => ({ id: d.id, label: d.label, address: d.rpId || '', created: d.created, lastSeen: d.lastSeen, via: d.via || '', you: d === me, test: !!d.test }));
+  list(headers = {}, opts = {}) {
+    const me = this.deviceFor(headers, opts);
+    const pc = me?.local ? [{ id: me.id, label: me.label, address: 'this PC', created: '', lastSeen: iso(this.now()), via: 'this PC needs no pairing', you: true, local: true }] : [];
+    return [...pc, ...this.devices.map(d => ({ id: d.id, label: d.label, address: d.rpId || '', created: d.created, lastSeen: d.lastSeen, via: d.via || '', you: d === me, test: !!d.test }))];
   }
   remove(id) {
     const i = this.devices.findIndex(d => d.id === String(id || ''));

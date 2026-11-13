@@ -24,12 +24,10 @@ export function platform(nav = globalThis.navigator || {}) {
 // Where a pairing code comes from, for this hub and this device (GET /api/auth/status: codeWhere 'window' | 'none',
 // devices = how many are paired). The hub shows a code only in its own window, never in a file (decision 47 review).
 const WINDOW = 'the hub\'s own window on the PC (Crux Hub, on the taskbar)';
+// The PC itself needs no pairing (Matt, 2026-11-12), so a remote device's code comes from the PC's Devices panel.
 export function codeHelp(st = {}) {
-  const win = st.codeWhere === 'window';
-  if (!st.devices) return { text: `The code is in ${WINDOW}.`, print: win };
-  return { text: `Get a code on a device already paired: hub menu, Devices, Pair another device.${win ? ` Lost a passkey? The code in ${WINDOW} works too.` : ''}`, print: false };
+  return { text: 'Get a code on the PC: hub menu, Devices, Pair another device.', print: false };
 }
-export const START_OVER_NO_WINDOW = 'Starting over needs the hub in a window. Delete devices.json in the .crux-hub folder in your user folder, then double-click Restart Crux Hub.vbs: with no device paired, the hub opens in a window with a code. Every device then pairs again.';
 
 // ---------- the panels, as HTML (testable without a browser) ----------
 const head = (iconId, title) => `<header class="ps-head">${ic(iconId)}<h2 id="g-title">${esc(title)}</h2>
@@ -47,10 +45,6 @@ export function pairPanel(s) {
     body = `<div class="g-hero">${glyph('key')}<div><p class="g-lead">This PC pairs at the hub's own name</p>
       <p class="g-sub">Passkeys need a name, and on this PC the hub keeps its cookie on ${esc(pc.replace(/^http:\/\//, ''))} only, so other programs never receive it.</p></div></div>
       <a class="btn primary g-wide" href="${esc(pc)}/">${ic('external')}Open ${esc(pc)}</a>`;
-  } else if (s.step === 'nowindow') {
-    body = `<div class="g-hero">${glyph('pc')}<div><p class="g-lead">Start the hub in a window to pair the first device</p>
-      <p class="g-sub">The hub shows the first pairing code only in its own window, never in a file. Double-click <b>Restart Crux Hub.vbs</b> in the hub folder: with no device paired yet, it restarts the hub in a window (Crux Hub, on the taskbar). Then reload this page.</p></div></div>
-      <button type="button" class="btn ghost g-wide" data-g-close>Close</button>`;
   } else if (s.step === 'nokey') {
     body = `<div class="g-hero">${glyph('key')}<div><p class="g-lead">This browser cannot make passkeys here.</p>
       <p class="g-sub">Use Edge or Chrome on the PC at ${esc(pc)}, or the Crux app on your phone's home screen (its Tailscale address).</p></div></div>`;
@@ -77,11 +71,8 @@ export function pairPanel(s) {
         <input data-g-label type="text" autocomplete="off" maxlength="40" value="${esc(s.label || p.name)}"></label>
       ${s.error ? warnLine(s.error) : ''}
       <button type="button" class="btn primary g-big" data-g-next ${s.busy ? 'disabled' : ''}>${ic('chev')}Next</button>
-      ${st.devices ? `<details class="g-fold"><summary>${ic('help')}<span>Lost a passkey?</span>${ic('chev', 'ps-chev')}</summary>
-        ${st.codeWhere === 'window'
-          ? `<p>Use the code from the hub's own window (not one from another device) and start over: every paired device is unpaired, then this one pairs. Your phone gets a notification.</p>
-        <button type="button" class="btn deny g-wide" data-g-startover ${s.busy ? 'disabled' : ''}>${ic('unlink')}Unpair every device, then pair this one</button>`
-          : `<p>${esc(START_OVER_NO_WINDOW)}</p>`}</details>` : ''}`;
+      <details class="g-fold"><summary>${ic('help')}<span>Lost a passkey?</span>${ic('chev', 'ps-chev')}</summary>
+        <p>On the PC: hub menu, Devices. Unpair the lost device there, then Pair another device for a fresh code. The PC itself never needs a passkey.</p></details>`;
   }
   return `${head('key', 'Pair this device')}<div class="ps-body g-body">${body}</div>`;
 }
@@ -91,7 +82,7 @@ export function stepUpPanel(s) {
   const p = s.plat;
   return `${head('shield', 'Confirm it\'s you')}<div class="ps-body g-body">
     <div class="g-hero">${glyph(p.glyph, true)}<div><p class="g-lead">${esc(s.need?.why || 'A big change')}</p>
-      <p class="g-sub">Only big changes ask for this. Good for one minute, for this change only.</p></div></div>
+      <p class="g-sub">${s.need?.enroll ? `Only big changes ask for this. The first time, ${esc(p.word)} sets up this PC's passkey: no code, one prompt.` : 'Only big changes ask for this. Good for one minute, for this change only.'}</p></div></div>
     ${s.error ? warnLine(s.error) : ''}
     <button type="button" class="btn primary g-big" data-g-confirm ${s.ready && !s.busy ? '' : 'disabled'}>${ic(p.glyph)}${s.busy ? 'Waiting for ' : 'Confirm with '}${esc(p.word)}</button>
     <button type="button" class="btn ghost g-wide" data-g-close>Cancel</button></div>`;
@@ -103,8 +94,8 @@ const ago = iso => { if (!iso) return 'never'; const m = Math.round((Date.now() 
 export function devicesPanel(s) {
   const L = s.list || { devices: [], push: [] };
   const dev = d => `<li class="g-row ${d.you ? 'you' : ''}"><span class="g-row-ic">${ic(/ts\.net$/.test(d.address) ? 'phone' : 'pc')}</span>
-    <span class="g-row-t"><b>${esc(d.label)}</b>${d.you ? '<span class="g-chip">This device</span>' : ''}<span class="g-row-s">${esc(d.address === 'localhost' ? 'this PC (localhost)' : d.address || 'test hub')} · paired ${esc(when(d.created))} · used ${esc(ago(d.lastSeen))}</span></span>
-    ${d.test ? '' : `<button type="button" class="btn ghost icon-only g-rm" data-g-unpair="${esc(d.id)}" aria-label="Unpair ${esc(d.label)}" title="Unpair ${esc(d.label)} and forget its passkey (asks to confirm it's you)">${ic('unlink')}</button>`}</li>`;
+    <span class="g-row-t"><b>${esc(d.label)}</b>${d.you ? '<span class="g-chip">This device</span>' : ''}<span class="g-row-s">${d.local ? 'Always trusted: changes from this PC need no pairing' : `${esc(d.address === 'localhost' ? 'this PC (localhost)' : d.address || 'test hub')} · paired ${esc(when(d.created))} · used ${esc(ago(d.lastSeen))}`}</span></span>
+    ${d.test || d.local ? '' : `<button type="button" class="btn ghost icon-only g-rm" data-g-unpair="${esc(d.id)}" aria-label="Unpair ${esc(d.label)}" title="Unpair ${esc(d.label)} and forget its passkey (asks to confirm it's you)">${ic('unlink')}</button>`}</li>`;
   const sub = x => `<li class="g-row"><span class="g-row-ic">${ic('bell')}</span><span class="g-row-t"><b>${esc(x.label)}</b><span class="g-row-s">notifications since ${esc(when(x.added))}</span></span>
     <button type="button" class="btn ghost icon-only g-rm" data-g-unpush="${esc(x.id)}" aria-label="Stop notifications to ${esc(x.label)}" title="Stop notifications to ${esc(x.label)}">${ic('x')}</button></li>`;
   const code = s.code ? `<div class="g-issued"><span class="g-cap">${ic('lock')}Code for the new device</span><b class="g-code-big">${esc(s.code.code)}</b>
@@ -170,9 +161,8 @@ export class GuardUI {
     if (!this.st) await this.check();
     const named = this.st ? this.st.webauthn : !/^\d+(\.\d+){3}$|^\[/.test(location.hostname);
     const can = typeof PublicKeyCredential !== 'undefined' && isSecureContext;
-    const noWindow = this.st && !this.st.devices && this.st.codeWhere !== 'window';   // the first device needs the hub in a window
     this.kind = 'pair';
-    this.s = { step: !named ? 'noname' : !can ? 'nokey' : noWindow ? 'nowindow' : 'code', st: this.st, plat: this.plat, label: this.plat.name, standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true };
+    this.s = { step: !named ? 'noname' : !can ? 'nokey' : 'code', st: this.st, plat: this.plat, label: this.plat.name, standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true };
     this.show(this.panel, () => pairPanel(this.s));
     this.panel.onclick = e => this.pairClick(e);
     this.panel.oninput = e => { if (e.target.matches('[data-g-code]')) this.s.code = e.target.value; if (e.target.matches('[data-g-label]')) this.s.label = e.target.value; };
@@ -235,8 +225,24 @@ export class GuardUI {
         if (e.target.closest('[data-g-confirm]')) this.confirmGo();
       };
       this.confirmEl.onclose = () => { const p = this.pending; this.pending = null; p?.reject(new Error('Not changed: it was not confirmed.')); };
-      this.challenge();
+      need.enroll ? this.enroll() : this.challenge();
     });
+  }
+  // This PC's first big change (Matt, 2026-11-12): set up its passkey with one Windows Hello prompt, no code. If the
+  // browser offers no Windows Hello, the change goes ahead without a prompt and the hub pushes an alert.
+  async enroll() {
+    const hello = typeof PublicKeyCredential !== 'undefined' && isSecureContext && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable?.().catch(() => false);
+    if (!hello) return this.finish(await this.c.submit({ fallback: true }).catch(e => ({ ok: false, status: 0, json: { error: e.message } })));
+    const r = await raw('/api/pc/enroll', { purpose: this.c.need.purpose, scope: this.c.need.scope });
+    if (!r.ok) this.c.error = r.json.error || 'The hub did not answer.';
+    else { this.c.options = r.json.publicKey; this.c.ready = true; this.c.create = true; }
+    this.redraw(this.confirmEl);
+    this.confirmEl.querySelector('[data-g-confirm]')?.focus({ preventScroll: true });
+  }
+  finish(r) {
+    const p = this.pending; this.pending = null;
+    if (this.confirmEl.open) this.confirmEl.close();
+    if (r.ok) p?.resolve(r.json); else p?.reject(new Error(r.json.error || 'The hub refused that.'));
   }
   async challenge() {
     const r = await raw('/api/auth/challenge', { purpose: this.c.need.purpose, scope: this.c.need.scope });
@@ -249,16 +255,23 @@ export class GuardUI {
     const o = this.c.options;
     if (!o) return;
     this.c.busy = true; this.c.error = ''; this.redraw(this.confirmEl);
+    const again = () => (this.c.create ? this.enroll() : this.challenge());
     let a;
     try {
-      const cred = await navigator.credentials.get({ publicKey: { ...o, challenge: fromB64u(o.challenge), allowCredentials: (o.allowCredentials || []).map(c => ({ ...c, id: fromB64u(c.id) })) } });
-      const res = cred.response;
-      a = { id: cred.id, clientDataJSON: toB64u(res.clientDataJSON), authenticatorData: toB64u(res.authenticatorData), signature: toB64u(res.signature) };
-    } catch (e) { this.c.busy = false; this.c.error = plainError(e); this.c.ready = false; this.redraw(this.confirmEl); return this.challenge(); }
+      if (this.c.create) {   // this PC's first big change: set up its passkey, which counts as the confirmation
+        const cred = await navigator.credentials.create({ publicKey: { ...o, challenge: fromB64u(o.challenge), user: { ...o.user, id: fromB64u(o.user.id) } } });
+        const res = cred.response;
+        a = { enroll: { id: cred.id, rawId: toB64u(cred.rawId), type: cred.type, clientDataJSON: toB64u(res.clientDataJSON), authenticatorData: toB64u(res.getAuthenticatorData()), publicKey: toB64u(res.getPublicKey()), publicKeyAlgorithm: res.getPublicKeyAlgorithm(), transports: res.getTransports?.() || [] } };
+      } else {
+        const cred = await navigator.credentials.get({ publicKey: { ...o, challenge: fromB64u(o.challenge), allowCredentials: (o.allowCredentials || []).map(c => ({ ...c, id: fromB64u(c.id) })) } });
+        const res = cred.response;
+        a = { id: cred.id, clientDataJSON: toB64u(res.clientDataJSON), authenticatorData: toB64u(res.authenticatorData), signature: toB64u(res.signature) };
+      }
+    } catch (e) { this.c.busy = false; this.c.error = plainError(e); this.c.ready = false; this.redraw(this.confirmEl); return again(); }
     const r = await this.c.submit(a).catch(e => ({ ok: false, status: 0, json: { error: e.message } }));
     this.c.busy = false;
     if (r.ok) { const p = this.pending; this.pending = null; this.confirmEl.close(); return p?.resolve(r.json); }
-    if (r.status === 403 && r.json.stepUp) { this.c.error = r.json.error; this.c.ready = false; this.redraw(this.confirmEl); return this.challenge(); }
+    if (r.status === 403 && r.json.stepUp) { this.c.error = r.json.error; this.c.ready = false; this.c.create = !!r.json.stepUp.enroll; this.redraw(this.confirmEl); return again(); }
     const p = this.pending; this.pending = null; this.confirmEl.close();
     p?.reject(new Error(r.json.error || 'The hub refused that.'));
   }

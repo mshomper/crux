@@ -21,12 +21,13 @@ const HUB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const freePort = () => new Promise(ok => { const s = createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); });
 const CODE = /Pairing code|[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}/;
+const TS = 'pc.tail1234.ts.net';   // the phone's way in (tailscale serve)
 
-let port, child, out = '', root, proj, data, crux;
+let port, rport, child, out = '', root, proj, data, crux;
 const key = new FakePasskey(), token = randomBytes(32).toString('base64url');
 let cookie;
 async function startHub() {
-  child = spawn(process.execPath, [join(HUB, 'server.mjs'), '--port', String(port), '--no-agents', '--test-pair', proj], {
+  child = spawn(process.execPath, [join(HUB, 'server.mjs'), '--port', String(port), '--remote-port', String(rport), '--no-agents', '--test-pair', proj], {
     cwd: HUB, windowsHide: true,
     env: { ...process.env, CRUX_HUB_DATA: data, CRUX_HOME: crux, USERPROFILE: join(root, 'home'), HOME: join(root, 'home'), CRUX_HUB_AGENTS: '0', CRUX_HUB_PORT: '', CRUX_HUB_RESTARTED: '' }
   });
@@ -43,6 +44,7 @@ async function stopAll() {
 
 test.before(async () => {
   do { port = await freePort(); } while (port === 4747);
+  do { rport = await freePort(); } while (rport === 4747 || rport === 4748 || rport === port);
   root = mkdtempSync(join(tmpdir(), 'crux-guard-http-'));
   proj = join(root, 'proj'); data = join(root, 'data'); crux = join(root, 'crux');
   for (const d of [join(proj, '.crux'), join(proj, '.decisions', 'images'), join(crux, 'media', 'proj'), join(root, 'home'), data]) mkdirSync(d, { recursive: true });
@@ -56,7 +58,7 @@ test.before(async () => {
   writeFileSync(join(crux, 'media', 'proj', 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
   // The paired PC.
   const now = new Date().toISOString();
-  writeFileSync(join(data, 'devices.json'), JSON.stringify({ version: 1, raises: {}, devices: [{ id: 'dseed', label: 'Test PC', rpId: 'localhost', origin: `http://localhost:${port}`, tokenHash: createHash('sha256').update(token).digest('hex'),
+  writeFileSync(join(data, 'devices.json'), JSON.stringify({ version: 1, raises: {}, devices: [{ id: 'dseed', label: 'Test PC', rpId: TS, origin: `https://${TS}`, tokenHash: createHash('sha256').update(token).digest('hex'),
     credential: { id: key.id, publicKey: key.spki.toString('base64url'), alg: -7, signCount: 0, transports: ['internal'] }, created: now, lastSeen: now, via: 'written by the test' }] }));
   cookie = `crux_device_${port}=${token}`;
   await startHub();
@@ -68,11 +70,14 @@ test.after(async () => {
 });
 
 // A request as the hub's own page would send it (Host, Origin, JSON), or with a different host.
-function call(method, path, { body, cookie: c, host = `localhost:${port}` } = {}) {
+// Remote by default: the phone's requests come through tailscale serve, with a *.ts.net Host and forwarding headers.
+function call(method, path, { body, cookie: c, host = TS, extra = {}, to = port } = {}) {
   return new Promise((ok, bad) => {
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
-    const headers = { host, ...(payload ? { 'content-type': 'application/json', origin: `http://${host}`, 'content-length': payload.length } : {}), ...(c ? { cookie: c } : {}) };
-    const r = request({ host: '127.0.0.1', port, method, path, headers }, res => {
+    const remote = /\.ts\.net$/.test(host);
+    const headers = { host, ...(remote ? { 'x-forwarded-for': '100.101.102.103', 'x-forwarded-proto': 'https' } : {}), ...(payload ? { 'content-type': 'application/json', origin: `${remote ? 'https' : 'http'}://${host}`, 'content-length': payload.length } : {}), ...(c ? { cookie: c } : {}), ...extra };
+    for (const k of Object.keys(headers)) if (headers[k] === undefined) delete headers[k];   // extra: { origin: undefined } drops it
+    const r = request({ host: '127.0.0.1', port: to, method, path, headers }, res => {
       const parts = [];
       res.on('data', x => parts.push(x));
       res.on('end', () => { const text = Buffer.concat(parts).toString('utf8'); let json = null; try { json = JSON.parse(text); } catch { } ok({ status: res.statusCode, headers: res.headers, json, text }); });
@@ -83,7 +88,8 @@ function call(method, path, { body, cookie: c, host = `localhost:${port}` } = {}
   });
 }
 const cookieOf = r => String([].concat(r.headers['set-cookie'] || [])[0] || '').split(';')[0];
-const ORIGIN = () => `http://localhost:${port}`;
+const ORIGIN = () => `https://${TS}`;
+const LOCAL = () => `localhost:${port}`;
 const postRoutes = () => [...new Set([...readFileSync(join(HUB, 'server.mjs'), 'utf8').matchAll(/'POST (\/api\/[\w/-]+)'/g)].map(m => m[1]))];
 const OPEN = ['/api/pair/code', '/api/pair/options', '/api/pair/finish'];
 const filesUnder = dir => readdirSync(dir).flatMap(n => { const f = join(dir, n); return statSync(f).isDirectory() ? filesUnder(f) : [f]; });
@@ -92,7 +98,7 @@ test('every POST route refuses a request with no device cookie (one request per 
   const routes = postRoutes();
   for (const r of ['/api/approval', '/api/pick', '/api/send', '/api/worker', '/api/retire', '/api/answer', '/api/settings', '/api/entry-status', '/api/push/subscribe', '/api/restart', '/api/presence', '/api/auth/challenge'])
     assert.ok(routes.includes(r), `${r} is among the routes checked`);
-  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 24, `24 routes need the cookie: ${routes.join(' ')}`);
+  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 25, `25 routes need a paired device: ${routes.join(' ')}`);
   for (const path of routes.filter(r => !OPEN.includes(r))) {
     const r = await call('POST', path, { body: {} });
     assert.equal(r.status, 401, `${path} without a cookie: ${r.status} ${r.text}`);
@@ -126,6 +132,68 @@ test('the test device\'s cookie is accepted on every route; the big changes then
   const lower = await call('POST', '/api/settings', { body: { project: 'proj', permissionMode: 'standard' }, cookie: testCookie });
   assert.equal(lower.status, 200, 'lowering needs only the cookie');
   assert.equal((await call('POST', '/api/send', { body: { project: 'proj', thread: 'orchestrator', text: 'Hello from a paired device' }, cookie: testCookie })).status, 200);
+});
+
+const pcKey = new FakePasskey();
+// A big change from the PC page: once the PC has its passkey, a Windows Hello confirmation made with it.
+async function confirmPC(need) {
+  const ch = await call('POST', '/api/auth/challenge', { body: { purpose: need.purpose, scope: need.scope }, host: LOCAL() });
+  assert.equal(ch.status, 200, ch.text);
+  return pcKey.assert({ challenge: ch.json.publicKey.challenge, origin: `http://${LOCAL()}`, rpId: 'localhost' });
+}
+
+test('this PC: no login for everyday changes; its first big change sets up Windows Hello (or goes ahead without it, with a note); the phone\'s path still needs a cookie', async () => {
+  const msg = { project: 'proj', thread: 'orchestrator', text: 'From the PC' };
+  const st = await call('GET', '/api/auth/status', { host: LOCAL() });
+  assert.equal(st.json.paired, true); assert.equal(st.json.device.local, true);
+  // everyday changes: no cookie, no prompt
+  assert.equal((await call('POST', '/api/send', { body: msg, host: LOCAL() })).status, 200, 'localhost, page Origin');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: `crux.localhost:${port}` })).status, 200, 'crux.localhost, no forwarded headers');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: LOCAL(), extra: { origin: undefined } })).status, 200, 'a local tool with no Origin');
+  assert.equal((await call('POST', '/api/settings', { body: { project: 'proj', permissionMode: 'auto', handoff: { retireAt: 55 } }, host: LOCAL() })).status, 200, 'ordinary settings');
+  const issued = await call('POST', '/api/pair/issue', { body: {}, host: LOCAL() });
+  assert.equal(issued.status, 200, 'Pair another device just shows a code, no Windows Hello');
+  assert.match(issued.json.code, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+  assert.equal((await call('GET', '/api/devices', { host: LOCAL() })).json.devices[0].label, 'This PC');
+  // a big change, no PC passkey yet: asks to set one up; with no Windows Hello in the browser it goes ahead
+  const big = { project: 'proj', permissionMode: 'trusted' };
+  const ask = await call('POST', '/api/settings', { body: big, host: LOCAL() });
+  assert.equal(ask.status, 403); assert.equal(ask.json.stepUp.enroll, true);
+  const fallback = await call('POST', '/api/settings', { body: { ...big, stepUp: { fallback: true } }, host: LOCAL() });
+  assert.equal(fallback.status, 200, fallback.text); assert.equal(fallback.json.permissionMode, 'trusted');
+  assert.equal(JSON.parse(readFileSync(join(data, 'devices.json'), 'utf8')).raises[projectKey(proj)].local, true, 'recorded as raised from this PC');
+  const notes = (await call('GET', '/api/state')).json.projects[0].events.filter(e => e.type === 'notice').map(e => e.text);
+  assert.ok(notes.some(t => /made on this PC without Windows Hello/.test(t)), 'and told');
+  // the first big change with Windows Hello sets up the PC's passkey (no code)
+  const conn = await call('POST', '/api/settings', { body: { project: 'proj', connectors: true }, host: LOCAL() });
+  assert.equal(conn.json.stepUp.enroll, true);
+  const o = await call('POST', '/api/pc/enroll', { body: { purpose: conn.json.stepUp.purpose, scope: conn.json.stepUp.scope }, host: LOCAL() });
+  assert.equal(o.status, 200, o.text);
+  const enrolled = await call('POST', '/api/settings', { body: { project: 'proj', connectors: true, stepUp: { enroll: pcKey.register({ challenge: o.json.publicKey.challenge, origin: `http://${LOCAL()}`, rpId: 'localhost' }) } }, host: LOCAL() });
+  assert.equal(enrolled.status, 200, enrolled.text); assert.equal(enrolled.json.connectors, true);
+  // from now on: Windows Hello, no fallback
+  const hub = { permissionTimeoutSec: 300 };
+  const need = (await call('POST', '/api/settings', { body: hub, host: LOCAL() })).json.stepUp;
+  assert.ok(need && !need.enroll, 'a normal confirmation now');
+  assert.equal((await call('POST', '/api/settings', { body: { ...hub, stepUp: { fallback: true } }, host: LOCAL() })).status, 403, 'no fallback once the PC has its passkey');
+  assert.equal((await call('POST', '/api/settings', { body: { ...hub, stepUp: await confirmPC(need) }, host: LOCAL() })).json.settings.permissionTimeoutSec, 300);
+  assert.equal((await call('POST', '/api/pc/enroll', { body: { purpose: 'push', scope: 'push' }, cookie: testCookie })).status, 403, 'a remote device cannot set up the PC passkey');
+  // the phone's path, and anything that came through a proxy: refused without a cookie
+  assert.equal((await call('POST', '/api/send', { body: msg })).status, 401, 'Host ts.net');
+  assert.equal((await call('POST', '/api/send', { body: msg, to: rport })).status, 401, 'the phone port');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: `localhost:${rport}`, to: rport })).status, 401, 'the phone port, even with a local Host');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: LOCAL(), extra: { 'x-forwarded-for': '100.1.2.3' } })).status, 401, 'X-Forwarded-For');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: `crux.localhost:${port}`, extra: { 'x-forwarded-host': TS } })).status, 401, 'serve passing a spoofed Host through');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: LOCAL(), extra: { 'tailscale-user-login': 'someone@example.com' } })).status, 401, 'Tailscale identity');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: `127.0.0.1:${port}` })).status, 401, '127.0.0.1 is not the PC name');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: LOCAL(), extra: { origin: 'http://localhost:3000' } })).status, 401, 'a page on another local port');
+  assert.equal((await call('POST', '/api/send', { body: msg, host: LOCAL(), extra: { origin: 'https://evil.example' } })).status, 403, 'a foreign page is refused by the page checks');
+  // back to where the tests below expect it
+  for (const b of [{ project: 'proj', permissionMode: 'standard', connectors: false, handoff: { retireAt: null } }, { permissionTimeoutSec: 120 }]) {
+    let r = await call('POST', '/api/settings', { body: b, host: LOCAL() });
+    if (r.status === 403) r = await call('POST', '/api/settings', { body: { ...b, stepUp: await confirmPC(r.json.stepUp) }, host: LOCAL() });
+    assert.equal(r.status, 200, r.text);
+  }
 });
 
 test('no pairing code ever reaches a file, a reply or the page: a hub with no window shows none', async () => {
@@ -174,7 +242,7 @@ test('agent-written pages, pictures, the roll-up and visuals are served sandboxe
 async function confirm(need, { cookie: c = cookie, sign = {} } = {}) {
   const ch = await call('POST', '/api/auth/challenge', { body: { purpose: need.purpose, scope: need.scope }, cookie: c });
   assert.equal(ch.status, 200, ch.text);
-  return key.assert({ challenge: ch.json.publicKey.challenge, origin: ORIGIN(), rpId: 'localhost', ...sign });
+  return key.assert({ challenge: ch.json.publicKey.challenge, origin: ORIGIN(), rpId: TS, ...sign });
 }
 
 test('raising to Trusted needs a fresh step-up made for it; a replay or a missing face check is refused', async () => {
@@ -213,13 +281,13 @@ test('a paired device pairs another (real ES256 registration over HTTP) after a 
   assert.equal((await call('POST', '/api/pair/options', { body: { code: issued.json.code, label: 'PC' }, host: `127.0.0.1:${port}` })).status, 400, 'no passkeys on 127.0.0.1');
   const opts = await call('POST', '/api/pair/options', { body: { code: issued.json.code, label: 'Second PC' } });
   assert.equal(opts.status, 200, opts.text);
-  assert.equal(opts.json.publicKey.rp.id, 'localhost');
+  assert.equal(opts.json.publicKey.rp.id, TS);
   assert.equal(opts.json.publicKey.authenticatorSelection.userVerification, 'required');
   const second = new FakePasskey();
-  const fin = await call('POST', '/api/pair/finish', { body: { credential: second.register({ challenge: opts.json.publicKey.challenge, origin: ORIGIN(), rpId: 'localhost' }) } });
+  const fin = await call('POST', '/api/pair/finish', { body: { credential: second.register({ challenge: opts.json.publicKey.challenge, origin: ORIGIN(), rpId: TS }) } });
   assert.equal(fin.status, 200, fin.text);
   const secondCookie = cookieOf(fin);
-  assert.match(String(fin.headers['set-cookie']), /HttpOnly; SameSite=Strict$/);
+  assert.match(String(fin.headers['set-cookie']), /HttpOnly; SameSite=Strict; Secure$/, 'Secure over the tailnet https address');
   assert.equal((await call('GET', '/api/auth/status', { cookie: secondCookie })).json.paired, true);
   assert.ok(!readFileSync(join(data, 'devices.json'), 'utf8').includes(secondCookie.split('=')[1]), 'devices.json holds a hash, not the token');
   assert.equal((await call('POST', '/api/pair/options', { body: { code: issued.json.code, label: 'again' } })).status, 403, 'the code worked once');
@@ -231,11 +299,15 @@ test('a paired device pairs another (real ES256 registration over HTTP) after a 
   assert.equal(gone.status, 200, gone.text);
   assert.equal((await call('POST', '/api/send', { body: { project: 'proj', thread: 'orchestrator', text: 'x' }, cookie: secondCookie })).status, 401, 'its cookie stops working');
   const notes = (await call('GET', '/api/state')).json.projects[0].events.filter(e => e.type === 'notice' && e.thread === 'orchestrator').map(e => e.text);
-  assert.ok(notes.some(t => /Second PC \(localhost\) was paired with the hub, using a code from Test PC/.test(t)), 'the pairing is noted');
-  assert.ok(notes.some(t => /Second PC \(localhost\) was unpaired from the hub, with its passkey, from Test PC/.test(t)), 'and the unpairing');
+  assert.ok(notes.some(t => /Second PC \(pc\.tail1234\.ts\.net\) was paired with the hub, using a code from Test PC/.test(t)), 'the pairing is noted');
+  assert.ok(notes.some(t => /Second PC \(pc\.tail1234\.ts\.net\) was unpaired from the hub, with its passkey, from Test PC/.test(t)), 'and the unpairing');
 });
 
-test('restart: allowed for a paired device; the new hub keeps the passkey-backed Trusted level', async () => {
+test('restart: allowed for a paired device; the new hub keeps a Trusted level raised from this PC', async () => {
+  assert.equal((await call('POST', '/api/settings', { body: { project: 'proj', permissionMode: 'auto' }, host: LOCAL() })).status, 200);
+  const ask = await call('POST', '/api/settings', { body: { project: 'proj', permissionMode: 'trusted' }, host: LOCAL() });
+  assert.equal(ask.status, 403, 'a big change on the PC asks for its Windows Hello');
+  assert.equal((await call('POST', '/api/settings', { body: { project: 'proj', permissionMode: 'trusted', stepUp: await confirmPC(ask.json.stepUp) }, host: LOCAL() })).status, 200);
   const before = (await call('GET', '/api/ping')).json.boot;
   const r = await call('POST', '/api/restart', { body: {}, cookie });
   assert.equal(r.status, 200, r.text);
@@ -247,4 +319,27 @@ test('restart: allowed for a paired device; the new hub keeps the passkey-backed
   assert.equal((await call('GET', '/api/auth/status', { cookie })).json.paired, true, 'the device is still paired');
   const log = join(data, `hub-${port}.log`);
   assert.doesNotMatch(readFileSync(log, 'utf8'), /Pairing code/, 'the restarted hub\'s log holds no code');
+});
+
+test('the off switch (CRUX_HUB_GUARD=off): the hub takes changes as before decision 47, the phone\'s path included', async () => {
+  let offPort; do { offPort = await freePort(); } while ([4747, 4748, port, rport].includes(offPort));
+  const offData = join(root, 'off-data');
+  mkdirSync(offData, { recursive: true });
+  let text = '';
+  const off = spawn(process.execPath, [join(HUB, 'server.mjs'), '--port', String(offPort), '--no-agents', proj], {
+    cwd: HUB, windowsHide: true, env: { ...process.env, CRUX_HUB_DATA: offData, CRUX_HOME: crux, USERPROFILE: join(root, 'home'), HOME: join(root, 'home'), CRUX_HUB_AGENTS: '0', CRUX_HUB_PORT: '', CRUX_HUB_RESTARTED: '', CRUX_HUB_GUARD: 'off' }
+  });
+  off.stdout.on('data', d => { text += d; });
+  try {
+    for (let i = 0; i < 100 && !text.includes('Write guard: OFF'); i++) await sleep(100);
+    assert.match(text, /Write guard: OFF/);
+    const r = await call('POST', '/api/send', { body: { project: 'proj', thread: 'orchestrator', text: 'guard off' }, to: offPort });
+    assert.equal(r.status, 200, `a ts.net request with no cookie: ${r.text}`);
+    const big = await call('POST', '/api/settings', { body: { project: 'proj', permissionMode: 'trusted' }, to: offPort });
+    assert.equal(big.status, 200, 'and a big change with no step-up');
+    assert.equal((await call('POST', '/api/settings', { body: { project: 'proj', permissionMode: 'standard' }, to: offPort })).status, 200);
+  } finally {
+    off.kill();
+    for (const pid of await pidsOnPort(offPort)) await stopTree(pid);
+  }
 });

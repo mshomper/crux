@@ -5,10 +5,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Guard, stepUpNeed, settingsNeed, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, addressOf, pcRedirect, projectScope, projectTag, cutScope, OPEN_POSTS, STEP_UP_MS } from '../lib/guard.mjs';
+import { Guard, stepUpNeed, settingsNeed, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, addressOf, pcRedirect, projectScope, projectTag, cutScope, fromThisPC, guardOff, THIS_PC, OPEN_POSTS, STEP_UP_MS } from '../lib/guard.mjs';
 import { verifyRegistration, verifyAssertion, parseAuthData } from '../lib/webauthn.mjs';
 import { Push, cardsFor, payloadOf } from '../lib/push.mjs';
-import { testPairError, startHub, pairedDevices } from '../lib/relaunch.mjs';
+import { testPairError } from '../lib/relaunch.mjs';
 import { cruxToolNames, restartHub } from '../lib/tools.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -244,23 +244,70 @@ test('a pairing push says how the device was paired, not only the name it gave',
   assert.match(pairAlert({ device: d, via: 'the code from the hub\'s window', removed: [{ label: 'Old PC' }], startOver: true }).title, /^Every device was unpaired, with the code in the hub's window$/);
 });
 
-test('a live hub with no device paired restarts into a window; otherwise, and test hubs, with none', () => {
-  const calls = [], fake = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { unref() { } }; };
-  const spec = { port: 4747, node: 'C:/Program Files/nodejs/node.exe', args: ['C:/hub/server.mjs'], cwd: 'C:/hub' };
-  startHub(spec, { window: true, spawnFn: fake, platform: 'win32', env: {} });
-  assert.equal(calls[0].cmd, 'cmd.exe');
-  assert.equal(calls[0].args.at(-1), '"start "Crux Hub" /min "C:/Program Files/nodejs/node.exe" "C:/hub/server.mjs""');
-  assert.equal(calls[0].opts.windowsVerbatimArguments, true);
-  assert.equal(calls[0].opts.stdio, 'ignore', 'nothing goes to a log file: the window shows it');
-  startHub(spec, { window: false, spawnFn: fake, platform: 'win32', env: {} });
-  assert.equal(calls[1].cmd, spec.node, 'detached as before');
-  const data = tmp('paired');
-  assert.equal(pairedDevices({ CRUX_HUB_DATA: data }), 0);
-  writeFileSync(join(data, 'devices.json'), JSON.stringify({ devices: [{ id: 'd1' }, { id: 'dtest', test: true }] }));
-  assert.equal(pairedDevices({ CRUX_HUB_DATA: data }), 1);
-  const src = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
-  assert.match(src, /startHub\(launchSpec\(\{ port \}\), \{ window: port === 4747 && !guard\.paired\(\)\.length \}\)/);
-  assert.match(readFileSync(new URL('../restart.mjs', import.meta.url), 'utf8'), /const window = port === DEFAULT_PORT && pairedDevices\(\) === 0;/);
+// A request as the server sees it: its TCP peer, the port it reached, and its headers.
+const req = (headers, { remoteAddress = '127.0.0.1', localPort = 4747 } = {}) => ({ socket: { remoteAddress, localPort }, headers });
+test('this PC is trusted only from loopback, on the PC port, with no proxy header and the PC\'s own Host and Origin', () => {
+  const o = { pcPort: 4747, remotePort: 4748 };
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747' }), o), true, 'a local tool, no Origin');
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747', origin: 'http://crux.localhost:4747' }), o), true, 'the PC page');
+  assert.equal(fromThisPC(req({ host: 'localhost:4747', origin: 'http://localhost:4747' }), o), true);
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747' }, { remoteAddress: '::ffff:127.0.0.1' }), o), true);
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747' }, { remoteAddress: '::1' }), o), true);
+  // the phone, through tailscale serve: forwarded headers, even with a spoofed Host
+  for (const h of [{ 'x-forwarded-for': '100.64.0.2' }, { 'x-forwarded-host': 'pc.tail1234.ts.net' }, { 'x-forwarded-proto': 'https' }, { 'tailscale-user-login': 'a@b.c' }, { forwarded: 'for=1.2.3.4' }, { 'x-real-ip': '1.2.3.4' }])
+    assert.equal(fromThisPC(req({ host: 'crux.localhost:4747', ...h }), o), false, JSON.stringify(h));
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747' }, { localPort: 4748 }), o), false, 'the phone port is never the PC');
+  assert.equal(fromThisPC(req({ host: 'pc.tail1234.ts.net' }), o), false, 'a tailnet Host');
+  assert.equal(fromThisPC(req({ host: '127.0.0.1:4747' }), o), false, 'only crux.localhost or localhost');
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4791' }), o), false, 'the PC port only');
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747', origin: 'http://localhost:3000' }), o), false, 'a page on another local port');
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747', origin: 'https://evil.example' }), o), false, 'a foreign page');
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747', origin: 'null' }), o), false);
+  assert.equal(fromThisPC(req({ host: 'crux.localhost:4747' }, { remoteAddress: '100.64.0.2' }), o), false, 'not loopback');
+});
+
+test('the off switch: a guard-off file in the hub folder, or CRUX_HUB_GUARD=off', () => {
+  const dir = tmp('off');
+  assert.equal(guardOff({ env: {}, hubDir: dir }), false);
+  assert.equal(guardOff({ env: { CRUX_HUB_GUARD: 'off' }, hubDir: dir }), true);
+  writeFileSync(join(dir, 'guard-off'), '');
+  assert.equal(guardOff({ env: {}, hubDir: dir }), true);
+  const g = new Guard({ port: PORT, file: null, off: true });
+  assert.equal(g.deviceFor({ host: 'pc.tail1234.ts.net' }).off, true, 'every request counts as paired');
+});
+
+test('this PC: no login; its first big change sets up its passkey (no code); with no Windows Hello it goes ahead; then Hello is required', () => {
+  const { g, out } = newGuard();
+  assert.equal(g.deviceFor({}, { local: true }), THIS_PC);
+  assert.equal(g.status(H, { local: true }).paired, true);
+  assert.equal(g.list(H, { local: true })[0].label, 'This PC');
+  const need = { purpose: 'project', scope: 'project=abc;trusted', enroll: true };
+  // no Windows Hello in the browser: allowed (the server pushes an alert)
+  assert.deepEqual(g.verifyStepUp({ headers: H, device: THIS_PC, stepUp: { fallback: true }, need }), { ok: true, fallback: true });
+  assert.match(g.verifyStepUp({ headers: H, device: { id: 'd1', label: 'Phone' }, stepUp: { fallback: true }, need }).error, /Only this PC/, 'never for a remote device');
+  // set up the PC's passkey with the change itself
+  const key = new FakePasskey();
+  const o = g.pcEnrollOptions({ headers: H, device: THIS_PC, purpose: need.purpose, scope: need.scope });
+  assert.equal(o.publicKey.authenticatorSelection.userVerification, 'required');
+  assert.throws(() => g.pcEnrollOptions({ headers: H, device: { id: 'd1' }, purpose: 'project', scope: 'x' }), /Only this PC/);
+  const enrolled = g.verifyStepUp({ headers: H, device: THIS_PC, stepUp: { enroll: key.register({ challenge: o.publicKey.challenge, origin: H.origin, rpId: 'localhost' }) }, need });
+  assert.equal(enrolled.ok, true, enrolled.error); assert.equal(enrolled.enrolled, true);
+  assert.equal(g.pcHasPasskey(), true);
+  assert.equal(g.paired().length, 0, 'the PC passkey is not a remote device');
+  // from now on: no fallback, and a normal Windows Hello confirmation works
+  assert.match(g.verifyStepUp({ headers: H, device: THIS_PC, stepUp: { fallback: true }, need }).error, /has its passkey/);
+  const plain = { purpose: 'project', scope: 'project=abc;trusted' };
+  assert.equal(g.verifyStepUp({ headers: H, device: THIS_PC, stepUp: stepUp(g, THIS_PC, key, plain), need: plain }).ok, true);
+  assert.ok(out.every(l => !/Pairing code/.test(l)), 'no code anywhere in this');
+});
+
+test('a Trusted level raised from this PC is kept at start', () => {
+  const { g } = newGuard();
+  const k = 'c:/users/x/proj';
+  g.recordRaise(k, { local: true, at: new Date().toISOString(), purpose: 'project', scope: `${projectTag(k)};trusted` });
+  assert.equal(g.raiseBacked(k), true);
+  g.raises[k] = { local: true, purpose: 'project', scope: `${projectTag('c:/other')};trusted` };
+  assert.equal(g.raiseBacked(k), false, 'only for the project it names');
 });
 
 test('a raise to Trusted is kept as its signed step-up and checked again from scratch', () => {
