@@ -52,7 +52,7 @@ Every record carries a short brief written for the user, so the decision card ca
 - `lead`: one or two sentences. What the user is deciding and what you recommend, with your confidence. Plain words, no decision numbers, memo ids or code names. Example: "Pick where the watering times are saved. I recommend B, one shared schedule file: it keeps beds on one tap in step and survives a reinstall. Confidence: lean."
 - `for_you`: two to four short lines on what the pick means for the user: what they will see or do differently, any setup they would have to do, and anything that is hard to undo later. Each is a string, or `{ "text": "...", "kind": "setup" }` or `"kind": "undo"` for those two (the default kind is a change they will notice).
 - `context` stays the background for later sessions: history, related decisions, constraints. The brief shows it last, folded.
-- Give each picture a `kind` (`schematic`, `screenshot`, `mockup` or `chart`) and the `option` it shows, so it sits beside that option in the brief.
+- Give each picture a `kind` (`schematic`, `screenshot` or `mockup`) and the `option` it shows, so it sits beside that option in the brief.
 
 ### Quick mode (in chat, no page)
 
@@ -63,13 +63,13 @@ Write, in chat:
 - If you showed pictures for it (mockups, screenshots, charts), attach them to the message or post them, and name them in the record's `images` list (see "Pictures" below).
 - Then stop and wait.
 
-When you invoked Crux yourself in the Crux hub, write the record (with its brief) as you draft, so the card can show it. Otherwise, after the pick, still write the record (section 4) with `"mode": "quick"` and no sketches, keeping its `images` and writing its `lead` and `for_you`.
+Then write the record with `"mode": "quick"` and no sketches, keeping its `images` and writing its `lead` and `for_you`. In the Crux hub, write it now, while the decision is still open: the hub turns the record into the card the user picks from, and the card shows the brief. Elsewhere, write it after the pick (section 4).
 
 ### Pictures (any mode)
 
 Every decision that was shown with pictures carries them, so its card, page and `.md` show what the call was made from.
 
-- List each picture in the record's `images` field: `{ "from": "...", "caption": "One line on what it shows", "option": "B", "kind": "mockup" }`. `kind` is `schematic`, `screenshot`, `mockup` or `chart`. `from` is the id `post_visual` returned in the Crux hub, or the path of a PNG, JPEG, GIF or WebP file inside the project folder or one of its worktrees. Files elsewhere (a temp folder, say) are refused: post them with `post_visual` first, or save them inside the project. Leave out `option` for a picture that covers the whole question.
+- List each picture in the record's `images` field: `{ "from": "...", "caption": "One line on what it shows", "option": "B", "kind": "mockup" }`. `kind` is `schematic`, `screenshot` or `mockup` (leave it out for anything else). `from` is the id `post_visual` returned in the Crux hub, or the path of a PNG, JPEG, GIF or WebP file inside the project folder or one of its worktrees. Files elsewhere (a temp folder, say) are refused: post them with `post_visual` first, or save them inside the project. Leave out `option` for a picture that covers the whole question.
 - The build script (or the hub, when it commits the record) copies each one into `.decisions/images/NNNN-name.png`, shrinks PNGs wider than 1600 px, strips text and camera metadata from PNGs and JPEGs (GIF and WebP are copied as they are), and rewrites the entry to `{ "file": "images/NNNN-name.png", ... }`. Never write into `images/` yourself and never edit a `file` entry by hand.
 - A picture that is refused (outside the project, not an image, an interlaced PNG wider than 1600 px, over 3 MB after shrinking) gets a `"skipped"` note with the reason, and the build lists it under "Problems to fix". It is not tried again: fix it, then delete the `"skipped"` note. A file not found yet gets a `"missing"` note and is tried again on every build and commit.
 - SVG and HTML mockups: take a PNG screenshot and list that.

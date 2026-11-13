@@ -10,7 +10,7 @@ import { leadOf, forYouOf, sketchUri, briefData } from '../../crux/scripts/brief
 import { placedImages } from '../../crux/scripts/images.mjs';
 import { build } from '../../crux/scripts/build.mjs';
 import { Board } from '../lib/board.mjs';
-import { briefButton, briefHtml } from '../public/brief.js';
+import { briefButton, briefHtml, Brief } from '../public/brief.js';
 
 const temp = t => { const d = mkdtempSync(join(tmpdir(), 'crux-brief-')); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
 const record = (id, extra = {}) => ({ id, slug: `d${id}`, title: `Decision ${id}`, status: 'open', date: '2026-11-12', mode: 'full', context: 'History for later sessions.',
@@ -134,7 +134,8 @@ test('the pop-up: an unsafe sketch is never put in the page', () => {
 });
 
 test('the card: a brief button on every decision with options, escaped, and the lead in place of the cut background', () => {
-  assert.equal(briefButton('p', { id: 1, options: [] }), '');
+  assert.match(briefButton('p', { id: 1, status: 'found', options: [] }), /data-brief="1"/, 'findings without options get one too');
+  assert.equal(briefButton('p', null), '');
   const html = briefButton('my "proj"', { id: 12, title: 'Where <do> they live?', options: [{ key: 'A' }] });
   assert.match(html, /data-brief="12" data-brief-pj="my &quot;proj&quot;" data-brief-title="Where &lt;do&gt; they live\?"/);
   assert.match(html, /title="Read the brief for D0012" aria-label="Read the brief for D0012"><svg class="icon"><use href="#i-brief"\/><\/svg><\/button>/);
@@ -142,4 +143,39 @@ test('the card: a brief button on every decision with options, escaped, and the 
   assert.match(card, /briefButton\(p\.name, d\)\}\$\{picturesButton\(p\.name, d\)\}/);
   assert.match(card, /d\.lead \? `<p class="lead-line">\$\{esc\(d\.lead\)\}<\/p>` : d\.context/);
   assert.match(APP, /installBrief\(document, \(project, id\) => api\(`\/api\/brief\?project=\$\{encodeURIComponent\(project\)\}&id=\$\{encodeURIComponent\(id\)\}`\)\)/);
+});
+
+test('stray entries: null options and criteria are skipped; a sketch the brief cannot show gets a hover note', () => {
+  const b = briefData(record(12, { options: [null, { key: 'A', name: 'Aye', sketch: '<svg>' + 'x'.repeat(40001) + '</svg>' }, 'odd', { key: 'B', name: 'Bee' }], criteria: [null, { name: 'Speed', scores: null }] }));
+  assert.deepEqual(b.options.map(o => o.key), ['A', 'B']);
+  assert.equal(b.options[0].sketch_dropped, true);
+  assert.equal(b.options[1].sketch_dropped, undefined);
+  assert.deepEqual(b.criteria, [{ name: 'Speed', note: '', scores: {} }]);
+  const { body } = briefHtml('p', b);
+  assert.match(body, /<h3>Aye<\/h3>.*class="bf-mark" title="This option's sketch is too large to show here; the full record page has it\."/s);
+  assert.equal((body.match(/bf-mark/g) || []).length, 1);
+});
+
+test('a finding without options: no options section, Confirm and Reject at the foot', () => {
+  const { body, foot } = briefHtml('p', briefData(record(13, { status: 'found', options: [] })));
+  assert.doesNotMatch(body, /The options/);
+  assert.match(foot, /data-choice="confirm".*data-choice="reject"/s);
+});
+
+test('picked elsewhere while open: the brief keeps only Close and says what the decision is now', () => {
+  // A tiny stand-in for the dialog: the parts sync() touches.
+  const foot = { innerHTML: '<button data-pick="7" data-choice="A">Take A</button>' };
+  let chip = { replaced: null, replaceWith(x) { this.replaced = x; } };
+  const el = { open: true, querySelector: s => s === '.bf-foot' ? foot : s === '.bf-head .bf-call' ? chip : null };
+  const pop = new Brief({ createElement: () => ({}) }, null);
+  pop.el = el;
+  pop.shown = { project: 'p', id: '7', status: 'open' };
+  pop.sync(() => 'open');
+  assert.match(foot.innerHTML, /data-pick/, 'unchanged while it is still open');
+  pop.sync(() => 'decided');
+  assert.doesNotMatch(foot.innerHTML, /data-pick/);
+  assert.match(foot.innerHTML, /Already decided: picked somewhere else while this was open\..*data-brief-close>Close</s);
+  assert.deepEqual(chip.replaced, { className: 'chip decided', textContent: 'decided' });
+  foot.innerHTML = 'x'; pop.sync(() => 'superseded');
+  assert.equal(foot.innerHTML, 'x', 'only once');
 });

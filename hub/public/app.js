@@ -23,7 +23,7 @@ import { GuardUI } from './guard.js';
 import { briefButton, installBrief } from './brief.js';
 installPictures();   // decision 43: the pictures button on decision cards opens a gallery
 // Decision 50: the brief button on decision cards opens the brief, loaded from the card's own project.
-installBrief(document, (project, id) => api(`/api/brief?project=${encodeURIComponent(project)}&id=${encodeURIComponent(id)}`));
+const briefPop = installBrief(document, (project, id) => api(`/api/brief?project=${encodeURIComponent(project)}&id=${encodeURIComponent(id)}`));
 
 // iPhone: no automatic zoom when a box is tapped; two-finger zoom still works there (viewport.js).
 { const m = document.querySelector('meta[name="viewport"]'); m.content = noFocusZoom(m.content, isIOS(navigator.userAgent, navigator.platform, navigator.maxTouchPoints)); }
@@ -102,6 +102,8 @@ async function load() {
   S.settings = settings || {};
   S.models = models || [];
   S.projects = projects;
+  // An open brief whose decision was picked elsewhere loses its pick buttons (decision 50).
+  briefPop.sync((pj, id) => projects.find(p => p.name === pj)?.board?.decisions?.find(d => String(d.id) === String(id))?.status);
   S.pending = new Set(projects.flatMap(p => p.pendingApprovals));
   S.hub = null;
   // Drafts for questions that are no longer waiting are let go.

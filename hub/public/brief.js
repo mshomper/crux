@@ -9,13 +9,14 @@ const icon = id => `<svg class="icon"><use href="#i-${id}"/></svg>`;
 const pad = n => String(n).padStart(4, '0');
 const SAFE_IMG = /^images\/[\w-][\w.-]*\.(png|jpg|gif|webp)$/;
 const SAFE_SKETCH = /^data:image\/svg\+xml;charset=utf-8,[^"'<>\s]*$/;
-const KIND = { schematic: 'Schematic', screenshot: 'Screenshot', mockup: 'Mockup', chart: 'Chart' };
+const KIND = { schematic: 'Schematic', screenshot: 'Screenshot', mockup: 'Mockup' };
 const FOR_YOU = { change: ['eye', ''], setup: ['setup', 'Setup: '], undo: ['warn', 'Hard to undo: '] };
 const CONF = { strong: 'strong', lean: 'lean', 'toss-up': 'toss-up' };
 
 // The button for a card's foot. The project rides along, so it is right in All projects too.
+// Every decision gets one, findings from Crux Dig without options too.
 export function briefButton(projectName, d) {
-  if (!d || !(d.options || []).length) return '';
+  if (!d) return '';
   const label = `Read the brief for D${pad(d.id)}`;
   return `<button type="button" class="btn brief-btn" data-brief="${esc(d.id)}" data-brief-pj="${esc(projectName)}" data-brief-title="${esc(d.title || '')}" title="${esc(label)}" aria-label="${esc(label)}">${icon('brief')}</button>`;
 }
@@ -31,7 +32,7 @@ export function briefHtml(projectName, b) {
   const pics = (b.images || []).filter(i => SAFE_IMG.test(String(i?.file || '')));
   const src = i => `/p/${pj}/${i.file}`;
   const fig = i => `<figure class="bf-fig"><button type="button" class="bf-shot" data-view="${esc(src(i))}" data-view-name="${esc(i.file.split('/').pop())}" data-view-cap="${esc(i.caption || '')}" title="Open the picture full size" aria-label="Open the picture full size"><img src="${esc(src(i))}" alt="${esc(i.caption || 'Picture')}" loading="lazy"></button>
-    ${i.caption || i.kind ? `<figcaption>${i.kind ? `<b>${KIND[i.kind]}</b>` : ''}${esc(i.caption || '')}</figcaption>` : ''}</figure>`;
+    ${i.caption || KIND[i.kind] ? `<figcaption>${KIND[i.kind] ? `<b>${KIND[i.kind]}</b>` : ''}${esc(i.caption || '')}</figcaption>` : ''}</figure>`;
   const sketch = o => SAFE_SKETCH.test(o.sketch || '') ? `<figure class="bf-fig"><img class="bf-sketch" src="${esc(o.sketch)}" alt="Sketch of option ${esc(o.key)}"><figcaption><b>Sketch</b></figcaption></figure>` : '';
 
   const head = `<span class="bf-k"><i>// </i>Brief · D${pad(b.id)}</span>${open || found ? '<span class="chip bf-call">Your call</span>' : `<span class="chip ${esc(b.status)}">${esc(b.status)}${decided ? ' · ' + esc(b.chosen) : ''}</span>`}
@@ -49,11 +50,11 @@ export function briefHtml(projectName, b) {
   if ((b.for_you || []).length) body += `<section class="bf-sec"><div class="bf-sk">What changes for you</div><ul class="bf-for">${b.for_you.map(x => { const [ic, pre] = FOR_YOU[x.kind] || FOR_YOU.change; return `<li class="${esc(x.kind)}">${icon(ic)}<span>${pre ? `<b>${pre}</b>` : ''}${esc(x.text)}</span></li>`; }).join('')}</ul></section>`;
   const shared = pics.filter(i => !keys.has(i.option));
   if (shared.length) body += `<section class="bf-sec"><div class="bf-sk">Pictures</div><div class="bf-figs wide">${shared.map(fig).join('')}</div></section>`;
-  body += `<section class="bf-sec"><div class="bf-sk">The options</div>${opts.map(o => {
+  if (opts.length) body += `<section class="bf-sec"><div class="bf-sk">The options</div>${opts.map(o => {
     const own = pics.filter(i => i.option === o.key), figs = own.length ? own.map(fig).join('') : sketch(o);
     const isRec = o.key === b.recommended, isCh = decided && o.key === b.chosen;
     return `<article class="bf-opt ${isRec ? 'rec' : ''} ${isCh ? 'chosen' : ''}">
-      <div class="bf-ohead"><span class="bf-hex">${esc(o.key)}</span><h3>${esc(o.name)}</h3>${isRec ? `<span class="chip rec">${icon('star')}recommended${b.confidence ? ' · ' + esc(CONF[b.confidence] || b.confidence) : ''}</span>` : ''}${isCh ? `<span class="chip decided">${icon('check')}chosen</span>` : ''}</div>
+      <div class="bf-ohead"><span class="bf-hex">${esc(o.key)}</span><h3>${esc(o.name)}</h3>${isRec ? `<span class="chip rec">${icon('star')}recommended${b.confidence ? ' · ' + esc(CONF[b.confidence] || b.confidence) : ''}</span>` : ''}${isCh ? `<span class="chip decided">${icon('check')}chosen</span>` : ''}${o.sketch_dropped && !own.length ? `<span class="bf-mark" title="This option's sketch is too large to show here; the full record page has it." aria-label="Sketch not shown here; see the full record page">${icon('warn')}</span>` : ''}</div>
       <div class="bf-obody ${figs ? '' : 'nofig'}">${figs ? `<div class="bf-figs">${figs}</div>` : ''}
         <div class="bf-otext">${o.summary ? `<p>${esc(o.summary)}</p>` : ''}
           ${(o.pros || []).length || (o.cons || []).length ? `<ul class="bf-pc">${(o.pros || []).map(p => `<li class="pro">${icon('check')}<span>${esc(p)}</span></li>`).join('')}${(o.cons || []).map(c => `<li class="con">${icon('minus')}<span>${esc(c)}</span></li>`).join('')}</ul>` : ''}
@@ -92,7 +93,7 @@ export class Brief {
       // A pick: the pop-up closes and the hub's own pick handler (app.js) takes the click from here.
       if (e.target.closest('[data-pick]')) d.close();
     });
-    d.addEventListener('close', () => { this.asked++; this.opener?.focus?.({ preventScroll: true }); });
+    d.addEventListener('close', () => { this.asked++; this.shown = null; this.opener?.focus?.({ preventScroll: true }); });
     this.doc.body.appendChild(d);
     this.el = d;
   }
@@ -114,7 +115,20 @@ export class Brief {
     const h = briefHtml(projectName, b);
     q('.bf-head').innerHTML = h.head; q('.bf-body').innerHTML = h.body; q('.bf-foot').innerHTML = h.foot;
     q('.bf-body').scrollTop = 0;
+    this.shown = { project: projectName, id: String(id), status: b.status };
     (q('.bf-foot .btn.primary') || q('.bf-head [data-brief-close]')).focus({ preventScroll: true });
+  }
+
+  // The hub's state changed (app.js load). If the decision on show was picked or confirmed somewhere else meanwhile,
+  // its pick buttons go: the foot says what it is now and keeps only Close. statusOf(project, id) gives the status.
+  sync(statusOf) {
+    const s = this.shown, d = this.el;
+    if (!s || !d?.open || !['open', 'found'].includes(s.status)) return;
+    const now = statusOf(s.project, s.id);
+    if (!now || now === s.status) return;
+    s.status = now;
+    d.querySelector('.bf-head .bf-call')?.replaceWith(Object.assign(this.doc.createElement('span'), { className: `chip ${now}`, textContent: now }));
+    d.querySelector('.bf-foot').innerHTML = `<span class="bf-stale">${icon('check')}<span>Already ${esc(now)}: picked somewhere else while this was open.</span></span><span class="spacer"></span><button type="button" class="btn ghost" data-brief-close>Close</button>`;
   }
 }
 

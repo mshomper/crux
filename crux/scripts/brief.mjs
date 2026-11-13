@@ -2,7 +2,7 @@
 //   "lead":    one or two sentences: what is being decided and what the agent recommends.
 //   "for_you": two to four lines: what changes for the human, any setup, anything hard to undo. Each line is a string
 //              or { "text", "kind" } with kind "change" (the default), "setup" or "undo".
-// Pictures may carry "kind" (schematic, screenshot, mockup, chart) so the brief can label them; they sit beside the
+// Pictures may carry "kind" (schematic, screenshot, mockup) so the brief can label them; they sit beside the
 // option they name. Records written before decision 50 have neither field: the brief is then laid out from the fields
 // every record has, opening with the recommendation.
 // Used by the build script (the .md and the page) and the hub (the card and its brief pop-up). No dependencies.
@@ -36,6 +36,7 @@ export function sketchUri(svg) {
 }
 
 const list = v => (Array.isArray(v) ? v : []).map(str).filter(Boolean);
+const objects = v => (Array.isArray(v) ? v : []).filter(x => x && typeof x === 'object');   // a null or stray entry is skipped
 
 // Everything the hub's brief pop-up shows for one record, plain data only.
 export function briefData(d) {
@@ -46,11 +47,13 @@ export function briefData(d) {
     written: !!lead, lead, for_you: forYouOf(d),
     context: str(d.context), recommendation: str(d.recommendation), change_mind: str(d.change_mind), reason: str(d.reason),
     depends_on: (d.depends_on || []).filter(n => Number.isFinite(Number(n))).map(Number),
-    options: (d.options || []).map(o => ({
-      key: str(o.key), name: str(o.name), summary: str(o.summary), effort: str(o.effort),
-      pros: list(o.pros), cons: list(o.cons), sketch: sketchUri(o.sketch)
-    })),
-    criteria: (d.criteria || []).map(c => ({ name: str(c.name), note: str(c.note), scores: Object.fromEntries(Object.entries(c.scores || {}).filter(([, v]) => [1, 2, 3].includes(v))) })),
+    options: objects(d.options).map(o => {
+      const sketch = sketchUri(o.sketch);
+      // A sketch the brief cannot show (too big, or not a drawing) gets a note instead; the full page still has it.
+      return { key: str(o.key), name: str(o.name), summary: str(o.summary), effort: str(o.effort),
+        pros: list(o.pros), cons: list(o.cons), sketch, ...(!sketch && typeof o.sketch === 'string' && o.sketch.trim() ? { sketch_dropped: true } : {}) };
+    }),
+    criteria: objects(d.criteria).map(c => ({ name: str(c.name), note: str(c.note), scores: Object.fromEntries(Object.entries(c.scores && typeof c.scores === 'object' ? c.scores : {}).filter(([, v]) => [1, 2, 3].includes(v))) })),
     images: placedImages(d)
   };
 }

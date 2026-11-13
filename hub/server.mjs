@@ -141,13 +141,13 @@ async function body(req, limit = 1e6) {
 
 const routes = {
   'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt }),
-  // Restart from the hub's own menu: answer first, then hand over to a fresh hub started the same way (M010).
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/brief': ({ project, id }) => {
     const b = hub.project(String(project || '')).board.brief(id);
     if (!b) throw new Error(`No decision ${id}`);
     return b;
   },
+  // Restart from the hub's own menu: answer first, then hand over to a fresh hub started the same way (M010).
   'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },
   // The off switch for decision 21: false sends every permission request to you.
   // Whole hub (decision 44 B): { permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt } (the hub defaults).

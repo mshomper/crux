@@ -51,7 +51,7 @@ export function sniffImage(buf) {
 export const isPlaced = img => !!img && typeof img === 'object' && !img.from && PLACED.test(String(img.file || ''));
 
 // What a picture shows, for its label in the brief (decision 50): anything else is left out.
-export const IMAGE_KINDS = ['schematic', 'screenshot', 'mockup', 'chart'];
+export const IMAGE_KINDS = ['schematic', 'screenshot', 'mockup'];
 
 // The pictures of a record that are in place, as { file, caption, option?, kind? }: what pages, cards and the .md show.
 export function placedImages(d) {

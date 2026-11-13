@@ -27,7 +27,7 @@ Rules:
   card carries them (decision 43). Write its brief for {{who}} too (decision 50): "lead", the question and your
   recommendation in one or two plain sentences (no decision numbers or code names), and "for_you", two to four lines
   on what changes for {{who}}, any setup ({ "text", "kind": "setup" }) and anything hard to undo ("kind": "undo").
-  Give each picture a "kind" (schematic, screenshot, mockup, chart) and its option letter, so it sits beside that option.
+  Give each picture a "kind" (schematic, screenshot or mockup) and its option letter, so it sits beside that option.
   {{Who}} picks; you never act on an option before that.
 - Commands {{who}} may have to approve are shown on a card. Keep them readable:
   - give every Bash or PowerShell call a description in plain words for {{who}}: what it does and why, no code;
