@@ -1,7 +1,7 @@
 # 0052 How does a stranger get from download to a running hub?
 
-- Status: open
-- Date: 2026-11-13
+- Status: decided
+- Date: 2026-11-13, decided 2026-11-13
 - Lenses: architecture
 - Builds on: 0004, 0049, 0038
 - Settles: desktop app distribution = one installer carrying Node, the hub and its packages; app still attaches to the hub and Quit leaves it running; updates via the signed Tauri updater on GitHub Releases
@@ -16,13 +16,17 @@ For you:
 - Setup: Builds run on your PC as today; updates reach users through the app's own signed updater on GitHub Releases
 - Hard to undo: Amends decisions 4 and 49: the app still attaches and Quit still leaves the hub running, but the hub now lives in the app folder. Your own clone keeps working through hubDir
 
+## Decision
+
+**A: Everything in one installer.** The installer carries node.exe, the hub, crux scripts and its packages including Claude Code, as plain files. The app starts that hub detached, exactly as now. First-run screen for the key and folders. Updates through the Tauri updater.
+
 ## Context
 
 Today the desktop app (decision 49, release v0.1.0) is only a window on a hub the user installs by hand: Node, clone, npm install, login, start. Matt: 'why would we go through the trouble of making a Tauri wrapper if people had to do 400 steps?' install-research (memo M030) compared four routes. Licence: Anthropic's terms allow shipping Claude Code inside a product if the binary is unmodified, users bring their own key or subscription and usage is never resold; the Agent SDK is all rights reserved, so it goes in the installer, never in the public repo (Claude's reading, not legal advice). A single-exe build (Node SEA, bun) was ruled out: same size, experimental, needs a bundler. winget can be a second channel later.
 
 ## Options
 
-### A: Everything in one installer (recommended)
+### A: Everything in one installer (chosen) (recommended)
 
 The installer carries node.exe, the hub, crux scripts and its packages including Claude Code, as plain files. The app starts that hub detached, exactly as now. First-run screen for the key and folders. Updates through the Tauri updater.
 - Pro: One download, nothing else to install, works offline after install

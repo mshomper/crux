@@ -7,12 +7,18 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how the desktop app installs. I recommend A: one installer of about 120-150 MB that carries the hub, Node and Claude Code inside it, so a stranger downloads, clicks through, pastes an API key and is running. Confidence: medium-high on the approach, medium on the size.",
  "for_you": [
   "Strangers skip Node, git and the terminal; a first-run screen asks for the API key and project folders",
-  { "text": "Builds run on your PC as today; updates reach users through the app's own signed updater on GitHub Releases", "kind": "setup" },
-  { "text": "Amends decisions 4 and 49: the app still attaches and Quit still leaves the hub running, but the hub now lives in the app folder. Your own clone keeps working through hubDir", "kind": "undo" }
+  {
+   "text": "Builds run on your PC as today; updates reach users through the app's own signed updater on GitHub Releases",
+   "kind": "setup"
+  },
+  {
+   "text": "Amends decisions 4 and 49: the app still attaches and Quit still leaves the hub running, but the hub now lives in the app folder. Your own clone keeps working through hubDir",
+   "kind": "undo"
+  }
  ],
  "context": "Today the desktop app (decision 49, release v0.1.0) is only a window on a hub the user installs by hand: Node, clone, npm install, login, start. Matt: 'why would we go through the trouble of making a Tauri wrapper if people had to do 400 steps?' install-research (memo M030) compared four routes. Licence: Anthropic's terms allow shipping Claude Code inside a product if the binary is unmodified, users bring their own key or subscription and usage is never resold; the Agent SDK is all rights reserved, so it goes in the installer, never in the public repo (Claude's reading, not legal advice). A single-exe build (Node SEA, bun) was ruled out: same size, experimental, needs a bundler. winget can be a second channel later.",
  "depends_on": [
@@ -71,9 +77,9 @@
  "recommendation": "A is the only option that matches 'download, click, paste a key'. The size is the price, and an installer that works offline is easier to support than a first-run download that can break halfway. B stays the fallback if the size or the licence reading becomes a problem.",
  "confidence": "lean",
  "change_mind": "If Anthropic's terms are read more strictly, or 150 MB proves a barrier, go B.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-13",
  "superseded_by": null,
  "challenge": null,
  "settles": [
