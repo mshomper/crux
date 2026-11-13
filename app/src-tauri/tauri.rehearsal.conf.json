@@ -1,0 +1,9 @@
+{
+  "productName": "Crux Hub Rehearsal",
+  "identifier": "dev.crux.hub.rehearsal",
+  "plugins": {
+    "updater": {
+      "dangerousInsecureTransportProtocol": true
+    }
+  }
+}

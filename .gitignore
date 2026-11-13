@@ -5,3 +5,6 @@
 app/node_modules/
 app/src-tauri/target/
 app/src-tauri/gen/
+# Built by app/scripts/stage.mjs for the installer: Node, the hub's packages and Anthropic's SDK, never committed
+app/staging/
+app/release/
