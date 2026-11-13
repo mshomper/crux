@@ -59,6 +59,12 @@ export class FakeEl {
   get textContent() { return this._text; }
   set textContent(v) { this._text = String(v ?? ''); this.kids = []; }
   get innerHTML() { return this._html; }
+  // The element's own markup: its source when it came from the parser (text included), else built from its parts.
+  get outerHTML() {
+    if (this._outer !== undefined) return this._outer;
+    const attrs = [...this.attrs].map(([k, v]) => ` ${k}="${v}"`).join('');
+    return `<${this.tagName}${attrs}>${this._text}${this.kids.map(k => k.outerHTML).join('')}</${this.tagName}>`;
+  }
   set innerHTML(v) { this._html = String(v); for (const k of this.kids) k.parent = null; this.kids = []; for (const n of parse(this._html)) this.appendChild(n); }
   setAttribute(k, v) { this.attrs.set(k, String(v)); }
   getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
@@ -114,11 +120,12 @@ export function parse(html) {
   for (const m of src.matchAll(/<(\/)?([a-zA-Z][\w-]*)((?:\s+[^\s=>/]+(?:="[^"]*")?)*)\s*(\/)?>/g)) {
     const [, close, tag, attrs, selfClose] = m;
     const t = tag.toLowerCase();
-    if (close) { for (let n = cur; n !== root; n = n.parent) if (n.tagName === t) { cur = n.parent; break; } continue; }
+    if (close) { for (let n = cur; n !== root; n = n.parent) if (n.tagName === t) { n._outer = src.slice(n._start, m.index + m[0].length); cur = n.parent; break; } continue; }
     const el = new FakeEl(t);
     for (const a of attrs.matchAll(/([^\s=]+)(?:="([^"]*)")?/g)) el.setAttribute(a[1], unent(a[2] ?? ''));
     cur.appendChild(el);
-    if (!selfClose && !VOID.has(t)) cur = el;
+    el._start = m.index;
+    if (!selfClose && !VOID.has(t)) cur = el; else el._outer = m[0];
   }
   const out = root.children;
   for (const k of out) k.parent = null;
