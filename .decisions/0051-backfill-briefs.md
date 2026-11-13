@@ -1,7 +1,7 @@
 # 0051 Should older decisions get a written brief too?
 
-- Status: open
-- Date: 2026-11-13
+- Status: decided
+- Date: 2026-11-13, decided 2026-11-13
 - Lenses: data-model
 - Builds on: 0050, 0040, 0041
 
@@ -14,6 +14,10 @@ For you:
 - Older decisions you reopen will start with a plain answer instead of the background
 - Setup: Nothing to set up: one records-only pull request, which I merge and report in one line
 - Hard to undo: Easy to undo: briefs are two text fields; the original wording of every decision stays untouched
+
+## Decision
+
+**B: Only the ones still open or parked.** An agent writes lead and for_you into every record whose status is open or parked, plus any decided record that a new decision is about to supersede. Settled ones keep the fallback.
 
 ## Context
 
@@ -29,7 +33,7 @@ No backfill. Older decisions keep the fallback layout built from their fields. E
 - Con: When an old decision comes back (a challenge or a superseding call), you read the agent-written background again
 - Effort: None
 
-### B: Only the ones still open or parked (recommended)
+### B: Only the ones still open or parked (chosen) (recommended)
 
 An agent writes lead and for_you into every record whose status is open or parked, plus any decided record that a new decision is about to supersede. Settled ones keep the fallback.
 - Pro: Covers the decisions you are likely to read again
