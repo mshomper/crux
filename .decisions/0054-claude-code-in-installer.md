@@ -1,7 +1,7 @@
 # 0054 Does the installer carry Claude Code, or fetch it?
 
-- Status: open
-- Date: 2026-11-13
+- Status: decided
+- Date: 2026-11-13, decided 2026-11-13
 - Lenses: architecture
 - Builds on: 0052, 0001
 - Settles: Claude Code in the desktop installer = not bundled; first run downloads the exact matching version from Anthropic's npm package with a checksum check; an installed copy is the offline fallback
@@ -15,6 +15,10 @@ For you:
 - Strangers download about 40 MB instead of about 160 MB; the first-run screen shows a download bar
 - Setup: First run needs the internet once; nothing for you to set up
 - Hard to undo: Amends decision 52 for Claude Code only; switching back to bundling later is a build change, not a redesign
+
+## Decision
+
+**B: Download the matching one on first run.** About 40 MB installer. The setup screen fetches the exact Claude Code version the hub's SDK expects from Anthropic's npm package (about 150 MB), checks its checksum, and keeps it. Uses an installed copy only as an offline fallback.
 
 ## Context
 
@@ -30,7 +34,7 @@ As decision 52 A planned: Claude Code inside the installer. About 160 MB downloa
 - Con: We redistribute Anthropic's program (allowed under their terms, as read)
 - Effort: As planned
 
-### B: Download the matching one on first run (recommended)
+### B: Download the matching one on first run (chosen) (recommended)
 
 About 40 MB installer. The setup screen fetches the exact Claude Code version the hub's SDK expects from Anthropic's npm package (about 150 MB), checks its checksum, and keeps it. Uses an installed copy only as an offline fallback.
 - Pro: Small download; versions always match
