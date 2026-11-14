@@ -138,7 +138,7 @@ function connect() {
     if (ev.type === 'plan_usage') { if (!ev.logged) usageUI.setPlan(ev); return; }
     // The Conductor (decision 55): its state as one event, and its own thread's events under its place name.
     if (ev.type === 'conductor_state') { if (S.conductor) { Object.assign(S.conductor, ev.conductor); S.hub = null; render(); } return; }
-    if (ev.project === CP.CONDUCTOR) { if (CP.applyEvent(S.conductor, ev)) { S.hub = null; if (ev.logged && ['agent_created', 'agent_retired', 'agent_session', 'agent_settings'].includes(ev.type)) refreshSoon(); render(); } return; }
+    if (ev.project === CP.CONDUCTOR) { if (CP.applyEvent(S.conductor, ev)) { S.hub = null; if (ev.logged && ['agent_created', 'agent_retired', 'agent_session', 'agent_settings', 'summary', 'message', 'lesson_proposed', 'lesson_result', 'question_dismissed'].includes(ev.type)) refreshSoon(); render(); } return; }
     const p = S.projects.find(x => x.name === ev.project);
     if (!p) return;
     S.hub = null;
@@ -147,7 +147,7 @@ function connect() {
       if (ev.type === 'approval') S.pending.add(ev.approval);
       if (ev.type === 'approval_result') S.pending.delete(ev.approval);
       // Agents write decision records straight to .decisions/; a summary is the signal to re-read the board.
-      if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'entry_status', 'summary', 'project_settings'].includes(ev.type)) refreshSoon();
+      if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'entry_status', 'summary', 'project_settings', 'lesson_result'].includes(ev.type)) refreshSoon();
       if (ev.type === 'message' && ev.from !== 'you') delete S.activity[key(p.name, ev.thread)];
       if (['approval_result', 'pick', 'question_dismissed', 'message'].includes(ev.type)) queueMicrotask(() => phone.clearSettled(cardWaiting));
     } else if (ev.type === 'agent_state') {
@@ -279,7 +279,8 @@ const escalation = (p, id) => AP.escalation(p, id);
 const withOrchestrator = p => AP.withOrchestrator(p, S.pending);
 const pendingApprovals = p => AP.pendingApprovals(p, S.pending);
 function pendingForYou(p) { return new Set(p ? pendingApprovals(p).map(e => e.approval) : []); }
-const openQuestions = p => AP.openQuestions(p);
+// The Conductor's open questions come whole from the hub (decision 55), not from its latest events only.
+const openQuestions = p => p && p === S.cplace ? (S.conductor?.questions || []) : AP.openQuestions(p);
 const pendingLessons = p => AP.pendingLessons(p);
 // The project a card or row belongs to (All projects marks each group with data-pj); else the current one.
 const projectOf = el => AP.projectOf(el, S.cplace ? [...S.projects, S.cplace] : S.projects, proj());
@@ -767,14 +768,17 @@ function conductorSection() {
       default: return '';
     }
   };
-  const lessons = pendingLessons(place);
+  // What waits on you from it comes whole from the hub (c.questions, c.lessons), not from the latest events only,
+  // so the red count and the cards always agree. Its questions are answered here like any other.
+  const lessons = c.lessons || [];
+  const asks = (c.questions || []).map(q => questionCard(q, place).replace(`data-thread="${CP.CONDUCTOR_THREAD}"`, `data-thread="${AP.HUB_THREAD}"`)).join('');
   const state = c.name ? `${esc(c.state)}${c.contextPct != null ? ` · ${c.contextPct}%` : ''}` : 'asleep';
   return `<section class="hub-conductor" data-pj="${CP.CONDUCTOR}">
     <div class="hub-head cd-head"><span class="hub-k"><span class="ava${hue ? ' ring' : ''}"${hue ? ` style="--mh:${hue}"` : ''}>${robot(a, { size: 22, needs: c.waiting > 0 })}</span><b>Conductor</b></span>
       <span class="hub-line"></span><span class="hub-meta">${state}</span>${c.waiting ? `<span class="colbadge" title="${c.waiting} waiting for your call from the Conductor">${c.waiting}</span>` : ''}</div>
     ${hidden ? `<button class="more cd-earlier" data-expand="conductor-earlier">Show earlier (${hidden})</button>` : open && items.length > n ? `<button class="more cd-earlier" data-expand="conductor-earlier">Show fewer</button>` : ''}
     <div class="cd-feed">${shown.map(item).join('') || `<div class="cd-empty"><p>Ask what waits for you across projects, or ask for something in another project: the Conductor passes it to that project's orchestrator.</p></div>`}</div>
-    ${lessons.length ? lessonsCard(lessons) : ''}
+    ${asks}${lessons.length ? lessonsCard(lessons) : ''}
   </section>`;
 }
 

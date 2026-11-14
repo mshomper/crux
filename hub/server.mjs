@@ -283,9 +283,9 @@ const routes = {
   'POST /api/retire-finished': ({ project, agent }) => ({ result: hub.retireFinished(hub.project(project), agent) }),
   // The orchestrator's handoff, a worker's, or (project "~conductor") the Conductor's.
   'POST /api/retire': ({ project, agent }) => { const p = hub.place(project); hub.retire(p, p.hubWide ? p.orchestrator() : agent || p.orchestrator()); return { ok: true }; },
-  'POST /api/dismiss': ({ project, question, index }) => hub.dismissQuestion(hub.project(project), String(question || ''), 'you', index ?? null),
+  'POST /api/dismiss': ({ project, question, index }) => hub.dismissQuestion(hub.place(project), String(question || ''), 'you', index ?? null),
   // Answers typed in Needs you: { question: summary event id, answers: [{ index, text }] }.
-  'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.project(project), String(question || ''), answers),
+  'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.place(project), String(question || ''), answers),
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
   // Change an agent's model, effort or type. Only the keys sent change; an empty value means the default.

@@ -17,13 +17,16 @@ import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
 import { Attachments } from './attachments.mjs';
 import { conductorPrompt, RESUME_MESSAGE } from './prompts.mjs';
-import { waiting as waitingFor, openQuestions as openAsked, pendingLessons } from '../public/all-projects.js';
+import { waiting as waitingFor, pendingLessons } from '../public/all-projects.js';
+import { openQuestions as openAsked } from '../public/questions.js';   // on events (the all-projects one takes a project)
 import { CONNECTOR_SERVERS } from './permission-rules.mjs';
 
 export const CONDUCTOR = '~conductor';          // its place name in URLs and live events; never a project folder's name
 export const CONDUCTOR_THREAD = 'conductor';
 export const CONDUCTOR_ROLE = 'conductor';
 export const WAKE_MS = 2 * 60 * 1000;           // updates within this long of the first one wake it once
+export const MAX_AUTO_WAKES = 6;                 // automatic wakes (projects' updates) an hour at most
+const HOUR_MS = 60 * 60 * 1000;
 const REMINDER_CHECK_MS = 60 * 1000;
 const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
 const EVENTS_SHOWN = 400;                        // the page gets this many of its latest events
@@ -66,12 +69,22 @@ export class Conductor {
     this.hub = hub;
     this.home = new ConductorHome(dir);
     this.wakeMs = wakeMs;
-    this.pending = [];      // update lines waiting for the next wake
+    this.maxAutoWakes = MAX_AUTO_WAKES;
+    // Lines waiting for the next wake: { line, reminder? }. Update lines are logged as they come (wake_pending), so a
+    // restart keeps them; due reminders are found again from the log, since they are marked done only once delivered.
+    this.pending = this.restorePending();
     this.timer = null;
     this.activity = '';
     this.off = hub.on(ev => this.heard(ev));
     this.reminderTimer = setInterval(() => this.dueReminders(), REMINDER_CHECK_MS);
     this.reminderTimer.unref?.();
+    if (this.pending.length && this.wakesOn()) this.arm(this.wakeMs);
+  }
+
+  restorePending() {
+    const evs = this.home.log.events;
+    const from = evs.findLastIndex(e => e.type === 'wake' || e.type === 'wake_taken');
+    return evs.slice(from + 1).filter(e => e.type === 'wake_pending').map(e => ({ line: e.line }));
   }
 
   stop() { this.off?.(); clearTimeout(this.timer); clearInterval(this.reminderTimer); }
@@ -89,23 +102,27 @@ export class Conductor {
 
   // ---------- messages ----------
   // Yours, at once. Updates waiting for a batched wake ride along in front of it.
-  fromYou(text, attachments = []) {
-    this.home.log.append('message', { thread: CONDUCTOR_THREAD, from: 'you', text, ...(attachments.length ? { attachments } : {}) });
+  // extra: more fields for the message event (answers: the Conductor's questions it answers, from its question card).
+  fromYou(text, attachments = [], extra = {}) {
+    this.home.log.append('message', { thread: CONDUCTOR_THREAD, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
     const a = this.ensure();
-    const lines = this.take();
+    const lines = this.take('wake_taken');
     if (lines) a.noteForNextTurn(lines);
     a.send(text, attachments);
   }
 
-  // message_agent: to a project's orchestrator only (never a worker). Logged in that project's orchestrator thread,
-  // and one line in the Conductor's own thread, so you can see what it sent where.
+  // message_agent: to a project's orchestrator only (never a worker). Logged in that project's orchestrator thread
+  // (marked conductor, so it never counts as your answer to a question), and one line in the Conductor's own thread.
+  // It reaches the holder of the role, resting or not; it never starts one (decision 55 A: no starting orchestrators).
   toOrchestrator(projectName, from, msg) {
     const p = this.project(projectName);
     msg = String(msg || '').trim();
     if (!msg) return 'Write the message first.';
+    const orch = p.orchestrator();
+    if (!orch) return `${p.name} has no orchestrator running, and the Conductor cannot start one. Nothing was sent. Tell {{who}}: an orchestrator starts when {{who}} writes in ${p.name}'s orchestrator thread.`;
     p.log.append('message', { thread: 'orchestrator', from, text: msg, conductor: true });
     this.hub.notice(this.home, CONDUCTOR_THREAD, `${from} sent a brief to ${p.name}'s orchestrator.`);
-    this.hub.ensureOrchestrator(p).send(`[From the Conductor, ${from}, on {{who}}'s side]\n${msg}`);
+    orch.send(`[From the Conductor, ${from}, on {{who}}'s side]\n${msg}`);
     return `Sent to ${p.name}'s orchestrator.`;
   }
 
@@ -121,19 +138,35 @@ export class Conductor {
     if (!ev?.logged || ev.project === CONDUCTOR || !this.hub.projects.has(ev.project)) return null;
     const asks = n => n ? `, ${n} question${n === 1 ? '' : 's'}` : '';
     if (ev.type === 'summary') {
-      const fromOrch = ev.thread === 'orchestrator';
       const ds = (ev.decisions_needed || []).length, qs = (ev.questions || []).length;
-      // A worker's routine summary goes to its orchestrator; only one that asks something of you wakes the Conductor.
-      if (!fromOrch && !ds && !qs) return null;
+      // Only a summary that asks something of you wakes it: routine rounds are the orchestrator's, and you see them
+      // in the project. Nor the orchestrator's answer to the Conductor's own brief: no back-and-forth between them.
+      if (!ds && !qs) return null;
+      if (ev.thread === 'orchestrator' && this.answersBrief(this.hub.projects.get(ev.project), ev)) return null;
       return `- ${ev.project}: ${ev.from} posted a round summary${asks(qs)}${ds ? `, ${ds} decision${ds === 1 ? '' : 's'} to pick` : ''}`;
     }
     if ((ev.type === 'approval' && !ev.routedTo) || ev.type === 'approval_escalated') return `- ${ev.project}: a permission card from ${ev.agent} waits for {{who}}`;
     return null;
   }
 
+  // Does this orchestrator summary answer a Conductor brief? Yes when the last message that reached the orchestrator
+  // thread from outside it (yours, or a Conductor brief) before the summary was a Conductor brief.
+  answersBrief(p, ev) {
+    if (!p) return false;
+    const orchs = new Set([...p.agents.values()].filter(a => a.role === 'orchestrator').map(a => a.name));
+    const evs = p.log.events, i = evs.indexOf(ev);
+    const before = i < 0 ? evs : evs.slice(0, i);
+    const last = before.findLast(e => e.type === 'message' && e.thread === 'orchestrator' && !orchs.has(e.from));
+    return !!last?.conductor;
+  }
+
   // Wakes need the switch on (settings conductorWakes, on by default) and more than one project: with one, the page
   // shows no All projects column, so a Conductor working there would be out of sight.
   wakesOn() { return this.hub.settings.get('conductorWakes') !== false && this.hub.projects.size > 1 && !this.hub.noAgents; }
+
+  // Automatic wakes (from projects' updates) in the last hour, from the log, so a restart does not reset the count.
+  // Your messages and due reminders are not counted and always wake it.
+  autoWakes(now = Date.now()) { return this.home.log.ofType('wake').filter(e => e.auto !== false && now - Date.parse(e.ts) < HOUR_MS); }
 
   heard(ev) {
     if (ev?.project === CONDUCTOR && (ev.type === 'activity' || ev.type === 'agent_state')) {
@@ -147,33 +180,55 @@ export class Conductor {
     this.queue(line);
   }
 
-  queue(line, { now = false } = {}) {
-    this.pending.push(line);
-    if (now) { clearTimeout(this.timer); this.timer = null; return this.flush(); }
-    if (!this.timer) { this.timer = setTimeout(() => { this.timer = null; this.flush(); }, this.wakeMs); this.timer.unref?.(); }
+  queue(line) {
+    this.pending.push({ line });
+    this.home.log.append('wake_pending', { line });
+    this.arm(this.wakeMs);
   }
 
-  take() {
+  arm(ms) {
+    if (this.timer) return;
+    this.timer = setTimeout(() => { this.timer = null; this.flush(); }, Math.max(0, ms));
+    this.timer.unref?.();
+  }
+
+  // Everything waiting, as one message; due reminders delivered with it are marked done now (not when they fell due,
+  // so a restart before delivery finds them again). marker: the event that says the lines were handed over.
+  take(marker = 'wake', extra = {}) {
     if (!this.pending.length) return '';
-    const lines = [...new Set(this.pending)];
+    const items = this.pending;
     this.pending = [];
-    return `[Hub: updates since you last heard]\n${lines.join('\n')}`;
+    const lines = [...new Set(items.map(x => x.line))];
+    const msg = `[Hub: updates since you last heard]\n${lines.join('\n')}`;
+    this.home.log.append(marker, { ...(marker === 'wake' ? { thread: CONDUCTOR_THREAD } : {}), text: msg, ...extra });
+    for (const r of items.filter(x => x.reminder)) this.home.log.append('reminder_done', { thread: CONDUCTOR_THREAD, reminder: r.reminder, why: 'due' });
+    return msg;
   }
 
   // One turn for everything queued. A busy, retiring or answering holder takes it at the end of its turn (afterTurn).
-  flush() {
+  // force: a due reminder, which is never held back. Otherwise at most maxAutoWakes automatic wakes an hour: past
+  // that, the lines wait (and ride along with your next message) until the oldest wake leaves the hour.
+  flush({ force = false, now = Date.now() } = {}) {
     if (!this.pending.length) return false;
     const cur = this.holder();
     if (cur && (['working', 'starting'].includes(cur.state) || cur.retiring || cur.capture)) return false;
-    const msg = this.take();
+    const auto = !this.pending.some(x => x.reminder);
+    if (auto && !force) {
+      const recent = this.autoWakes(now);
+      if (recent.length >= this.maxAutoWakes) { this.arm(Date.parse(recent[0].ts) + HOUR_MS - now + 1000); return false; }
+    }
     const a = this.ensure();
-    this.home.log.append('wake', { thread: CONDUCTOR_THREAD, agent: a.name, text: msg });
+    const msg = this.take('wake', { agent: a.name, auto });
     a.send(msg);
     return true;
   }
 
-  // The hub calls this when the Conductor goes idle (Hub.onIdle).
-  afterTurn() { if (this.pending.length && !this.timer) this.flush(); }
+  // The hub calls this when the Conductor goes idle (Hub.onIdle): a due reminder at once, updates after the window.
+  afterTurn() {
+    if (!this.pending.length) return;
+    if (this.pending.some(x => x.reminder)) { clearTimeout(this.timer); this.timer = null; this.flush({ force: true }); }
+    else this.arm(this.wakeMs);
+  }
 
   // ---------- reminders across days ----------
   reminders() {
@@ -197,16 +252,15 @@ export class Conductor {
     this.home.log.append('reminder_done', { thread: CONDUCTOR_THREAD, reminder: r.id, why });
     return `Reminder ${r.id} cleared.`;
   }
-  // Due ones wake the Conductor at once (no batching): they are rare and time matters.
+  // Due ones wake the Conductor at once (no batching, no hourly cap): they are rare and time matters. Each is marked
+  // done only once it is delivered (take); a busy Conductor gets it at the end of its turn (afterTurn).
   dueReminders(now = Date.now()) {
-    const due = this.reminders().filter(r => Date.parse(r.at) <= now);
+    const queued = new Set(this.pending.map(x => x.reminder).filter(Boolean));
+    const due = this.reminders().filter(r => Date.parse(r.at) <= now && !queued.has(r.id));
     if (!due.length || this.hub.noAgents) return due.length;
-    for (const r of due) {
-      this.home.log.append('reminder_done', { thread: CONDUCTOR_THREAD, reminder: r.id, why: 'due' });
-      this.pending.push(`- Reminder ${r.id} is due (set for ${when(r.at)}): ${r.text}`);
-    }
+    for (const r of due) this.pending.push({ line: `- Reminder ${r.id} is due (set for ${when(r.at)}): ${r.text}`, reminder: r.id });
     clearTimeout(this.timer); this.timer = null;
-    this.flush();
+    this.flush({ force: true, now });
     return due.length;
   }
 
@@ -401,18 +455,21 @@ export class Conductor {
   // ---------- what the page gets (/api/state "conductor", and conductor_state on the live stream) ----------
   // state: 'asleep' (no one holds the role, or resting), 'starting', 'working', 'idle', 'error'. waiting: what in its
   // thread waits on you (its open questions, and its lesson card).
+  // The page shows only the latest EVENTS_SHOWN events, so what waits on you comes whole, from the full log: its open
+  // questions (questions, drawn as answerable cards) and its unanswered lessons (lessons). waiting counts exactly those.
   view({ events = true } = {}) {
     const a = this.holder();
     const evs = this.home.log.events;
-    const waiting = openAsked(evs, {}).reduce((n, q) => n + q.open.length, 0) + (pendingLessons({ events: evs }).length ? 1 : 0);
+    const questions = openAsked(evs, {}), lessons = pendingLessons({ events: evs });
+    const waiting = questions.reduce((n, q) => n + q.open.length, 0) + (lessons.length ? 1 : 0);
     return {
       place: CONDUCTOR, thread: CONDUCTOR_THREAD, role: CONDUCTOR_ROLE,
       name: a?.name || null, state: a ? a.state : 'asleep', contextPct: a?.contextPct ?? null,
       model: a?.model || null, modelSeen: a?.modelSeen || null, effort: a?.effort || null, type: null,
       live: !!a?.live, retiring: a?.retiring || false,
       retireAt: this.hub.retireAtFor(this.home), activity: this.activity, waiting,
-      wakes: this.wakesOn(), pendingWake: this.pending.length,
-      ...(events ? { events: evs.slice(-EVENTS_SHOWN), pendingApprovals: [] } : {})
+      wakes: this.wakesOn(), pendingWake: this.pending.length, questions, lessons,
+      ...(events ? { events: evs.slice(-EVENTS_SHOWN), olderEvents: Math.max(0, evs.length - EVENTS_SHOWN) } : {})
     };
   }
 }
