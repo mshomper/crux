@@ -221,8 +221,14 @@ test('a merge question names exactly one PR and no condition; the answer is a pl
   for (const q of ['May I open the PR, merge it and restart?', 'Merge PRs 74 and 75?', 'Merge PR 75? (it closes #74)', 'Merge #75 and #74?',
     'Merge PR 74 once CI passes?', 'Merge PR 74 after the review?', 'Merge PR 74 when ready?', 'Merge PR 74 if the tests pass?', 'Merge PR 74 before lunch?',
     'Wait, merge PR 74?', 'Merge PR 74 until tonight?', 'Merge the branch into main?', 'I will merge #74 next.', 'May I merge mshomper/acuload#12?',
-    'Merge https://github.com/x/y/pull/3 ?', 'Merge pull request 74?'])
+    'Merge https://github.com/x/y/pull/3 ?', 'Merge pull request 74?',
+    // It must open as a merge ask, and ask nothing else (final review).
+    'Close PR #77 instead of merging it?', 'Should I skip merging PR #74?', 'Abandon PR #74 rather than merge it?', 'Should I merge main into PR #74?',
+    'Is PR #74 safe to merge, or should I close it?', 'Merge PR #74 or not?', 'Should I revert PR #74 and merge it again?', 'OK to merge PR #74?', 'PR #74: merge it?'])
     assert.equal(mergeQuestion(q), null, q);
+  assert.deepEqual(mergeQuestion('May I open and merge PR #76?'), { number: 76 });
+  assert.deepEqual(mergeQuestion('Can I merge #76 now?'), { number: 76 });
+  assert.deepEqual(mergeQuestion('Tests pass. Shall I merge PR 76 and restart?'), { number: 76 });
   for (const y of ['Yes', 'yes.', 'Yep!', 'OK', 'okay', 'Sure', 'go', 'Go ahead.', 'do it', 'Merge it', 'approved', 'Yes please', 'yes, thanks']) assert.equal(isYes(y), true, y);
   for (const y of ['No', 'Yes, but wait for the reviewer', 'yes go ahead and restart too', 'Yes, merge 75 as well', 'Not yet', 'yes after the tests', 'Yeah', 'Sure, merge it and #75', '']) assert.equal(isYes(y), false, y);
   assert.deepEqual(mergeCommand('Bash', 'gh pr merge 74'), { number: 74, cd: null });

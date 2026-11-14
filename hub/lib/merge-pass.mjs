@@ -25,10 +25,18 @@ const CONDITION = /\b(once|after|when|whenever|if|unless|until|before|wait)\b/i;
 // Every PR a text names: #N, PR N, PR #N, PRs N, pull request N.
 const REFS = /#(\d+)\b|\bPRs?[ \t]*#?(\d+)\b|\bpull[ \t]+requests?[ \t]*#?(\d+)\b/gi;
 
-// A question asking to merge exactly one PR of this project: returns { number } or null.
+// Words that turn it into another ask: close or skip it instead, merge something into it, or a choice.
+const OTHER_ASK = /\b(skip|skipping|close|closing|instead|rather|abandon|revert|into)\b|\bor should\b|\bor not\b/i;
+// The asking sentence opens as a merge ask: "Merge #N", "Merge PR N", "May/Can/Shall/Should I (open and) merge (PR) #N".
+const OPENS = /^(?:(?:may|can|shall|should)[ \t]+I[ \t]+(?:open[ \t]+(?:it[ \t]+|the[ \t]+PR[ \t]+)?and[ \t]+)?)?merge[ \t]+(?:PR[ \t]*)?#?\d+\b/i;
+
+// A question asking to merge exactly one PR of this project: returns { number } or null. Its asking sentence (the
+// last one ending in "?") opens as a merge ask, and nothing in it asks something else.
 export function mergeQuestion(text) {
   const s = flat(text);
-  if (!s.includes('?') || !/\bmerg(e|es|ing)\b/i.test(s) || CONDITION.test(s)) return null;
+  if (!s.includes('?') || !/\bmerg(e|es|ing)\b/i.test(s) || CONDITION.test(s) || OTHER_ASK.test(s)) return null;
+  const asking = s.split(/(?<=[.!?])\s+/).filter(x => x.endsWith('?')).at(-1) || '';
+  if (!OPENS.test(asking)) return null;
   if (/[\w.-]+\/[\w.-]+#\d+|github\.com\//i.test(s)) return null;   // another repo, or a link
   if (/\bPRs\b|\bpull requests\b/i.test(s)) return null;           // several
   const nums = [...s.matchAll(REFS)].map(m => Number(m[1] || m[2] || m[3]));
