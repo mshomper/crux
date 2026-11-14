@@ -178,8 +178,8 @@ export class Hub {
         this.notice(p, m.thread, r.wasWorking
           ? `The hub restarted while ${r.agent} was working on ${whose} from ${when}, so it was sent again.`
           : `The hub restarted before ${whose} from ${when} reached its agent, so it was delivered again.`);
-        const text = m.from === 'you' ? m.text : m.conductor ? briefText(m.from, m.text, m.request) : `[From the orchestrator, ${m.from}]\n${m.text}`;
-        if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(text, m.attachments);
+        const text = m.from === 'you' ? m.text : m.conductor ? briefText(m.from, m.text, m.request, m.replyExpected !== false) : `[From the orchestrator, ${m.from}]\n${m.text}`;
+        if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(text, m.attachments, m.conductor && m.request ? { request: m.request } : null);
         else p.agents.get(m.thread)?.send(text, m.attachments);
       } else {
         const a = p.agents.get(r.agent);
@@ -804,14 +804,15 @@ export class Hub {
       agent.restartWhenIdle = false;
       agent.close();
     }
+    // Decision 62: a Conductor request it was given and did not answer gets one reminder, as a short follow-up turn,
+    // before anything else, a threshold handoff included (that waits for the end of the reminder's turn).
+    if (agent.role === 'orchestrator' && !p.hubWide && this.conductor?.remindReplies(p, agent)) return;
     if (agent.contextPct != null && agent.contextPct >= this.retireAtFor(p)) {
       this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role !== 'worker' ? 'the role' : 'its task'} on.`);
       this.retire(p, agent, { reason: 'threshold' });
       return;
     }
     if (p.hubWide) this.conductor?.afterTurn();   // updates that came in while it worked: one more turn for them
-    // Decision 62: a Conductor request it read and did not answer gets one reminder, as a short follow-up turn.
-    else if (agent.role === 'orchestrator') this.conductor?.remindReplies(p, agent);
   }
 
   // reason: 'asked' (you, or the API), 'threshold' (decision 10), 'idle' (decision 37) or 'orchestrator' (a worker
@@ -936,6 +937,9 @@ export class Hub {
     if (agent.role === 'orchestrator') {
       const open = p.board.decisions().filter(d => ['open', 'found'].includes(d.status));
       lines.push('Decisions waiting on {{who}}:', ...(open.length ? open.map(d => `- D${String(d.id).padStart(4, '0')} ${d.title}${d.recommended ? ` (recommended ${d.recommended})` : ''}`) : ['- none']));
+      // Decision 62: requests from the Conductor still waiting for this project's reply.
+      const reqs = this.conductor?.openRequests(p.name) || [];
+      if (reqs.length) lines.push('Conductor requests waiting for a reply (answer each with reply_to_conductor):', ...reqs.map(r => `- ${r.request} (${when(r.ts)}): "${clip(r.text, 300)}"`));
       const cards = [...this.approvals.values()].filter(x => x.p === p);
       if (cards.length) lines.push('Permission cards waiting:', ...cards.map(x => `- ${x.agent.name} wants ${x.toolName}${x.routedTo && !x.escalated ? ` (with ${x.routedTo})` : ''}`));
       const lessons = this.pendingLessons(p);

@@ -663,7 +663,7 @@ function messageEl(p, ev, t) {
   const imgs = (ev.attachments || []).filter(a => IMG_TYPES[a.type]), docs = (ev.attachments || []).filter(a => !IMG_TYPES[a.type]);
   const shots = (imgs.length ? shotsEl(p, imgs) : '') + (docs.length ? `<div class="fchips sent">${docs.map(a => fileChip({ name: a.name, size: a.size, type: a.type, href: attSrc(p, a.id) })).join('')}</div>` : '');
   // Decision 62: a Conductor brief is a request; its mark says whether the orchestrator has replied yet.
-  const req = ev.conductor && ev.request ? (p.events.some(e => e.type === 'conductor_reply' && e.request === ev.request)
+  const req = ev.conductor && ev.request && ev.replyExpected !== false ? (p.events.some(e => e.type === 'conductor_reply' && e.request === ev.request)
     ? `<span class="chip req done" title="The orchestrator answered this request; the reply went to the Conductor">Replied · ${esc(ev.request)}</span>`
     : `<span class="chip req" title="The Conductor expects a reply (reply_to_conductor)">Reply expected · ${esc(ev.request)}</span>`) : '';
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
