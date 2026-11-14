@@ -51,6 +51,7 @@ export class Conversation {
     this.feed = q('.feed'); this.activity = q('.activity');
     this.form = q('.composer'); this.quick = q('.quick'); this.trayEl = q('.tray'); this.errEl = q('.attach-error');
     this.input = q('.c-input'); this.attachBtn = q('.attach'); this.file = q('.c-file');
+    this.micBtn = q('.c-mic'); this.voiceBtn = q('.c-voice'); this.voiceLineEl = q('.voice-line');   // voice (decision 61 A)
     this.file.setAttribute('accept', ACCEPT);
     this.sending = false;
     this.justOpened = true;     // the first draw scrolls to the latest message (Needs you: to the top)
@@ -93,6 +94,8 @@ export class Conversation {
       this.autosize(); host.focusBox(box);
     });
     this.attachBtn.addEventListener('click', () => this.file.click());
+    this.micBtn.addEventListener('click', () => host.mic?.(this));
+    this.voiceLineEl.querySelector('.vl-cancel').addEventListener('click', () => host.micCancel?.());
     this.file.addEventListener('change', e => { this.addFiles([...e.target.files]); e.target.value = ''; });
     this.trayEl.addEventListener('click', e => {
       const x = e.target.closest('[data-untray]'); if (!x) return;
@@ -143,6 +146,7 @@ export class Conversation {
     // The hint fits its box on one line (M008 9, phone pass): one word on a phone, the thread's name in a narrow column.
     this.input.placeholder = composerHint({ thread: this.thread, retired: !!h.retired, narrow: o.phone, fine: o.fine, compact: o.narrow });
     this.renderPin(o);
+    this.renderVoice(h.voice);
     // A red count in a column's header when a card waits for you in that thread (decision 31), beside other columns.
     const n = o.multi ? h.waiting : 0;
     this.badge.hidden = !n;
@@ -162,6 +166,30 @@ export class Conversation {
     b.title = tip; b.setAttribute('aria-label', tip);
     // A column that is not pinned, beside others, can be closed.
     this.closeBtn.hidden = !!pinned || !multi;
+  }
+
+  // Voice (decision 61 A), in the Conductor's column only. v: { on, state, tip, rec, line: { text, cancel, tone } }
+  // from app.js, or nothing. The switch is lit cyan when on, with an amber mark on a problem; the mic is red while
+  // it is open. Also called by itself every quarter second while recording, for the clock.
+  renderVoice(v) {
+    this.micBtn.hidden = !v; this.voiceBtn.hidden = !v; this.voiceLineEl.hidden = true;
+    if (!v) return;
+    const b = this.voiceBtn;
+    b.classList.toggle('on', !!v.on);
+    b.classList.toggle('warn', v.state === 'problem' || !!v.setupError);
+    b.setAttribute('aria-pressed', String(!!v.on));
+    if (b.title !== v.tip) { b.title = v.tip; b.setAttribute('aria-label', v.tip.split('\n')[0]); }
+    const m = this.micBtn;
+    m.classList.toggle('rec', v.rec === 'recording');
+    m.classList.toggle('busy', v.rec === 'opening' || v.rec === 'sending');
+    m.classList.toggle('dim', !v.on || v.state !== 'ready');
+    const tip = v.rec === 'recording' ? 'Send: closes the mic and sends what you said' : 'Talk: tap, say it, tap again to send';
+    if (m.title !== tip) { m.title = tip; m.setAttribute('aria-label', v.rec === 'recording' ? 'Send what you said' : 'Talk'); }
+    const line = v.line || { text: '' };
+    this.voiceLineEl.hidden = !line.text;
+    this.voiceLineEl.dataset.tone = line.tone || '';
+    this.voiceLineEl.querySelector('.vl-text').textContent = line.text;
+    this.voiceLineEl.querySelector('.vl-cancel').hidden = !line.cancel;
   }
 
   renderQuick(chips) {

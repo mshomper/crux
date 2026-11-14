@@ -32,6 +32,9 @@ const REMINDER_CHECK_MS = 60 * 1000;
 const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
 const EVENTS_SHOWN = 400;                        // the page gets this many of its latest events
 const REMINDER_MAX_DAYS = 400;
+// Decision 61 A: in front of a message {{who}} said by voice. The hub has already snapped near-miss project and agent
+// names to known ones; {{who}} sees the message with a mic mark and corrects it after if it was misheard (R011).
+export const VOICE_NOTE = '[Hub: {{who}} said this by voice and the hub transcribed it. A word, name or number may be misheard: if it reads oddly, go by what {{who}} most likely meant, and ask when it matters.]';
 
 // Its board tools, by name. These and nothing else: the permission callback refuses every other tool.
 export const CONDUCTOR_TOOLS = ['hub_overview', 'needs_you', 'board_index', 'board_read', 'latest_handoff', 'list_agents',
@@ -133,6 +136,8 @@ export class Conductor {
     this.home.log.append('message', { thread: CONDUCTOR_THREAD, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
     const a = this.ensure();
     if (cards) a.noteForNextTurn(this.notesRequest(cards, 'message'));
+    // Voice (decision 61 A): a spoken message was transcribed, so a name or number in it may be off.
+    if (extra.voice) a.noteForNextTurn(VOICE_NOTE);
     a.send(text, attachments);
   }
 

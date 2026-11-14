@@ -24,6 +24,7 @@ import { picturesButton, installPictures } from './pictures.js';
 import { levelChip, LEVELS as LEVEL_INFO, SettingsCards } from './project-settings.js';
 import { GuardUI } from './guard.js';
 import { briefButton, installBrief } from './brief.js';
+import { VoiceRecorder, voiceLine, switchTip } from './voice.js';
 import { installKeepScroll } from './keep-scroll.js';
 installKeepScroll();   // a pop-up opening or closing leaves the thread where it was (the iPhone sent it to the top)
 installPictures();   // decision 43: the pictures button on decision cards opens a gallery
@@ -99,7 +100,8 @@ async function api(path, body) {
 $('#pair-btn').addEventListener('click', () => guardUI.openPair());
 
 async function load() {
-  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, bootAt, setup } = await api('/api/state');
+  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, bootAt, setup, voice } = await api('/api/state');
+  S.voice = voice || null;   // decision 61 A: the voice switch and helper; canSetup is true on the hub's own PC
   // Decisions 52 and 54: the desktop app's first run (no key, no folders or no Claude Code yet) opens the setup
   // screen. Closing it there comes back here for this visit; with no project folder at all there is nothing to show.
   let skipped = false; try { skipped = sessionStorage.getItem('crux-hub:setup-closed') === '1'; } catch { }
@@ -142,6 +144,8 @@ function connect() {
     const ev = JSON.parse(e.data);
     // Plan numbers belong to the hub, not a project: the live copy (no project) and the logged one both land here.
     if (ev.type === 'plan_usage') { if (!ev.logged) usageUI.setPlan(ev); return; }
+    // Voice (decision 61 A): the helper's state and setup progress, hub-wide. Whether this device may set up stays.
+    if (ev.type === 'voice') { S.voice = { ...ev.voice, canSetup: !!S.voice?.canSetup }; renderVoice(); return; }
     // The Conductor (decision 55): its state as one event, and its own thread's events under its place name.
     if (ev.type === 'conductor_state') { if (S.conductor) { Object.assign(S.conductor, ev.conductor); S.hub = null; render(); } return; }
     if (ev.project === CP.CONDUCTOR) { if (CP.applyEvent(S.conductor, ev)) { S.hub = null; if (ev.logged && ['agent_created', 'agent_retired', 'agent_session', 'agent_settings', 'summary', 'message', 'lesson_proposed', 'lesson_result', 'question_dismissed'].includes(ev.type)) refreshSoon(); render(); } return; }
@@ -655,6 +659,8 @@ function isTall(text, limit) { const s = String(text || ''); return s.length > l
 function messageEl(p, ev, t) {
   const you = ev.from === 'you';
   const relay = !you && t !== 'orchestrator' && /^orchestrator-/.test(ev.from);
+  // Said by voice (decision 61 A, R011): a mic mark; when a name was snapped, its hover shows what was heard.
+  const said = you && ev.voice ? `<span class="vsaid" title="${esc(ev.heard ? `Said by voice. Heard as: “${ev.heard}”` : 'Said by voice')}">${icon('mic')}</span>` : '';
   // Your words as typed; "> " lines (a question quoted by an answer from Needs you) show as a quote.
   const body = you ? `<p>${String(ev.text || '').split('\n').map(l => /^> /.test(l) ? `<span class="yq">${esc(l.slice(2))}</span>` : esc(l)).join('<br>').replace(/<\/span><br>/g, '</span>')}</p>` : md(ev.text);
   // A brief that started a worker says what it was started as.
@@ -663,7 +669,7 @@ function messageEl(p, ev, t) {
   const imgs = (ev.attachments || []).filter(a => IMG_TYPES[a.type]), docs = (ev.attachments || []).filter(a => !IMG_TYPES[a.type]);
   const shots = (imgs.length ? shotsEl(p, imgs) : '') + (docs.length ? `<div class="fchips sent">${docs.map(a => fileChip({ name: a.name, size: a.size, type: a.type, href: attSrc(p, a.id) })).join('')}</div>` : '');
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
-    <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}</span>
+    <span class="who">${said}${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}</span>
     ${shots}${ev.text || !shots ? `<div class="bubble">${fold(ev.id, body, isTall(ev.text, relay ? 240 : 900))}</div>` : ''}</div>`;
 }
 
@@ -1009,7 +1015,7 @@ function headFor(t) {
     const sub = `<span class="chip ${esc(a.state)}">${c.name ? `${esc(c.name)} · ` : 'Conductor · '}${esc(a.state)}</span>${c.name ? modelChip(a, { button: true }) : ''}${c.contextPct != null ? `<span>${c.contextPct}% context</span>` : ''}`;   // the counts are on the Agents row now (decision 59 B)
     // Decision 59 B: a chat, read from its latest message; while the waiting cards are open it reads from the top.
     const n = conductorWaiting(v, c);
-    return { title: 'All projects', sub, retired: false, retire: !!c.name && !c.retiring, finish: false, chips: [], activity: c.activity || '', top: hubFoldOpen('waiting', n) || hubFoldOpen('agents', n), waiting: n };
+    return { title: 'All projects', sub, retired: false, retire: !!c.name && !c.retiring, finish: false, chips: [], activity: c.activity || '', top: hubFoldOpen('waiting', n) || hubFoldOpen('agents', n), waiting: n, voice: voiceHead() };
   }
   let title = 'Needs you', sub = '';
   if (p && t === 'orchestrator') {
@@ -1119,9 +1125,9 @@ function sendPicks(p, picks) {
 }
 
 // Hub-styled pop-ups (M008 3) instead of the browser's: a confirm with a way out, and a short message.
-function hubConfirm({ k = 'Confirm', title, body = '', ok = 'OK' }) {
+function hubConfirm({ k = 'Confirm', title, body = '', ok = 'OK', no = 'Cancel' }) {
   const d = $('#confirm');
-  $('#confirm-k').textContent = k; $('#confirm-title').textContent = title; $('#confirm-body').textContent = body; $('#confirm-ok').textContent = ok;
+  $('#confirm-k').textContent = k; $('#confirm-title').textContent = title; $('#confirm-body').textContent = body; $('#confirm-ok').textContent = ok; $('#confirm-no').textContent = no;
   d.returnValue = '';
   d.showModal();
   $('#confirm-ok').focus();
@@ -1227,6 +1233,50 @@ function lockOn(el) {
 // keyboard: the server takes one viewed thread, and a column you are not using may well go unread.
 const phone = initPhone({ button: $('#phone-alerts'), view: () => ({ project: S.current, thread: cols.kb }), openCard, post: (path, body) => guardUI.post(path, body) });
 
+// ---------- voice (decision 61 A): the mic and the switch in the Conductor's column ----------
+// One recorder for the page. While it records, only the voice parts of the columns redraw (four times a second).
+const voiceRec = new VoiceRecorder({
+  post: (path, body) => api(path, body),
+  onChange: () => renderVoice(),
+  onError: msg => toast(msg)
+});
+// What the Conductor's column shows for voice: the switch, the mic, and the line above the box.
+function voiceHead() {
+  const v = S.voice;
+  if (!v) return null;
+  return { on: !!v.on, state: v.state, setupError: !!v.setup?.error, tip: switchTip(v), rec: voiceRec.state, line: voiceLine({ rec: voiceRec.state, secs: voiceRec.seconds, v }) };
+}
+function renderVoice() { for (const c of cols.all?.() || []) if (c.thread === AP.HUB_THREAD) c.renderVoice(voiceHead()); }
+// The mic: off or not ready yet says so (and offers to turn voice on); ready opens the mic, and a second tap sends.
+async function micTap() {
+  const v = S.voice;
+  if (!v) return;
+  if (voiceRec.state !== 'idle') return voiceRec.toggle();
+  if (!v.on || v.installed !== 'ready') return voiceSwitch();
+  if (v.state === 'starting') return toast('Voice is still starting: try again in a few seconds.', 'info');
+  if (v.state === 'problem') return toast(v.problem || 'Voice has a problem.');
+  voiceRec.toggle();
+}
+// The switch. Off: stops the helper. On: starts it, once voice is set up. Setup is a download, so it asks each time,
+// with the size and a way out, and only on the PC the hub runs on.
+async function voiceSwitch() {
+  const v = S.voice;
+  if (!v) return;
+  if (v.setup && !v.setup.error && !v.setup.done) return toast('Voice is being set up on the PC.', 'info');
+  if (v.on && v.installed === 'ready') { voiceRec.cancel(); return act(() => api('/api/voice/switch', { on: false })); }
+  if (v.installed !== 'ready') {
+    if (!v.canSetup) return toast('Voice is set up once on the PC the hub runs on: tap the speaker icon in All projects there.');
+    const ok = await hubConfirm({
+      k: 'Voice', title: v.installed === 'stale' ? 'Update voice?' : 'Set up voice?',
+      body: `Downloads about ${(v.downloadMB / 1000).toFixed(1)} GB once (speech recognition and Imogen's voice) into your .crux-hub folder. It runs on this PC only; no sound is stored or sent anywhere else. Removing it later is deleting the .crux-hub\\voice folder.\n\n${v.credit}`,
+      ok: 'Set up', no: 'Not now'
+    });
+    if (ok) act(() => api('/api/voice/setup', {}));
+    return;
+  }
+  act(() => api('/api/voice/switch', { on: true }));
+}
+
 // ---------- the columns (decision 39 A): what each conversation draws and does comes from here ----------
 const cols = new Columns({
   area: $('#cols'), template: $('#conv-tpl'), winActs: $('#win-acts'), store, phoneMq, fineMq,
@@ -1246,6 +1296,8 @@ const cols = new Columns({
     // Pins and columns changed: redraw; a rail click also puts the keyboard in the column it opened.
     changed: (fromRail = false) => { render(); phone.viewChanged(); if (fromRail) focusIfDesk(cols.kbConv()?.input); },
     action: (name, c) => columnAction(name, c),
+    mic: () => micTap(),                  // voice (decision 61 A)
+    micCancel: () => voiceRec.cancel(),
     // A message from a column: its files first (images, PDFs, text), then the text. Needs you writes to the
     // orchestrator. Each file's original name goes along as display text; a pasted screenshot's "image.png" does not.
     send: async (t, text, files) => {
@@ -1533,6 +1585,7 @@ $('#board-filter').addEventListener('keydown', e => { if (e.key === 'Escape' && 
 async function columnAction(name, c) {
   const t = c.thread;
   if (name === 'back') return $('#app').classList.add('show-side');
+  if (name === 'voice') return voiceSwitch();
   if (name === 'retire-finished') {
     if (await hubConfirm({ k: 'Retire', title: `Retire ${t}?`, body: 'Use this when its job is done: it stops and moves to Retired, with no replacement.', ok: 'Retire' }))
       act(async () => { const r = await api('/api/retire-finished', { project: proj().name, agent: t }); if (!/retired\.$/.test(r.result)) toast(r.result); });

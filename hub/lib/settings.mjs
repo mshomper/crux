@@ -14,7 +14,8 @@ import { homedir } from 'node:os';
 
 //   conductorWakes: projects' summaries and cards wake the Conductor (decision 55). The off switch: false in
 //     settings.json (or hub.json) and it wakes only for your messages and its reminders.
-export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35, conductorWakes: true };
+//   voice: the voice switch (decision 61 A). Off by default; while off the voice helper does not run.
+export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35, conductorWakes: true, voice: false };
 // Hub-wide numbers with no per-project value, and the range each accepts.
 export const HUB_NUMBERS = { workerHandoffFloorPct: { min: 0, max: 100 } };
 // The handoff numbers a project may set for itself, with the range each accepts.
@@ -86,6 +87,7 @@ function pick(o = {}) {
   const out = {};
   if (typeof o.routePermissions === 'boolean') out.routePermissions = o.routePermissions;
   if (typeof o.conductorWakes === 'boolean') out.conductorWakes = o.conductorWakes;
+  if (typeof o.voice === 'boolean') out.voice = o.voice;
   const t = Number(o.permissionTimeoutSec);
   if (o.permissionTimeoutSec != null && o.permissionTimeoutSec !== '' && Number.isFinite(t) && t >= 10 && t <= 3600) out.permissionTimeoutSec = t;
   for (const [n, range] of Object.entries(HUB_NUMBERS)) {   // out of range or not a number: ignored, the saved or default stays

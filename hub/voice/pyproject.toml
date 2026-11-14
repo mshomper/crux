@@ -1,0 +1,15 @@
+# The hub's voice helper (decision 61 A): Parakeet TDT 0.6B v3 through onnx-asr for listening, Phonon 31M (ptts) for
+# speaking, both on the CPU. The hub makes this environment in %USERPROFILE%\.crux-hub\voice\venv from the lockfile
+# (Set up voice, or npm run voice-setup); nothing is installed into this folder.
+[project]
+name = "crux-voice"
+version = "0.1.0"
+description = "Local speech helper for the Crux hub"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "onnx-asr[cpu,hub]",
+  "ptts==0.7.1",
+]
+
+[tool.uv]
+package = false

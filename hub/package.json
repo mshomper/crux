@@ -1,6 +1,6 @@
 {
   "name": "crux-hub",
-  "version": "0.20.1",
+  "version": "0.21.0",
   "private": true,
   "type": "module",
   "description": "Crux hub: a messaging-style home for agents, backed by the Crux memory board",
@@ -8,7 +8,8 @@
     "start": "node server.mjs",
     "login": "node login.mjs",
     "test": "node --test \"test/*.test.mjs\"",
-    "test:temp-leaks": "node test/check-temp-leaks.mjs"
+    "test:temp-leaks": "node test/check-temp-leaks.mjs",
+    "voice-setup": "node voice/setup.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.322",

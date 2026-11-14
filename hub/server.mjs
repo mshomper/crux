@@ -17,6 +17,8 @@ import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, t
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
+import { Voice, decodeClip, MAX_CLIP_S, LISTEN_RATE } from './lib/voice.mjs';
+import { snapNames } from './lib/voice-names.mjs';
 import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
@@ -120,6 +122,12 @@ if (hub.conductor) {
 }
 const hosts = extraHosts();
 
+// Voice (decision 61 A): the local helper runs only while the voice switch is on; every open page hears its state.
+const voice = new Voice({ onChange: v => hub.emit({ type: 'voice', voice: v }) });
+if (hub.settings.get('voice')) voice.start();
+// The names a transcript's near-misses snap to: projects, their live agents, and the Conductor.
+const voiceNames = () => ['Conductor', ...[...hub.projects.values()].flatMap(p => [p.name, ...[...p.agents.values()].filter(a => a.state !== 'retired').map(a => a.name)]), hub.conductor?.holder?.()?.name].filter(Boolean);
+
 // The write guard (decision 47 B): paired devices, their passkeys, and alerts on any change to those or to the push
 // devices. A pairing code is shown only when this process runs in a window (stdout is a TTY), never in a log file.
 // This PC itself needs no pairing and no step-up (Matt, 2026-11-12); remote devices (the phone) do. A file named
@@ -177,13 +185,14 @@ function serveFile(res, file, extra = {}) {
   if (!existsSync(file) || !statSync(file).isFile()) return send(res, 404, { error: 'Not found' });
   send(res, 200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream', extra);
 }
-// Uploads carry a file as base64 text (about 4/3 of its size); everything else stays small.
-const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_UPLOAD * 4 / 3) + 64 * 1024 };
-async function body(req, limit = 1e6) {
+// Uploads carry a file (or a voice clip) as base64 text (about 4/3 of its size); everything else stays small.
+const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_UPLOAD * 4 / 3) + 64 * 1024, '/api/voice/listen': Math.ceil(MAX_CLIP_S * LISTEN_RATE * 2 * 4 / 3) + 4096 };
+const TOO_BIG = { '/api/attach': `Attachments must be ${MAX_UPLOAD / 1024 / 1024} MB or less (images 10 MB).`, '/api/voice/listen': `Clips can be up to ${MAX_CLIP_S} seconds.` };
+async function body(req, limit = 1e6, tooBig = 'Too large') {
   const parts = []; let n = 0;
   for await (const c of req) {
     n += c.length;
-    if (n > limit) throw new Error(limit > 1e6 ? `Attachments must be ${MAX_UPLOAD / 1024 / 1024} MB or less (images 10 MB).` : 'Too large');
+    if (n > limit) throw new Error(tooBig);
     parts.push(c);
   }
   const s = Buffer.concat(parts).toString('utf8');
@@ -192,7 +201,7 @@ async function body(req, limit = 1e6) {
 
 const routes = {
   // conductor (decision 55): the hub-wide agent's state and its thread's events (lib/conductor.mjs view()), or null.
-  'GET /api/state': () => ({ projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
+  'GET /api/state': (_, { local }) => ({ voice: { ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/brief': ({ project, id }) => {
     const b = hub.project(String(project || '')).board.brief(id);
@@ -287,6 +296,29 @@ const routes = {
     }
     hub.fromYou(p, thread, text);
     return { ok: true };
+  },
+
+  // ---------- voice (decision 61 A): the switch, setup on the PC, and a spoken message to the Conductor ----------
+  // On or off, from the PC or a paired device. Off stops the helper; nothing of it runs.
+  'POST /api/voice/switch': ({ on }) => { hub.settings.set({ voice: !!on }); return voice.apply(!!on); },
+  // Set up: a download and install, only when you press Set up on the PC (the page asks each time, with the size and
+  // a Not now). Voice turns on once it finishes.
+  'POST /api/voice/setup': (_, { local }) => {
+    if (!local) throw new GuardError('Voice is set up on the PC the hub runs on.', 403);
+    hub.settings.set({ voice: true });
+    voice.wanted = true;
+    return voice.setup();
+  },
+  // A clip (16 kHz 16-bit mono PCM, base64): heard by the helper in memory, near-miss names snapped, and sent at once
+  // as your message to the Conductor, marked as spoken (R011). What was heard is kept when a name was snapped.
+  'POST /api/voice/listen': async ({ audio }) => {
+    if (!hub.conductor) throw new Error('Voice talks to the Conductor, and this hub has none.');
+    const r = await voice.listen(decodeClip(audio));
+    const heard = String(r.text || '').replace(/\s+/g, ' ').trim();
+    if (!heard) throw new Error('Nothing was heard. Tap the mic and try again.');
+    const { text, snapped } = snapNames(heard, voiceNames(), hubCfg.voiceAliases);
+    hub.fromYou(hub.place(CONDUCTOR), 'conductor', text, [], { voice: true, ...(snapped.length ? { heard } : {}) });
+    return { text, ...(snapped.length ? { heard } : {}), seconds: r.seconds, ms: r.ms };
   },
 
   'POST /api/pick': ({ project, picks }) => ({ picked: hub.pickMany(hub.project(project), picks).map(d => d.id) }),
@@ -419,7 +451,7 @@ async function handle(req, res) {
         ctx.device = guard.deviceFor(req.headers, { local });
         if (!ctx.device) return send(res, 401, { error: NOT_PAIRED, pair: true });
       }
-      const input = req.method === 'POST' ? await body(req, BODY_LIMIT[url.pathname]) : Object.fromEntries(url.searchParams);
+      const input = req.method === 'POST' ? await body(req, BODY_LIMIT[url.pathname], TOO_BIG[url.pathname]) : Object.fromEntries(url.searchParams);
       // Big changes ask for Face ID or Windows Hello, from the phone and from this PC alike (Matt, 2026-11-12). Not with
       // the guard off; and showing a code to pair the phone needs none on the PC. A PC with no passkey yet sets one up
       // with that same prompt (no code); where Windows Hello is not available it goes ahead, with a push.

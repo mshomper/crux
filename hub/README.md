@@ -156,6 +156,14 @@ Pin a thread (the pin in its header, or on its row in the list when you point at
 
 When the hub runs more than one project, **All projects** sits above the project switcher (decision 42). It opens as a column: a count bar for everything waiting in every project, then the waiting cards grouped by project, then every orchestrator and agent with its model colour, state, model chip, context ring (the orchestrator's has a gold mark where it hands off) and a red count when something in its thread waits for you. Answer a card right there: it goes to that project's agent or decision without switching project. Click an agent, or Open thread on a question, to go to that thread in its project; the arrow beside a project's name opens the project. All projects has no message box. Pin it like any thread; it stays pinned when you switch projects. The live map's Needs you counter shows the total across projects and opens All projects. On a phone the hub still opens on the project's Needs you (decision 32); All projects is at the top of the thread list. The roll-up page of every project's decision records is the **All decisions** button.
 
+## Talking to the Conductor (voice)
+
+Decision 61 A. In All projects, the speaker icon in the header is the voice switch (off by default) and the mic sits beside Send. Tap the mic, say it, tap again: your words go straight into the Conductor chat as your message, with a small mic mark (hover it to see what was heard when a project or agent name was snapped to a known one). Fix it with a follow-up if it was misheard. The mic is open only between your two taps.
+
+Everything runs on the hub's PC in a small Python helper, on the CPU: nothing is sent anywhere else and no sound is stored. The helper runs only while voice is on. The first time, the speaker icon on the PC offers **Set up** (about 1 GB, once; or `npm run voice-setup` in this folder). It needs [uv](https://docs.astral.sh/uv/) and puts everything in `%USERPROFILE%\.crux-hub\voice`; removing voice is deleting that folder. The phone uses voice once the PC has it (paired, as for any change). For names no ear will get, add `"voiceAliases": { "field lab": "f1eld.lab" }` to `~/crux/hub.json`.
+
+Credits: speech recognition is NVIDIA [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) (CC BY 4.0) via [onnx-asr](https://github.com/istupakov/onnx-asr) (MIT); the voice is [Phonon 31M](https://huggingface.co/gradium/phonon-31m-en) by Gradium (Apache 2.0), voice Imogen.
+
 ## Pictures and files in threads
 
 Paste, drop or attach files in any thread, in every open column (the clip beside the message box opens a file picker). Each column keeps its own tray until you send.
