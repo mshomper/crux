@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick what happens when the Conductor has a request for a project with no orchestrator running. I recommend A: its request starts a fresh orchestrator, which reads the latest handoff first and then answers. Confidence: medium.",
  "for_you": [
   "The Conductor can reach every project, even one whose orchestrator retired or never started; you no longer write in a project's thread just to wake it",
@@ -75,9 +75,9 @@
  "recommendation": "A makes every project reachable through the Conductor without paying for idle orchestrators, and the new orchestrator still follows its own project's rules and handoff.",
  "confidence": "lean",
  "change_mind": "If you want projects warm and ready at all times, take B.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [],

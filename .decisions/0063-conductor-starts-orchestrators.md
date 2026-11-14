@@ -1,7 +1,7 @@
 # 0063 May the Conductor start a project's orchestrator?
 
-- Status: open
-- Date: 2026-11-14
+- Status: decided
+- Date: 2026-11-14, decided 2026-11-14
 - Lenses: architecture
 - Builds on: 0010, 0016, 0055, 0060, 0062
 
@@ -15,13 +15,17 @@ For you:
 - The new orchestrator works under that project's own rules and reads its handoff first, as if you had woken it
 - Hard to undo: Changes one limit in decision 55 (the Conductor could not start orchestrators); it still can't start workers, retire anyone, merge or push
 
+## Decision
+
+**A: A Conductor request starts it.** When the Conductor briefs a project with no orchestrator running, the hub starts one. It reads the project's latest handoff (decision 16) and board index first, then handles the request and replies (decision 62). Nothing starts until the Conductor has something to ask.
+
 ## Context
 
 Matt: when an orchestrator retires it writes a handoff, but the successor only starts when he writes in that project's thread, so the Conductor can't wake it. Today a Conductor brief to a project without an orchestrator is refused on purpose (decision 55 A listed 'can't start or stop a project's orchestrator' as its limit), and the life project shows the cost: a tidy-up couldn't be sent. Decision 10 has the hub start the successor when an orchestrator retires; in practice a successor waits for a first message. Decision 62 adds replies to Conductor requests, so a started orchestrator also answers back.
 
 ## Options
 
-### A: A Conductor request starts it (recommended)
+### A: A Conductor request starts it (chosen) (recommended)
 
 When the Conductor briefs a project with no orchestrator running, the hub starts one. It reads the project's latest handoff (decision 16) and board index first, then handles the request and replies (decision 62). Nothing starts until the Conductor has something to ask.
 - Pro: Costs nothing until needed
