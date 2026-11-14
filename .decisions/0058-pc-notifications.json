@@ -8,7 +8,7 @@
   "ui",
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how notices are split between the desktop app and your phone. I recommend A: if you're at the PC, the PC shows it; if you've been away from the PC for 5 minutes, or a card is still waiting 3 minutes after the PC notice, the phone gets it too. Confidence: medium.",
  "for_you": [
   "Windows notices from the Crux Hub app for the same cards the phone gets today (permissions that are yours, decisions to pick, agent questions); clicking one opens that exact card",
@@ -76,9 +76,9 @@
  "recommendation": "A keeps the phone quiet while you work at the desk, but still reaches you if you walk away with a card waiting.",
  "confidence": "lean",
  "change_mind": "If the second notice after 3 minutes annoys you, go B; if you miss notices, go C.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [
