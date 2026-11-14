@@ -135,7 +135,7 @@ test('hard cap: at most 6 automatic wakes an hour; cards still go up, your messa
 test('a summary answering a Conductor brief still brings its question to you: anything that asks you is never skipped', async () => {
   const { hub, c, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
-  assert.equal(c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.'), "Sent to alpha's orchestrator.");
+  assert.match(c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.'), /^Sent to alpha's orchestrator as request req-001\./);
   hub.postSummary(a, orch, summary({ done: ['scoped it'], questions: ['Red or amber for the frost warning?'] }));
   await sleep(80);
   assert.equal(c.home.log.ofType('cards').length, 1);   // the card is in the chat, so the digest and its notice cover it too
@@ -169,12 +169,12 @@ test('a Conductor brief never counts as your answer: the orchestrator\'s questio
   assert.equal(open(), 0);
 });
 
-test('briefing a project with no orchestrator starts none: it is refused, and the Conductor is told why', async () => {
+test('briefing a project with no orchestrator starts one (decision 63 A; detail in conductor-replies.test.mjs)', async () => {
   const { c, b } = await setup();
   const out = c.toOrchestrator('beta', 'conductor-1', 'Please look.');
-  assert.match(out, /beta has no orchestrator running, and the Conductor cannot start one\. Nothing was sent/);
-  assert.equal(b.orchestrator(), null);
-  assert.equal(b.log.events.some(e => e.type === 'message'), false);
+  assert.match(out, /beta had no orchestrator running, so orchestrator-1 was started/);
+  assert.equal(b.orchestrator()?.name, 'orchestrator-1');
+  assert.ok(b.log.events.some(e => e.type === 'message' && e.conductor && e.request === 'req-001'));
 });
 
 test('waiting update lines survive a restart; due reminders are done only once delivered', async () => {
@@ -218,7 +218,7 @@ test('message_agent reaches the project\'s orchestrator only, marked as from the
   hub.ensureOrchestrator(a);
   c.fromYou('Ask alpha to look at the build');
   const out = c.toOrchestrator('alpha', 'conductor-1', 'Please look at the build.');
-  assert.equal(out, "Sent to alpha's orchestrator.");
+  assert.match(out, /^Sent to alpha's orchestrator as request req-\d+\. Its reply will come back to you here\.$/);
   const [to, msg] = sent.at(-1);
   assert.equal(to, 'orchestrator-1');
   assert.match(msg, /^\[From the Conductor, conductor-1, on/);

@@ -8,13 +8,15 @@ import { rulesEntry, CONNECTOR_SERVERS } from './permission-rules.mjs';
 import { UsageLedger, baselineFor } from './usage.mjs';
 import { isNoOutputNudge } from './conductor.mjs';
 
-class Inbox {
-  constructor() { this.items = []; this.waiters = []; this.closed = false; }
-  push(x) { const w = this.waiters.shift(); if (w) w(); this.items.push(x); }
+// meta: what the hub wants to know about a message once Claude Code takes it in (onYield): a Conductor brief's request
+// id (decision 62), so a reminder goes only for a brief really delivered.
+export class Inbox {
+  constructor() { this.items = []; this.waiters = []; this.closed = false; this.onYield = null; }
+  push(x, meta = null) { const w = this.waiters.shift(); if (w) w(); this.items.push({ x, meta }); }
   close() { this.closed = true; for (const w of this.waiters.splice(0)) w(); }
   async *[Symbol.asyncIterator]() {
     while (true) {
-      if (this.items.length) { yield this.items.shift(); continue; }
+      if (this.items.length) { const { x, meta } = this.items.shift(); if (meta) this.onYield?.(meta); yield x; continue; }
       if (this.closed) return;
       await new Promise(r => this.waiters.push(r));
     }
@@ -77,7 +79,8 @@ export class Agent {
     this.hub.emit({ type: 'agent_state', project: this.project.name, thread: this.thread, agent: this.name, state, contextPct: this.contextPct });
   }
 
-  send(textMsg, attachments = []) {
+  // meta (optional): { request } for a Conductor brief (decision 62); noted as delivered once Claude Code takes it in.
+  send(textMsg, attachments = [], meta = null) {
     if (this.state === 'retired' && !this.retiring) throw new Error(`${this.name} has retired`);
     // A test hub: the message is in the log, but no Claude Code process starts.
     if (this.hub.noAgents) {
@@ -86,8 +89,14 @@ export class Agent {
     }
     const message = this.userMessage(this.withNotes(textMsg), attachments);   // built first: a missing image fails before start-up
     if (!this.q) this.start();
-    this.inbox.push(message);
+    this.inbox.push(message, meta);
     this.setState('working');
+  }
+
+  // Decision 62: a Conductor brief reached Claude Code as input for this agent. Logged with the agent's name, so a
+  // successor is never reminded of a brief it never had.
+  noteDelivered(meta) {
+    if (meta?.request) this.project.log.append('brief_delivered', { request: meta.request, agent: this.name });
   }
 
   // Notes the hub wants this agent to read, without waking it for them: they ride in front of its next message.
@@ -152,6 +161,7 @@ export class Agent {
   start() {
     const p = this.project;
     this.inbox = new Inbox();
+    this.inbox.onYield = meta => this.noteDelivered(meta);
     this.beginRun();
     const options = this.queryOptions();
     // Decision 54 B: the desktop app's hub runs the Claude Code its setup screen downloaded (or one installed on the
@@ -209,6 +219,9 @@ export class Agent {
         this.project.log.append('agent_session', { agent: this.name, sessionId: m.session_id, model: m.model, effort: this.effort, agentType: this.type });
       }
     } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
+      // Decision 62: when this turn started (its first output since the last result), so the reminder knows which
+      // briefs were delivered before it.
+      if (!this.inTurn) { this.inTurn = true; this.turnStartedAt = Date.now(); }
       const blocks = m.message?.content || [];
       const said = blocks.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
       if (said && !this.quietTurn) this.hub.agentSaid(this.project, this, said);
@@ -219,6 +232,9 @@ export class Agent {
       this.hub.usage?.rateLimit(m.rate_limit_info, this.project);
     } else if (m.type === 'result') {
       this.quietTurn = false;
+      // The turn that just ended: its start, and whether it ended in an error (no reminder then).
+      this.lastTurn = { start: this.inTurn ? this.turnStartedAt : Date.now(), end: Date.now(), error: !!m.is_error && m.subtype !== 'success' };
+      this.inTurn = false;
       this.logUsage(m);
       try { this.contextPct = Math.round((await q.getContextUsage()).percentage); } catch { /* older CLI */ }
       if (/not logged in/i.test(m.result || '')) {
