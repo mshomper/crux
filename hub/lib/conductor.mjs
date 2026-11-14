@@ -27,6 +27,7 @@ export const CONDUCTOR_ROLE = 'conductor';
 export const WAKE_MS = 2 * 60 * 1000;           // updates within this long of the first one wake it once
 export const MAX_AUTO_WAKES = 6;                 // automatic wakes (projects' updates) an hour at most
 const HOUR_MS = 60 * 60 * 1000;
+export const BRIEF_ANSWER_MS = 30 * 60 * 1000;   // an orchestrator's first summary this soon after a brief answers it
 const REMINDER_CHECK_MS = 60 * 1000;
 const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
 const EVENTS_SHOWN = 400;                        // the page gets this many of its latest events
@@ -149,15 +150,19 @@ export class Conductor {
     return null;
   }
 
-  // Does this orchestrator summary answer a Conductor brief? Yes when the last message that reached the orchestrator
-  // thread from outside it (yours, or a Conductor brief) before the summary was a Conductor brief.
+  // Does this orchestrator summary answer a Conductor brief? Only the FIRST orchestrator summary after a brief, within
+  // BRIEF_ANSWER_MS of it, and only when the brief was the last message into that thread from outside (not yours).
+  // Later summaries wake it as usual: worker results and permission requests leave no message in the thread, so
+  // "the last outside message" alone would keep an old brief in force all day.
   answersBrief(p, ev) {
     if (!p) return false;
     const orchs = new Set([...p.agents.values()].filter(a => a.role === 'orchestrator').map(a => a.name));
-    const evs = p.log.events, i = evs.indexOf(ev);
+    const evs = p.log.events, i = evs.findIndex(e => e.id === ev.id);   // ev is the hub's copy of the logged event
     const before = i < 0 ? evs : evs.slice(0, i);
-    const last = before.findLast(e => e.type === 'message' && e.thread === 'orchestrator' && !orchs.has(e.from));
-    return !!last?.conductor;
+    const j = before.findLastIndex(e => e.type === 'message' && e.thread === 'orchestrator' && !orchs.has(e.from));
+    const brief = before[j];
+    if (!brief?.conductor || Date.parse(ev.ts) - Date.parse(brief.ts) > BRIEF_ANSWER_MS) return false;
+    return !before.slice(j + 1).some(e => e.type === 'summary' && e.thread === 'orchestrator');
   }
 
   // Wakes need the switch on (settings conductorWakes, on by default) and more than one project: with one, the page
