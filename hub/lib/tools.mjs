@@ -112,9 +112,12 @@ export function cruxTools(hub, project, agent) {
         async ({ reason }) => out(await restartHub(hub, project, agent, reason))),
 
       // Decision 62: the return path for a Conductor request ([From the Conductor ... request req-007, reply expected]).
-      tool('reply_to_conductor', t('Answer a request the Conductor sent you, by its id (req-007). Plain and short: it goes to the Conductor and {{who}} only, never to another project. Details stay in your own thread.'),
-        { request_id: z.string().describe('The id from the brief, e.g. req-007.'), text: z.string().min(1).max(2000).describe('Your answer, plain and short.') },
-        async ({ request_id, text: msg }) => out(hub.conductor ? hub.conductor.replyFrom(project, agent, request_id, msg) : 'This hub has no Conductor.')),
+      tool('reply_to_conductor', t('Answer a request the Conductor sent you, by its id (req-007). Plain and short: it goes to the Conductor and {{who}} only, never to another project. Details stay in your own thread. It shows to {{who}} as one folded line unless for_matt is true.'),
+        {
+          request_id: z.string().describe('The id from the brief, e.g. req-007.'), text: z.string().min(1).max(2000).describe('Your answer, plain and short.'),
+          for_matt: z.boolean().optional().default(false).describe(t('true only when {{who}} must read it personally (a question for {{who}}, or something {{who}} must see): it then shows in full.'))
+        },
+        async ({ request_id, text: msg, for_matt }) => out(hub.conductor ? hub.conductor.replyFrom(project, agent, request_id, msg, { forMatt: !!for_matt }) : 'This hub has no Conductor.')),
 
       tool('message_agent','Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },

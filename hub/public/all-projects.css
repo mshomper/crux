@@ -106,15 +106,33 @@ html[data-hud] .hub-threads{border-bottom-color:var(--hud-line)}
 .cd-item .opt.offer{border-color:var(--hud-cyan);box-shadow:0 0 0 1px var(--hud-cyan),0 0 14px -4px rgba(111,227,255,.6)}
 .cd-cards-done{opacity:.75}
 /* decision 62: replies from orchestrators in the Conductor chat, and the request mark in an orchestrator thread */
-.cd-reply{display:flex;flex-direction:column;gap:4px;min-width:0;padding:8px 10px;border-left:2px solid var(--hud-cyan);background:rgba(111,227,255,.04);border-radius:2px}
-.cd-reply>.icon{display:none}
-.cd-reply-k{font:600 11px/1.3 var(--mono);letter-spacing:.08em;color:var(--hud-ice)}
-.cd-reply-t{margin:0;font-size:13px;line-height:1.5;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere}
+/* Matt, 0.20.2: one folded line per reply; a tap opens it. A reply written to Matt directly shows in full. */
+.cd-reply-wrap{min-width:0}
+.cd-reply-line{display:flex;align-items:center;gap:8px;width:100%;min-width:0;min-height:30px;padding:4px 8px;border:0;border-left:2px solid var(--hud-line);
+  background:transparent;color:var(--muted);font:inherit;text-align:left;cursor:pointer;border-radius:2px}
+.cd-reply-line:hover{background:rgba(111,227,255,.05);border-left-color:var(--hud-cyan)}
+.cd-reply-line:focus-visible{outline:none;box-shadow:0 0 0 2px var(--hud-cyan)}
+.cd-reply-line .icon{flex:none;width:12px;height:12px;color:var(--hud-dim);transform:rotate(-90deg)}
+.cd-reply-wrap.open .cd-reply-line .icon{transform:none}
+.cd-rl-k{flex:none;font:600 11px/1 var(--mono);letter-spacing:.08em;color:var(--hud-ice);white-space:nowrap}
+.cd-rl-t{flex:1;min-width:0;font-size:12px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cd-reply-line .time{flex:none;font:500 11px/1 var(--mono);color:var(--faint)}
+.cd-reply-wrap .cd-reply-t{margin:2px 0 4px 10px;padding:6px 10px;border-left:2px solid var(--hud-cyan);background:rgba(111,227,255,.04);font-size:13px;line-height:1.5;color:var(--text);overflow-wrap:anywhere}
+.cd-reply-t>:first-child{margin-top:0}.cd-reply-t>:last-child{margin-bottom:0}
+.cd-reply.for-you{display:flex;flex-direction:column;gap:6px;min-width:0;padding:10px 12px;border:1px solid var(--hud-edge2,var(--line2));border-left:3px solid var(--hud-cyan);background:rgba(111,227,255,.06);border-radius:4px}
+.cd-reply.for-you .cd-reply-k{display:flex;align-items:center;gap:6px;font:600 11px/1.3 var(--mono);letter-spacing:.08em;color:var(--hud-ice)}
+.cd-reply.for-you .cd-reply-k .icon{width:13px;height:13px;color:var(--hud-cyan)}
+.cd-reply.for-you .cd-reply-k>span:not(.time){white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cd-reply.for-you .time{margin-left:auto;flex:none;white-space:nowrap;color:var(--faint);font-weight:500}
+.cd-reply.for-you .cd-reply-t{font-size:14px;line-height:1.5;color:var(--text);overflow-wrap:anywhere}
+.cd-digest-replies{display:flex;flex-direction:column;gap:2px;min-width:0}
+.cd-digest-replies .cd-k{margin:4px 0 2px}
 .chip.req{font:600 10px/1 var(--mono);letter-spacing:.08em;color:var(--warn,#f5c96a);border:1px solid currentColor;border-radius:3px;padding:2px 5px}
 .chip.req.done{color:var(--good)}
 @media (max-width:720px){
   .cd-cards-k{flex-wrap:wrap;row-gap:8px}
   .cd-cards-k .btn{margin-left:0}
+  .cd-reply-line{min-height:44px}
 }
 
 /* ---------- phone: one line per agent, state as a dot, 44 px targets ---------- */

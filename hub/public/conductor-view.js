@@ -42,6 +42,17 @@ export function applyEvent(c, ev) {
 const SHOWS = new Set(['message', 'summary', 'notice', 'visual', 'lesson_proposed', 'wake', 'reminder', 'cards', 'reply']);
 // An orchestrator's reply to a Conductor request (decision 62), as its one-line head in the chat.
 export const replyHead = ev => `${ev.project} · ${ev.from} replied to ${ev.request}`;
+// Matt (0.20.2): a reply shows as ONE folded line, "crux replied · req-012" and its first few words; a tap opens it.
+// One written to Matt directly (forMatt) shows in full instead.
+export const replyFold = ev => `${ev.project} replied · ${ev.request}`;
+export function replyGist(text, max = 72) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  return `${cut.slice(0, cut.lastIndexOf(' ') > max / 2 ? cut.lastIndexOf(' ') : max).replace(/[\s,.;:]+$/, '')}…`;
+}
+// The digest that took a reply along, if any: there it is drawn, so the chat does not draw it a second time.
+export const digestOf = (events, replyId) => (events || []).find(e => e.type === 'cards' && e.digest && (e.replies || []).includes(replyId)) || null;
 export const threadItems = c => (c?.events || []).filter(e => e.thread === CONDUCTOR_THREAD && SHOWS.has(e.type));
 
 // ---------- cards in its chat (decision 60 A) ----------
