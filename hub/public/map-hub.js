@@ -8,6 +8,7 @@
 
 import { radialReserve, clamp } from './map-layout.js';
 import { modelLabel } from './models.js';
+import { nameParts } from './agent-name.js';
 
 const TAU = Math.PI * 2;
 const DEG = Math.PI / 180;
@@ -40,7 +41,9 @@ export function hubProjects(groups, { retireAt = 60, waitingOf = () => 0 } = {})
     return {
       name: g.name, count: g.count || 0, retireAt: Number(g.p?.retireAt) || retireAt,
       model: orch ? orch.model || orch.modelSeen || null : null, effort: orch?.effort || null,
-      state: orch ? orch.state || 'asleep' : 'vacant', ctx: orch?.contextPct ?? null, workers
+      state: orch ? orch.state || 'asleep' : 'vacant', ctx: orch?.contextPct ?? null, workers,
+      // the orchestrator shows as the project and a small "vN" chip (agent-name.js); holder keeps its internal name
+      holder: orch?.name || null, v: orch ? nameParts(orch.name).v : null
     };
   });
 }
@@ -60,7 +63,7 @@ export function labelLines(p) {
 // The hover title of a project's robot, bay or label.
 export function projectTitle(p) {
   const l = labelLines(p);
-  return `${p.name}: ${l.waiting}. ${l.model}; ${l.agents}. Opens its orchestrator`;
+  return `${p.name}${p.v != null ? ` v${p.v}` : ''}: ${l.waiting}. ${l.model}; ${l.agents}. Opens its orchestrator${p.holder ? ` (${p.holder})` : ''}`;
 }
 
 // Angles are canvas radians (0 = right, clockwise). The first sector starts just after the bottom, so a gap always
@@ -236,6 +239,6 @@ export function hubFeed(projects) {
   const rank = p => (p.count ? 0 : busy(p.state) || p.workers.some(w => busy(w.state)) ? 1 : 2);
   return projects.map((p, i) => ({ p, i })).sort((a, b) => rank(a.p) - rank(b.p) || a.i - b.i).map(({ p }) => {
     const l = labelLines(p);
-    return { name: p.name, tone: p.count ? 'alert' : busy(p.state) ? 'reply' : 'activity', text: p.count ? l.waiting : `${l.agents} · ${p.ctx == null ? 'context –' : `${Math.round(p.ctx)}%`}` };
+    return { name: p.name, v: p.v ?? null, holder: p.holder || null, tone: p.count ? 'alert' : busy(p.state) ? 'reply' : 'activity', text: p.count ? l.waiting : `${l.agents} · ${p.ctx == null ? 'context –' : `${Math.round(p.ctx)}%`}` };
   });
 }

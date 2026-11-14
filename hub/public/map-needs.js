@@ -3,6 +3,7 @@
 // Allow / Always allow / Deny. The buttons carry the same data-approve / data-deny attributes as
 // the cards in the chat, so app.js answers them exactly the same way.
 
+import { nameHtml, nameParts } from './agent-name.js';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ICON = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
@@ -39,6 +40,7 @@ export class NeedsPopover {
   // hub: with more than one project, { approvals (each with its project), total } for every project (decision 42):
   // the popover then matches the strip's counter and its link opens All projects.
   set(project, pending, total, hub = null) {
+    this.pname = project?.name || '';   // an orchestrator asking shows as its project and "vN"
     const done = new Set(project.events.filter(e => e.type === 'approval_result').map(e => e.approval));
     const approvals = hub ? hub.approvals : project.events.filter(e => e.type === 'approval' && pending.has(e.approval) && !done.has(e.approval));
     const all = hub ? hub.total : total;
@@ -75,7 +77,7 @@ export class NeedsPopover {
       const plain = ev.summary?.plain || `use ${ev.tool}`;
       const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
       return `<article class="np-card">
-        <div class="np-who">${esc(ev.agent)}${this.multi && ev.project ? ` · ${esc(ev.project)}` : ''}${desc ? '' : ' wants to'}</div>
+        <div class="np-who">${nameHtml(ev.agent, ev.project || this.pname)}${this.multi && ev.project && nameParts(ev.agent).v == null ? ` · ${esc(ev.project)}` : ''}${desc ? '' : ' wants to'}</div>
         <div class="np-what">${esc(desc || plain[0].toLowerCase() + plain.slice(1))}</div>
         ${tags ? `<div class="np-tags">${tags}</div>` : ''}
         <div class="np-acts">

@@ -34,6 +34,10 @@ async function setup({ projects = ['alpha', 'beta'], settings = {} } = {}) {
   return { hub, c: hub.conductor, root, a: hub.project('alpha'), b: hub.project(projects[1] || 'alpha') };
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Decision 64: while you are here the Conductor stays silent about cards (they are in Needs you). These tests mark you
+// away while the cards come, then back, when the return digest takes them up.
+const away = hub => { hub.presence = () => false; };
+const back = (hub, c) => { hub.presence = () => true; c.presenceReport(); };
 
 test('lives in the hub state folder, not in a project; no Conductor unless asked for', async () => {
   const { hub, c, root } = await setup();
@@ -56,15 +60,18 @@ test('your message starts conductor-1 in its own thread and reaches it at once',
 test('updates are batched: several summaries and cards within the window wake it once', async () => {
   const { hub, c, a, b } = await setup();
   const orch = hub.ensureOrchestrator(a);
+  away(hub);
   hub.postSummary(a, orch, summary({ done: ['x'], questions: ['Merge the lens picker today?'] }));
   hub.postSummary(b, hub.ensureOrchestrator(b), summary({ questions: ['Ship it?'] }));
   hub.approvals.set('ap1', { p: b });   // a permission card really waiting (the wake checks it still is)
   b.log.append('approval', { thread: 'w1', approval: 'ap1', agent: 'w1', tool: 'Bash', input: {}, routedTo: null });
   sent.length = 0;
   await sleep(80);
+  assert.equal(sent.filter(([n]) => n === 'conductor-1').length, 0, 'away: held for the digest, no wake');
+  back(hub, c);
   const wakes = sent.filter(([n]) => n === 'conductor-1');
   assert.equal(wakes.length, 1);
-  assert.match(wakes[0][1], /\[Hub: new cards for/);
+  assert.match(wakes[0][1], /\[Hub: digest after time away for/);
   assert.match(wakes[0][1], /alpha · question:\S+ · question from orchestrator-1: Merge the lens picker today\?/);
   assert.match(wakes[0][1], /beta · question:\S+ · question from orchestrator-1: Ship it\?/);
   assert.match(wakes[0][1], /beta · approval:ap1 · permission: w1 wants to use Bash/);
@@ -73,7 +80,25 @@ test('updates are batched: several summaries and cards within the window wake it
   assert.equal(cards.length, 1);
   assert.deepEqual(cards[0].items.map(i => `${i.project} ${i.card.split(':')[0]}`), ['alpha question', 'beta approval', 'beta question']);
   assert.equal(cards[0].thread, CONDUCTOR_THREAD);
-  assert.equal(cards[0].digest, undefined);
+  assert.equal(cards[0].digest, 'return');
+});
+
+test('decision 64: while you are here the Conductor stays silent about new cards: no line, no post, no wake', async () => {
+  const { hub, c, a, b } = await setup();
+  hub.presence = () => true;
+  hub.postSummary(a, hub.ensureOrchestrator(a), summary({ questions: ['Merge the lens picker today?'], decisions_needed: [4] }));
+  hub.approvals.set('ap9', { p: b });
+  b.log.append('approval', { thread: 'w1', approval: 'ap9', agent: 'w1', tool: 'Bash', input: {}, routedTo: null });
+  await sleep(80);
+  assert.equal(c.pending.length, 0);
+  assert.equal(c.home.log.ofType('cards').length, 0, 'nothing posted in its chat: the cards are in Needs you');
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0, 'no turn');
+  assert.equal(c.holdsCard({ project: 'alpha', card: `question:${a.log.events.findLast(e => e.type === 'summary').id}` }), false, 'so its notice goes as usual');
+  // Lines left from before (a restart, or an older hub) that did not come while you were away are dropped quietly.
+  c.pending.push({ line: '- alpha: old line', cause: { project: 'alpha', summary: a.log.events.findLast(e => e.type === 'summary').id }, ts: Date.now() });
+  c.flush();
+  assert.equal(c.home.log.ofType('cards').length, 0);
+  assert.ok(c.home.log.events.some(e => e.type === 'wake_taken' && /you are here/.test(e.why)));
 });
 
 test('routine summaries (worker or orchestrator), a routed request and its own events do not wake it', async () => {
@@ -100,15 +125,17 @@ test('no wakes from projects with the switch off, or with a single project', asy
 test('cards that come while it works go up at once; its notes on them come at the end of its turn, not a second wake', async () => {
   const { hub, c, a } = await setup();
   c.fromYou('Brief me');   // now working
+  away(hub);
   hub.postSummary(a, hub.ensureOrchestrator(a), summary({ questions: ['Which lens picker ships first?'] }));
   await sleep(80);
+  back(hub, c);
   assert.equal(sent.filter(([n]) => n === 'conductor-1').length, 1);   // still only your message
   assert.equal(c.home.log.ofType('cards').length, 1);                   // the card is in its chat already
   const holder = c.holder();
   holder.state = 'idle';
   hub.onIdle(c.home, holder);
   assert.equal(sent.filter(([n]) => n === 'conductor-1').length, 2);
-  assert.match(sent.at(-1)[1], /\[Hub: new cards for/);
+  assert.match(sent.at(-1)[1], /\[Hub: digest after time away for/);
   assert.match(sent.at(-1)[1], /alpha · question:\S+ · question from orchestrator-1: Which lens picker ships first\?/);
 });
 
@@ -117,8 +144,10 @@ test('hard cap: at most 6 automatic wakes an hour; cards still go up, your messa
   const orch = hub.ensureOrchestrator(a);
   for (let i = 0; i < 6; i++) c.home.log.append('wake', { thread: CONDUCTOR_THREAD, agent: 'conductor-1', text: 'x', auto: true });
   sent.length = 0;
+  away(hub);
   hub.postSummary(a, orch, summary({ questions: ['Seventh?'] }));
   await sleep(80);
+  back(hub, c);
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);   // no turn for its notes past the cap
   assert.equal(c.home.log.ofType('cards').length, 1);                         // the card is in its chat all the same
   assert.equal(c.pending.length, 0);
@@ -136,8 +165,10 @@ test('a summary answering a Conductor brief still brings its question to you: an
   const { hub, c, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
   assert.match(c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.'), /^Sent to alpha's orchestrator as request req-001\./);
+  away(hub);
   hub.postSummary(a, orch, summary({ done: ['scoped it'], questions: ['Red or amber for the frost warning?'] }));
   await sleep(80);
+  back(hub, c);
   assert.equal(c.home.log.ofType('cards').length, 1);   // the card is in the chat, so the digest and its notice cover it too
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
   // A summary that asks nothing still wakes nothing.
@@ -152,8 +183,10 @@ test('an old brief does not silence a project: a first summary more than 30 minu
   c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.');
   const brief = a.log.events.findLast(e => e.conductor);
   brief.ts = new Date(Date.now() - 5 * 3600e3).toISOString();   // the brief was at 09:00, the question at 14:00
+  away(hub);
   hub.postSummary(a, orch, summary({ questions: ['Worker w1 is done: merge it?'] }));
   await sleep(80);
+  back(hub, c);
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
 });
 
@@ -179,6 +212,7 @@ test('briefing a project with no orchestrator starts one (decision 63 A; detail 
 
 test('waiting update lines survive a restart; due reminders are done only once delivered', async () => {
   const { hub, c, a, root } = await setup();
+  away(hub);
   hub.postSummary(a, hub.ensureOrchestrator(a), summary({ questions: ['?'] }));
   assert.equal(c.pending.length, 1);
   clearTimeout(c.timer); c.timer = null;   // "restart" before the window ends
@@ -407,15 +441,17 @@ test('a question lives in one card: a repeat is hidden while the first card is o
   const Q = 'Should the preview update while dragging, or only on release?';
   hub.postSummary(a, w, summary({ questions: [Q] }));
   // The orchestrator repeats it (case and punctuation differ) and asks one of its own: nothing is dropped from the log.
-  hub.postSummary(a, orch, summary({ questions: ['should the preview update while dragging or only on release', 'Ship the lens picker on Friday or wait?'] }));
+  hub.postSummary(a, orch, summary({ questions: ['should the preview update while dragging or only on release ?', 'Ship the lens picker on Friday or wait?'] }));
   assert.equal(a.log.events.findLast(e => e.type === 'summary').questions.length, 2);
   const open = () => openQuestions(a.log.events).map(q => [q.from, q.open.map(x => x.text)]);
   assert.deepEqual(open(), [['w1', [Q]], ['orchestrator-1', ['Ship the lens picker on Friday or wait?']]]);
   const note = repeatsIn(a.log.events).get(a.log.events.findLast(e => e.type === 'summary').id);
   assert.deepEqual(note.map(r => [r.i, r.of]), [[0, 'w1']]);   // the "also in w1's card" note
-  // The worker's card closes without your answer (its orchestrator writes to it): the repeat shows again by itself.
+  // The worker's card closes without your answer (its orchestrator writes to it): the repeat shows again by itself
+  // (only open cards hold repeats; its notice is skipped when w1's already went: fewer-notices.test.mjs).
   hub.orchestratorToWorker(a, orch, 'w1', 'Hold on, I am asking Matt.');
-  assert.deepEqual(open(), [['orchestrator-1', ['should the preview update while dragging or only on release', 'Ship the lens picker on Friday or wait?']]]);
+  assert.deepEqual(open(), [['orchestrator-1', ['should the preview update while dragging or only on release ?', 'Ship the lens picker on Friday or wait?']]]);
+  assert.ok(w);
   // The Conductor's own summary is never hidden against a project's cards (its prompt keeps it from re-asking).
   const { hub: h2, c } = await setup();
   const cd = { name: 'conductor-1', thread: CONDUCTOR_THREAD, role: 'conductor' };
@@ -525,6 +561,7 @@ test('one card per decision, and a pick takes every copy away at once', async ()
 test('no wake for cards you settled before it came: no turn, no reply; one still waiting wakes it with that line only', async () => {
   const { hub, c, a, b } = await setup();
   const orch = hub.ensureOrchestrator(a);
+  away(hub);
   hub.postSummary(a, orch, summary({ questions: ['Merge the lens picker today?'] }));
   hub.approvals.set('ap7', { p: b });
   b.log.append('approval', { thread: 'w1', approval: 'ap7', agent: 'w1', tool: 'Bash', input: {}, routedTo: null });
@@ -545,6 +582,7 @@ test('no wake for cards you settled before it came: no turn, no reply; one still
   hub.postSummary(a, orch, summary({ questions: ['Ship the lens picker on Friday or wait?'] }));
   hub.dismissQuestion(a, a.log.events.findLast(e => e.type === 'summary').id);
   await sleep(80);
+  back(hub, c);
   const wakes = sent.filter(([n]) => n === 'conductor-1');
   assert.equal(wakes.length, 1);
   assert.match(wakes[0][1], /beta · question:\S+ · question from orchestrator-1: Pause beta tonight\?/);
@@ -556,6 +594,7 @@ test('a worker question its orchestrator answers within the window wakes nothing
   const { hub, c, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
   const w = hub.startWorker(a, 'w1', 'task');
+  away(hub);
   hub.postSummary(a, w, summary({ questions: ['Use the cyan or the violet focus ring?'] }));
   assert.equal(c.pending.length, 1);
   a.log.append('message', { thread: w.thread, from: orch.name, text: 'Cyan.' });
