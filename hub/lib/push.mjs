@@ -91,18 +91,25 @@ export function settledCard(ev) {
 }
 
 export class Push {
-  constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), subject = process.env.CRUX_HUB_VAPID_SUBJECT || 'mailto:crux-hub@example.com', sender = null, timers = { setTimeout, clearTimeout } } = {}) {
+  constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), subject = process.env.CRUX_HUB_VAPID_SUBJECT || 'mailto:crux-hub@example.com', sender = null, timers = { setTimeout, clearTimeout }, log = s => console.log(`[notices] ${s}`) } = {}) {
     this.dir = dir;
     this.subject = subject;
     this.sender = sender; // web-push, loaded on first use so tests need not touch it
     this.timers = timers;
+    this.log = log;             // one line per card: where it went, or why it was held (card ids only, no text)
     this.presences = new Map();
     this.sent = new Set();
     this.settled = new Set();   // cards notified about and then settled: cleared from the phone with the next push
     this.desktops = new Map();  // decision 58: desktop apps listening on this PC: client -> { write, idleMs, locked, ts }
     this.sentDesk = new Set();
+    this.ctx = null;            // the hub's live state, from the latest handle() or resume()
     this.subsFile = join(dir, 'push-subscriptions.json');
     this.subs = existsSync(this.subsFile) ? safeJson(this.subsFile, []) : [];
+    // PC notices whose 3-minute phone follow-up is still due: card id -> { card, due }. Kept on disk, so a hub restart
+    // inside those 3 minutes does not lose the follow-up (resume() picks them up).
+    this.followFile = join(dir, 'desk-followups.json');
+    const saved = existsSync(this.followFile) ? safeJson(this.followFile, []) : [];
+    this.follow = new Map((Array.isArray(saved) ? saved : []).filter(f => f?.card?.card && Number.isFinite(f.due)).map(f => [f.card.card, f]));
   }
 
   async lib() {
@@ -156,8 +163,22 @@ export class Push {
   // ---------- decision 58: the desktop app on this PC ----------
   // The app holds a stream open (GET /api/desktop/stream, this PC only) and reports every 30 s how long since the
   // PC last had keyboard or mouse input, and whether it is locked.
-  desktopAttach(client, write) { if (client) this.desktops.set(client, { write, idleMs: 0, locked: false, notices: true, ts: 0 }); }
-  desktopDetach(client) { this.desktops.delete(client); }
+  // Attach returns the listener; detach takes it back, so a late close of an earlier stream with the same client id
+  // never removes the newer, live one.
+  desktopAttach(client, write) {
+    if (!client) return null;
+    const d = { write, idleMs: 0, locked: false, notices: true, ts: 0 };
+    this.desktops.set(client, d);
+    return d;
+  }
+  desktopDetach(client, d) { if (this.desktops.get(client) === d) this.desktops.delete(client); }
+  // The app could not show a notice (Windows refused it): the phone gets the card now instead of 3 minutes later.
+  desktopFailed(cardId) {
+    if (!this.follow.has(cardId)) return false;
+    this.log(`${cardId}: the PC could not show its notice, so the phone now`);
+    this.followUp(cardId);
+    return true;
+  }
   // notices: whether Windows lets the app show notices (its master switch and the app's own switch in Settings).
   desktopPresence(client, { idleMs = 0, locked = false, notices = true } = {}, now = Date.now()) {
     const d = this.desktops.get(client);
@@ -182,29 +203,81 @@ export class Push {
   // Called for every logged hub event. `ctx` gives the live state: approvals, decisionOpen(project, id),
   // decisionStatus(project, id) and events(project).
   handle(ev, ctx) {
+    this.ctx = ctx;
     const done = settledCard(ev);
     if (done && this.sent.has(done)) { this.settled.add(done); if (this.settled.size > 50) this.settled.delete(this.settled.values().next().value); }
-    if (done && this.sentDesk.has(done)) this.toDesktops('clear', { card: done });   // the app takes the notice down
+    if (done && this.sentDesk.has(done)) { this.toDesktops('clear', { card: done }); this.unfollow(done); }   // the app takes the notice down
     if (!this.subs.length && !this.desktops.size) return;
-    const decisionOpen = id => ctx.decisionOpen(ev.project, id);
-    const decisionStatus = id => ctx.decisionStatus?.(ev.project, id);
-    const waiting = card => stillOpen(card, { approvals: ctx.approvals, decisionOpen, decisionStatus, events: ctx.events(ev.project) })
-      && (card.always || !isLooking(card, this.presences.values()));
-    for (const card of cardsFor(ev, { decisionOpen })) {
+    for (const card of cardsFor(ev, { decisionOpen: id => ctx.decisionOpen(ev.project, id) })) {
       if (this.sent.has(card.card) || this.sentDesk.has(card.card)) continue;
-      const go = () => {
-        if (this.sent.has(card.card) || this.sentDesk.has(card.card) || !waiting(card)) return;
-        // Decision 58 A: the PC while it is in use (or when no phone is set up), with the phone as backup.
-        if (this.desktops.size && (this.pcInUse() || (!this.subs.length && this.desktopCanShow()))) {
-          this.sentDesk.add(card.card);
-          if (this.sentDesk.size > 200) this.sentDesk.delete(this.sentDesk.values().next().value);
-          this.toDesktops('notify', payloadOf(card));
-          if (this.subs.length) this.timers.setTimeout(() => { if (!this.sent.has(card.card) && waiting(card)) this.toPhone(card); }, PHONE_FOLLOWUP_MS);
-          return;
-        }
-        this.toPhone(card);
-      };
+      const go = () => this.route(card, ctx);
       card.delayMs ? this.timers.setTimeout(go, card.delayMs) : go();
+    }
+  }
+
+  // Does the card still wait for you (answered, picked, settled elsewhere)?
+  open(card, ctx) {
+    return stillOpen(card, { approvals: ctx.approvals, decisionOpen: id => ctx.decisionOpen(card.project, id), decisionStatus: id => ctx.decisionStatus?.(card.project, id), events: ctx.events(card.project) });
+  }
+
+  // Where one card goes, once its grace (if any) is over.
+  route(card, ctx) {
+    if (this.sent.has(card.card) || this.sentDesk.has(card.card)) return;
+    const id = `${card.card} (${card.project})`;
+    if (!this.open(card, ctx)) return this.log(`${id}: settled before it went out`);
+    const looking = isLooking(card, this.presences.values());
+    // Decision 58 A: the PC while it is in use (or when no phone is set up).
+    const desk = this.desktops.size > 0 && (this.pcInUse() || (!this.subs.length && this.desktopCanShow()));
+    // Decision 45: a raise to Trusted reaches the phone at once, always, even while you look at it; the PC as well
+    // while you are at it and not already looking. No follow-up: the phone already has it.
+    if (card.always) {
+      this.toPhone(card);
+      if (desk && !looking) this.toDesk(card, { follow: false });
+      return this.log(`${id}: phone${desk && !looking ? ' and PC' : ''} (always told)`);
+    }
+    if (looking) return this.log(`${id}: held, you are looking at it in an open hub page`);
+    if (desk) {
+      this.toDesk(card, { follow: this.subs.length > 0 });
+      return this.log(`${id}: PC${this.subs.length ? ', phone in 3 minutes if it still waits' : ''}`);
+    }
+    this.toPhone(card);
+    this.log(`${id}: phone${this.desktops.size ? ' (PC idle, locked, asleep or notices off)' : ''}`);
+  }
+
+  toDesk(card, { follow }) {
+    this.sentDesk.add(card.card);
+    if (this.sentDesk.size > 200) this.sentDesk.delete(this.sentDesk.values().next().value);
+    this.toDesktops('notify', payloadOf(card));
+    if (!follow) return;
+    this.follow.set(card.card, { card, due: Date.now() + PHONE_FOLLOWUP_MS });
+    this.saveFollow();
+    this.timers.setTimeout(() => this.followUp(card.card), PHONE_FOLLOWUP_MS);
+  }
+
+  // The phone backup for a PC notice: the card still waits and nobody is looking at it.
+  followUp(cardId) {
+    const f = this.follow.get(cardId);
+    if (!f) return;
+    this.unfollow(cardId);
+    const id = `${cardId} (${f.card.project})`;
+    if (this.sent.has(cardId)) return;
+    if (!this.ctx || !this.open(f.card, this.ctx)) return this.log(`${id}: settled, no phone follow-up`);
+    if (isLooking(f.card, this.presences.values())) return this.log(`${id}: no phone follow-up, you are looking at it`);
+    this.toPhone(f.card);
+    this.log(`${id}: phone, as it still waits after the PC notice`);
+  }
+
+  unfollow(cardId) { if (this.follow.delete(cardId)) this.saveFollow(); }
+  saveFollow() {
+    try { mkdirSync(this.dir, { recursive: true }); writeFileSync(this.followFile, JSON.stringify([...this.follow.values()]), { mode: 0o600 }); } catch { }
+  }
+
+  // At hub start: follow-ups still due from before a restart run at their time (at once if it has passed).
+  resume(ctx, now = Date.now()) {
+    this.ctx = ctx;
+    for (const [cardId, f] of this.follow) {
+      this.sentDesk.add(cardId);
+      this.timers.setTimeout(() => this.followUp(cardId), Math.max(0, f.due - now));
     }
   }
 

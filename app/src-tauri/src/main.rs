@@ -398,32 +398,52 @@ fn report_presence(port: u16, client: &str, app_id: &str) {
     hub_post(port, "/api/desktop/presence", &body);
 }
 
-// Show one card as a Windows notice.
-fn show_notice(app: &AppHandle, card: &serde_json::Value) {
+// The script a notice click runs in the open hub page: hand the page the card's address (the page opens the card
+// without a reload, so an unsent message and its pictures stay), or load the address if the page isn't ready for it
+// (public/open-card.js). It runs in the page with the page's own rights, nothing native.
+fn open_card_script(url: &str) -> String {
+    let u = serde_json::to_string(url).unwrap_or_else(|_| "\"/\"".to_string());
+    format!("(u => {{ if (document.documentElement.dataset.cruxOpenCard) window.postMessage({{ type: 'open-card', url: u }}, location.origin); else location.assign(u); }})({u});")
+}
+
+// Bring the window forward on the card: in the page already showing the hub, or by loading the card's address.
+fn open_card(app: &AppHandle, target: &Url) {
+    show_main(app);
+    let Some(w) = app.get_webview_window(MAIN) else { return };
+    let state = app.state::<Arc<State>>().inner().clone();
+    let on_hub = w.url().map(|u| state.hub.owns(&u)).unwrap_or(false);
+    if !on_hub || w.eval(open_card_script(target.as_str())).is_err() {
+        let _ = w.navigate(target.clone());
+    }
+}
+
+// Show one card as a Windows notice. If Windows refuses it, the hub is told, and the phone gets the card at once.
+fn show_notice(app: &AppHandle, client: &str, card: &serde_json::Value) {
     let state = app.state::<Arc<State>>().inner().clone();
     let title = card.get("title").and_then(|t| t.as_str()).unwrap_or("Crux Hub").to_string();
     let body = card.get("body").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let card_id = card.get("card").and_then(|t| t.as_str()).unwrap_or("").to_string();
     let target = card.get("url").and_then(|u| u.as_str()).and_then(|u| state.hub.url.join(u).ok()).filter(|u| state.hub.owns(u)).unwrap_or_else(|| state.hub.url.clone());
     let app_id = notice_app_id(app);
     let handle = app.clone();
+    let (port, client) = (state.hub.port, client.to_string());
     // Shown from the main thread, which Windows has set up for these calls.
     let _ = app.run_on_main_thread(move || {
         let click = handle.clone();
-        let _ = Toast::new(&app_id)
+        let shown = Toast::new(&app_id)
             .title(&title)
             .text1(&body)
             .on_activated(move |_| {
                 let h = click.clone();
                 let t = target.clone();
-                let _ = click.run_on_main_thread(move || {
-                    show_main(&h);
-                    if let Some(w) = h.get_webview_window(MAIN) {
-                        let _ = w.navigate(t);
-                    }
-                });
+                let _ = click.run_on_main_thread(move || open_card(&h, &t));
                 Ok(())
             })
             .show();
+        if shown.is_err() && !card_id.is_empty() {
+            let body = serde_json::json!({ "client": client, "card": card_id }).to_string();
+            thread::spawn(move || hub_post(port, "/api/desktop/failed", &body));
+        }
     });
 }
 
@@ -463,7 +483,7 @@ fn start_pc_notices(app: &AppHandle) {
                         } else if let Some(d) = line.strip_prefix("data: ") {
                             if event == "notify" {
                                 if let Ok(card) = serde_json::from_str::<serde_json::Value>(d) {
-                                    show_notice(&app, &card);
+                                    show_notice(&app, &client, &card);
                                 }
                             }
                             // "clear": a settled card. The notice library cannot take a shown notice down, so it
@@ -688,4 +708,23 @@ fn main() {
             api.prevent_exit();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_card_script;
+
+    #[test]
+    fn a_notice_click_hands_the_open_page_the_card_without_a_reload() {
+        let s = open_card_script("http://crux.localhost:4747/?project=crux&card=question%3Aabc");
+        assert!(s.contains("window.postMessage({ type: 'open-card', url: u }, location.origin)"));
+        assert!(s.contains("dataset.cruxOpenCard"), "only a page that is ready for it; else the address loads");
+        assert!(s.ends_with(r#"})("http://crux.localhost:4747/?project=crux&card=question%3Aabc");"#));
+    }
+
+    #[test]
+    fn the_address_goes_in_as_a_quoted_string() {
+        let s = open_card_script("http://x/\"); alert(1); (\"");
+        assert!(s.ends_with(r#"})("http://x/\"); alert(1); (\"");"#));
+    }
 }

@@ -106,7 +106,9 @@ const push = new Push();
 const decisionStatus = (project, id) => { try { return hub.project(project).board.decision(id)?.status; } catch { return undefined; } };
 const decisionOpen = (project, id) => ['open', 'found'].includes(decisionStatus(project, id));
 // The Conductor's own thread (decision 55) sends no phone notifications in this build; projects' cards still do.
-hub.on(ev => { if (ev.logged && ev.project !== CONDUCTOR) push.handle(ev, { approvals: hub.approvals, decisionOpen, decisionStatus, events: name => hub.project(name).log.events }); });
+const pushCtx = { get approvals() { return hub.approvals; }, decisionOpen, decisionStatus, events: name => hub.project(name).log.events };
+hub.on(ev => { if (ev.logged && ev.project !== CONDUCTOR) push.handle(ev, pushCtx); });
+push.resume(pushCtx);   // decision 58: phone follow-ups for PC notices sent before a restart
 const hosts = extraHosts();
 
 // The write guard (decision 47 B): paired devices, their passkeys, and alerts on any change to those or to the push
@@ -323,6 +325,11 @@ const routes = {
     if (!local) throw new GuardError('Only the desktop app on this PC reports here.', 403);
     return { known: push.desktopPresence(String(client || ''), { idleMs, locked, notices }), inUse: push.pcInUse() };
   },
+  // The app could not show a card's notice: the phone gets it at once instead of 3 minutes later.
+  'POST /api/desktop/failed': ({ card }, { local }) => {
+    if (!local) throw new GuardError('Only the desktop app on this PC reports here.', 403);
+    return { phone: push.desktopFailed(String(card || '')) };
+  },
   'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId }),
   // Mark a memo done, or back to active, from the board panel: a new event in the log, never an edit.
   'POST /api/entry-status': ({ project, id, status }) => ({ entryId: hub.project(project).board.setEntryStatus(String(id || ''), status === 'active' ? 'active' : 'done', 'you').entryId }),
@@ -379,14 +386,16 @@ async function handle(req, res) {
     }
     // Decision 58: the desktop app's notices. This PC only; it carries the same few words as a phone push.
     if (url.pathname === '/api/desktop/stream' && req.method === 'GET') {
-      if (!local) return send(res, 403, { error: 'The desktop stream is for the app on this PC.' });
+      // A web page in a browser on this PC sends Sec-Fetch-Site (cross-site, same-site, same-origin); the app sends none.
+      const site = req.headers['sec-fetch-site'];
+      if (!local || (site && site !== 'none')) return send(res, 403, { error: 'The desktop stream is for the app on this PC.' });
       const client = String(url.searchParams.get('client') || '').slice(0, 64);
       if (!/^[\w-]{8,64}$/.test(client)) return send(res, 400, { error: 'Give a client id.' });
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
       res.write(': hello\n\n');
-      push.desktopAttach(client, (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      const listener = push.desktopAttach(client, (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-      req.on('close', () => { push.desktopDetach(client); clearInterval(ping); });
+      req.on('close', () => { push.desktopDetach(client, listener); clearInterval(ping); });
       return;
     }
     const key = `${req.method} ${url.pathname}`;
