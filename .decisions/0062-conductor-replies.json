@@ -1,0 +1,86 @@
+{
+ "id": 62,
+ "slug": "conductor-replies",
+ "title": "How do orchestrators answer the Conductor?",
+ "date": "2026-11-14",
+ "mode": "quick",
+ "lenses": [
+  "architecture"
+ ],
+ "status": "decided",
+ "lead": "Pick how a project's orchestrator answers a request the Conductor sent it. I recommend A: the orchestrator gets a reply tool, a Conductor request is marked as expecting an answer, the hub reminds it once if it forgets, and the reply lands in the Conductor's chat for you. Confidence: medium.",
+ "for_you": [
+  "Ask the Conductor for status, a tidy-up or a handoff across projects, and the answers come back into its chat; no more digging through each project's thread",
+  "The Conductor can also read a project's latest round summaries when it needs more than the answer",
+  "Replies go only to the Conductor and you, never into another project",
+  {
+   "text": "Small hub change (a reply tool, a reminder, a read tool); easy to remove",
+   "kind": "undo"
+  }
+ ],
+ "context": "Matt, via the Conductor: orchestrators don't answer the Conductor's requests back to it; they post in their own threads, so he has to dig into each project, which defeats the point of relaying through the Conductor. From the Conductor's side: message_agent is one-way (no reply tool, and nothing tells the orchestrator an answer is expected); the Conductor gets a one-line notice that a project posted a summary but can't read its text (its read tools cover the board, latest handoff, Needs you and agents only). Results so far: a tidy-up sent to six orchestrators produced no report it could see; a handoff meant for it sat as a board memo; a status request was answered in the project's own thread. Decision 60 made the Conductor the single point of contact; this is the missing return path. The project boundary from decision 55 stays: a reply goes to the Conductor and Matt only.",
+ "depends_on": [
+  55,
+  60
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Reply tool, with a reminder",
+   "summary": "Each Conductor request carries an id and is marked 'reply expected'. Orchestrators get reply_to_conductor(id, text). If a turn ends without a reply to an open request, the hub reminds the orchestrator once. The reply wakes the Conductor with its text, and the Conductor shows it to Matt in its chat (or folds several into one answer). The Conductor also gets a read tool for a project's latest round summaries.",
+   "pros": [
+    "Answers come back reliably and are clearly answers to a request",
+    "Works for status, tidy-ups and handoffs alike"
+   ],
+   "cons": [
+    "One more tool and prompt line for every orchestrator"
+   ],
+   "effort": "Small to medium: a tool, a reminder at turn end, the wake with text, a summaries read tool, tests",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Forward the next summary",
+   "summary": "No new tool. After a Conductor request, the orchestrator's next round summary is forwarded to the Conductor in full as the answer.",
+   "pros": [
+    "No change to how orchestrators work"
+   ],
+   "cons": [
+    "A summary about other work can be taken as the answer; a request answered across two turns is cut short"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Read access only",
+   "summary": "Give the Conductor tools to read a project's thread and recent summaries, and let it look for answers itself.",
+   "pros": [
+    "Smallest change to orchestrators"
+   ],
+   "cons": [
+    "The Conductor has to guess where and when the answer appears; more reading, more cost"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "A gives a real return path: the orchestrator knows an answer is expected, says so plainly, and the Conductor gets it with no guessing. The summaries read tool covers the cases where it needs more context.",
+ "confidence": "lean",
+ "change_mind": "If orchestrators reliably answer in their summaries anyway, B is enough.",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-14",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "Conductor request replies",
+   "value": "Conductor requests carry an id and expect a reply; orchestrators answer with a reply tool, reminded once if a turn ends without one; the reply wakes the Conductor with its text; the Conductor can read a project's latest round summaries; replies go only to the Conductor and the human"
+  }
+ ],
+ "images": []
+}

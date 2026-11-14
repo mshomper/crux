@@ -1,0 +1,65 @@
+# 0059 How is the All projects column laid out now that the Conductor talks there?
+
+- Status: decided
+- Date: 2026-11-14, decided 2026-11-14
+- Lenses: ui
+- Builds on: 0032, 0042, 0055
+
+## In short
+
+Pick how the All projects column fits the Conductor's chat. I recommend B: the chat and its message box fill the column like any thread, with small "waiting" and "agents" rows on top that open in place. On the phone, "waiting" opens by itself whenever something needs you. Confidence: medium.
+
+For you:
+
+- What you type and what the Conductor answers sit together, as in every other thread
+- Waiting cards and the agents list are still one tap away, and on the phone what needs you still comes first
+- Hard to undo: Changes the column order from decision 42; switching back is a page change only
+
+## Decision
+
+**B: Chat fills the column, rows on top.** The chat and message box fill the column like any thread. Two compact rows on top, "2 waiting" and "9 agents", open in place. On the phone, "waiting" opens by itself whenever something waits and folds with one tap.
+
+## Context
+
+Decision 42 laid out All projects as a count bar, Needs you grouped by project, then every agent. Decision 55 added the Conductor's chat at the top of that column, with its message box at the very bottom, so the waiting cards and the agents list sat between what Matt types and what the Conductor answers. Matt called it discombobulated. conductor-build mocked two layouts on the real page with fake data, at desktop and phone width.
+
+## Options
+
+### A: Waiting on top, chat below
+
+Waiting cards at the top, the agents list folded to one row, then the Conductor chat ending at the message box.
+
+![A on the desktop: waiting cards, folded agents row, then the chat](images/0059-a-on-the-desktop-waiting-cards-folded.png)
+
+*A on the desktop: waiting cards, folded agents row, then the chat*
+
+![A on a phone](images/0059-a-on-a-phone.png)
+
+*A on a phone*
+
+- Pro: Waiting cards always in view
+- Con: With several cards waiting, the chat drifts away from the box again
+- Effort: Small
+
+### B: Chat fills the column, rows on top (chosen) (recommended)
+
+The chat and message box fill the column like any thread. Two compact rows on top, "2 waiting" and "9 agents", open in place. On the phone, "waiting" opens by itself whenever something waits and folds with one tap.
+
+![B on the desktop: the chat fills the column, waiting and agents rows on top](images/0059-b-on-the-desktop-the-chat-fills-the.png)
+
+*B on the desktop: the chat fills the column, waiting and agents rows on top*
+
+![B on a phone: waiting open by default when something waits](images/0059-b-on-a-phone-waiting-open-by-default.png)
+
+*B on a phone: waiting open by default when something waits*
+
+- Pro: Chat and box always together
+- Pro: Quiet when nothing waits; phone still leads with what needs you
+- Con: On the desktop, waiting cards are one tap away rather than always shown
+- Effort: Small
+
+## Recommendation
+
+B (lean). B keeps the chat whole however many cards wait, and the red count on the waiting row still tells you at a glance.
+
+What would change this: If you find yourself opening the waiting row every time on the desktop, take A.

@@ -1,0 +1,119 @@
+{
+ "id": 60,
+ "slug": "conductor-digest",
+ "title": "How does the Conductor cut down what reaches you?",
+ "date": "2026-11-14",
+ "mode": "quick",
+ "lenses": [
+  "research and product",
+  "ui"
+ ],
+ "status": "decided",
+ "lead": "Pick how the Conductor takes work off you. I recommend A: while you're around, it's a live single point of contact you can talk to and answer cards through; when you've been away, it greets you with one digest, a recommendation per item, answered with one tap. Confidence: medium.",
+ "for_you": [
+  "While you're active, the Conductor answers you right away; you can ask anything, give orders it routes, and answer any waiting card from its chat; your tap or reply counts as your own answer in that project",
+  "When you've been away from the PC and the phone, it holds what comes in and greets you with one digest, grouped by project, each item with a recommendation; one phone notice per digest, while permission requests that need you right away keep their own notice",
+  "B adds no authority the orchestrators lack: the Conductor would only clear items your earlier answers already settle, plus contained permission requests an orchestrator let time out",
+  {
+   "text": "Widens decision 55 (it can show and take your answers, not just point to projects); going back is a settings change",
+   "kind": "undo"
+  }
+ ],
+ "context": "Matt, after using the Conductor (decision 55 A): it 'is supposed to be the hive mind that supercharges my ability to manage projects at once, not just send me to individual repos... It needs to reduce what's coming into me, not increase it.' Then, on the first draft: a digest suits time away from the desk or phone, but otherwise the Conductor must stay a communicative single point of contact; and what would it answer that the orchestrators can't already? Honest answer: nothing beyond their authority. What reaches Matt today is (1) questions orchestrators chose to put to him (product calls and confirmations), (2) contained permission requests an orchestrator was unsure of or let time out, (3) decisions, (4) push, PR and merge OKs. (3) and (4) are his in every option. B's extra is narrow: (1) where his own earlier answer, in any project, or the board already settles it (cross-project memory the orchestrators don't have), and (2) within the same rules an orchestrator uses. Away is judged by the PC and phone activity the hub already tracks (decision 58). An answer counts as Matt's because it is his own tap or reply on the real card; a push, PR or merge OK in the Conductor's own words never counts. Mockups by conductor-mock, fake projects.",
+ "depends_on": [
+  21,
+  31,
+  42,
+  55,
+  58,
+  59
+ ],
+ "conflicts": [
+  55
+ ],
+ "options": [
+  {
+   "key": "A",
+   "name": "Live contact, digest when you've been away",
+   "summary": "While you're active, the Conductor is a live chat: it answers at once, routes your orders, and shows any waiting card in its chat with its recommendation so you answer there. When you've been away, it holds what arrives and greets you with one digest (grouped by project, recommendation per item, the real cards inside, 'take all recommendations'). One phone notice per digest while away.",
+   "pros": [
+    "One place to talk to and answer everything, live or after a break",
+    "No new authority for the Conductor"
+   ],
+   "cons": [
+    "Every item still needs your tap, though with a recommendation ready"
+   ],
+   "effort": "Medium: away detection from existing presence, digest timing, cards shown in the Conductor chat, notice batching",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "A, plus it clears what you've already answered",
+   "summary": "As A, and the Conductor clears two narrow kinds itself, each listed with its reason and Undo: questions your own earlier answer or the board already settles (in any project), and contained permission requests an orchestrator let time out, judged by the same rules the orchestrator uses. Nothing beyond the orchestrators' authority.",
+   "pros": [
+    "Stops the same question reaching you twice across projects"
+   ],
+   "cons": [
+    "Small extra saving for a new answering path that needs its own review",
+    "A wrong match runs before you see it (undo after the fact)"
+   ],
+   "effort": "Medium to large: A plus matching against past answers, undo and tests",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Today's relay, batched",
+   "summary": "One message listing the waiting items with links to answer each in its project; the cards stay in the Waiting drawer.",
+   "pros": [
+    "Smallest change"
+   ],
+   "cons": [
+    "No shorter than today; still sends you to each project"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "A gives you what you described: one live point of contact while you work, and a short digest when you come back, with every card answerable in place. B's extra saving is small, since the Conductor can't do more than the orchestrators; add it later if repeat questions keep reaching you.",
+ "confidence": "lean",
+ "change_mind": "If the same questions keep reaching you from different projects, add B.",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-14",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "cross-project agent authority",
+   "value": "a Conductor above the project orchestrators is the human's live single point of contact: it shows waiting cards with a recommendation so the human answers in place, and greets the human with one digest after time away; it reads every project and routes requests to orchestrators, answers nothing itself, never edits, merges or pushes, and never carries details from one project into another; merges, pushes, installs, deletes and decisions always go to the human"
+  }
+ ],
+ "images": [
+  {
+   "file": "images/0060-a-one-digest-four-items-with.png",
+   "caption": "A: the digest after time away, four items with recommendations, answered in place (phone)",
+   "option": "A",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0060-b-three-real-calls-plus-i-handled-these.png",
+   "caption": "B: three real calls, plus 'I handled these' with reasons and Undo (phone)",
+   "option": "B",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0060-b-on-the-desktop.png",
+   "caption": "B on the desktop",
+   "option": "B",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0060-c-todays-relay-batched-into-one-message.png",
+   "caption": "C: today's relay batched into one message (phone)",
+   "option": "C",
+   "kind": "mockup"
+  }
+ ]
+}
