@@ -226,6 +226,95 @@
   .hud-scan{display:none}
 }
 
+/* ---------- All projects (decision 57 C): the Conductor in the middle, one sector or bay per project ----------
+   Positions come from map-hub.js (the label sizes there match the heights below); the line work is on the canvas. */
+.hub-over{position:absolute;inset:0;pointer-events:none}
+.hub-over[hidden]{display:none}
+.hub-over>button{position:absolute;left:0;top:0;margin:0;font:inherit;color:inherit;cursor:pointer;pointer-events:auto;-webkit-tap-highlight-color:transparent;--h:var(--hud-cyan)}
+.hub-over>button.off{pointer-events:none}
+.hub-over>button:focus-visible{outline:2px solid var(--hud-ice);outline-offset:2px}
+.hb-n{position:absolute;right:-7px;top:-7px;min-width:17px;height:17px;padding:0 4px;box-sizing:border-box;border-radius:9px;display:grid;place-items:center;font:700 10.5px/1 var(--mono);
+  color:#2a0609;background:var(--hud-red);box-shadow:0 0 0 2px #070b11,0 0 12px rgba(242,114,122,.85);animation:hud-alarm 1.5s ease-in-out infinite;pointer-events:none}
+/* strip bays */
+.hb{display:flex;align-items:center;gap:9px;padding:5px 12px 5px 8px;box-sizing:border-box;white-space:nowrap;border-radius:3px;text-align:left;
+  background:linear-gradient(90deg,rgba(10,22,34,.92),rgba(8,16,26,.8));border:1px solid color-mix(in srgb,var(--h) 45%,transparent);border-left:3px solid var(--h)}
+.hb:hover{border-color:color-mix(in srgb,var(--h) 85%,#fff);box-shadow:0 0 16px color-mix(in srgb,var(--h) 30%,transparent)}
+.hb.hot{border-color:rgba(242,114,122,.85);border-left-color:var(--hud-red);box-shadow:inset 0 0 18px rgba(242,114,122,.18)}
+.hb.asleep{opacity:.8}
+.hb .bot{width:28px;height:28px}
+.hb-t{display:grid;gap:2px;min-width:0;flex:1}
+.hb-t b{font:600 13px/1.1 var(--sans,'Segoe UI',system-ui,sans-serif);color:var(--hud-ice);overflow:hidden;text-overflow:ellipsis}
+.hb-t i{font:600 10px/1.1 var(--mono);letter-spacing:.12em;text-transform:uppercase;font-style:normal;color:var(--hud-dim);overflow:hidden;text-overflow:ellipsis}
+.hb.hot .hb-t i{color:var(--hud-red)}
+.hb-bar{position:relative;height:3px;margin-top:2px;background:rgba(255,255,255,.08)}
+.hb-bar s{position:absolute;left:0;top:0;bottom:0;background:var(--h);text-decoration:none}
+.hb-bar u{position:absolute;top:-2px;bottom:-2px;width:2px;margin-left:-1px;background:#f5c96a}
+.hb.icon,.hb.dot{padding:4px 6px;gap:0;border-left-width:1px;border-radius:50%}
+.hb.icon .hb-t,.hb.dot .hb-t{display:none}
+.hb.icon .bot{width:24px;height:24px}
+.hb.dot{padding:1px}
+.hb.dot .bot{width:16px;height:16px}
+.hb.dot .hb-n{min-width:13px;height:13px;font-size:9px;right:-6px;top:-6px}
+.hud.phone .hb.icon{padding:3px 4px}
+.hud.phone .hb.icon .bot{width:18px;height:18px}
+.hud.phone .hb.dot .bot{width:12px;height:12px}
+.hud.phone .hb .hb-n{min-width:13px;height:13px;font-size:9px;right:-6px;top:-6px}
+.hud.phone.docked .hb,.hud.phone.docked .hp-more.strip{pointer-events:none}   /* a tap on a phone's strip opens the map */
+/* the opened map: each project's robot in its sector, and its label */
+.hp-bot{width:var(--bs,40px);height:var(--bs,40px);padding:0;border:0;background:none;display:block}
+.hp-bot .bot{width:100%;height:100%}
+.hp-bot:hover .bot{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--h) 80%,transparent))}
+.hp-tag{box-sizing:border-box;display:grid;align-content:center;gap:3px;padding:6px 12px;text-align:left;overflow:hidden;white-space:nowrap;
+  background:rgba(7,14,22,.84);border:0;border-left:2px solid var(--h)}
+.hp-tag.r{text-align:right;border-left:0;border-right:2px solid var(--h)}
+.hp-tag.hot{border-color:var(--hud-red)}
+.hp-tag:hover{background:rgba(14,26,40,.92)}
+.hp-tag>b{font:600 17px/1.15 var(--sans,'Segoe UI',system-ui,sans-serif);color:#f1f8fc;overflow:hidden;text-overflow:ellipsis}
+.hp-tag .w{font:600 12px/1.2 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--hud-dim);overflow:hidden;text-overflow:ellipsis}
+.hp-tag.hot .w{color:var(--hud-red)}
+.hp-tag .m{font:13px/1.25 var(--sans,'Segoe UI',system-ui,sans-serif);color:#a9bccb;overflow:hidden;text-overflow:ellipsis}
+.hp-tag .ln{display:none}
+.hp-tag.line{padding:0 10px}
+.hp-tag.line>b,.hp-tag.line>.w,.hp-tag.line>.m{display:none}
+.hp-tag.line .ln{display:flex;align-items:baseline;gap:10px;min-width:0}
+.hp-tag.r.line .ln{justify-content:flex-end}
+.hp-tag .ln b{flex:none;max-width:calc(100% - 26px);font:600 14px/1.2 var(--sans,'Segoe UI',system-ui,sans-serif);color:#f1f8fc;overflow:hidden;text-overflow:ellipsis}
+.hp-tag .ln .w{flex:0 1 auto;min-width:0;font-size:10.5px}
+.hp-tag .ln .n{flex:none;align-self:center;min-width:17px;height:17px;padding:0 4px;box-sizing:border-box;border-radius:9px;display:grid;place-items:center;
+  font:700 10.5px/1 var(--mono);color:#2a0609;background:var(--hud-red);box-shadow:0 0 8px rgba(242,114,122,.6)}
+.hp-tag.ph{padding:4px 8px;gap:2px}
+.hp-tag.ph>b{font-size:14px}
+.hp-tag.ph .w{font-size:10px;letter-spacing:.05em}
+.hp-tag.ph .m{font-size:11.5px}
+.hp-tag.ph.line{padding:0 8px}
+.hp-tag.ph .ln b{font-size:13px}
+.hp-more{box-sizing:border-box;padding:0 10px;text-align:left;font:600 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--hud-ice);
+  background:rgba(7,14,22,.84);border:1px dashed var(--hud-faint);border-radius:3px}
+.hp-more.r{text-align:right}
+.hp-more.hot{border-color:rgba(242,114,122,.7);color:#ffd3d6}
+.hp-more:hover{border-color:var(--hud-dim)}
+.hp-more.strip{padding:2px 6px;font-size:10px;letter-spacing:.06em;border-radius:9px}
+.tele-feed li[data-pj]{cursor:pointer}
+.tele-feed li[data-pj]:hover{background:rgba(111,227,255,.06)}
+/* the ALL button: a project's own map goes back up to every project */
+.hud-up{position:absolute;left:12px;top:42%;transform:translateY(-50%);z-index:2;display:grid;justify-items:center;gap:4px;padding:0;margin:0;border:0;background:none;
+  font:inherit;color:var(--hud-violet);cursor:pointer;opacity:clamp(0,calc(1 - var(--e) * 3),1);-webkit-tap-highlight-color:transparent}
+.hud-up[hidden],.hud.open .hud-up{display:none}
+.up-ring{position:relative;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;--mh:var(--hud-violet);
+  border:1.5px solid color-mix(in srgb,var(--mh) 80%,transparent);background:radial-gradient(circle at 50% 30%,color-mix(in srgb,var(--mh) 26%,transparent),rgba(10,10,24,.94) 70%);
+  box-shadow:0 0 12px color-mix(in srgb,var(--mh) 30%,transparent)}
+.up-ring .bot{width:24px;height:24px}
+.up-n{position:absolute;right:-7px;top:-7px;min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;border-radius:8px;display:grid;place-items:center;font:700 10px/1 var(--mono);
+  color:#2a0609;background:var(--hud-red);box-shadow:0 0 0 2px #070b11,0 0 10px rgba(242,114,122,.8)}
+.hud-up i{font-style:normal;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase}
+.hud-up:hover .up-ring{box-shadow:0 0 18px color-mix(in srgb,var(--mh) 55%,transparent)}
+.hud.up .hud-read-l{left:72px}
+.hud.phone .hud-up{left:0;top:50%;gap:0;width:40px;height:40px;place-content:center}   /* a 40px target for a thumb */
+.hud.phone .hud-up i{display:none}
+.hud.phone .up-ring{width:24px;height:24px}
+.hud.phone .up-ring .bot{width:17px;height:17px}
+.hud.phone .up-n{min-width:13px;height:13px;font-size:9px;right:-6px;top:-6px}
+
 /* ---------- the core's readout: the numbers the glass sphere shows without words (M013) ---------- */
 .core-pop{position:fixed;z-index:60;box-sizing:border-box;padding:12px 14px 12px;font-family:var(--mono);color:var(--hud-ice);background:var(--hud-glass);border:1px solid var(--hud-faint);
   clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px));box-shadow:0 18px 50px rgba(0,0,0,.55);

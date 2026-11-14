@@ -55,7 +55,8 @@ export class Agent {
     // modelSeen is what Claude Code reported at start-up, so a default model still shows its name and colour.
     Object.assign(this, { type, model, effort, modelSeen: null, restartWhenIdle: false });
     this.questionsLeft = predecessor ? 3 : 0;
-    this.thread = role === 'orchestrator' ? 'orchestrator' : name;
+    // Role threads keep their name across holders: 'orchestrator' in a project, 'conductor' hub-wide (decision 55).
+    this.thread = role === 'orchestrator' || role === 'conductor' ? role : name;
     this.q = null;
     this.inbox = null;
     this.cost = 0;                 // estimated spend logged by this hub process (decision 36)
@@ -105,6 +106,8 @@ export class Agent {
 
   // The query options for this agent's next start. Kept apart from start() so tests can check them.
   options() {
+    // The Conductor (decision 55) has its own prompt, tools and permission callback, and nothing from disk.
+    if (this.role === 'conductor') return this.hub.conductor.options(this);
     const p = this.project;
     const m = this.hub.memory;
     const type = this.type ? this.hub.agentTypes(p).get(this.type) : null;
