@@ -9,6 +9,8 @@ A small, messaging-style home for your Claude agents, built on Crux's memory boa
 
 ## Run it
 
+**On Windows, use the desktop app**: one installer with the hub and Node inside, a first-run screen for your API key and project folders, and updates from the tray (see "Desktop app (Windows)" below). The rest of this section is the route for Mac and Linux (untested) and for running from source.
+
 You need Node 20 or newer, git, and your own Anthropic API key (from the Anthropic Console). The GitHub CLI (`gh`, signed in) and Tailscale are optional. Keep the `hub` folder inside its Crux clone: it uses the page builder in `../crux/scripts/`.
 
 ```bash
@@ -96,7 +98,7 @@ In the box at the bottom, Enter sends; Alt+Enter or Shift+Enter starts a new lin
 
 ## Desktop app (Windows)
 
-One download with everything in it (decisions 49, 52 and 54), in [`../app/`](../app/README.md): the hub, its own Node, a window and a tray icon (Open, Restart hub, Quit, and Install update when one is ready). Get `CruxHub_<version>_x64-setup.exe` from the [GitHub Releases page](https://github.com/mshomper/crux/releases/latest) and run it (per-user, no admin; unsigned, so Windows may show "Windows protected your PC": More info, then Run anyway). No Node, git clone or terminal needed.
+One download with everything in it (decisions 49, 52 and 54), in [`../app/`](../app/README.md): the hub, its own Node, a window and a tray icon (Open, Restart hub, Quit, and Install update when one is ready). Get `CruxHub_<version>_x64-setup.exe` from the [GitHub Releases page](https://github.com/mshomper/crux/releases/latest) and run it (per-user, no admin; unsigned, so Windows may show "Windows protected your PC": More info, then Run anyway). No Node, git clone or terminal needed. Version 0.1.0 had no updater: if you have it, install the newest version by hand once.
 
 On first run a setup screen asks for three things: your Anthropic API key (kept in `~/.crux-hub/secrets.json`, never in a repo or a log), your project folders (saved in `~/crux/hub.json`), and Claude Code, which it downloads from Anthropic in the exact version this hub was built with, checks against the Agent SDK's checksum and keeps in `~/.crux-hub/claude-code/` (about 330 MB, once per version). A Claude Code already installed on the PC is used only when that download is missing. Only the app's own hub shows this screen; a hub run from a clone never does.
 

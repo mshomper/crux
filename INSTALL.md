@@ -2,7 +2,7 @@
 
 Crux is two skill folders, `crux` and `crux-dig`, placed where Claude Code looks for skills: `~/.claude/skills/` (on Windows, `C:\Users\<you>\.claude\skills\`). Both are needed: `crux-dig` uses `crux`'s page builder.
 
-This page covers the skill. To run the Hub, see [hub/README.md](hub/README.md).
+This page covers the skill. To run the Hub, see [hub/README.md](hub/README.md); on Windows it is one installer download, with no clone or npm needed.
 
 **You need:** Claude Code, and Node 20 or newer (the page builder runs on Node). Check with `node --version`; if it is missing or older, install it from https://nodejs.org.
 
