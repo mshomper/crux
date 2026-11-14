@@ -1,0 +1,119 @@
+{
+ "id": 60,
+ "slug": "conductor-digest",
+ "title": "How does the Conductor cut down what reaches you?",
+ "date": "2026-11-14",
+ "mode": "quick",
+ "lenses": [
+  "research and product",
+  "ui"
+ ],
+ "status": "open",
+ "lead": "Pick how the Conductor takes work off you instead of relaying it. I recommend B: one digest at a time with a recommendation per item that you answer in place, and the Conductor settles the routine items itself (with undo), so only real calls reach you. Confidence: medium.",
+ "for_you": [
+  "One digest at a time (at most every 30 minutes, or when you open the hub), grouped by project; tap once per item or take all recommendations; your tap counts as your own answer in that project",
+  "One phone notice per digest instead of one per card; permission requests that need you right away keep their own immediate notice",
+  "With B the Conductor answers routine questions under each project's own rules and shows what it decided, with undo; merges, pushes, installs, deletes and decisions always come to you",
+  {
+   "text": "Widens decision 55: today the Conductor only reads and routes; going back to A or C is a settings change",
+   "kind": "undo"
+  }
+ ],
+ "context": "Matt, after using the Conductor (decision 55 A): it 'is supposed to be the hive mind that supercharges my ability to manage projects at once, not just send me to individual repos to answer questions and make decisions there. It needs to reduce what's coming into me, not increase it.' Today it relays each card and points to the project. conductor-mock mocked three options on the real All projects page with fake projects (a decision, a question, an OK to merge, a routine permission). The answer counting as Matt's is safe because it is his own tap or reply on the real card, not the Conductor's reading of it; the earlier rule stays that a push, PR or merge OK relayed in the Conductor's own words never counts.",
+ "depends_on": [
+  21,
+  31,
+  42,
+  55,
+  59
+ ],
+ "conflicts": [
+  55
+ ],
+ "options": [
+  {
+   "key": "A",
+   "name": "Digest with answers in place",
+   "summary": "The Conductor posts one digest at a time, grouped by project, with a one-line summary and its recommendation per item. The real cards sit inside it with the recommendation pre-filled: one tap answers, or take all recommendations. One phone notice per digest. Routine permissions the orchestrators already handle never reach you.",
+   "pros": [
+    "Everything in one place, answered without leaving the Conductor",
+    "No new authority for the Conductor"
+   ],
+   "cons": [
+    "Every item still needs your tap, routine ones included"
+   ],
+   "effort": "Medium: digest timing, cards embedded in a Conductor message, notice batching",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "A, plus it settles the routine ones",
+   "summary": "As A, and the Conductor answers routine items itself within each project's rules (what that project's orchestrator could answer on its own), listing each in an 'I handled these' box with the rule it used and Undo. Only real calls reach you: decisions, merges, pushes, installs, deletes and anything a rule keeps for you.",
+   "pros": [
+    "The only option that cuts what reaches you",
+    "Every Conductor answer is shown with its reason and can be undone"
+   ],
+   "cons": [
+    "New authority: the Conductor answers questions and contained permission requests, so its rules need care and a review",
+    "A wrong routine answer can run before you see it (undo after the fact)"
+   ],
+   "effort": "Medium to large: A plus answering tools fenced to each project's rules, undo, and tests",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Today's relay, batched",
+   "summary": "One message listing the waiting items with links to answer each in its project; the cards stay in the Waiting drawer.",
+   "pros": [
+    "Smallest change"
+   ],
+   "cons": [
+    "No shorter than today; still sends you to each project"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "B",
+ "recommendation": "B is what you asked for: fewer things reach you, each with a recommendation and one tap, and the routine ones are handled with a visible reason and undo. The hard stops stay yours in every option.",
+ "confidence": "lean",
+ "change_mind": "If you'd rather see every item before anything is answered, take A; B can be switched on later.",
+ "chosen": null,
+ "reason": "",
+ "decided_on": null,
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "cross-project agent authority",
+   "value": "a Conductor above the project orchestrators digests what waits for the human, recommends per item and lets the human answer in place; it settles routine items within each project's own rules with undo; merges, pushes, installs, deletes and decisions always go to the human"
+  }
+ ],
+ "images": [
+  {
+   "file": "images/0060-a-one-digest-four-items-with.png",
+   "caption": "A: one digest, four items with recommendations, answered in place (phone)",
+   "option": "A",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0060-b-three-real-calls-plus-i-handled-these.png",
+   "caption": "B: three real calls, plus 'I handled these' with reasons and Undo (phone)",
+   "option": "B",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0060-b-on-the-desktop.png",
+   "caption": "B on the desktop",
+   "option": "B",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0060-c-todays-relay-batched-into-one-message.png",
+   "caption": "C: today's relay batched into one message (phone)",
+   "option": "C",
+   "kind": "mockup"
+  }
+ ]
+}
