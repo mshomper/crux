@@ -130,9 +130,26 @@ test('no back-and-forth: the orchestrator\'s answer to a Conductor brief does no
   await sleep(80);
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);
   assert.equal(c.pending.length, 0);
+  // Only the first summary after the brief is its answer: the next one with a question wakes it again.
+  hub.postSummary(a, orch, summary({ questions: ['Ship the warning?'] }));
+  await sleep(80);
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
+  sent.length = 0;
+  c.holder().state = 'idle';
   // After your own message to that orchestrator, its next summary with a question wakes it again.
   hub.fromYou(a, 'orchestrator', 'Also check the calendar.');
   hub.postSummary(a, orch, summary({ questions: ['Which calendar?'] }));
+  await sleep(80);
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
+});
+
+test('an old brief does not silence a project: a first summary more than 30 minutes later wakes it', async () => {
+  const { hub, c, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.');
+  const brief = a.log.events.findLast(e => e.conductor);
+  brief.ts = new Date(Date.now() - 5 * 3600e3).toISOString();   // the brief was at 09:00, the question at 14:00
+  hub.postSummary(a, orch, summary({ questions: ['Worker w1 is done: merge it?'] }));
   await sleep(80);
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
 });
