@@ -5,6 +5,9 @@
 // c: { place, thread, role, name, state, contextPct, model, modelSeen, effort, live, retiring, retireAt, activity,
 //      waiting, wakes, pendingWake, events }
 
+import { nameHtml } from './agent-name.js';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 export const CONDUCTOR = '~conductor';      // its place name in URLs and live events (lib/conductor.mjs)
 export const CONDUCTOR_THREAD = 'conductor';
 export const SHOWN = 6;                     // the latest items shown; the rest fold behind "Show earlier"
@@ -42,6 +45,8 @@ export function applyEvent(c, ev) {
 const SHOWS = new Set(['message', 'summary', 'notice', 'visual', 'lesson_proposed', 'wake', 'reminder', 'cards', 'reply']);
 // An orchestrator's reply to a Conductor request (decision 62), as its one-line head in the chat.
 export const replyHead = ev => `${ev.project} · ${ev.from} replied to ${ev.request}`;
+// The same on screen: the orchestrator by its project and "vN" (crux v6 replied to req-004), escaped.
+export const replyHeadHtml = ev => `${nameHtml(ev.from, ev.project)} replied to ${esc(ev.request)}`;
 export const threadItems = c => (c?.events || []).filter(e => e.thread === CONDUCTOR_THREAD && SHOWS.has(e.type));
 
 // ---------- cards in its chat (decision 60 A) ----------

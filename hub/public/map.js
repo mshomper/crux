@@ -22,6 +22,7 @@ import { NeedsPopover } from './map-needs.js';
 import { CoreReadout, coreReadout, conductorReadout } from './map-readout.js';
 import { hueOf, rgb01, describe } from './models.js';
 import { robot, robotKey, conductorBot } from './robots.js';
+import { nameHtml, nameText, namesInHtml, namesInText, vchip } from './agent-name.js';
 import { hubLayout, hubBays, hubFeed } from './map-hub.js';
 import { SectorView, conductorCore } from './map-sectors.js';
 
@@ -343,7 +344,8 @@ export class LiveMap {
       if (el.className !== full) el.className = full;
       if ((el.style.getPropertyValue('--mh') || null) !== hue) hue ? el.style.setProperty('--mh', hue) : el.style.removeProperty('--mh');
       el.dataset.thread = s.thread;
-      const label = s.kind === 'worker' || s.kind === 'ghost' ? s.name : s.name.toUpperCase();
+      // an outgoing orchestrator (ghost) by its project and holder number, "atlas v5"; workers by their own names
+      const label = s.kind === 'ghost' ? nameText(s.name, this.model.project?.name) : s.kind === 'worker' ? s.name : s.name.toUpperCase();
       const b = el.querySelector('b'), i = el.querySelector('i');
       if (b.textContent !== label) b.textContent = label;
       if (i.dataset.text !== sub) this.decode(i, sub);
@@ -374,12 +376,13 @@ export class LiveMap {
     const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;
     const holder = `
       <div class="th-k">Orchestrator role</div>
-      <div class="th-name"><span>${esc(core.holder || 'No holder')}</span><span class="th-state ${esc(st)}">${esc(st)}</span></div>
+      <div class="th-name"><span>${core.holder ? nameHtml(core.holder, this.model.project?.name) : 'No holder'}</span><span class="th-state ${esc(st)}">${esc(st)}</span></div>
       <div class="th-act">${core.activity ? `<span class="caret">&gt;</span> ${esc(core.activity)}` : core.state === 'vacant' ? 'Starts when you send a message' : 'Point at or tap the core for details'}</div>
       <div class="th-stats"><span><b>${busy}</b>working</span><span><b>${workers.length - busy}</b>resting</span><span class="${needs ? 'hot' : ''}"><b>${needs}</b>need you</span>${this.hidden ? `<span><b>+${this.hidden}</b>off map</span>` : ''}</div>`;
     if (this.holderEl.dataset.html !== holder) { this.holderEl.dataset.html = holder; this.holderEl.innerHTML = holder; }
     const top = this.model.feed[0];
-    const tick = top ? `${top.actor} ▸ ${top.text}` : 'Waiting for activity';
+    const pj = this.model.project?.name;
+    const tick = top ? `${nameText(top.actor, pj)} ▸ ${namesInText(top.text, pj)}` : 'Waiting for activity';
     if (this.r.ticker.dataset.text !== tick) this.decode(this.r.ticker, tick);
   }
 
@@ -391,7 +394,7 @@ export class LiveMap {
     const st = !core.holder ? (core.state === 'vacant' ? 'not running' : 'asleep') : core.state === 'writing' ? 'writing handoff' : core.state;
     const holder = `
       <div class="th-k">Conductor</div>
-      <div class="th-name"><span>${esc(core.holder || 'Conductor')}</span><span class="th-state ${esc(core.state)}">${esc(st)}</span></div>
+      <div class="th-name"><span>${core.holder ? nameHtml(core.holder) : 'Conductor'}</span><span class="th-state ${esc(core.state)}">${esc(st)}</span></div>
       <div class="th-act">${core.activity ? `<span class="caret">&gt;</span> ${esc(core.activity)}` : core.holder ? 'Point at or tap the core for details' : 'Wakes when you write to it in All projects'}</div>
       <div class="th-stats"><span><b>${P.length}</b>projects</span><span><b>${working}</b>working</span><span class="${waiting ? 'hot' : ''}"><b>${waiting}</b>need you</span></div>`;
     if (this.holderEl.dataset.html !== holder) { this.holderEl.dataset.html = holder; this.holderEl.innerHTML = holder; }
@@ -403,16 +406,17 @@ export class LiveMap {
   syncFeed() {
     if (this.hubMode) {
       // one line per project, those waiting on you first; a click opens its orchestrator
-      const html = hubFeed(this.places).map(l => `<li class="tone-${esc(l.tone)}" data-pj="${esc(l.name)}" title="Open ${esc(l.name)}'s orchestrator"><time></time><b>${esc(l.name)}</b><span>${esc(l.text)}</span></li>`).join('')
+      const html = hubFeed(this.places).map(l => `<li class="tone-${esc(l.tone)}" data-pj="${esc(l.name)}" title="Open ${esc(l.name)}'s orchestrator"><time></time><b>${esc(l.name)}${l.v != null ? ` ${vchip(l.v, l.holder)}` : ''}</b><span>${esc(l.text)}</span></li>`).join('')
         || '<li class="empty"><span>No projects yet.</span></li>';
       if (html !== this.feedKey) { this.feedKey = html; this.feedEl.innerHTML = html; }
       return;
     }
     const ago = ts => { const s = Math.max(0, (Date.now() - ts) / 1000); return s < 50 ? 'now' : s < 3600 ? `${Math.round(s / 60)}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`; };
+    const pj = this.model.project?.name;   // orchestrators show as this project and "vN"
     const threadOf = l => l.actor === 'You' ? (l.target === 'orchestrator' ? 'orchestrator' : l.target) : /^orchestrator-/.test(l.actor) ? 'orchestrator' : this.model.project?.agents.some(a => a.name === l.actor) ? l.actor : '';
     const html = this.model.feed.map(l => {
       const t = threadOf(l);
-      return `<li class="tone-${esc(l.tone)} ${l.id === this.freshLine ? 'fresh' : ''}" ${t && t !== 'you' ? `data-thread="${esc(t)}"` : ''}><time>${ago(l.ts)}</time><b>${esc(l.actor)}${l.target && l.target !== 'you' && l.kind === 'message' ? ` <em>▸ ${esc(l.target)}</em>` : ''}</b><span>${esc(l.text)}</span></li>`;
+      return `<li class="tone-${esc(l.tone)} ${l.id === this.freshLine ? 'fresh' : ''}" ${t && t !== 'you' ? `data-thread="${esc(t)}"` : ''}><time>${ago(l.ts)}</time><b>${nameHtml(l.actor, pj)}${l.target && l.target !== 'you' && l.kind === 'message' ? ` <em>▸ ${esc(l.target)}</em>` : ''}</b><span>${namesInHtml(l.text, pj)}</span></li>`;
     }).join('') || '<li class="empty"><span>Nothing yet. Pulses and actions show up here.</span></li>';
     if (html !== this.feedKey) { this.feedKey = html; this.feedEl.innerHTML = html; }
     this.freshLine = null;

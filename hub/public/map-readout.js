@@ -3,6 +3,7 @@
 // context used and where it hands off, the permission mode, and what waits on you.
 
 import { modelLabel, EFFORT_WORDS, pips, hueOf } from './models.js';
+import { nameText } from './agent-name.js';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const STATE_WORDS = { vacant: 'No holder', asleep: 'Asleep', idle: 'Idle', starting: 'Starting', working: 'Working', writing: 'Writing its handoff', error: 'Stopped on an error' };
@@ -24,7 +25,8 @@ export function coreReadout(core, { busy = 0, resting = 0 } = {}) {
   if (core.waiting) rows.push({ k: 'Needs you', v: `${core.waiting} waiting`, tone: 'red' });
   rows.push({ k: 'Workers', v: `${busy} working, ${resting} resting` });
   if (core.activity) rows.push({ k: 'Doing', v: core.activity });
-  return { title: core.holder || 'Orchestrator', sub: `Generation ${core.generation}`, state: STATE_WORDS[core.state] || core.state, hue: hueOf(core.model), effort: core.effort, rows };
+  // the holder by its project and number, "atlas v3" (agent-name.js); its role underneath
+  return { title: core.holder ? nameText(core.holder, core.project) : 'Orchestrator', sub: 'Orchestrator', state: STATE_WORDS[core.state] || core.state, hue: hueOf(core.model), effort: core.effort, rows };
 }
 
 // The Conductor's readout (decision 57 C): the core of the All projects map. core: conductorCore() (map-sectors.js);
@@ -49,7 +51,7 @@ function conductorRows(core, { projects = 0, waiting = 0 } = {}) {
   if (core.waiting) rows.push({ k: 'Needs you', v: `${core.waiting} waiting`, tone: 'red' });
   rows.push(across);
   if (core.activity) rows.push({ k: 'Doing', v: core.activity });
-  return { title: core.holder, sub: 'Conductor', state: STATE_WORDS[core.state] || core.state, hue: hueOf(core.model), effort: core.effort, rows };
+  return { title: nameText(core.holder), sub: 'Every project', state: STATE_WORDS[core.state] || core.state, hue: hueOf(core.model), effort: core.effort, rows };
 }
 
 export class CoreReadout {
