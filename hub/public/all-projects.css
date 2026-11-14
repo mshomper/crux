@@ -59,7 +59,7 @@ html[data-hud] .hub-threads{border-bottom-color:var(--hud-line)}
 .ctx-ring text{font:600 9px var(--mono);fill:var(--hud-ice);text-anchor:middle;dominant-baseline:central}
 
 /* ---------- the Conductor's thread, pinned at the top of All projects (decision 55) ---------- */
-.hub-conductor{display:flex;flex-direction:column;gap:10px;padding:2px 12px 14px;margin:0 -2px 6px;border:1px solid var(--hud-line);border-radius:6px;
+.hub-conductor{display:flex;flex-direction:column;gap:10px;padding:2px 12px 14px;margin-bottom:6px;border:1px solid var(--hud-line);border-radius:6px;
   background:linear-gradient(180deg,rgba(111,227,255,.06),rgba(111,227,255,.015) 60%,transparent)}
 .cd-head .ava{position:relative;width:28px;height:28px;border-radius:4px;display:grid;place-items:center;background:var(--surface2)}
 .cd-head .ava.ring::after{content:"";position:absolute;inset:-2px;border-radius:6px;border:1.5px solid var(--mh);pointer-events:none;box-shadow:0 0 10px -2px var(--mh)}
@@ -77,6 +77,6 @@ html[data-hud] .hub-threads{border-bottom-color:var(--hud-line)}
   .ha-l1 .mchip :is(.mtype,.mver,.msep,.meff){display:none}
   .hub-meta{display:none}
   .cd-head .hub-meta{display:block}
-  .hub-conductor{padding:2px 8px 12px;margin:0 0 6px}
+  .hub-conductor{padding:2px 8px 12px}
   .hub-go{min-width:44px;min-height:44px}
 }
