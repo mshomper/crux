@@ -13,7 +13,9 @@ import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs'
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, dataDir } from './lib/relaunch.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp, dataDir } from './lib/relaunch.mjs';
+import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
+import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
 import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
@@ -43,18 +45,28 @@ if (testPair) args.splice(args.indexOf('--test-pair'), 1);
 const pairError = testPairError({ wanted: testPair, noAgents, port, env: process.env });
 if (pairError) { console.error(pairError); process.exit(1); }
 
-// A test hub never falls back to ~/crux/hub.json or the current folder: that loads real projects.
-const folderError = testHubFolderError({ noAgents, folders: args });
+// Decisions 52 and 54: a hub that came with the desktop app (its build step leaves bundled.json here) has a first-run
+// screen for the API key, the project folders and Claude Code, and never takes its own folder as a project.
+// CRUX_HUB_BUNDLED=1 plays the part on a test hub only (tests and screenshots).
+const BUNDLED = isBundled(here) || (noAgents && process.env.CRUX_HUB_BUNDLED === '1');
+const cfg = join(process.env.CRUX_HOME || join(homedir(), 'crux'), 'hub.json');
+// A test hub never falls back to ~/crux/hub.json or the current folder: that loads real projects. A throwaway
+// hub.json in the temp folder is fine (the desktop app's first-run rehearsal).
+const tempHome = inTemp(process.env.CRUX_HOME) && existsSync(cfg);
+const folderError = testHubFolderError({ noAgents, folders: args, tempHome });
 if (folderError) { console.error(folderError); process.exit(1); }
 let projects = args.map(a => resolve(a));
-const cfg = join(process.env.CRUX_HOME || join(homedir(), 'crux'), 'hub.json');
 // hub.json may also hold { "defaults": { "worker": { "model": "sonnet", "effort": "medium" }, "orchestrator": {...} } }.
 let hubCfg = {};
 if (existsSync(cfg)) {
-  try { hubCfg = JSON.parse(readFileSync(cfg, 'utf8')); } catch (e) { console.warn(`Could not read ${cfg}: ${e.message}`); }
+  try { hubCfg = JSON.parse(readFileSync(cfg, 'utf8').replace(/^﻿/, '')); } catch (e) { console.warn(`Could not read ${cfg}: ${e.message}`); }
 }
-if (!projects.length) projects = (hubCfg.projects || []).map(p => resolve(p));
-if (!projects.length) projects = [process.cwd()];
+if (!projects.length && (!noAgents || tempHome)) projects = (hubCfg.projects || []).map(p => resolve(p)).filter(p => existsSync(p) || !BUNDLED);
+if (!projects.length && !BUNDLED) projects = [process.cwd()];
+// The saved API key (setup screen) becomes the agents' key, unless one is already set in the environment. Only on
+// the desktop app's own hub: a hub run from a clone never switches from its login to a key someone saved.
+const secrets = new Secrets();
+let keySource = BUNDLED ? secrets.apply() : null;
 
 // Hub settings (decision 21: routePermissions, permissionTimeoutSec; decision 44 B: the handoff defaults) start from
 // hub.json and the --retire-at flag, and are saved in ~/.crux-hub; a change made in the page wins from then on.
@@ -62,6 +74,31 @@ const settings = new HubSettings({ initial: { ...hubCfg, retireAt } });
 // Decision 55: the Conductor keeps its log and handoffs in the hub's own state folder, next to settings.json.
 const hub = new Hub({ projects, defaults: hubCfg.defaults, settings, noAgents, conductorDir: join(dataDir(), 'conductor') });
 if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
+// Decision 54 B: the Claude Code the agents run. A clone's SDK finds its own; the desktop app's hub uses the copy the
+// setup screen downloaded, or one installed on the PC when that is missing.
+const claudeExp = claudeExpected();
+const claudeDownload = new ClaudeDownload({ exp: claudeExp });
+hub.claudeCode = () => resolveClaude({ exp: claudeExp }).path;
+// What the setup screen shows. The key itself never leaves this process; only whether one is saved and, to this PC,
+// its last four characters.
+function setupState(local) {
+  const cc = resolveClaude({ exp: claudeExp });
+  const download = claudeDownload.state();
+  const ccReady = claudeReady(cc, download);
+  const hasKey = !!(process.env.ANTHROPIC_API_KEY && process.env.CRUX_HUB_USE_API_KEY === '1');
+  const folders = [...hub.projects.values()].map(p => p.dir);
+  return {
+    bundled: BUNDLED, local, testHub: hub.noAgents, needed: BUNDLED && (!hasKey || !folders.length || !ccReady),
+    key: { saved: hasKey, from: hasKey ? (keySource === 'environment' ? 'environment' : 'saved') : null, end: local && hasKey ? keyEnd(process.env.ANTHROPIC_API_KEY) : '' },
+    folders, configFolders: (readHubConfig(cfg).projects || []),
+    claude: { source: cc.source, ready: ccReady, fallback: cc.source === 'previous' || cc.source === 'installed', version: claudeExp?.version || null, path: local ? cc.path : null, sizeMB: claudeExp ? Math.round(claudeExp.size / 1048576) : null, download }
+  };
+}
+let picking = false;   // one Windows folder picker at a time
+const pcOnly = ctx => {
+  if (!BUNDLED) throw new GuardError('Setup belongs to the desktop app\'s own hub.', 404);
+  if (!ctx.local) throw new GuardError('Setup is done on the PC the hub runs on.', 403);
+};
 hub.usage.start();   // decision 36: the plan meters, asked of any live agent every few minutes
 
 // Phone notifications (decision 19): a card that needs you becomes a push to every subscribed phone.
@@ -144,12 +181,47 @@ async function body(req, limit = 1e6) {
 
 const routes = {
   // conductor (decision 55): the hub-wide agent's state and its thread's events (lib/conductor.mjs view()), or null.
-  'GET /api/state': () => ({ projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt }),
+  'GET /api/state': () => ({ projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/brief': ({ project, id }) => {
     const b = hub.project(String(project || '')).board.brief(id);
     if (!b) throw new Error(`No decision ${id}`);
     return b;
+  },
+  // ---------- decisions 52 and 54: the desktop app's first run (PC only, desktop app's hub only) ----------
+  'GET /api/setup': (_, { local }) => setupState(local),
+  // The API key: shape-checked, then asked of Anthropic (a free list of models; a test hub never calls out), then kept
+  // in ~/.crux-hub/secrets.json. Never logged and never sent back.
+  'POST /api/setup/key': async ({ apiKey }, ctx) => {
+    pcOnly(ctx);
+    const k = String(apiKey || '').trim();
+    if (!KEY_SHAPE.test(k)) throw new Error('That does not look like an Anthropic API key. It starts with sk-ant- (copy it from console.anthropic.com, API keys).');
+    const check = hub.noAgents ? 'unchecked' : await checkKey(k);
+    if (check === 'refused') throw new Error('Anthropic did not accept this key. Check that it was copied whole and is still active in console.anthropic.com.');
+    secrets.save(k);
+    process.env.ANTHROPIC_API_KEY = k;
+    process.env.CRUX_HUB_USE_API_KEY = '1';
+    keySource = 'saved';
+    return { check, setup: setupState(true) };
+  },
+  // Download the exact Claude Code this hub's SDK expects; the page follows its progress through GET /api/setup.
+  'POST /api/setup/claude': async (_, ctx) => { pcOnly(ctx); await claudeDownload.start(); return setupState(true); },
+  // The Windows folder picker, on this PC's screen.
+  'POST /api/setup/browse': async (_, ctx) => {
+    pcOnly(ctx);
+    if (picking) throw new Error('The folder picker is already open: look for it in front of the app window.');
+    picking = true;
+    try { return { path: await pickFolder() }; } finally { picking = false; }
+  },
+  // The project folders: saved into hub.json, then the hub restarts to load them (the page reconnects by itself).
+  'POST /api/setup/folders': ({ folders }, ctx) => {
+    pcOnly(ctx);
+    const { folders: ok, problems } = checkFolders(folders);
+    if (problems.length) throw new Error(problems.join('\n'));
+    if (!ok.length) throw new Error('Add at least one project folder.');
+    saveProjects(ok, cfg);
+    setTimeout(restart, 300);
+    return { saved: ok, restarting: true };
   },
   // Restart from the hub's own menu: answer first, then hand over to a fresh hub started the same way (M010).
   'POST /api/restart': () => { setTimeout(restart, 200); return { ok: true, boot: BOOT, log: logFile(port) }; },

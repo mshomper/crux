@@ -1,10 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Crux Hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "dev.crux.hub",
   "build": {
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeBuildCommand": "node scripts/stage.mjs"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRFOThGRTVEOEMxOTk1MTkKUldRWmxSbU1YZjZZVG9yNTB3bmRIWCtUaEJYTFd2djUxL2N2SGgxTDNaSE5BalZmekxnbWQzY0YK",
+      "endpoints": ["https://github.com/mshomper/crux/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
   },
   "app": {
     "withGlobalTauri": false,
@@ -16,9 +24,11 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico", "icons/icon.png"],
+    "resources": { "../staging/runtime/": "runtime/" },
     "shortDescription": "Crux Hub",
-    "longDescription": "A window and tray icon for the Crux hub running on this PC.",
+    "longDescription": "Crux Hub for Windows: the hub, its Node and a window and tray icon. Claude Code is downloaded from Anthropic on first run.",
     "windows": {
       "nsis": {
         "installMode": "currentUser",

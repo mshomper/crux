@@ -147,6 +147,10 @@ export class Agent {
     this.beginRun();
     const options = this.options();
     options.env = cleanEnv();
+    // Decision 54 B: the desktop app's hub runs the Claude Code its setup screen downloaded (or one installed on the
+    // PC); a clone's SDK finds its own copy, and no path is passed.
+    const claude = this.hub.claudeCode?.();
+    if (claude) options.pathToClaudeCodeExecutable = claude;
     this.restartWhenIdle = false;
     const q = this.q = query({ prompt: this.inbox, options });
     this.setState('starting');

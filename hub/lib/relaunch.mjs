@@ -4,7 +4,7 @@
 // Each running hub writes how it was started to <data>/launch-<port>.json, and a restarted hub's output goes to
 // <data>/hub-<port>.log. <data> is CRUX_HUB_DATA or ~/.crux-hub, outside every repo, as for the hub's settings.
 import { spawn, execFile } from 'node:child_process';
-import { openSync, closeSync, writeFileSync, readFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { openSync, closeSync, writeFileSync, readFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
@@ -27,11 +27,19 @@ export function testHubWithoutAgents({ args = [], env = process.env, tmp = tmpdi
 }
 
 // A test hub must be given its project folders on the command line; it never reads ~/crux/hub.json or uses the
-// current folder, which would load real projects. Returns the message to print, or '' when the start is fine.
-export function testHubFolderError({ noAgents, folders = [] }) {
-  return noAgents && !folders.length
+// current folder, which would load real projects. The exception: CRUX_HOME inside the temp folder, whose hub.json
+// is a throwaway one (the desktop app's first-run rehearsal). Returns the message to print, or '' when the start is fine.
+export function testHubFolderError({ noAgents, folders = [], tempHome = false }) {
+  return noAgents && !folders.length && !tempHome
     ? 'Test hub refused: give its project folders on the command line (it never falls back to hub.json or the current folder).'
     : '';
+}
+
+// Whether a folder (CRUX_HOME, CRUX_HUB_DATA) sits inside the system temp folder.
+export function inTemp(dir, tmp = tmpdir()) {
+  if (!dir) return false;
+  const norm = s => resolve(String(s)).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+  return (norm(dir) + '/').startsWith(norm(tmp) + '/');
 }
 
 // --test-pair (decision 47): a test hub may start with one fake paired device, so screenshots and tests can make
@@ -75,10 +83,14 @@ export function saveLaunch(spec, env = process.env) {
 }
 
 // The saved start for a port, or the plain one: node server.mjs in the hub folder (projects from ~/crux/hub.json).
-export function readLaunch(port = DEFAULT_PORT, env = process.env) {
+// A saved start whose node, script or folder is gone (the desktop app reinstalled elsewhere, a deleted clone) is
+// passed over for the plain one.
+export function readLaunch(port = DEFAULT_PORT, env = process.env, exists = existsSync) {
   try {
     const s = JSON.parse(readFileSync(launchFile(port, env), 'utf8'));
-    if (s && typeof s.node === 'string' && Array.isArray(s.args) && typeof s.cwd === 'string') return { port: Number(port), node: s.node, args: s.args.map(String), cwd: s.cwd };
+    const script = s && Array.isArray(s.args) ? s.args.map(String).find(a => /server\.mjs$/.test(a)) : null;
+    const there = s && exists(s.node) && exists(s.cwd) && (!script || exists(resolve(String(s.cwd), script)));
+    if (there && typeof s.node === 'string' && Array.isArray(s.args) && typeof s.cwd === 'string') return { port: Number(port), node: s.node, args: s.args.map(String), cwd: s.cwd };
   } catch { }
   return { port: Number(port), node: process.execPath, args: [join(HUB_DIR, 'server.mjs'), ...(Number(port) === DEFAULT_PORT ? [] : ['--port', String(port)])], cwd: HUB_DIR };
 }
