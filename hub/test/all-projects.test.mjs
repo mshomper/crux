@@ -88,9 +88,10 @@ test('the page sends every answer to the card\'s project', () => {
   assert.match(APP, /function sendPicks\(p, picks\) \{[\s\S]*?api\('\/api\/pick', \{ project: p\.name/);
   assert.match(APP, /api\('\/api\/dismiss', \{ project: projectOf\(dq\)\.name/);
   assert.match(APP, /api\('\/api\/lessons', \{ project: projectOf\(ls\)\.name/);
-  assert.match(APP, /sendAnswers\(sa\.dataset\.sendAnswers, projectOf\(sa\)\)/);
-  assert.match(APP, /sendAnswers\(e\.target\.dataset\.q, projectOf\(e\.target\)\)/);
-  assert.match(APP, /function sendAnswers\(id, p = proj\(\)\) \{\s*const ev = openQuestions\(p\)/);
+  // (the third argument: the Conductor's pre-fill, only for its chat copy of the card, decision 60)
+  assert.match(APP, /sendAnswers\(sa\.dataset\.sendAnswers, projectOf\(sa\), chatSuggestAt\(sa, projectOf\(sa\)/);
+  assert.match(APP, /sendAnswers\(e\.target\.dataset\.q, projectOf\(e\.target\), chatSuggestAt\(e\.target, projectOf\(e\.target\)/);
+  assert.match(APP, /function sendAnswers\(id, p = proj\(\), suggest = null\) \{\s*const ev = openQuestions\(p\)/);
   assert.match(APP, /api\('\/api\/answer', \{ project: p\.name/);
   // permission answers go by request id, which is unique across the hub
   assert.match(APP, /api\('\/api\/approval', \{ id: ap\.dataset\.approve/);

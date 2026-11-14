@@ -103,6 +103,7 @@ html[data-hud] .hub-threads{border-bottom-color:var(--hud-line)}
 .cd-done .icon{width:13px;height:13px}
 .cd-item.rec-allow [data-approve]:not([data-always]),.cd-item.rec-deny [data-deny]{box-shadow:0 0 0 2px var(--hud-cyan),0 0 14px rgba(111,227,255,.45)}
 .cd-foot{margin:0;font-size:12px;line-height:1.5}
+.cd-item .opt.offer{border-color:var(--hud-cyan);box-shadow:0 0 0 1px var(--hud-cyan),0 0 14px -4px rgba(111,227,255,.6)}
 .cd-cards-done{opacity:.75}
 @media (max-width:720px){
   .cd-cards-k{flex-wrap:wrap;row-gap:8px}

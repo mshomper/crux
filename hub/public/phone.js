@@ -69,8 +69,14 @@ export function initPhone({ button, view, openCard, post: act = post }) {
   // ---------- presence: so a card you are already looking at does not buzz your phone ----------
   const client = sessionStorage.getItem('crux-hub:client') || Math.random().toString(36).slice(2);
   sessionStorage.setItem('crux-hub:client', client);
-  let lastInput = Date.now(), timer = 0;
-  for (const t of ['pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(t, () => { lastInput = Date.now(); }, { passive: true, capture: true });
+  // Only real input counts (decision 60: are you here?): a page load, such as the reload after a hub restart, is not
+  // input. The first input after a quiet minute reports at once, so your return is seen without waiting for the timer.
+  let lastInput = 0, timer = 0;
+  for (const t of ['pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(t, () => {
+    const quiet = Date.now() - lastInput > 60000;
+    lastInput = Date.now();
+    if (quiet) report();
+  }, { passive: true, capture: true });
   const report = () => {
     clearTimeout(timer);
     const visible = document.visibilityState === 'visible';

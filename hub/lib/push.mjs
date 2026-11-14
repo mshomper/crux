@@ -165,7 +165,7 @@ export class Push {
   // device, with input in the last 5 minutes. Otherwise you are away: idle 5+ minutes, locked or asleep, the app not
   // connected, and no open page.
   present(now = Date.now()) {
-    if (this.pcInUse(now)) return true;
+    if (this.pcActive(now)) return true;
     for (const p of this.presences.values()) {
       const age = now - p.ts;
       if (age <= LOOK_FRESH_MS && p.visible && (p.idleMs || 0) + age < PC_IDLE_MS) return true;
@@ -173,8 +173,13 @@ export class Push {
     return false;
   }
 
-  // Decision 60 A: one notice for the Conductor's digest after 30 minutes away, in place of one per card. It opens the
-  // digest in All projects. info: { id (the digest event), count, projects }.
+  // Decision 60 A: holdForDigest(card) (server.mjs: the Conductor's holdsCard) says whether the Conductor holds this
+  // question or decision for its digest. Never a permission card or a notice.
+  heldForDigest(card) { return (card.kind === 'question' || card.kind === 'decision') && !!this.holdForDigest?.(card); }
+
+  // Decision 60 A: one notice for the Conductor's digest, in place of one per card: after 30 minutes away, or when you
+  // come back (then routed as any card: the PC while in use, else the phone; none while a page shows All projects).
+  // It opens the digest in All projects. info: { id (the digest event), count, projects }.
   digest(info, ctx = this.ctx) {
     const n = info.count, m = info.projects;
     const card = { kind: 'digest', card: `digest:${info.id}`, project: '~conductor', thread: HUB_THREAD,
@@ -211,10 +216,13 @@ export class Push {
   // The PC is in use and can show a notice: a desktop app reported recently, the PC is not locked, there was input
   // in the last 5 min, and Windows notices are on. Otherwise the phone gets the card at once.
   pcInUse(now = Date.now()) {
-    for (const d of this.desktops.values()) {
-      const age = now - d.ts;
-      if (d.ts && age <= DESK_FRESH_MS && !d.locked && d.notices && d.idleMs + age < PC_IDLE_MS) return true;
-    }
+    for (const d of this.desktops.values()) if (d.notices && deskActive(d, now)) return true;
+    return false;
+  }
+  // Someone is at the PC: input in the last 5 minutes and not locked, whether or not Windows notices are on
+  // (decision 60's presence; notices only decide whether the PC can show one).
+  pcActive(now = Date.now()) {
+    for (const d of this.desktops.values()) if (deskActive(d, now)) return true;
     return false;
   }
   // Somewhere a PC notice can show at all (used when no phone is set up).
@@ -249,9 +257,10 @@ export class Push {
     if (this.sent.has(card.card) || this.sentDesk.has(card.card)) return;
     const id = `${card.card} (${card.project})`;
     if (!this.open(card, ctx)) return this.log(`${id}: settled before it went out`);
-    // Decision 60 A: while you are away and the Conductor is on, questions and decisions wait for its one digest
-    // notice. Permission requests (they may need you now) and raises to Trusted still go at once.
-    if ((card.kind === 'question' || card.kind === 'decision') && this.holdForDigest?.()) return this.log(`${id}: held for the Conductor's digest (you are away)`);
+    // Decision 60 A: a question or decision the Conductor is holding for its digest (you are away) waits for the
+    // digest's one notice. Asked per card, so a card the Conductor did not take is never held. Permission requests
+    // (they may need you now) and raises to Trusted still go at once.
+    if (this.heldForDigest(card)) return this.log(`${id}: held for the Conductor's digest (you are away)`);
     const looking = isLooking(card, this.presences.values());
     // Decision 58 A: the PC while it is in use (or when no phone is set up).
     const desk = this.desktops.size > 0 && (this.pcInUse() || (!this.subs.length && this.desktopCanShow()));
@@ -264,7 +273,7 @@ export class Push {
     }
     if (looking) return this.log(`${id}: held, you are looking at it in an open hub page`);
     if (desk) {
-      this.toDesk(card, { follow: this.subs.length > 0 });
+      this.toDesk(card, { follow: this.subs.length > 0 && card.kind !== 'digest' });   // a digest notice has no phone follow-up
       return this.log(`${id}: PC${this.subs.length ? ', phone in 3 minutes if it still waits' : ''}`);
     }
     this.toPhone(card);
@@ -289,6 +298,7 @@ export class Push {
     const id = `${cardId} (${f.card.project})`;
     if (this.sent.has(cardId)) return;
     if (!this.ctx || !this.open(f.card, this.ctx)) return this.log(`${id}: settled, no phone follow-up`);
+    if (this.heldForDigest(f.card)) return this.log(`${id}: no phone follow-up, held for the Conductor's digest`);
     if (isLooking(f.card, this.presences.values())) return this.log(`${id}: no phone follow-up, you are looking at it`);
     this.toPhone(f.card);
     this.log(`${id}: phone, as it still waits after the PC notice`);
@@ -337,6 +347,9 @@ export class Push {
     return ok;
   }
 }
+
+// A desktop app that reported recently, on a PC that is not locked and had input in the last 5 minutes.
+const deskActive = (d, now) => { const age = now - d.ts; return !!d.ts && age <= DESK_FRESH_MS && !d.locked && d.idleMs + age < PC_IDLE_MS; };
 
 function safeJson(file, dflt) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return dflt; } }
 export const pushId = endpoint => createHash('sha256').update(String(endpoint)).digest('hex').slice(0, 16);

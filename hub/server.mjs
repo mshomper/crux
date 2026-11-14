@@ -115,7 +115,7 @@ push.resume(pushCtx);   // decision 58: phone follow-ups for PC notices sent bef
 if (hub.conductor) {
   hub.presence = () => push.present();
   push.onPresence = () => { try { hub.conductor.presenceReport(); } catch (e) { console.warn('Conductor digest failed:', e.message); } };
-  push.holdForDigest = () => hub.conductor.wakesOn() && !push.present();
+  push.holdForDigest = card => hub.conductor.holdsCard(card);   // only cards the Conductor really holds
   hub.digestNotice = info => push.digest(info, pushCtx);
 }
 const hosts = extraHosts();

@@ -58,7 +58,10 @@ test('away: cards are held, no wake and no cards in the chat; your return posts 
   assert.equal(toC().length, 1);
   assert.match(toC()[0][1], /^\[Hub: digest after time away for/);
   assert.match(toC()[0][1], /Add intro/);
-  assert.equal(notices.length, 0, 'no phone notice when you are back');
+  assert.match(toC()[0][1], /Then call stay_quiet and write nothing else/, 'a turn only for the cards ends quietly');
+  // One notice for the return digest too (push.mjs routes it: the PC in use, else the phone; none while a page shows
+  // All projects), so held cards are never left without one.
+  assert.deepEqual(notices.map(n => [n.count, n.digest]), [[2, 'return']]);
   // A report while nothing is held does nothing.
   c.presenceReport();
   assert.equal(cards().length, 1);
@@ -123,7 +126,43 @@ test('your message while cards are held: the digest goes up above it, and its no
   assert.ok(ci < mi, 'cards first, then your message');
   assert.equal(toC().length, 1);
   assert.equal(toC()[0][1], 'Morning. What happened?');
-  assert.match(c.holder().notes?.[0] || '', /\[Hub: digest after time away/);
+  // The notes request rides in front of your message and must not end the turn: it says to answer you afterwards.
+  const rider = c.holder().notes?.[0] || '';
+  assert.match(rider, /\[Hub: digest after time away/);
+  assert.match(rider, /message follows: after the notes, answer it/);
+  assert.doesNotMatch(rider, /stay_quiet|Then stop/);
+  // And note_cards itself does not end a turn (it is not on Claude Code's turn-ending list).
+  assert.doesNotMatch(c.holder().queryOptions().env.CLAUDE_CODE_TERMINAL_MCP_TOOLS, /note_cards/);
+});
+
+test('a due reminder with fresh cards: the notes request comes first and says to deal with the reminder after', async () => {
+  const { c, a, ask, toC } = await setup();
+  c.wakeMs = 60000;   // the cards wait in the batching window, and the reminder takes them along
+  ask(a, 'Retry failed uploads three times before showing the error?');
+  c.setReminder(new Date(Date.now() + 1000).toISOString(), 'Stretch', 'conductor-1');
+  c.dueReminders(Date.now() + 5000);
+  const msg = toC().at(-1)[1];
+  assert.match(msg, /^\[Hub: new cards for/);
+  assert.match(msg, /After the notes, deal with the reminder/);
+  assert.match(msg, /Reminder rem-001 is due/);
+  assert.doesNotMatch(msg, /stay_quiet/);
+});
+
+test('notices are held only for cards the Conductor holds: one source of truth', async () => {
+  const { hub, c, a, b, presence, ask } = await setup({ here: false });
+  const q = ask(a, 'Retry failed uploads three times before showing the error?');
+  hub.postSummary(b, hub.ensureOrchestrator(b), summary({ decisions_needed: [7] }));
+  const s = b.log.events.findLast(e => e.type === 'summary').id;
+  assert.equal(c.holdsCard({ project: 'alpha', card: `question:${q}` }), true);
+  assert.equal(c.holdsCard({ project: 'beta', card: 'decision:7' }), true);
+  assert.equal(c.holdsCard({ project: 'beta', card: `question:${s}` }), false, 'a card it did not take');
+  assert.equal(c.holdsCard({ project: 'alpha', card: 'decision:7' }), false, 'another project');
+  assert.equal(c.holdsCard({ project: 'beta', card: 'approval:x' }), false);
+  presence.here = true;
+  assert.equal(c.holdsCard({ project: 'alpha', card: `question:${q}` }), false, 'you are here: nothing is held');
+  presence.here = false;
+  hub.settings.set({ conductorWakes: false });
+  assert.equal(c.holdsCard({ project: 'alpha', card: `question:${q}` }), false, 'wakes off: nothing is held');
 });
 
 test('a due reminder still wakes it while you are away, and leaves the held cards held (also after a restart)', async () => {
@@ -187,28 +226,41 @@ test('the answer path: your answer from a chat card is yours in that project; th
 
 test('Take all recommendations: what it sends, card by card (page rules)', () => {
   const ev = { items: [
-    { project: 'alpha', card: 'decision:1' }, { project: 'alpha', card: 'decision:2' }, { project: 'beta', card: 'question:s1' },
-    { project: 'beta', card: 'question:s2' }, { project: 'beta', card: 'approval:ap1' }, { project: 'beta', card: 'approval:ap2' }, { project: 'beta', card: 'question:s3' }
+    { project: 'alpha', card: 'decision:1' }, { project: 'alpha', card: 'decision:2' }, { project: 'alpha', card: 'decision:3' },
+    { project: 'beta', card: 'question:s1' }, { project: 'beta', card: 'question:s2' }, { project: 'beta', card: 'question:s4' },
+    { project: 'beta', card: 'approval:ap1' }, { project: 'beta', card: 'approval:ap2' }, { project: 'beta', card: 'approval:ap3' }, { project: 'beta', card: 'question:s3' }
   ] };
   const notes = { items: new Map([
-    ['alpha|decision:1', { fill: 'B' }], ['alpha|decision:2', { fill: '' }], ['beta|question:s1', { fill: 'Retry 3 times' }],
-    ['beta|question:s2', { fill: 'Yes' }], ['beta|approval:ap1', { fill: 'allow' }], ['beta|approval:ap2', { fill: 'allow' }], ['beta|question:s3', { fill: 'Yes' }]
+    ['alpha|decision:1', { fill: "I'd pick B" }], ['alpha|decision:2', { fill: '' }], ['alpha|decision:3', { fill: 'Either A or B' }],
+    ['beta|question:s1', { fill: 'Retry 3 times' }], ['beta|question:s2', { fill: 'Yes' }], ['beta|question:s4', { fill: 'Yes' }],
+    ['beta|approval:ap1', { fill: 'allow' }], ['beta|approval:ap2', { fill: 'allow' }], ['beta|approval:ap3', { fill: 'allow' }], ['beta|question:s3', { fill: 'Yes' }]
   ]) };
   const look = it => ({
-    'decision:1': { kind: 'decision', status: 'open', options: ['A', 'B'], recommended: 'A' },
-    'decision:2': { kind: 'decision', status: 'open', options: ['A', 'B'], recommended: 'A' },
-    'question:s1': { kind: 'question', open: [{ i: 0 }] },
+    'decision:1': { kind: 'decision', status: 'open', options: ['A', 'B'] },
+    'decision:2': { kind: 'decision', status: 'open', options: ['A', 'B'] },   // no letter in the note: left out
+    'decision:3': { kind: 'decision', status: 'open', options: ['A', 'B'] },   // two letters: left out
+    'question:s1': { kind: 'question', open: [{ i: 0 }], edited: false },
     'question:s2': { kind: 'question', open: [{ i: 0 }, { i: 1 }] },        // several rows: answered on the card
+    'question:s4': { kind: 'question', open: [{ i: 0 }], edited: true },    // you typed in or cleared its box: its own Send
     'approval:ap1': { kind: 'approval', stops: [] },
     'approval:ap2': { kind: 'approval', stops: ['push to main'] },           // a hard stop takes its own tap
+    'approval:ap3': { kind: 'approval', stops: [], escalated: true },        // escalated to you: its own tap
     'question:s3': null                                                      // settled meanwhile
   })[it.card];
   assert.deepEqual(CP.recommendedActions(ev, notes, look), [
     { project: 'alpha', kind: 'decision', id: 1, choice: 'B' },
-    { project: 'alpha', kind: 'decision', id: 2, choice: 'A' },              // no letter from it: the record's own
     { project: 'beta', kind: 'question', id: 's1', index: 0, text: 'Retry 3 times' },
     { project: 'beta', kind: 'approval', id: 'ap1', allow: true }
   ]);
+  // The letter rule the chat's Take button uses too, so the note and the button agree.
+  assert.equal(CP.pickLetter('A, Web Mercator', ['A', 'B']), 'A');
+  assert.equal(CP.pickLetter("I'd pick B", ['A', 'B']), 'B');
+  assert.equal(CP.pickLetter('C', ['A', 'B']), '');
+  assert.equal(CP.pickLetter('Web Mercator', ['A', 'B']), '');
+  assert.equal(CP.pickLetter('A or B', ['A', 'B']), '');
+  // A digest notice clears once no card in it waits.
+  assert.equal(CP.digestWaiting({ items: [{ card: 'x' }, { card: 'y' }] }, it => it.card === 'y'), true);
+  assert.equal(CP.digestWaiting({ items: [{ card: 'x' }] }, () => false), false);
   assert.equal(CP.digestLine(1, 1), '1 needs you, from 1 project.');
   assert.equal(CP.digestLine(4, 3), '4 need you, from 3 projects.');
   assert.equal(CP.lastLine({ events: [{ type: 'cards', thread: CONDUCTOR_THREAD, digest: 'return', items: [{}, {}] }] }), 'Digest: 2 cards for you');
@@ -246,6 +298,57 @@ test('presence: here while the PC is in use or a page shows with recent input; a
   assert.equal(push.present(now), false, 'locked');
   push.desktopDetach('pc', d);
   assert.equal(reports, 5);   // three page reports, two from the desktop app
+});
+
+test('the PC in use counts as here even with Windows notices off; notices only decide whether the PC can show one', () => {
+  const { push } = pushWith();
+  const now = Date.now();
+  push.desktopAttach('pc', () => { });
+  push.desktopPresence('pc', { idleMs: 1000, locked: false, notices: false }, now);
+  assert.equal(push.present(now), true);
+  assert.equal(push.pcActive(now), true);
+  assert.equal(push.pcInUse(now), false, 'no PC notice can show');
+});
+
+test('the return digest notice: none while a page shows All projects; the PC while in use (no phone follow-up); else the phone', async () => {
+  const pc = [];
+  { // a page in front, showing All projects
+    const { push, pushed, logged, ctx } = pushWith();
+    push.presence('pc-page', { project: 'alpha', thread: 'all', visible: true, focused: true, idleMs: 0 });
+    push.digest({ id: 'd1', count: 2, projects: 1, digest: 'return' }, ctx);
+    await flushAsync();
+    assert.equal(pushed.length, 0);
+    assert.ok(logged.some(s => /digest:d1.*looking/.test(s)));
+  }
+  { // at the PC, another view
+    const { push, pushed, ctx } = pushWith();
+    let followUps = 0;
+    push.timers = { setTimeout: () => { followUps++; }, clearTimeout() { } };
+    push.desktopAttach('pc', (event, data) => pc.push([event, data.card]));
+    push.desktopPresence('pc', { idleMs: 1000, locked: false });
+    push.digest({ id: 'd2', count: 3, projects: 2, digest: 'return' }, ctx);
+    await flushAsync();
+    assert.deepEqual(pc, [['notify', 'digest:d2']]);
+    assert.equal(pushed.length, 0);
+    assert.equal(followUps, 0, 'no 3-minute phone follow-up for a digest');
+  }
+  { // nowhere in use: the phone
+    const { push, pushed, ctx } = pushWith();
+    push.digest({ id: 'd3', count: 1, projects: 1, digest: 'return' }, ctx);
+    await flushAsync();
+    assert.deepEqual(pushed.map(x => [x.card, x.title]), [['digest:d3', '1 card needs you']]);
+  }
+});
+
+test('a PC notice\'s 3-minute phone follow-up is held too while the Conductor holds that card', async () => {
+  const { push, pushed, logged, ctx } = pushWith();
+  push.ctx = ctx;
+  push.follow.set('decision:3', { card: { kind: 'decision', card: 'decision:3', project: 'alpha', thread: 'needs', title: 't', body: 'b' }, due: 0 });
+  push.holdForDigest = card => card.card === 'decision:3';
+  push.followUp('decision:3');
+  await flushAsync();
+  assert.equal(pushed.length, 0);
+  assert.ok(logged.some(s => /no phone follow-up, held for the Conductor's digest/.test(s)));
 });
 
 test('notices while away: questions and decisions wait for the digest, permission requests still go at once; one notice per digest', async () => {

@@ -54,6 +54,7 @@ const S = {
   activity: {},
   pending: new Set(),
   drafts: store.get('drafts', {}),   // answers typed in Needs you, by "<summary id>:<question place>"
+  cdEdited: new Set(store.get('cd-edited', [])),   // draft keys you typed in or cleared: no Conductor suggestion there (decision 60)
   boardOpen: store.get('board-open', {}),   // board sections you opened or closed, by key
   retiredOpen: store.get('retired-open', false),   // the Retired section of the thread list, folded by default
   retiredOlder: false   // "Show older" in it: for this visit only, so old ones age out again on the next load
@@ -334,13 +335,17 @@ function visualEl(p, ev, compact) {
 // takes it out of Needs you without telling the agent; the summary stays in its thread.
 // Drafts live in S.drafts, so the list can redraw while you type.
 const draftKey = (id, i) => `${id}:${i}`;
-function filledAnswers(ev) { return ev.open.map(q => ({ index: q.i, text: (S.drafts[draftKey(ev.id, q.i)] || '').trim() })).filter(a => a.text); }
-function questionCard(ev, p = proj()) {
+// suggest: { [draft key]: text }, the Conductor's pre-fill for a card in its chat (decision 60). It shows in that copy's
+// box only, while you have not typed or cleared anything for that question in any copy (S.cdEdited); it is never saved
+// as a draft, so Needs you and the thread copies stay empty and a reload never refills a box you cleared.
+const boxText = (k, suggest) => S.drafts[k] ?? (suggest?.[k] && !S.cdEdited.has(k) ? suggest[k] : '');
+function filledAnswers(ev, suggest = null) { return ev.open.map(q => ({ index: q.i, text: boxText(draftKey(ev.id, q.i), suggest).trim() })).filter(a => a.text); }
+function questionCard(ev, p = proj(), { suggest = null } = {}) {
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
   const where = ev.thread === 'orchestrator' ? 'the orchestrator thread' : ev.thread;
-  const filled = filledAnswers(ev).length;
+  const filled = filledAnswers(ev, suggest).length;
   const rows = ev.open.map(q => {
-    const k = draftKey(ev.id, q.i), draft = S.drafts[k] || '';
+    const k = draftKey(ev.id, q.i), draft = boxText(k, suggest);
     const yn = isYesNo(q.text) ? ['Yes', 'No'].map(w => `<button class="qquick ${draft === w ? 'on' : ''}" data-quick="${esc(k)}" data-word="${w}" aria-pressed="${draft === w}">${w}</button>`).join('') : '';
     return `<div class="qrow">
       <p class="qtext">${esc(q.text)}</p>
@@ -360,10 +365,11 @@ function questionCard(ev, p = proj()) {
 }
 const sendLabel = (n, of) => !n ? 'Send answers' : n === 1 && of === 1 ? 'Send answer' : `Send ${n} answer${n === 1 ? '' : 's'}`;
 // p: the project the card belongs to (projectOf), so answers from All projects reach the right agent.
-function sendAnswers(id, p = proj()) {
+// suggest: the Conductor's pre-fill when Send is pressed on its chat copy (what that box shows).
+function sendAnswers(id, p = proj(), suggest = null) {
   const ev = openQuestions(p).find(q => q.id === id);
   if (!ev || S.sending) return;
-  const answers = filledAnswers(ev);
+  const answers = filledAnswers(ev, suggest);
   if (!answers.length) return;
   S.sending = true;
   act(async () => {
@@ -379,6 +385,8 @@ function draftChanged(box) {
   S.drafts[box.dataset.answer] = box.value;
   if (!box.value) delete S.drafts[box.dataset.answer];
   store.set('drafts', S.drafts);
+  // Your own words now, in every copy: the Conductor's suggestion no longer shows, and Take all leaves this one alone.
+  if (!S.cdEdited.has(box.dataset.answer)) { S.cdEdited.add(box.dataset.answer); store.set('cd-edited', [...S.cdEdited].slice(-300)); }
   growBox(box, 140);
   const ev = openQuestions(projectOf(box)).find(q => q.id === box.dataset.q);
   const btn = box.closest('.card')?.querySelector('[data-send-answers]');
@@ -544,13 +552,14 @@ function retiredSection(p, workers) {
 }
 
 // ---------- render: cards ----------
-// take: the letter the Take button offers, when the Conductor recommends another than the record (decision 60).
+// take (a card in the Conductor's chat, decision 60): the letter its note names, offered by the Take button and lit on
+// its option; 'none' when the note names no option, so no Take button disagrees with it.
 function decisionCard(p, d, { take = null } = {}) {
   if (!d) return '';
-  const offer = take || d.recommended;
+  const offer = take === 'none' ? null : take || d.recommended;
   const open = d.status === 'open', found = d.status === 'found';
   const opts = (d.options || []).map(o => `
-    <button class="opt ${o.key === d.recommended ? 'rec' : ''} ${o.key === d.chosen ? 'chosen' : ''}" data-pick="${d.id}" data-choice="${o.key}" ${open ? '' : 'disabled'}>
+    <button class="opt ${o.key === d.recommended ? 'rec' : ''} ${take && o.key === take ? 'offer' : ''} ${o.key === d.chosen ? 'chosen' : ''}" data-pick="${d.id}" data-choice="${o.key}" ${open ? '' : 'disabled'}>
       <span class="key">${esc(o.key)}</span>
       <span class="oname">${esc(o.name)}${o.key === d.recommended ? `<span class="chip rec">${icon('star')}recommended${d.confidence ? ' · ' + esc(d.confidence) : ''}</span>` : ''}</span>
       <span class="osum">${esc(o.summary || '')}</span>
@@ -797,26 +806,34 @@ function chatCard(it) {
   const kind = CP.cardKind(it.card), id = CP.cardId(it.card);
   if (kind === 'approval') {
     const ev = p.events.find(e => e.type === 'approval' && e.approval === id);
-    return ev && S.pending.has(id) ? { kind, p, ev, stops: ev.stops || [] } : null;
+    return ev && S.pending.has(id) ? { kind, p, ev, stops: ev.stops || [], escalated: !!escalation(p, id) } : null;
   }
   if (kind === 'decision') {
     const d = openDecisions(p).find(x => x.id === Number(id));
-    return d ? { kind, p, d, status: d.status, options: (d.options || []).map(o => o.key), recommended: d.recommended || null } : null;
+    return d ? { kind, p, d, status: d.status, options: (d.options || []).map(o => o.key) } : null;
   }
   if (kind === 'question') {
     const q = openQuestions(p).find(x => x.id === id);
-    return q ? { kind, p, q, open: q.open } : null;
+    const keys = q ? q.open.map(x => draftKey(q.id, x.i)) : [];
+    return q ? { kind, p, q, open: q.open, edited: keys.some(k => S.cdEdited.has(k) || k in S.drafts) } : null;
   }
   return null;
 }
-// Pre-fill a question's reply box once from the Conductor's note (never over what you typed or cleared).
-S.prefilled ||= new Set();
-function prefill(q, fill) {
-  if (!fill || q.open.length !== 1) return;
-  const k = draftKey(q.id, q.open[0].i);
-  if (S.prefilled.has(k)) return;
-  S.prefilled.add(k);
-  if (!S.drafts[k]) S.drafts[k] = fill;
+// The Conductor's note on a card, from the latest cards event in its chat that holds it.
+function noteFor(project, card) {
+  const evs = S.conductor?.events || [];
+  const ev = evs.findLast(e => e.type === 'cards' && e.items.some(i => i.project === project && i.card === card));
+  return ev ? CP.cardNotes(evs, ev.id).items.get(CP.itemKey({ project, card })) || null : null;
+}
+// Its pre-fill for a question card's chat copy (one open row only), as questionCard's suggest.
+function suggestFor(project, q) {
+  const fill = String(noteFor(project, `question:${q.id}`)?.fill || '').trim();
+  return fill && q.open.length === 1 ? { [draftKey(q.id, q.open[0].i)]: fill } : null;
+}
+// The Conductor's pre-fill when el sits in its chat copy of question card id (what that box shows), else null.
+function chatSuggestAt(el, p, id) {
+  const q = el?.closest?.('.cd-item') && openQuestions(p).find(x => x.id === id);
+  return q ? suggestFor(p.name, q) : null;
 }
 function cardsBlock(ev) {
   const notes = CP.cardNotes(S.conductor?.events, ev.id);
@@ -831,8 +848,9 @@ function cardsBlock(ev) {
     const fill = String(r.note?.fill || '').trim();
     const sum = r.note ? `<p class="cd-sum">${esc(r.note.summary)}${r.note.recommend ? ` <b class="cd-rec">I recommend ${esc(r.note.recommend.replace(/\.$/, ''))}.</b>` : ''}</p>` : '';
     let card = '', rec = '';
-    if (r.c.kind === 'question') { prefill(r.c.q, fill); card = questionCard(r.c.q, r.c.p); }
-    else if (r.c.kind === 'decision') { const l = fill.match(/^([A-Za-z])\b/)?.[1]?.toUpperCase(); card = decisionCard(r.c.p, r.c.d, { take: r.c.options.includes(l) ? l : null }); }
+    if (r.c.kind === 'question') card = questionCard(r.c.q, r.c.p, { suggest: suggestFor(r.it.project, r.c.q) });
+    // With a note, the Take button offers the letter it names, or none at all, so the two always agree.
+    else if (r.c.kind === 'decision') card = decisionCard(r.c.p, r.c.d, r.note ? { take: CP.pickLetter(fill, r.c.options) || 'none' } : {});
     else { rec = /^allow\b/i.test(fill) ? ' rec-allow' : /^deny\b/i.test(fill) ? ' rec-deny' : ''; card = approvalCard(r.c.ev, r.c.p); }
     return `<section class="cd-item hub-group${rec}" data-pj="${esc(r.it.project)}"><span class="cd-k">${label(r)}</span>${sum}${card}</section>`;
   };
@@ -847,7 +865,9 @@ function cardsBlock(ev) {
   return `<div class="cd-cards${ev.digest ? ' is-digest' : ''}">${head}${rows.map(item).join('')}${foot}</div>`;
 }
 // "Take all recommendations": each still-waiting card answered with its recommendation, through the same calls as
-// tapping it (picks, answers, Allow or Deny), so each counts as yours in its project.
+// tapping it (picks, answers, Allow or Deny), so each counts as yours in its project. A question goes only while its
+// box still shows the Conductor's suggestion (what you see is what is sent); one you typed in waits for its own Send,
+// and your drafts are left as they are.
 function takeRecommendations(id) {
   const ev = S.conductor?.events.find(e => e.id === id && e.type === 'cards');
   if (!ev || S.sending) return;
@@ -860,11 +880,7 @@ function takeRecommendations(id) {
       for (const name of new Set(recs.filter(r => r.kind === 'decision').map(r => r.project))) {
         await sendPicks(S.projects.find(p => p.name === name), recs.filter(r => r.kind === 'decision' && r.project === name).map(r => ({ id: r.id, choice: r.choice })));
       }
-      for (const r of recs.filter(x => x.kind === 'question')) {
-        await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });
-        delete S.drafts[draftKey(r.id, r.index)];
-      }
-      store.set('drafts', S.drafts);
+      for (const r of recs.filter(x => x.kind === 'question')) await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });
       for (const r of recs.filter(x => x.kind === 'approval')) await api('/api/approval', { id: r.id, allow: r.allow });
     } finally { S.sending = false; }
   });
@@ -1261,7 +1277,9 @@ function cardWaiting(tag) {
   const [kind, id] = [tag.slice(0, tag.indexOf(':')), tag.slice(tag.indexOf(':') + 1)];
   return S.projects.some(p => kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
     : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
-      : kind === 'question' ? openQuestions(p).some(q => q.id === id) : true);
+      : kind === 'question' ? openQuestions(p).some(q => q.id === id)
+        // Decision 60: the Conductor's digest notice, until every card in that digest is settled.
+        : kind === 'digest' ? CP.digestWaiting(S.conductor?.events.find(e => e.id === id && e.type === 'cards'), it => !!chatCard(it)) : true);
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.projects.length) phone.clearSettled(cardWaiting); });
 
@@ -1390,12 +1408,13 @@ document.addEventListener('click', e => {
   if (dq) return act(() => api('/api/dismiss', { project: projectOf(dq).name, question: dq.dataset.dismiss, ...('index' in dq.dataset ? { index: Number(dq.dataset.index) } : {}) }));
   const qq = e.target.closest('[data-quick]');
   if (qq) {
-    const box = [...document.querySelectorAll('.qbox')].find(x => x.dataset.answer === qq.dataset.quick);
+    // This copy's box (the same question can be drawn in the chat, Needs you and its thread at once).
+    const box = qq.closest('.qrow')?.querySelector(`.qbox[data-answer="${CSS.escape(qq.dataset.quick)}"]`);
     if (box) { box.value = box.value === qq.dataset.word ? '' : qq.dataset.word; draftChanged(box); focusIfDesk(box); }   // a thumb on Yes needs no keyboard
     return;
   }
   const sa = e.target.closest('[data-send-answers]');
-  if (sa && !sa.disabled) return sendAnswers(sa.dataset.sendAnswers, projectOf(sa));
+  if (sa && !sa.disabled) return sendAnswers(sa.dataset.sendAnswers, projectOf(sa), chatSuggestAt(sa, projectOf(sa), sa.dataset.sendAnswers));
   const ls = e.target.closest('[data-lesson]');
   if (ls) return act(() => api('/api/lessons', { project: projectOf(ls).name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
   const lu = e.target.closest('[data-level-undo]'); if (lu) return undoLevel(proj(), lu.dataset.levelUndo);
@@ -1489,7 +1508,7 @@ $('#cols').addEventListener('keydown', e => {
   if (what === 'native') return;
   e.preventDefault();
   if (what === 'newline') insertLineBreak(e.target);
-  else sendAnswers(e.target.dataset.q, projectOf(e.target));
+  else sendAnswers(e.target.dataset.q, projectOf(e.target), chatSuggestAt(e.target, projectOf(e.target), e.target.dataset.q));
 });
 
 function toggleRouting() {

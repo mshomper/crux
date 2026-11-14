@@ -132,25 +132,18 @@ test('hard cap: at most 6 automatic wakes an hour; cards still go up, your messa
   assert.equal(c.autoWakes(Date.now() + 61 * 60000).length, 0);
 });
 
-test('no back-and-forth: the orchestrator\'s answer to a Conductor brief does not wake it, even with a question', async () => {
+test('a summary answering a Conductor brief still brings its question to you: anything that asks you is never skipped', async () => {
   const { hub, c, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
   assert.equal(c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.'), "Sent to alpha's orchestrator.");
-  hub.postSummary(a, orch, summary({ done: ['scoped it'], questions: ['Red or amber?'] }));
+  hub.postSummary(a, orch, summary({ done: ['scoped it'], questions: ['Red or amber for the frost warning?'] }));
   await sleep(80);
-  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);
-  assert.equal(c.pending.length, 0);
-  // Only the first summary after the brief is its answer: the next one with a question wakes it again.
-  hub.postSummary(a, orch, summary({ questions: ['Ship the warning?'] }));
-  await sleep(80);
+  assert.equal(c.home.log.ofType('cards').length, 1);   // the card is in the chat, so the digest and its notice cover it too
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
-  sent.length = 0;
-  c.holder().state = 'idle';
-  // After your own message to that orchestrator, its next summary with a question wakes it again.
-  hub.fromYou(a, 'orchestrator', 'Also check the calendar.');
-  hub.postSummary(a, orch, summary({ questions: ['Which calendar?'] }));
+  // A summary that asks nothing still wakes nothing.
+  hub.postSummary(a, orch, summary({ done: ['shipped it'] }));
   await sleep(80);
-  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
+  assert.equal(c.home.log.ofType('cards').length, 1);
 });
 
 test('an old brief does not silence a project: a first summary more than 30 minutes later wakes it', async () => {
@@ -579,7 +572,7 @@ test('quiet turns: stay_quiet and post_summary end its turn with no Claude Code 
   c.fromYou('[Hub: updates since you last heard]\n- alpha: a card');
   const k = c.holder();
   const o = k.queryOptions();
-  assert.deepEqual(o.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS.split(','), ['mcp__crux__post_summary', 'mcp__crux__stay_quiet', 'mcp__crux__note_cards']);
+  assert.deepEqual(o.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS.split(','), ['mcp__crux__post_summary', 'mcp__crux__stay_quiet']);   // not note_cards (decision 60 review)
   assert.ok(o.env.PATH || o.env.Path, 'the clean environment is kept underneath');
   assert.ok(o.allowedTools.includes('mcp__crux__stay_quiet'));
   assert.equal(c.decide('mcp__crux__stay_quiet', {}, k).behavior, 'allow');

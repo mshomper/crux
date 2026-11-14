@@ -59,13 +59,25 @@ export function cardNotes(events, id) {
   return out;
 }
 
+// The option letter the Conductor's pre-fill names: a clean letter ("A", "A, Web Mercator"), else the one valid option
+// letter written as a word in it ("I'd pick B"). '' when there is none, or more than one: then that card offers no
+// Take of its own in the chat and stays out of Take all, so the note and the button always agree.
+export function pickLetter(fill, options = []) {
+  const s = String(fill || '').trim();
+  const first = s.match(/^([A-Za-z])\b/)?.[1]?.toUpperCase();
+  const named = new Set([...(first ? [first] : []), ...[...s.matchAll(/\b([A-Z])\b/g)].map(m => m[1])].filter(l => options.includes(l)));
+  return named.size === 1 ? [...named][0] : '';   // "A or B" names two: no pick
+}
+
 // What "Take all recommendations" sends, for the cards still waiting. look(item) describes one card as the page sees
 // it: null when it no longer waits, else { kind, options (decision letters), status (decision), open (question rows
-// [{ i }]), stops (permission hard stops), recommended (the decision record's own pick) }.
-// - a decision: the Conductor's letter when it is one of the options, else the record's own recommendation; a found
+// [{ i }]), edited (question: you typed in or cleared its box), stops (permission hard stops), escalated (permission
+// sent to you by the orchestrator or the hub) }.
+// - a decision: the letter the Conductor's note names (pickLetter), never the record's own as a stand-in; a found
 //   decision only on "confirm" or "reject";
-// - a question with one row still open: the reply text (several rows are answered one by one, on the card);
-// - a permission card: "allow" or "deny", never one carrying a hard stop (those take their own tap).
+// - a question with one row still open whose box still shows the Conductor's suggestion: that text, which is what the
+//   box shows. A box you typed in or cleared takes its own Send; several rows are answered on the card;
+// - a permission card: "allow" or "deny", never one carrying a hard stop or escalated to you (those take their own tap).
 // Returns [{ project, kind, id, choice | text + index | allow }].
 export function recommendedActions(ev, notes, look) {
   const out = [];
@@ -75,19 +87,21 @@ export function recommendedActions(ev, notes, look) {
     const fill = String(notes.items.get(itemKey(it))?.fill || '').trim(), id = cardId(it.card);
     if (c.kind === 'decision') {
       if (c.status === 'found') { const w = /^(confirm|yes)\b/i.test(fill) ? 'confirm' : /^reject\b/i.test(fill) ? 'reject' : ''; if (w) out.push({ project: it.project, kind: 'decision', id: Number(id), choice: w }); continue; }
-      const letter = fill.match(/^([A-Za-z])\b/)?.[1]?.toUpperCase();
-      const choice = letter && (c.options || []).includes(letter) ? letter : c.recommended && (c.options || []).includes(c.recommended) ? c.recommended : '';
+      const choice = pickLetter(fill, c.options || []);
       if (choice) out.push({ project: it.project, kind: 'decision', id: Number(id), choice });
     } else if (c.kind === 'question') {
-      if (fill && c.open?.length === 1) out.push({ project: it.project, kind: 'question', id, index: c.open[0].i, text: fill });
+      if (fill && !c.edited && c.open?.length === 1) out.push({ project: it.project, kind: 'question', id, index: c.open[0].i, text: fill });
     } else if (c.kind === 'approval') {
-      if (c.stops?.length) continue;
+      if (c.stops?.length || c.escalated) continue;
       if (/^allow\b/i.test(fill)) out.push({ project: it.project, kind: 'approval', id, allow: true });
       else if (/^deny\b/i.test(fill)) out.push({ project: it.project, kind: 'approval', id, allow: false });
     }
   }
   return out;
 }
+
+// Does a digest still hold a card that waits? (A digest's phone notice clears once none does.)
+export const digestWaiting = (ev, waits) => (ev?.items || []).some(it => waits(it));
 
 // The digest's first line when the Conductor has not written its intro (yet): "4 need you, from 3 projects."
 export function digestLine(waiting, projects) {
