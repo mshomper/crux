@@ -22,6 +22,10 @@ tauri-plugin-updater = "2"
 # Windows notices with a click callback, so a click opens the exact card (decision 58 A, approved with the pick).
 tauri-winrt-notification = "0.8.1"
 
+[target.'cfg(windows)'.dependencies]
+# Asks Windows whether notices are on (Matt's OK, 2026-11-14). Same version and feature the toast crate already builds.
+windows = { version = "0.62.2", features = ["UI_Notifications"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

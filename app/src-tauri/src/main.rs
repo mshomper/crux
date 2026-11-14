@@ -320,9 +320,19 @@ mod pc_state {
         let rc = unsafe { RegGetValueW(HKEY_CURRENT_USER, k.as_ptr(), v.as_ptr(), RRF_RT_REG_DWORD, std::ptr::null_mut(), &mut data as *mut u32 as *mut u8, &mut size) };
         (rc == 0).then_some(data)
     }
-    // Whether Windows lets this app show notices: the master switch (Settings, System, Notifications) and the app's
-    // own switch there. Unset means on, as Windows treats it.
+    // Whether Windows lets this app show notices. Asks Windows itself (the app's notifier setting), which covers the
+    // master switch, the app's own switch and a registry value not yet picked up. Should Windows not answer (an app
+    // identity it doesn't know), falls back to reading the two switches from the registry.
     pub fn notices_on(app_id: &str) -> bool {
+        use windows::core::HSTRING;
+        use windows::UI::Notifications::{NotificationSetting, ToastNotificationManager};
+        match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id)).and_then(|n| n.Setting()) {
+            Ok(setting) => setting == NotificationSetting::Enabled,
+            Err(_) => notices_on_registry(app_id),
+        }
+    }
+    // The master switch (Settings, System, Notifications) and the app's own switch there. Unset means on.
+    fn notices_on_registry(app_id: &str) -> bool {
         let master = user_dword("Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications", "ToastEnabled").unwrap_or(1);
         let own = user_dword(&format!("Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\{app_id}"), "Enabled").unwrap_or(1);
         master != 0 && own != 0
