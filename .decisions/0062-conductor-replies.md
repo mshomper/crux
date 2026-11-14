@@ -1,7 +1,7 @@
 # 0062 How do orchestrators answer the Conductor?
 
-- Status: open
-- Date: 2026-11-14
+- Status: decided
+- Date: 2026-11-14, decided 2026-11-14
 - Lenses: architecture
 - Builds on: 0055, 0060
 - Settles: Conductor request replies = Conductor requests carry an id and expect a reply; orchestrators answer with a reply tool, reminded once if a turn ends without one; the reply wakes the Conductor with its text; the Conductor can read a project's latest round summaries; replies go only to the Conductor and the human
@@ -17,13 +17,17 @@ For you:
 - Replies go only to the Conductor and you, never into another project
 - Hard to undo: Small hub change (a reply tool, a reminder, a read tool); easy to remove
 
+## Decision
+
+**A: Reply tool, with a reminder.** Each Conductor request carries an id and is marked 'reply expected'. Orchestrators get reply_to_conductor(id, text). If a turn ends without a reply to an open request, the hub reminds the orchestrator once. The reply wakes the Conductor with its text, and the Conductor shows it to Matt in its chat (or folds several into one answer). The Conductor also gets a read tool for a project's latest round summaries.
+
 ## Context
 
 Matt, via the Conductor: orchestrators don't answer the Conductor's requests back to it; they post in their own threads, so he has to dig into each project, which defeats the point of relaying through the Conductor. From the Conductor's side: message_agent is one-way (no reply tool, and nothing tells the orchestrator an answer is expected); the Conductor gets a one-line notice that a project posted a summary but can't read its text (its read tools cover the board, latest handoff, Needs you and agents only). Results so far: a tidy-up sent to six orchestrators produced no report it could see; a handoff meant for it sat as a board memo; a status request was answered in the project's own thread. Decision 60 made the Conductor the single point of contact; this is the missing return path. The project boundary from decision 55 stays: a reply goes to the Conductor and Matt only.
 
 ## Options
 
-### A: Reply tool, with a reminder (recommended)
+### A: Reply tool, with a reminder (chosen) (recommended)
 
 Each Conductor request carries an id and is marked 'reply expected'. Orchestrators get reply_to_conductor(id, text). If a turn ends without a reply to an open request, the hub reminds the orchestrator once. The reply wakes the Conductor with its text, and the Conductor shows it to Matt in its chat (or folds several into one answer). The Conductor also gets a read tool for a project's latest round summaries.
 - Pro: Answers come back reliably and are clearly answers to a request

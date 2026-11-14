@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how a project's orchestrator answers a request the Conductor sent it. I recommend A: the orchestrator gets a reply tool, a Conductor request is marked as expecting an answer, the hub reminds it once if it forgets, and the reply lands in the Conductor's chat for you. Confidence: medium.",
  "for_you": [
   "Ask the Conductor for status, a tidy-up or a handoff across projects, and the answers come back into its chat; no more digging through each project's thread",
@@ -71,9 +71,9 @@
  "recommendation": "A gives a real return path: the orchestrator knows an answer is expected, says so plainly, and the Conductor gets it with no guessing. The summaries read tool covers the cases where it needs more context.",
  "confidence": "lean",
  "change_mind": "If orchestrators reliably answer in their summaries anyway, B is enough.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [
