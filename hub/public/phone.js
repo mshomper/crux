@@ -1,5 +1,6 @@
 // Phone side of the hub (decisions 18 and 19): home-screen install, notifications, and opening the card a
 // notification points at. Plain ES module; app.js passes in how to read the current view and open a card.
+import { READY_FLAG, openCardUrl } from './open-card.js';
 const post = (path, body) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(async r => {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.statusText);
@@ -24,6 +25,9 @@ export function initPhone({ button, view, openCard, post: act = post }) {
     // A tap on a notification while the hub is already open: the service worker hands us the card.
     navigator.serviceWorker.addEventListener('message', e => { if (e.data?.type === 'open-card') fromUrl(e.data.url); });
   }
+  // A click on a PC notice (decision 58): the desktop app posts the card to this page instead of reloading it.
+  addEventListener('message', e => { const u = openCardUrl(e, window); if (u) fromUrl(u); });
+  document.documentElement.dataset[READY_FLAG] = '1';
 
   // ---------- the bell ----------
   button.hidden = false;
