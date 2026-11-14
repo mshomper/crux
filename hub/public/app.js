@@ -4,7 +4,7 @@ import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
 import { hudBoot, openPanel, closePanel } from './hud.js';
-import { isYesNo, repeatsIn, pageStatus } from './questions.js';
+import { isYesNo, repeatsIn, pageAsk } from './questions.js';
 import * as AP from './all-projects.js';
 import * as CP from './conductor-view.js';
 import * as NM from './agent-name.js';
@@ -346,7 +346,11 @@ const draftKey = (id, i) => `${id}:${i}`;
 // box only, while you have not typed or cleared anything for that question in any copy (S.cdEdited); it is never saved
 // as a draft, so Needs you and the thread copies stay empty and a reload never refills a box you cleared.
 const boxText = (k, suggest) => S.drafts[k] ?? (suggest?.[k] && !S.cdEdited.has(k) ? suggest[k] : '');
-function filledAnswers(ev, suggest = null) { return ev.open.map(q => ({ index: q.i, text: boxText(draftKey(ev.id, q.i), suggest).trim() })).filter(a => a.text); }
+// own: the box holds your own words (typed, or your tap on Yes or No), not the Conductor's suggestion. Decision 64:
+// only an answer marked own can pre-approve a merge; the server gives nothing without it.
+function filledAnswers(ev, suggest = null) {
+  return ev.open.map(q => { const k = draftKey(ev.id, q.i), text = boxText(k, suggest).trim(); return { index: q.i, text, ...(S.drafts[k] != null && text ? { own: true } : {}) }; }).filter(a => a.text);
+}
 function questionCard(ev, p = proj(), { suggest = null } = {}) {
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
   const where = ev.thread === 'orchestrator' ? 'the orchestrator thread' : ev.thread;
@@ -644,12 +648,15 @@ function permLine(ev) {
 // small note saying where it waits, so it is asked in one card only.
 function summaryCard(p, ev, only = null, reps = null) {
   const sec = (label, xs) => xs?.length ? `<dt>${label}</dt><dd><ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul></dd>` : '';
-  const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· ${r.answered ? 'answered' : 'also'} in ${esc(r.of)}'s card</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
+  // Decision 64: a question hidden behind a decision card says so ("also in the D0059 card").
+  const also = r => `${r.answered ? 'answered' : 'also'} in ${r.decision ? `the ${esc(r.of)} card` : `${NM.nameHtml(r.of, p.name)}'s card`}`;
+  const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· ${also(r)}</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
   const decisions = (only || ev.decisions_needed || []).map(id => p.board.decisions.find(d => d.id === Number(id))).filter(Boolean);
+  // notes: lines given as questions with no question mark (decision 64): plain lines here, never a card.
   return `<article class="card summary">
     <div class="card-head">${icon('check')}<h3>${NM.nameHtml(ev.from, p.name)} finished a round</h3><span class="time">${timeOf(ev.ts)}</span></div>
-    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${qs}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
-      isTall([ev.done, ev.changed, ev.questions, ev.blocked_on, ev.next_step].flat().filter(Boolean).join('\n'), 700))}
+    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${qs}${sec('Notes', ev.notes)}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
+      isTall([ev.done, ev.changed, ev.questions, ev.notes, ev.blocked_on, ev.next_step].flat().filter(Boolean).join('\n'), 700))}
   </article>${decisions.map(d => decisionCard(p, d)).join('')}`;
 }
 
@@ -805,10 +812,19 @@ function conductorItem(ev) {
       case 'reminder': return `<div class="notice">${icon('clock')}Reminder set for ${esc(new Date(ev.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}: ${esc(ev.text)}</div>`;
       case 'wake': return `<div class="notice cd-wake" title="${esc(ev.text)}">${esc(CP.wakeLine(ev))} · ${timeOf(ev.ts)}</div>`;
       case 'cards': return cardsBlock(ev);
-      // Decision 62: the orchestrator's own words, folded to a line; the Conductor's answer to you follows.
-      case 'reply': return `<div class="cd-reply">${icon('orch')}<span class="cd-reply-k">${CP.replyHeadHtml(ev)} · ${timeOf(ev.ts)}</span>${fold('reply:' + ev.id, `<p class="cd-reply-t">${esc(ev.text)}</p>`, isTall(ev.text, 160))}</div>`;
+      // A reply the digest took along is drawn there, not here as well.
+      case 'reply': return CP.digestOf(S.conductor?.events, ev.id) ? '' : replyLine(ev);
       default: return '';
   }
+}
+
+// ---------- replies from orchestrators in the Conductor's chat (decision 62; Matt, 0.20.2) ----------
+// One folded line each: "crux replied · req-012", its first words and the time; a tap opens the whole reply in place.
+// The Conductor's own answer is the main message. A reply written to you directly (for_matt) shows in full.
+function replyLine(ev) {
+  if (ev.forMatt) return `<div class="cd-reply for-you"><span class="cd-reply-k" title="${esc(ev.from)} in ${esc(ev.project)}, written to you">${icon('orch')}<span>${CP.toYouHtml(ev)}</span><span class="time">${timeOf(ev.ts)}</span></span><div class="cd-reply-t">${md(ev.text)}</div></div>`;
+  const k = `reply:${ev.id}`, open = S.open.has(k);
+  return `<div class="cd-reply-wrap${open ? ' open' : ''}"><button type="button" class="cd-reply-line" data-expand="${esc(k)}" aria-expanded="${open}" title="${open ? 'Fold this reply' : 'Show the whole reply'}">${icon('chevron')}<span class="cd-rl-k">${CP.replyFoldHtml(ev)}</span><span class="cd-rl-t">${open ? '' : esc(CP.replyGist(ev.text))}</span><span class="time">${timeOf(ev.ts)}</span></button>${open ? `<div class="cd-reply-t">${md(ev.text)}</div>` : ''}</div>`;
 }
 
 // ---------- cards in the Conductor's chat (decision 60 A) ----------
@@ -860,11 +876,14 @@ function cardsBlock(ev) {
   const label = r => `${esc(r.it.project)} · ${CP.KIND_LABEL[CP.cardKind(r.it.card)] || 'Card'}`;
   // Settled ones fold to one line each; a block with nothing left waiting folds to a single line.
   // Decision 62: replies that came while you were away are part of the digest; the Conductor's answer to them follows.
-  const nr = (ev.replies || []).length;
-  const repliesLine = nr ? `${nr} repl${nr === 1 ? 'y' : 'ies'} from orchestrators came in too; the Conductor's answer follows.` : '';
+  // The digest's replies: one folded line each, inside the digest (Matt, 0.20.2).
+  const replyEvs = (ev.replies || []).map(id => S.conductor?.events.find(e => e.id === id)).filter(Boolean);
+  const nr = replyEvs.length;
+  const repliesLine = nr ? `${nr} repl${nr === 1 ? 'y' : 'ies'} from orchestrators:` : '';
+  const replyList = nr ? `<div class="cd-digest-replies"><p class="cd-k">${esc(repliesLine)}</p>${replyEvs.map(replyLine).join('')}</div>` : '';
   const dhead = inner => `<div class="cd-digest" data-card="digest:${esc(ev.id)}"><div class="cd-dk">${icon('projects')}<b>Digest</b><span class="time">${timeOf(ev.ts)}</span></div>${inner}</div>`;
-  if (!ev.items.length && nr) return `<div class="cd-cards is-digest">${dhead(`<p class="cd-intro">${esc(repliesLine)}</p>`)}</div>`;
-  if (!live.length) return `<div class="notice cd-cards-done">${icon('check')}${ev.digest ? 'Digest' : 'Cards'} from ${timeOf(ev.ts)}: all ${ev.items.length} answered</div>`;
+  if (!ev.items.length && nr) return `<div class="cd-cards is-digest">${dhead(replyList)}</div>`;
+  if (!live.length) return `<div class="notice cd-cards-done">${icon('check')}${ev.digest ? 'Digest' : 'Cards'} from ${timeOf(ev.ts)}: all ${ev.items.length} answered</div>${replyList}`;
   const item = r => {
     if (!r.c) return `<div class="cd-item done"><span class="cd-k">${label(r)}</span><span class="cd-done">${icon('check')}Answered</span></div>`;
     const fill = String(r.note?.fill || '').trim();
@@ -879,8 +898,8 @@ function cardsBlock(ev) {
   const nProj = new Set(live.map(r => r.it.project)).size;
   const take = recs.length ? `<button class="btn primary" data-take-recs="${esc(ev.id)}" title="Answer each card below with the recommendation shown on it, as if you tapped each one">${icon('check')}Take ${recs.length === 1 ? 'the recommendation' : `all ${recs.length} recommendations`}</button>` : '';
   const head = ev.digest
-    ? dhead(`<p class="cd-intro"><b>${esc(CP.digestLine(live.length, nProj))}</b>${notes.intro ? ` ${esc(notes.intro)}` : ''}${repliesLine ? ` ${esc(repliesLine)}` : ''}</p>
-        ${take ? `<div class="row">${take}<span class="faint">or answer one by one below</span></div>` : ''}`)
+    ? dhead(`<p class="cd-intro"><b>${esc(CP.digestLine(live.length, nProj))}</b>${notes.intro ? ` ${esc(notes.intro)}` : ''}</p>
+        ${take ? `<div class="row">${take}<span class="faint">or answer one by one below</span></div>` : ''}${replyList}`)
     : `<div class="cd-cards-k asks">${icon('inbox')}<b>New for you</b><span class="faint">${live.length} card${live.length === 1 ? '' : 's'}</span><span class="time">${timeOf(ev.ts)}</span>${recs.length > 1 ? take : ''}</div>`;
   const foot = ev.digest ? `<p class="faint cd-foot">While you're away, new cards wait here for one digest, at most every ${S.conductor?.digestMinutes || 30} minutes, with one phone notice. Your answers here count as yours in each project.</p>` : '';
   return `<div class="cd-cards${ev.digest ? ' is-digest' : ''}">${head}${rows.map(item).join('')}${foot}</div>`;
@@ -901,7 +920,7 @@ function takeRecommendations(id) {
       for (const name of new Set(recs.filter(r => r.kind === 'decision').map(r => r.project))) {
         await sendPicks(S.projects.find(p => p.name === name), recs.filter(r => r.kind === 'decision' && r.project === name).map(r => ({ id: r.id, choice: r.choice })));
       }
-      for (const r of recs.filter(x => x.kind === 'question')) await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });
+      for (const r of recs.filter(x => x.kind === 'question')) await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });   // never own: the Conductor's words
       for (const r of recs.filter(x => x.kind === 'approval')) await api('/api/approval', { id: r.id, allow: r.allow });
     } finally { S.sending = false; }
   });
@@ -963,7 +982,7 @@ function feedFor(t) {
     return html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
     const evs = threadEvents(p, t), once = AP.decisionCardsOnce(evs);   // one card per decision in a thread
-    const reps = repeatsIn(p.events, { decisionStatus: pageStatus(p) });   // repeats of a card still open elsewhere
+    const reps = repeatsIn(p.events, pageAsk(p));   // repeats of a card still open elsewhere
     const html = evs.map(ev => {
       switch (ev.type) {
         case 'message': return messageEl(p, ev, t);
@@ -978,7 +997,7 @@ function feedFor(t) {
         case 'lesson_proposed': return `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} proposed a lesson for your core profile (in Needs you)</span></div>`;
         case 'permission_answer': return permLine(ev);
         // Decision 62: the orchestrator's answer to a Conductor request; it went to the Conductor and you only.
-        case 'conductor_reply': return `<div class="notice cd-replied"><span>${icon('orch')}${NM.nameHtml(ev.from, p.name)} replied to the Conductor (${esc(ev.request)}): ${esc(String(ev.text || '').split('\n')[0].slice(0, 200))}</span></div>`;
+        case 'conductor_reply': return `<div class="notice cd-replied"><span>${icon('orch')}${NM.nameHtml(ev.from, p.name)} replied to the Conductor (${esc(ev.request)}${ev.forMatt ? ', for you' : ''}): ${esc(String(ev.text || '').split('\n')[0].slice(0, 200))}</span></div>`;
         case 'approval_escalated': return `<div class="notice">Permission request sent to you: ${esc(ev.reason)}</div>`;
         case 'handoff_qa': return '';
         case 'project_settings': return levelUndo(p, ev);

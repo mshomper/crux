@@ -48,7 +48,7 @@ export function cruxTools(hub, project, agent) {
         approvals: list.describe(t('Approvals, decisions or standing instructions {{who}} gave this round (merge #31, keep w1), briefly.')),
         open_questions: list.describe(t('Questions or quick calls you put to {{who}} in chat that are still unanswered.'))
       },
-      async (args) => { hub.postSummary(project, agent, args); return out('Summary posted. Stop here and wait for a reply.'); }),
+      async (args) => out(`${summaryReply(hub.postSummary(project, agent, args))} Stop here and wait for a reply.`)),
 
     tool('propose_lesson', t('Record a lasting lesson about how {{who}} wants work done. "project" lessons go straight into this project\'s pack; "core" lessons (true across all projects) wait for {{who}}\'s OK.'),
       { scope: z.enum(['project', 'core']), lesson: z.string().max(400).describe('One or two plain sentences, as a rule.') },
@@ -112,9 +112,12 @@ export function cruxTools(hub, project, agent) {
         async ({ reason }) => out(await restartHub(hub, project, agent, reason))),
 
       // Decision 62: the return path for a Conductor request ([From the Conductor ... request req-007, reply expected]).
-      tool('reply_to_conductor', t('Answer a request the Conductor sent you, by its id (req-007). Plain and short: it goes to the Conductor and {{who}} only, never to another project. Details stay in your own thread.'),
-        { request_id: z.string().describe('The id from the brief, e.g. req-007.'), text: z.string().min(1).max(2000).describe('Your answer, plain and short.') },
-        async ({ request_id, text: msg }) => out(hub.conductor ? hub.conductor.replyFrom(project, agent, request_id, msg) : 'This hub has no Conductor.')),
+      tool('reply_to_conductor', t('Answer a request the Conductor sent you, by its id (req-007). Plain and short: it goes to the Conductor and {{who}} only, never to another project. Details stay in your own thread. It shows to {{who}} as one folded line unless for_matt is true.'),
+        {
+          request_id: z.string().describe('The id from the brief, e.g. req-007.'), text: z.string().min(1).max(2000).describe('Your answer, plain and short.'),
+          for_matt: z.boolean().optional().default(false).describe(t('true only when {{who}} must read it personally (a question for {{who}}, or something {{who}} must see): it then shows in full.'))
+        },
+        async ({ request_id, text: msg, for_matt }) => out(hub.conductor ? hub.conductor.replyFrom(project, agent, request_id, msg, { forMatt: !!for_matt }) : 'This hub has no Conductor.')),
 
       tool('message_agent','Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },
@@ -171,6 +174,14 @@ export function settingsChanges({ model, effort, type } = {}) {
   if (effort !== undefined) changes.effort = /^(default)?$/i.test(String(effort).trim()) ? null : effort;
   if (type !== undefined) changes.type = /^(none|default)?$/i.test(String(type).trim()) ? null : String(type).trim();
   return changes;
+}
+
+// post_summary's reply (decision 64): lines under questions with no question mark are kept as plain lines, not cards,
+// and the agent is told so, with where such lines belong.
+export function summaryReply(r) {
+  const n = r?.notes?.length || 0;
+  if (!n) return 'Summary posted.';
+  return `Summary posted. ${n === 1 ? 'One line' : `${n} lines`} under questions had no question mark, so ${n === 1 ? 'it shows' : 'they show'} as a plain line in your summary, not as a question card: ${r.notes.map(x => `"${String(x).slice(0, 80)}"`).join('; ')}. Put status lines in done or next_step, and end real questions with "?".`;
 }
 
 // restart_hub's reply. The server sets hub.restartHub (lib/guard.mjs makeRestartHub); a hub with no server cannot.

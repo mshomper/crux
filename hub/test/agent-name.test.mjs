@@ -33,6 +33,22 @@ test("the hub's own lines show every orchestrator and Conductor name the same wa
   assert.equal(namesInText('builder finished; conductor-2 was told', 'p'), 'builder finished; Conductor v2 was told');
 });
 
+test("replies to the Conductor and the hub's phone notices name the orchestrator the same way", async () => {
+  const CP = await import('../public/conductor-view.js');
+  const r = { project: 'crux', from: 'orchestrator-6', request: 'req-012' };
+  assert.equal(CP.replyFoldHtml(r), 'crux <span class="vchip" title="orchestrator-6">v6</span> replied · req-012');
+  assert.equal(CP.toYouHtml(r), 'crux <span class="vchip" title="orchestrator-6">v6</span> to you · req-012');
+  assert.equal(CP.replyFoldHtml({ project: '<x>', from: 'someone', request: 'req-1' }), '&lt;x&gt; replied · req-1', 'not an orchestrator: the project, escaped');
+  assert.equal(CP.replyFold(r), 'crux replied · req-012', 'the plain text form is unchanged');
+  const { cardsFor, groupCard } = await import('../lib/push.mjs');
+  const s = { id: 's1', type: 'summary', project: 'crux', thread: 'orchestrator', from: 'orchestrator-6', questions: ['Ship the names change today?'], decisions_needed: [7] };
+  const cards = cardsFor(s);
+  assert.equal(cards.find(c => c.kind === 'question').title, 'crux v6 has a question');
+  assert.equal(cards.find(c => c.kind === 'question').asker, 'orchestrator-6', 'the internal name stays for matching');
+  assert.equal(groupCard(s, cards).title, 'crux v6 has 1 decision and a question for you');
+  assert.equal(cardsFor({ type: 'approval', project: 'crux', thread: 'w', agent: 'builder', approval: 'a1', tool: 'Bash' })[0].title, 'builder is waiting for Allow');
+});
+
 test('the page uses it wherever an orchestrator is named, and no longer writes "Orchestrator · #N"', () => {
   const app = pub('app.js');
   assert.doesNotMatch(app, /Orchestrator · \$\{/, 'no "Orchestrator · #6" left');
@@ -48,7 +64,10 @@ test('the page uses it wherever an orchestrator is named, and no longer writes "
     ['hub notices (handoffs)', /case 'notice': return `<div class="notice"><span>\$\{NM\.namesInHtml\(ev\.text, p\.name\)\}<\/span><\/div>`/],
     ['agents list', /<b class="ha-name">\$\{NM\.nameHtml\(a\.name, p\.name\)\}<\/b>/],
     ['Conductor header', /<span class="vname">\$\{c\.name \? NM\.nameHtml\(c\.name\) : 'Conductor'\}<\/span>/],
-    ['Conductor chat replies', /CP\.replyHeadHtml\(ev\)/]
+    ['Conductor chat replies, folded', /<span class="cd-rl-k">\$\{CP\.replyFoldHtml\(ev\)\}<\/span>/],
+    ['Conductor chat replies, to you', /<span>\$\{CP\.toYouHtml\(ev\)\}<\/span>/],
+    ['orchestrator thread: its reply to the Conductor', /\$\{NM\.nameHtml\(ev\.from, p\.name\)\} replied to the Conductor/],
+    ['a question waiting in another card', /\$\{NM\.nameHtml\(r\.of, p\.name\)\}'s card/]
   ]) assert.match(app, re, what);
   assert.match(pub('conversation.js'), /if \(h\.titleHtml\) \{ if \(this\.title\.innerHTML !== h\.titleHtml\) this\.title\.innerHTML = h\.titleHtml; \}/, 'the header title can carry the chip');
   assert.match(pub('map.js'), /s\.kind === 'ghost' \? nameText\(s\.name, this\.model\.project\?\.name\)/, 'live map: an outgoing orchestrator');

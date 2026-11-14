@@ -45,8 +45,22 @@ export function applyEvent(c, ev) {
 const SHOWS = new Set(['message', 'summary', 'notice', 'visual', 'lesson_proposed', 'wake', 'reminder', 'cards', 'reply']);
 // An orchestrator's reply to a Conductor request (decision 62), as its one-line head in the chat.
 export const replyHead = ev => `${ev.project} · ${ev.from} replied to ${ev.request}`;
-// The same on screen: the orchestrator by its project and "vN" (crux v6 replied to req-004), escaped.
-export const replyHeadHtml = ev => `${nameHtml(ev.from, ev.project)} replied to ${esc(ev.request)}`;
+// Matt (0.20.2): a reply shows as ONE folded line, "crux replied · req-012" and its first few words; a tap opens it.
+// One written to Matt directly (forMatt) shows in full instead.
+export const replyFold = ev => `${ev.project} replied · ${ev.request}`;
+// The same on screen: the orchestrator by its project and "vN" ("crux v6 replied · req-012", "crux v6 to you · req-012"),
+// escaped. A sender that is not an orchestrator name falls back to the project.
+const senderHtml = ev => /^orchestrator-\d+$/.test(String(ev.from || '')) ? nameHtml(ev.from, ev.project) : esc(ev.project);
+export const replyFoldHtml = ev => `${senderHtml(ev)} replied · ${esc(ev.request)}`;
+export const toYouHtml = ev => `${senderHtml(ev)} to you · ${esc(ev.request)}`;
+export function replyGist(text, max = 72) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  return `${cut.slice(0, cut.lastIndexOf(' ') > max / 2 ? cut.lastIndexOf(' ') : max).replace(/[\s,.;:]+$/, '')}…`;
+}
+// The digest that took a reply along, if any: there it is drawn, so the chat does not draw it a second time.
+export const digestOf = (events, replyId) => (events || []).find(e => e.type === 'cards' && e.digest && (e.replies || []).includes(replyId)) || null;
 export const threadItems = c => (c?.events || []).filter(e => e.thread === CONDUCTOR_THREAD && SHOWS.has(e.type));
 
 // ---------- cards in its chat (decision 60 A) ----------
