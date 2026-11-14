@@ -23,7 +23,7 @@
 // app's own hub first (installer-hooks.nsh, runtime/stop-bundled-hub.mjs); the app starts it again after.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -40,6 +40,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+use tauri_winrt_notification::Toast;
 
 const MAIN: &str = "main";
 const TRAY: &str = "crux";
@@ -267,6 +268,167 @@ fn turn_on_autostart_once(app: &AppHandle) {
     }
 }
 
+// ---------- PC notices (decision 58 A) ----------
+// The hub decides what to tell and where: the PC while it is in use, the phone as backup. The app holds the hub's
+// desktop stream open (this PC only), reports every 30 s how long since the last keyboard or mouse input and whether
+// the PC is locked, and shows each card it is sent as a Windows notice. A click opens that card in the window.
+
+// Windows' own idle and lock state, without another crate.
+#[cfg(windows)]
+mod pc_state {
+    #[repr(C)]
+    struct LastInputInfo {
+        cb_size: u32,
+        dw_time: u32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetLastInputInfo(plii: *mut LastInputInfo) -> i32;
+        fn OpenInputDesktop(flags: u32, inherit: i32, access: u32) -> isize;
+        fn CloseDesktop(desktop: isize) -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetTickCount() -> u32;
+    }
+    // Milliseconds since the last keyboard or mouse input on this PC.
+    pub fn idle_ms() -> u64 {
+        let mut info = LastInputInfo { cb_size: std::mem::size_of::<LastInputInfo>() as u32, dw_time: 0 };
+        // SAFETY: a plain Win32 call with a correctly sized struct.
+        unsafe {
+            if GetLastInputInfo(&mut info) == 0 {
+                return 0;
+            }
+            GetTickCount().wrapping_sub(info.dw_time) as u64
+        }
+    }
+    // Locked: the input desktop is the secure one, which this session cannot open.
+    pub fn locked() -> bool {
+        const DESKTOP_SWITCHDESKTOP: u32 = 0x0100;
+        // SAFETY: the handle is closed straight away.
+        unsafe {
+            let h = OpenInputDesktop(0, 0, DESKTOP_SWITCHDESKTOP);
+            if h == 0 {
+                return true;
+            }
+            CloseDesktop(h);
+            false
+        }
+    }
+}
+#[cfg(not(windows))]
+mod pc_state {
+    pub fn idle_ms() -> u64 {
+        0
+    }
+    pub fn locked() -> bool {
+        false
+    }
+}
+
+// One short request to the hub on loopback, as this PC (Host crux.localhost, no Origin).
+fn hub_post(port: u16, path: &str, body: &str) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else { return false };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+    let req = format!(
+        "POST {path} HTTP/1.0\r\nHost: crux.localhost:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    if s.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let mut out = String::new();
+    let _ = s.take(16 * 1024).read_to_string(&mut out);
+    out.starts_with("HTTP/1.1 200") || out.starts_with("HTTP/1.0 200")
+}
+
+fn report_presence(port: u16, client: &str) {
+    let body = serde_json::json!({ "client": client, "idleMs": pc_state::idle_ms(), "locked": pc_state::locked() }).to_string();
+    hub_post(port, "/api/desktop/presence", &body);
+}
+
+// Show one card as a Windows notice. Installed builds use the app's own identity (its Start menu shortcut), so the
+// notice says Crux Hub; dev builds borrow PowerShell's, as Windows only shows notices for installed apps.
+fn show_notice(app: &AppHandle, card: &serde_json::Value) {
+    let state = app.state::<Arc<State>>().inner().clone();
+    let title = card.get("title").and_then(|t| t.as_str()).unwrap_or("Crux Hub").to_string();
+    let body = card.get("body").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let target = card.get("url").and_then(|u| u.as_str()).and_then(|u| state.hub.url.join(u).ok()).filter(|u| state.hub.owns(u)).unwrap_or_else(|| state.hub.url.clone());
+    let app_id = if cfg!(debug_assertions) { Toast::POWERSHELL_APP_ID.to_string() } else { app.config().identifier.clone() };
+    let handle = app.clone();
+    // Shown from the main thread, which Windows has set up for these calls.
+    let _ = app.run_on_main_thread(move || {
+        let click = handle.clone();
+        let _ = Toast::new(&app_id)
+            .title(&title)
+            .text1(&body)
+            .on_activated(move |_| {
+                let h = click.clone();
+                let t = target.clone();
+                let _ = click.run_on_main_thread(move || {
+                    show_main(&h);
+                    if let Some(w) = h.get_webview_window(MAIN) {
+                        let _ = w.navigate(t);
+                    }
+                });
+                Ok(())
+            })
+            .show();
+    });
+}
+
+// Holds the hub's desktop stream open for as long as the app runs, reconnecting after a hub restart, and reports
+// the PC's state every 30 s while connected.
+fn start_pc_notices(app: &AppHandle) {
+    let port = app.state::<Arc<State>>().hub.port;
+    let client = format!("crux-app-{}", std::process::id());
+    let reporter = client.clone();
+    thread::spawn(move || loop {
+        report_presence(port, &reporter);
+        thread::sleep(Duration::from_secs(30));
+    });
+    let app = app.clone();
+    thread::spawn(move || loop {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+            // HTTP/1.0, so the hub sends the stream plainly (no chunks) and closes it when it stops.
+            let req = format!("GET /api/desktop/stream?client={client} HTTP/1.0\r\nHost: crux.localhost:{port}\r\n\r\n");
+            let _ = s.set_read_timeout(Some(Duration::from_secs(90)));   // the hub pings every 25 s
+            if s.write_all(req.as_bytes()).is_ok() {
+                let mut lines = BufReader::new(s).lines();
+                let ok = matches!(lines.next(), Some(Ok(l)) if l.contains(" 200"));
+                if ok {
+                    for l in lines.by_ref() {
+                        if matches!(l, Ok(ref h) if h.is_empty()) {
+                            break;   // end of the headers
+                        }
+                    }
+                    report_presence(port, &client);   // at once, so a card right after a restart routes right
+                    let mut event = String::new();
+                    for line in lines {
+                        let Ok(line) = line else { break };
+                        if let Some(e) = line.strip_prefix("event: ") {
+                            event = e.to_string();
+                        } else if let Some(d) = line.strip_prefix("data: ") {
+                            if event == "notify" {
+                                if let Ok(card) = serde_json::from_str::<serde_json::Value>(d) {
+                                    show_notice(&app, &card);
+                                }
+                            }
+                            // "clear": a settled card. The notice library cannot take a shown notice down, so it
+                            // stays in Action Center; clicking it opens the card, which shows it as settled.
+                        } else if line.is_empty() {
+                            event.clear();
+                        }
+                    }
+                }
+            }
+        }
+        thread::sleep(Duration::from_secs(3));
+    });
+}
+
 // ---------- updates ----------
 fn set_tooltip(app: &AppHandle, text: &str) {
     if let Some(t) = app.tray_by_id(TRAY) {
@@ -447,6 +609,7 @@ fn main() {
 
             turn_on_autostart_once(&handle);
             schedule_update_checks(&handle);
+            start_pc_notices(&handle);
             if !up {
                 run_hub(&handle, false);
             }
