@@ -144,9 +144,10 @@ export class Board {
     return this.log.append('entry', { entryId, kind, title, summary, body, supersedes: supersedes || null, from, ...extra });
   }
 
-  // The orchestrator role's latest handoff (workers' handoffs are read by their own successors).
-  latestHandoff() {
-    return this.entries().filter(e => e.kind === 'handoff' && e.status === 'active' && (e.role || 'orchestrator') === 'orchestrator').at(-1) || null;
+  // The orchestrator role's latest handoff (workers' handoffs are read by their own successors). The Conductor's
+  // board (in the hub's own state folder, decision 55) asks for role 'conductor'.
+  latestHandoff(role = 'orchestrator') {
+    return this.entries().filter(e => e.kind === 'handoff' && e.status === 'active' && (e.role || 'orchestrator') === role).at(-1) || null;
   }
 
   retireEntry(entryId, why, from) {

@@ -58,6 +58,17 @@ html[data-hud] .hub-threads{border-bottom-color:var(--hud-line)}
 .ctx-ring .tick{stroke:#f5c96a;stroke-width:2;stroke-linecap:round}
 .ctx-ring text{font:600 9px var(--mono);fill:var(--hud-ice);text-anchor:middle;dominant-baseline:central}
 
+/* ---------- the Conductor's thread, pinned at the top of All projects (decision 55) ---------- */
+.hub-conductor{display:flex;flex-direction:column;gap:10px;padding:2px 12px 14px;margin:0 -2px 6px;border:1px solid var(--hud-line);border-radius:6px;
+  background:linear-gradient(180deg,rgba(111,227,255,.06),rgba(111,227,255,.015) 60%,transparent)}
+.cd-head .ava{position:relative;width:28px;height:28px;border-radius:4px;display:grid;place-items:center;background:var(--surface2)}
+.cd-head .ava.ring::after{content:"";position:absolute;inset:-2px;border-radius:6px;border:1.5px solid var(--mh);pointer-events:none;box-shadow:0 0 10px -2px var(--mh)}
+.cd-feed{display:flex;flex-direction:column;gap:10px;min-width:0}
+.cd-earlier{align-self:center}
+.cd-wake{opacity:.75}
+.cd-empty p{margin:2px 0;color:var(--muted);font-size:13.5px;line-height:1.45}
+.hub-conductor .notice .icon{width:13px;height:13px;margin-right:6px;vertical-align:-2px}
+
 /* ---------- phone: one line per agent, state as a dot, 44 px targets ---------- */
 @media (max-width:720px){
   .hub-agent{min-height:56px;padding:8px 10px}
@@ -65,5 +76,7 @@ html[data-hud] .hub-threads{border-bottom-color:var(--hud-line)}
   .ha-l1 .dot{display:block}
   .ha-l1 .mchip :is(.mtype,.mver,.msep,.meff){display:none}
   .hub-meta{display:none}
+  .cd-head .hub-meta{display:block}
+  .hub-conductor{padding:2px 8px 12px;margin:0 0 6px}
   .hub-go{min-width:44px;min-height:44px}
 }

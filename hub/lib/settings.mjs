@@ -12,7 +12,9 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35 };
+//   conductorWakes: projects' summaries and cards wake the Conductor (decision 55). The off switch: false in
+//     settings.json (or hub.json) and it wakes only for your messages and its reminders.
+export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35, conductorWakes: true };
 // Hub-wide numbers with no per-project value, and the range each accepts.
 export const HUB_NUMBERS = { workerHandoffFloorPct: { min: 0, max: 100 } };
 // The handoff numbers a project may set for itself, with the range each accepts.
@@ -83,6 +85,7 @@ export const projectKey = dir => String(dir).replace(/\\/g, '/').replace(/\/+$/,
 function pick(o = {}) {
   const out = {};
   if (typeof o.routePermissions === 'boolean') out.routePermissions = o.routePermissions;
+  if (typeof o.conductorWakes === 'boolean') out.conductorWakes = o.conductorWakes;
   const t = Number(o.permissionTimeoutSec);
   if (o.permissionTimeoutSec != null && o.permissionTimeoutSec !== '' && Number.isFinite(t) && t >= 10 && t <= 3600) out.permissionTimeoutSec = t;
   for (const [n, range] of Object.entries(HUB_NUMBERS)) {   // out of range or not a number: ignored, the saved or default stays
