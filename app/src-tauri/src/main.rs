@@ -302,6 +302,31 @@ mod pc_state {
             GetTickCount().wrapping_sub(info.dw_time) as u64
         }
     }
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegGetValueW(hkey: isize, sub_key: *const u16, value: *const u16, flags: u32, kind: *mut u32, data: *mut u8, size: *mut u32) -> i32;
+    }
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+    // A DWORD under HKEY_CURRENT_USER, or None when it is not set.
+    fn user_dword(sub_key: &str, value: &str) -> Option<u32> {
+        const HKEY_CURRENT_USER: isize = 0x8000_0001_u32 as i32 as isize;
+        const RRF_RT_REG_DWORD: u32 = 0x10;
+        let (k, v) = (wide(sub_key), wide(value));
+        let mut data: u32 = 0;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        // SAFETY: NUL-terminated strings and a buffer of the size given.
+        let rc = unsafe { RegGetValueW(HKEY_CURRENT_USER, k.as_ptr(), v.as_ptr(), RRF_RT_REG_DWORD, std::ptr::null_mut(), &mut data as *mut u32 as *mut u8, &mut size) };
+        (rc == 0).then_some(data)
+    }
+    // Whether Windows lets this app show notices: the master switch (Settings, System, Notifications) and the app's
+    // own switch there. Unset means on, as Windows treats it.
+    pub fn notices_on(app_id: &str) -> bool {
+        let master = user_dword("Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications", "ToastEnabled").unwrap_or(1);
+        let own = user_dword(&format!("Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\{app_id}"), "Enabled").unwrap_or(1);
+        master != 0 && own != 0
+    }
     // Locked: the input desktop is the secure one, which this session cannot open.
     pub fn locked() -> bool {
         const DESKTOP_SWITCHDESKTOP: u32 = 0x0100;
@@ -324,6 +349,9 @@ mod pc_state {
     pub fn locked() -> bool {
         false
     }
+    pub fn notices_on(_app_id: &str) -> bool {
+        false
+    }
 }
 
 // One short request to the hub on loopback, as this PC (Host crux.localhost, no Origin).
@@ -343,19 +371,30 @@ fn hub_post(port: u16, path: &str, body: &str) -> bool {
     out.starts_with("HTTP/1.1 200") || out.starts_with("HTTP/1.0 200")
 }
 
-fn report_presence(port: u16, client: &str) {
-    let body = serde_json::json!({ "client": client, "idleMs": pc_state::idle_ms(), "locked": pc_state::locked() }).to_string();
+// The identity notices are shown under. Installed builds use the app's own (its Start menu shortcut carries it), so
+// the notice says Crux Hub; dev builds borrow PowerShell's, as Windows only shows notices for installed apps.
+fn notice_app_id(app: &AppHandle) -> String {
+    if cfg!(debug_assertions) {
+        Toast::POWERSHELL_APP_ID.to_string()
+    } else {
+        app.config().identifier.clone()
+    }
+}
+
+// notices: false when Windows notices are switched off, so the hub sends the card to the phone at once instead of to
+// a PC that would not show it.
+fn report_presence(port: u16, client: &str, app_id: &str) {
+    let body = serde_json::json!({ "client": client, "idleMs": pc_state::idle_ms(), "locked": pc_state::locked(), "notices": pc_state::notices_on(app_id) }).to_string();
     hub_post(port, "/api/desktop/presence", &body);
 }
 
-// Show one card as a Windows notice. Installed builds use the app's own identity (its Start menu shortcut), so the
-// notice says Crux Hub; dev builds borrow PowerShell's, as Windows only shows notices for installed apps.
+// Show one card as a Windows notice.
 fn show_notice(app: &AppHandle, card: &serde_json::Value) {
     let state = app.state::<Arc<State>>().inner().clone();
     let title = card.get("title").and_then(|t| t.as_str()).unwrap_or("Crux Hub").to_string();
     let body = card.get("body").and_then(|t| t.as_str()).unwrap_or("").to_string();
     let target = card.get("url").and_then(|u| u.as_str()).and_then(|u| state.hub.url.join(u).ok()).filter(|u| state.hub.owns(u)).unwrap_or_else(|| state.hub.url.clone());
-    let app_id = if cfg!(debug_assertions) { Toast::POWERSHELL_APP_ID.to_string() } else { app.config().identifier.clone() };
+    let app_id = notice_app_id(app);
     let handle = app.clone();
     // Shown from the main thread, which Windows has set up for these calls.
     let _ = app.run_on_main_thread(move || {
@@ -383,9 +422,10 @@ fn show_notice(app: &AppHandle, card: &serde_json::Value) {
 fn start_pc_notices(app: &AppHandle) {
     let port = app.state::<Arc<State>>().hub.port;
     let client = format!("crux-app-{}", std::process::id());
-    let reporter = client.clone();
+    let app_id = notice_app_id(app);
+    let (reporter, reporter_id) = (client.clone(), app_id.clone());
     thread::spawn(move || loop {
-        report_presence(port, &reporter);
+        report_presence(port, &reporter, &reporter_id);
         thread::sleep(Duration::from_secs(30));
     });
     let app = app.clone();
@@ -404,7 +444,7 @@ fn start_pc_notices(app: &AppHandle) {
                             break;   // end of the headers
                         }
                     }
-                    report_presence(port, &client);   // at once, so a card right after a restart routes right
+                    report_presence(port, &client, &app_id);   // at once, so a card right after a restart routes right
                     let mut event = String::new();
                     for line in lines {
                         let Ok(line) = line else { break };

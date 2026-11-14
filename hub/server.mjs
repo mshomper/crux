@@ -312,9 +312,9 @@ const routes = {
   // Where an open hub page is and whether you are using it, so cards you are looking at do not buzz your phone.
   'POST /api/presence': ({ client, ...info }) => { push.presence(String(client || ''), info); return { ok: true }; },
   // Decision 58: the desktop app's report, every 30 s: how long since the PC's last input, and whether it is locked.
-  'POST /api/desktop/presence': ({ client, idleMs, locked }, { local }) => {
+  'POST /api/desktop/presence': ({ client, idleMs, locked, notices }, { local }) => {
     if (!local) throw new GuardError('Only the desktop app on this PC reports here.', 403);
-    return { known: push.desktopPresence(String(client || ''), { idleMs, locked }), inUse: push.pcInUse() };
+    return { known: push.desktopPresence(String(client || ''), { idleMs, locked, notices }), inUse: push.pcInUse() };
   },
   'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId }),
   // Mark a memo done, or back to active, from the board panel: a new event in the log, never an edit.

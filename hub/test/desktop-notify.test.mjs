@@ -60,6 +60,7 @@ test('PC idle 5+ minutes, locked, or silent (asleep): the phone only', async () 
   for (const [why, setup] of [
     ['idle', h => h.push.desktopPresence('desk-app-1', { idleMs: PC_IDLE_MS + 1000 })],
     ['locked', h => h.push.desktopPresence('desk-app-1', { idleMs: 0, locked: true })],
+    ['Windows notices switched off', h => h.push.desktopPresence('desk-app-1', { idleMs: 0, notices: false })],
     ['asleep', h => h.push.desktopPresence('desk-app-1', { idleMs: 0 }, Date.now() - 10 * 60 * 1000)],
     ['no report yet', () => { }]
   ]) {

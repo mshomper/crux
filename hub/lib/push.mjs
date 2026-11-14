@@ -156,21 +156,25 @@ export class Push {
   // ---------- decision 58: the desktop app on this PC ----------
   // The app holds a stream open (GET /api/desktop/stream, this PC only) and reports every 30 s how long since the
   // PC last had keyboard or mouse input, and whether it is locked.
-  desktopAttach(client, write) { if (client) this.desktops.set(client, { write, idleMs: 0, locked: false, ts: 0 }); }
+  desktopAttach(client, write) { if (client) this.desktops.set(client, { write, idleMs: 0, locked: false, notices: true, ts: 0 }); }
   desktopDetach(client) { this.desktops.delete(client); }
-  desktopPresence(client, { idleMs = 0, locked = false } = {}, now = Date.now()) {
+  // notices: whether Windows lets the app show notices (its master switch and the app's own switch in Settings).
+  desktopPresence(client, { idleMs = 0, locked = false, notices = true } = {}, now = Date.now()) {
     const d = this.desktops.get(client);
-    if (d) Object.assign(d, { idleMs: Math.max(0, Number(idleMs) || 0), locked: !!locked, ts: now });
+    if (d) Object.assign(d, { idleMs: Math.max(0, Number(idleMs) || 0), locked: !!locked, notices: notices !== false, ts: now });
     return !!d;
   }
-  // The PC is in use: a desktop app reported recently, the PC is not locked, and there was input in the last 5 min.
+  // The PC is in use and can show a notice: a desktop app reported recently, the PC is not locked, there was input
+  // in the last 5 min, and Windows notices are on. Otherwise the phone gets the card at once.
   pcInUse(now = Date.now()) {
     for (const d of this.desktops.values()) {
       const age = now - d.ts;
-      if (d.ts && age <= DESK_FRESH_MS && !d.locked && d.idleMs + age < PC_IDLE_MS) return true;
+      if (d.ts && age <= DESK_FRESH_MS && !d.locked && d.notices && d.idleMs + age < PC_IDLE_MS) return true;
     }
     return false;
   }
+  // Somewhere a PC notice can show at all (used when no phone is set up).
+  desktopCanShow() { for (const d of this.desktops.values()) if (d.notices) return true; return false; }
   toDesktops(event, data) {
     for (const [client, d] of this.desktops) { try { d.write(event, data); } catch { this.desktops.delete(client); } }
   }
@@ -191,7 +195,7 @@ export class Push {
       const go = () => {
         if (this.sent.has(card.card) || this.sentDesk.has(card.card) || !waiting(card)) return;
         // Decision 58 A: the PC while it is in use (or when no phone is set up), with the phone as backup.
-        if (this.desktops.size && (this.pcInUse() || !this.subs.length)) {
+        if (this.desktops.size && (this.pcInUse() || (!this.subs.length && this.desktopCanShow()))) {
           this.sentDesk.add(card.card);
           if (this.sentDesk.size > 200) this.sentDesk.delete(this.sentDesk.values().next().value);
           this.toDesktops('notify', payloadOf(card));
