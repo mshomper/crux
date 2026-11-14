@@ -67,6 +67,32 @@ test('away: cards are held, no wake and no cards in the chat; your return posts 
   assert.equal(cards().length, 1);
 });
 
+test('back within the batching window: a card that came while you were away goes up as the return digest, with its notice', async () => {
+  // Your presence report comes first.
+  const { c, a, presence, notices, ask, cards } = await setup({ here: false });
+  c.wakeMs = 60000;   // still in the window: not held yet
+  ask(a, 'Retry failed uploads three times before showing the error?');
+  assert.equal(c.holding(), false);
+  presence.here = true;
+  c.presenceReport();
+  assert.equal(cards().length, 1);
+  assert.equal(cards()[0].digest, 'return');
+  assert.deepEqual(notices.map(n => n.digest), ['return']);
+  // No report: the window ends with you back, and the flush still treats it as a return.
+  const s = await setup({ here: false });
+  s.ask(s.a, 'Retry failed uploads three times before showing the error?');
+  s.presence.here = true;
+  await sleep(80);
+  assert.equal(s.cards()[0].digest, 'return');
+  assert.equal(s.notices.length, 1);
+  // A card that came while you were here stays live, with no digest notice.
+  const t = await setup({ here: true });
+  t.ask(t.a, 'Retry failed uploads three times before showing the error?');
+  await sleep(80);
+  assert.equal(t.cards()[0].digest, undefined);
+  assert.equal(t.notices.length, 0);
+});
+
 test('digest timing: one digest 30 minutes (here: 100 ms) after the oldest held card, with one notice; the next not sooner', async () => {
   const { c, a, b, notices, ask, cards } = await setup({ here: false });
   c.digestMs = 100;

@@ -125,7 +125,7 @@ export class Conductor {
     const held = this.pending.filter(x => !x.reminder);
     let cards = null;
     if (held.length) {
-      const digest = this.digestTimer ? 'return' : null;
+      const digest = this.digestTimer || held.some(x => x.away) ? 'return' : null;
       this.unhold();
       this.pending = this.pending.filter(x => x.reminder);
       cards = this.postCards(held, { digest });
@@ -210,7 +210,8 @@ export class Conductor {
 
   // cause: the card behind the line ({ project, summary } or { project, approval }), checked again before the wake.
   queue(line, cause = null) {
-    this.pending.push({ line, cause, ts: Date.now() });
+    // away: it came while you were away, so its card notice is held (push.mjs) and only a digest's notice stands in.
+    this.pending.push({ line, cause, ts: Date.now(), away: !this.present() });
     this.home.log.append('wake_pending', { line, cause });
     this.arm(this.wakeMs);
   }
@@ -278,8 +279,10 @@ export class Conductor {
 
   // The hub calls this on every presence report (a hub page, the desktop app). Back while cards are held: the digest
   // goes up now.
+  // Also a card that came while you were away and is still in the batching window (not yet held): it goes up as the
+  // return digest, with its one notice, never live and silent.
   presenceReport() {
-    if (!this.digestTimer || !this.present()) return;
+    if (!this.present() || !(this.digestTimer || this.pending.some(x => x.away))) return;
     this.unhold();
     clearTimeout(this.timer); this.timer = null;
     this.flush({ digest: 'return' });
@@ -399,12 +402,14 @@ ${lines.join('\n')}`;
     if (!this.pending.length) return false;
     const showCards = !!digest || this.present();
     const cardLines = this.pending.filter(x => !x.reminder);
-    if (cardLines.length && !showCards) this.hold(now);
+    if (cardLines.length && !showCards) { for (const x of cardLines) x.away = true; this.hold(now); }
     let cards = null;
     if (cardLines.length && showCards) {
       this.unhold();
       this.pending = this.pending.filter(x => x.reminder);
-      cards = this.postCards(cardLines, { digest });
+      // Lines that came or were held while you were away go up as a return digest: its one notice stands in for the
+      // card notices push held for them.
+      cards = this.postCards(cardLines, { digest: digest || (cardLines.some(x => x.away) ? 'return' : null) });
     }
     const cur = this.holder();
     if (cur && (['working', 'starting'].includes(cur.state) || cur.retiring || cur.capture)) {
