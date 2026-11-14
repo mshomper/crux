@@ -300,7 +300,7 @@ test('the server: voice routes go through the usual checks, setup is PC only, an
   const s = src('../server.mjs');
   assert.match(s, /'POST \/api\/voice\/listen': async/);
   assert.match(s, /'POST \/api\/voice\/setup': \(_, \{ local \}\) => \{\s*if \(!local\) throw new GuardError/);
-  assert.match(s, /\{ voice: true, \.\.\.\(snapped\.length \? \{ heard \} : \{\}\) \}/);
+  assert.match(s, /\{ voice: true, \.\.\.\(changed \? \{ heard \} : \{\}\) \}/);
   assert.match(s, /'\/api\/voice\/listen': Math\.ceil\(CLIP_LIMIT_S \* LISTEN_RATE \* 2 \* 4 \/ 3\)/);
   assert.doesNotMatch(src('../lib/guard.mjs'), /voice/, 'no pairing exception: a remote device must be paired (decision 48)');
   assert.match(src('../lib/conductor.mjs'), /if \(extra\.voice\) \{\s*a\.noteForNextTurn\(VOICE_NOTE\);/);
