@@ -424,6 +424,39 @@ test('a question lives in one card: a repeat is hidden while the first card is o
   assert.deepEqual(mine.decisions_needed, []);   // decisions are the projects' cards, never the Conductor's
 });
 
+test('once you answer or dismiss the first card, its repeat counts as answered; closed without you, it comes back', async () => {
+  const Q = 'Should the preview update while dragging, or only on release?';
+  const askBoth = async () => {
+    const s = await setup();
+    const orch = s.hub.ensureOrchestrator(s.a), w = s.hub.startWorker(s.a, 'w1', 'task');
+    s.hub.postSummary(s.a, w, summary({ questions: [Q] }));
+    s.hub.postSummary(s.a, orch, summary({ questions: [Q] }));
+    assert.deepEqual(openQuestions(s.a.log.events).map(q => q.from), ['w1']);
+    return { ...s, orch, w, workerCard: s.a.log.events.find(e => e.type === 'summary' && e.from === 'w1') };
+  };
+  // You answer w1's card in Needs you: the orchestrator's repeat does not come back.
+  let s = await askBoth();
+  s.hub.answerQuestions(s.a, s.workerCard.id, [{ index: 0, text: 'Only on release.' }]);
+  assert.deepEqual(openQuestions(s.a.log.events), []);
+  assert.equal([...repeatsIn(s.a.log.events).values()][0][0].answered, true);   // the "answered in w1's card" note
+  // You dismiss w1's card: the same.
+  s = await askBoth();
+  s.hub.dismissQuestion(s.a, s.workerCard.id);
+  assert.deepEqual(openQuestions(s.a.log.events), []);
+  // You reply in w1's thread: the same.
+  s = await askBoth();
+  s.hub.fromYou(s.a, 'w1', 'Only on release.');
+  assert.deepEqual(openQuestions(s.a.log.events), []);
+  // w1's card closes without you (a newer summary from w1 that asks nothing new): the repeat comes back.
+  s = await askBoth();
+  s.hub.postSummary(s.a, s.w, summary({ questions: ['Which lens is the default?'] }));
+  assert.deepEqual(openQuestions(s.a.log.events).map(q => [q.from, q.open.map(x => x.text)]).sort(), [['orchestrator-1', [Q]], ['w1', ['Which lens is the default?']]]);
+  // w1 hands off without you: the repeat comes back too.
+  s = await askBoth();
+  s.hub.finishRetire(s.a, s.w);
+  assert.deepEqual(openQuestions(s.a.log.events).map(q => q.from), ['orchestrator-1']);
+});
+
 test('only a real repeat is hidden: never the longer question, never a short exact one; a retired holder lets it back', async () => {
   const merge = 'Should I merge PR #63 now?';
   assert.equal(isRepeat('should i merge pr 63 now', merge), true);   // equal once cleaned (24+ characters)

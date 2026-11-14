@@ -624,7 +624,7 @@ function permLine(ev) {
 // small note saying where it waits, so it is asked in one card only.
 function summaryCard(p, ev, only = null, reps = null) {
   const sec = (label, xs) => xs?.length ? `<dt>${label}</dt><dd><ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul></dd>` : '';
-  const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· also in ${esc(r.of)}'s card</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
+  const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· ${r.answered ? 'answered' : 'also'} in ${esc(r.of)}'s card</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
   const decisions = (only || ev.decisions_needed || []).map(id => p.board.decisions.find(d => d.id === Number(id))).filter(Boolean);
   return `<article class="card summary">
     <div class="card-head">${icon('check')}<h3>${esc(ev.from)} finished a round</h3><span class="time">${timeOf(ev.ts)}</span></div>

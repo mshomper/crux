@@ -39,27 +39,34 @@ export function answeredByPicks(question, decisionStatus = () => undefined) {
 
 // The summaries still asking you something, one per thread. Each has `open`: [{ i, text }] for the questions
 // still waiting (i is the question's place in the summary), and `byPicks`: how many your picks answered.
-export function openQuestions(events, opts) { return withoutRepeatCards(readCards(events, opts)); }
+export function openQuestions(events, opts) { const r = readCards(events, opts); return withoutRepeatCards(r.cards, r.settled); }
 
-// Every summary card still asking something, before repeats are set aside.
+// Every summary card still asking something, before repeats are set aside (cards), and every question you yourself
+// settled, in any summary (settled: { ts, thread, from, text }): answered, dismissed, or answered by your picks.
 function readCards(events, { decisionStatus = () => undefined } = {}) {
   const dismissed = new Set(), retired = new Set();
-  const gone = new Map();   // summary id -> Set of question places answered or dismissed one by one
+  const gone = new Map();   // summary id -> Set of question places answered or dismissed one by one (by you)
   const mark = (id, i) => { if (!gone.has(id)) gone.set(id, new Set()); gone.get(id).add(Number(i)); };
-  const last = new Map();   // thread -> { ev, answered }
+  const last = new Map();   // thread -> { ev, answered, byYou }
+  const asked = [];         // every summary that asked something, with how it was closed
   for (const e of events || []) {
     if (e.type === 'question_dismissed') { e.index == null ? dismissed.add(e.question) : mark(e.question, e.index); continue; }
     if (e.type === 'agent_retired') retired.add(e.agent);
     if (!e.thread) continue;
-    if (e.type === 'summary' && e.questions?.length) last.set(e.thread, { ev: e, answered: false });
+    if (e.type === 'summary' && e.questions?.length) { const s = { ev: e, answered: false, byYou: false }; last.set(e.thread, s); asked.push(s); }
     else if (e.type === 'message') {
       if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index); continue; }
       // A Conductor brief (decision 55) logged in a project's thread is never an answer: only you (or the orchestrator
       // answering its worker) can settle a question that waits on you.
       if (e.conductor) continue;
       const q = last.get(e.thread);
-      if (q && e.from !== q.ev.from) q.answered = true;
+      if (q && e.from !== q.ev.from && !q.answered) { q.answered = true; q.byYou = e.from === 'you'; }
     }
+  }
+  const settled = [];
+  for (const { ev, byYou } of asked) {
+    const done = gone.get(ev.id) || new Set(), all = byYou || dismissed.has(ev.id);
+    ev.questions.forEach((text, i) => { if (all || done.has(i) || answeredByPicks(text, decisionStatus)) settled.push({ ts: ev.ts, thread: ev.thread, from: ev.from, text }); });
   }
   const cards = [];
   for (const { ev, answered } of last.values()) {
@@ -74,21 +81,26 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
     });
     if (open.length) cards.push({ ...ev, open, byPicks, repeats: [] });
   }
-  return cards;
+  return { cards, settled };
 }
 
 // A question lives in one card (Matt, 2026-11-14). Where a later card in this project repeats a question an earlier
 // card from another thread still holds open (an orchestrator re-asking its worker's question), the repeat is hidden
 // here, where cards are drawn, and listed under the card's `repeats` ({ i, text, of: who holds it }). Nothing is
-// dropped from the log: once the earlier card closes for any reason, the repeat shows again by itself.
-function withoutRepeatCards(cards) {
+// dropped from the log. Once you answer or dismiss the first one, its repeats count as answered too (answered: true);
+// if the first card closes without you (its agent retired or handed off, a newer summary, the orchestrator wrote into
+// that thread), the repeat shows again by itself.
+function withoutRepeatCards(cards, settled = []) {
   const shown = [];
   for (const c of [...cards].sort((a, b) => String(a.ts).localeCompare(String(b.ts)))) {
     const earlier = shown.filter(d => d.thread !== c.thread);
     const open = [];
     for (const q of c.open) {
       const holder = earlier.find(d => d.open.some(w => isRepeat(q.text, w.text)));
-      if (holder) c.repeats.push({ ...q, of: holder.from, thread: holder.thread }); else open.push(q);
+      const yours = !holder && settled.find(s => s.thread !== c.thread && String(s.ts) < String(c.ts) && isRepeat(q.text, s.text));
+      if (holder) c.repeats.push({ ...q, of: holder.from, thread: holder.thread });
+      else if (yours) c.repeats.push({ ...q, of: yours.from, thread: yours.thread, answered: true });
+      else open.push(q);
     }
     c.open = open;
     if (open.length) shown.push(c);
@@ -98,8 +110,8 @@ function withoutRepeatCards(cards) {
 
 // The repeats hidden from each summary's card, by summary id, for the small "also in w1's card" note in its thread.
 export function repeatsIn(events, opts) {
-  const cards = readCards(events, opts), out = new Map();
-  withoutRepeatCards(cards);
+  const { cards, settled } = readCards(events, opts), out = new Map();
+  withoutRepeatCards(cards, settled);
   for (const c of cards) if (c.repeats.length) out.set(c.id, c.repeats);
   return out;
 }
