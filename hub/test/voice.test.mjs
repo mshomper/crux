@@ -203,5 +203,5 @@ test('the server: voice routes go through the usual checks, setup is PC only, an
   assert.match(s, /\{ voice: true, \.\.\.\(snapped\.length \? \{ heard \} : \{\}\) \}/);
   assert.match(s, /'\/api\/voice\/listen': Math\.ceil\(MAX_CLIP_S \* LISTEN_RATE \* 2 \* 4 \/ 3\)/);
   assert.doesNotMatch(src('../lib/guard.mjs'), /voice/, 'no pairing exception: a remote device must be paired (decision 48)');
-  assert.match(src('../lib/conductor.mjs'), /if \(extra\.voice\) a\.noteForNextTurn\(VOICE_NOTE\)/);
+  assert.match(src('../lib/conductor.mjs'), /if \(extra\.voice\) \{\s*a\.noteForNextTurn\(VOICE_NOTE\);/);
 });

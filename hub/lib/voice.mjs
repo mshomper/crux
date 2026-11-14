@@ -205,6 +205,38 @@ export class Voice {
   }
 }
 
+// Speech for an answer read aloud (a voice_say event): each sentence is made as soon as the event is logged, one after
+// another, and kept in memory until the page fetches it or 2 minutes pass. Never written anywhere.
+export const SPEECH_KEEP_MS = 2 * 60 * 1000;
+export class SpeechCache {
+  constructor(voice, { keepMs = SPEECH_KEEP_MS } = {}) { this.voice = voice; this.keepMs = keepMs; this.items = new Map(); }
+  key(id, n) { return `${id}:${n}`; }
+  // Start making every sentence of this answer, in order (the first is ready soonest).
+  prepare(ev) {
+    let chain = Promise.resolve();
+    (ev.sentences || []).forEach((s, n) => {
+      const k = this.key(ev.id, n);
+      if (this.items.has(k)) return;
+      const p = chain.then(() => this.voice.say(s)).then(r => r.wav);
+      p.catch(() => { });
+      chain = p.catch(() => { });
+      const timer = setTimeout(() => this.items.delete(k), this.keepMs);
+      timer.unref?.();
+      this.items.set(k, { p, timer });
+    });
+  }
+  // One sentence's WAV: made earlier, or now if it was not (a page that fetches after a restart). Taken out once given.
+  async take(ev, n) {
+    const k = this.key(ev.id, n), it = this.items.get(k);
+    if (it) { this.items.delete(k); clearTimeout(it.timer); return it.p; }
+    const s = ev.sentences?.[n];
+    if (!s) throw new Error('No such sentence.');
+    return (await this.voice.say(s)).wav;
+  }
+  // Voice went off: drop everything.
+  clear() { for (const it of this.items.values()) clearTimeout(it.timer); this.items.clear(); }
+}
+
 function folderBytes(dir) {
   let n = 0;
   let list = [];

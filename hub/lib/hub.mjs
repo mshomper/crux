@@ -370,7 +370,12 @@ export class Hub {
 
   agentSaid(p, agent, text) {
     if (agent.capture) agent.capture.buf.push(text);
-    p.log.append('message', { thread: agent.thread, from: agent.name, text });
+    // Voice (decision 61 A): the Conductor's answer to a spoken message loses its Spoken line, which is read aloud.
+    const v = p.hubWide && agent.role === 'conductor' ? this.conductor?.voiceSaid(text) : null;
+    if (!v) return p.log.append('message', { thread: agent.thread, from: agent.name, text });
+    const ev = v.rest ? p.log.append('message', { thread: agent.thread, from: agent.name, text: v.rest }) : null;
+    this.conductor.voiceLogged(ev, v);
+    return ev;
   }
 
   orchestratorToWorker(p, orch, to, text) {

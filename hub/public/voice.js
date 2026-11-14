@@ -5,6 +5,8 @@
 
 export const RATE = 16000;
 export const MAX_S = 60;
+// This open page, for the hub: only the page that spoke plays the answer back (another open page stays quiet).
+export const VOICE_CLIENT = (globalThis.crypto?.randomUUID?.() || String(Math.random()).slice(2)).replace(/-/g, '').slice(0, 32);
 
 // Float blocks at the mic's own rate to 16 kHz 16-bit samples: each output sample is the mean of the input samples
 // it covers (a box filter, enough to keep speech clean when going down from 44.1 or 48 kHz).
@@ -96,7 +98,7 @@ export class VoiceRecorder {
     const pcm = downsample(blocks, rate);
     if (pcm.length < RATE / 4) { this.set('idle'); return this.onError('That was too short to hear. Tap the mic, talk, then tap again.'); }
     this.set('sending');
-    try { await this.post('/api/voice/listen', { audio: toBase64(new Uint8Array(pcm.buffer)) }); }
+    try { await this.post('/api/voice/listen', { audio: toBase64(new Uint8Array(pcm.buffer)), client: VOICE_CLIENT }); }
     catch (e) { this.onError(e?.message || 'Sending the clip failed.'); }
     finally { this.set('idle'); }
   }
@@ -113,9 +115,62 @@ export class VoiceRecorder {
   }
 }
 
+// The answer read aloud (step 2): one voice_say event's sentences, fetched one by one from the hub (each a WAV made in
+// memory) and played back to back through the AudioContext the mic tap unlocked. The next sentence is fetched while
+// one plays. stop() ends it at once and drops the rest; nothing is kept.
+export class VoicePlayer {
+  constructor({ ctx, fetchSentence, onChange = () => { }, onError = () => { } }) {
+    Object.assign(this, { ctx, fetchSentence, onChange, onError });
+    this.playing = null;   // { id, source, stopped }
+  }
+  get speaking() { return !!this.playing; }
+  async play(ev) {
+    this.stop();
+    const ctx = this.ctx();
+    if (!ctx || !ev?.sentences?.length) return;
+    const run = this.playing = { id: ev.id, source: null, stopped: false };
+    this.onChange(true);
+    try {
+      if (ctx.state !== 'running') await ctx.resume();
+      let next = this.fetchSentence(ev.id, 0);
+      for (let n = 0; n < ev.sentences.length; n++) {
+        const bytes = await next;
+        if (run.stopped) return;
+        next = n + 1 < ev.sentences.length ? this.fetchSentence(ev.id, n + 1) : null;
+        next?.catch(() => { });
+        const buf = await ctx.decodeAudioData(bytes);
+        if (run.stopped) return;
+        await new Promise(done => {
+          const src = run.source = ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(ctx.destination);
+          src.onended = done;
+          run.done = done;
+          src.start();
+        });
+      }
+    } catch (e) {
+      if (!run.stopped) this.onError(e?.message || 'The voice could not play.');
+    } finally {
+      if (this.playing === run) { this.playing = null; this.onChange(false); }
+    }
+  }
+  stop() {
+    const run = this.playing;
+    if (!run) return false;
+    run.stopped = true;
+    try { run.source?.stop(); } catch { }
+    run.done?.();
+    this.playing = null;
+    this.onChange(false);
+    return true;
+  }
+}
+
 export const clock = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 // The line above the message box while voice is busy: { text, cancel (show the cancel mark), tone }. Empty text: none.
-export function voiceLine({ rec = 'idle', secs = 0, v = null } = {}) {
+export function voiceLine({ rec = 'idle', secs = 0, v = null, speaking = false } = {}) {
+  if (speaking) return { text: 'Imogen is speaking · tap anywhere to stop', tone: 'speak' };
   if (rec === 'opening') return { text: 'Opening the mic… (tap it again to give up)' };
   if (rec === 'recording') return { text: `Listening ${clock(secs)} · tap the mic again to send`, cancel: true, tone: 'rec' };
   if (rec === 'sending') return { text: 'Hearing what you said…' };

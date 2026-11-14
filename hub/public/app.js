@@ -24,7 +24,7 @@ import { picturesButton, installPictures } from './pictures.js';
 import { levelChip, LEVELS as LEVEL_INFO, SettingsCards } from './project-settings.js';
 import { GuardUI } from './guard.js';
 import { briefButton, installBrief } from './brief.js';
-import { VoiceRecorder, voiceLine, switchTip } from './voice.js';
+import { VoiceRecorder, VoicePlayer, VOICE_CLIENT, voiceLine, switchTip } from './voice.js';
 import { installKeepScroll } from './keep-scroll.js';
 installKeepScroll();   // a pop-up opening or closing leaves the thread where it was (the iPhone sent it to the top)
 installPictures();   // decision 43: the pictures button on decision cards opens a gallery
@@ -145,7 +145,9 @@ function connect() {
     // Plan numbers belong to the hub, not a project: the live copy (no project) and the logged one both land here.
     if (ev.type === 'plan_usage') { if (!ev.logged) usageUI.setPlan(ev); return; }
     // Voice (decision 61 A): the helper's state and setup progress, hub-wide. Whether this device may set up stays.
-    if (ev.type === 'voice') { S.voice = { ...ev.voice, canSetup: !!S.voice?.canSetup }; renderVoice(); return; }
+    if (ev.type === 'voice') { S.voice = { ...ev.voice, canSetup: !!S.voice?.canSetup }; if (!S.voice.on) voicePlayer.stop(); renderVoice(); return; }
+    // The answer to what this page said, read aloud; never while this page's mic is open (WebKit bug 326286).
+    if (ev.type === 'voice_say' && ev.logged && ev.project === CP.CONDUCTOR && ev.client === VOICE_CLIENT && S.voice?.on && voiceRec.state === 'idle') voicePlayer.play(ev);
     // The Conductor (decision 55): its state as one event, and its own thread's events under its place name.
     if (ev.type === 'conductor_state') { if (S.conductor) { Object.assign(S.conductor, ev.conductor); S.hub = null; render(); } return; }
     if (ev.project === CP.CONDUCTOR) { if (CP.applyEvent(S.conductor, ev)) { S.hub = null; if (ev.logged && ['agent_created', 'agent_retired', 'agent_session', 'agent_settings', 'summary', 'message', 'lesson_proposed', 'lesson_result', 'question_dismissed'].includes(ev.type)) refreshSoon(); render(); } return; }
@@ -1240,11 +1242,33 @@ const voiceRec = new VoiceRecorder({
   onChange: () => renderVoice(),
   onError: msg => toast(msg)
 });
+// The answer read aloud (step 2). While Imogen speaks, a clear layer over the whole page takes the next tap and stops
+// her; a tap that lands on the mic stops her and opens the mic in one go. Escape stops her too.
+async function fetchSpeech(id, n) {
+  const res = await fetch('/api/voice/say', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, n }), credentials: 'same-origin' });
+  if (!res.ok) { let msg = 'The voice could not play.'; try { msg = (await res.json()).error || msg; } catch { } throw new Error(msg); }
+  return res.arrayBuffer();
+}
+const voicePlayer = new VoicePlayer({
+  ctx: () => voiceRec.ctx,
+  fetchSentence: fetchSpeech,
+  onChange: speaking => { $('#voice-stop').hidden = !speaking; renderVoice(); },
+  onError: msg => toast(msg)
+});
+$('#voice-stop').addEventListener('pointerdown', e => {
+  e.preventDefault(); e.stopPropagation();
+  const layer = e.currentTarget;
+  layer.hidden = true;
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  voicePlayer.stop();
+  if (under?.closest('.c-mic')) micTap();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && voicePlayer.stop()) e.preventDefault(); }, true);
 // What the Conductor's column shows for voice: the switch, the mic, and the line above the box.
 function voiceHead() {
   const v = S.voice;
   if (!v) return null;
-  return { on: !!v.on, state: v.state, setupError: !!v.setup?.error, tip: switchTip(v), rec: voiceRec.state, line: voiceLine({ rec: voiceRec.state, secs: voiceRec.seconds, v }) };
+  return { on: !!v.on, state: v.state, setupError: !!v.setup?.error, tip: switchTip(v), rec: voiceRec.state, speaking: voicePlayer.speaking, line: voiceLine({ rec: voiceRec.state, secs: voiceRec.seconds, v, speaking: voicePlayer.speaking }) };
 }
 function renderVoice() { for (const c of cols.all?.() || []) if (c.thread === AP.HUB_THREAD) c.renderVoice(voiceHead()); }
 // The mic: off or not ready yet says so (and offers to turn voice on); ready opens the mic, and a second tap sends.

@@ -20,6 +20,7 @@ import { conductorPrompt, RESUME_MESSAGE } from './prompts.mjs';
 import { waiting as waitingFor, pendingLessons } from '../public/all-projects.js';
 import { openQuestions as openAsked } from '../public/questions.js';   // on events (the all-projects one takes a project)
 import { CONNECTOR_SERVERS } from './permission-rules.mjs';
+import { liftSpoken, sentences } from './voice-speech.mjs';
 
 export const CONDUCTOR = '~conductor';          // its place name in URLs and live events; never a project folder's name
 export const CONDUCTOR_THREAD = 'conductor';
@@ -34,7 +35,9 @@ const EVENTS_SHOWN = 400;                        // the page gets this many of i
 const REMINDER_MAX_DAYS = 400;
 // Decision 61 A: in front of a message {{who}} said by voice. The hub has already snapped near-miss project and agent
 // names to known ones; {{who}} sees the message with a mic mark and corrects it after if it was misheard (R011).
-export const VOICE_NOTE = '[Hub: {{who}} said this by voice and the hub transcribed it. A word, name or number may be misheard: if it reads oddly, go by what {{who}} most likely meant, and ask when it matters.]';
+export const VOICE_NOTE = '[Hub: {{who}} said this by voice and the hub transcribed it. A word, name or number may be misheard: if it reads oddly, go by what {{who}} most likely meant, and ask when it matters. Begin the message that answers it with one line "Spoken: " and 1-3 short plain sentences to read aloud; then reply as usual.]';
+// A spoken message's answer is read aloud only if it comes within this long.
+export const VOICE_TURN_MS = 10 * 60 * 1000;
 
 // Its board tools, by name. These and nothing else: the permission callback refuses every other tool.
 export const CONDUCTOR_TOOLS = ['hub_overview', 'needs_you', 'board_index', 'board_read', 'latest_handoff', 'list_agents',
@@ -136,9 +139,48 @@ export class Conductor {
     this.home.log.append('message', { thread: CONDUCTOR_THREAD, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
     const a = this.ensure();
     if (cards) a.noteForNextTurn(this.notesRequest(cards, 'message'));
-    // Voice (decision 61 A): a spoken message was transcribed, so a name or number in it may be off.
-    if (extra.voice) a.noteForNextTurn(VOICE_NOTE);
+    // Voice (decision 61 A): a spoken message was transcribed, so a name or number in it may be off; its answer is
+    // read aloud on the page that sent it (expectVoice). A turn already running when it came is not its answer.
+    if (extra.voice) {
+      a.noteForNextTurn(VOICE_NOTE);
+      this.voiceTurn = { client: this.voiceClient || '', at: Date.now(), busy: ['working', 'starting'].includes(a.state), last: null };
+      this.voiceClient = '';
+    }
     a.send(text, attachments);
+  }
+
+  // ---------- voice (decision 61 A): reading the answer to a spoken message aloud ----------
+  // The page that sends the next spoken message; only it plays the answer.
+  expectVoice(client) { this.voiceClient = String(client || '').slice(0, 64); }
+  // A message the Conductor wrote, before it is logged: during a voice turn its Spoken line comes off. Returns the
+  // text to log and the spoken words, or null outside a voice turn.
+  voiceSaid(text) {
+    const t = this.voiceTurn;
+    if (!t) return null;
+    if (Date.now() - t.at > VOICE_TURN_MS) { this.voiceTurn = null; return null; }
+    if (t.busy) return null;   // still the turn that was running when the spoken message came
+    return liftSpoken(text);
+  }
+  // After it is logged (ev, or null when the message was only the Spoken line): the words go up to be read.
+  voiceLogged(ev, { spoken }) {
+    const t = this.voiceTurn;
+    if (!t) return;
+    if (spoken) { this.voiceTurn = null; this.say(ev?.id || null, sentences(spoken), t.client, 'spoken'); }
+    else if (ev) t.last = { id: ev.id, text: ev.text };
+  }
+  // The end of a turn: a voice turn with no Spoken line has its last message's first sentences read instead.
+  voiceTurnEnded() {
+    const t = this.voiceTurn;
+    if (!t) return;
+    if (t.busy) { t.busy = false; t.last = null; return; }   // that was the turn before; the answer comes next
+    this.voiceTurn = null;
+    const s = t.last ? sentences(t.last.text) : [];
+    if (s.length) this.say(t.last.id, s, t.client, 'first sentences');
+  }
+  // One event per answer read aloud: its sentences (text only; the sound is made in memory and never kept).
+  say(of, list, client, from) {
+    if (!list.length) return;
+    this.home.log.append('voice_say', { thread: CONDUCTOR_THREAD, of, sentences: list, client, from });
   }
 
   // message_agent: to a project's orchestrator only (never a worker). Logged in that project's orchestrator thread
@@ -434,6 +476,7 @@ ${lines.join('\n')}`;
   // The hub calls this when the Conductor goes idle (Hub.onIdle): notes owed on cards posted while it worked, a due
   // reminder at once, card lines after the window.
   afterTurn() {
+    this.voiceTurnEnded();
     if (this.owed.length) this.askNotes(this.owed.splice(0));
     if (!this.pending.length) return;
     if (this.pending.some(x => x.reminder)) { clearTimeout(this.timer); this.timer = null; this.flush(); }

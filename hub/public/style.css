@@ -259,6 +259,10 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .voice-line .vl-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .voice-line .vl-dot{width:8px;height:8px;border-radius:50%;background:var(--hud-cyan);flex:none;opacity:.5}
 .voice-line[data-tone="rec"] .vl-dot{opacity:1;animation:mic-wait .7s ease-in-out infinite alternate}
+.voice-line[data-tone="speak"] .vl-dot{opacity:1;animation:mic-wait .5s ease-in-out infinite alternate}
+.composer .c-mic.speaking .icon{color:var(--hud-cyan);animation:mic-wait .5s ease-in-out infinite alternate}
+.voice-stop{position:fixed;inset:0;z-index:9000;background:transparent;cursor:pointer;touch-action:none}
+.voice-stop[hidden]{display:none}
 .voice-line[data-tone="warn"]{color:var(--hud-amber)}
 .voice-line[data-tone="warn"] .vl-dot{background:var(--hud-amber);opacity:1}
 .voice-line .vl-cancel{height:28px;width:28px;color:var(--muted)}
@@ -270,7 +274,7 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .c-voice.warn .vmark{display:block}
 .msg .vsaid{display:inline-flex;vertical-align:-2px;margin-right:4px;color:var(--hud-cyan);cursor:help}
 .msg .vsaid .icon{width:13px;height:13px}
-@media (prefers-reduced-motion: reduce){.composer .c-mic.rec,.composer .c-mic.busy .icon,.voice-line[data-tone="rec"] .vl-dot{animation:none}}
+@media (prefers-reduced-motion: reduce){.composer .c-mic.rec,.composer .c-mic.busy .icon,.composer .c-mic.speaking .icon,.voice-line[data-tone="rec"] .vl-dot,.voice-line[data-tone="speak"] .vl-dot{animation:none}}
 #confirm-body{white-space:pre-line}
 /* quick replies from what is really open (M008 9) */
 .quick{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;padding:0 2px}

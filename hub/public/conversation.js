@@ -182,6 +182,7 @@ export class Conversation {
     const m = this.micBtn;
     m.classList.toggle('rec', v.rec === 'recording');
     m.classList.toggle('busy', v.rec === 'opening' || v.rec === 'sending');
+    m.classList.toggle('speaking', !!v.speaking);
     m.classList.toggle('dim', !v.on || v.state !== 'ready');
     const tip = v.rec === 'recording' ? 'Send: closes the mic and sends what you said' : 'Talk: tap, say it, tap again to send';
     if (m.title !== tip) { m.title = tip; m.setAttribute('aria-label', v.rec === 'recording' ? 'Send what you said' : 'Talk'); }

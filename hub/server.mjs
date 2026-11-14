@@ -17,7 +17,7 @@ import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, t
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
-import { Voice, decodeClip, MAX_CLIP_S, LISTEN_RATE } from './lib/voice.mjs';
+import { Voice, SpeechCache, decodeClip, MAX_CLIP_S, LISTEN_RATE } from './lib/voice.mjs';
 import { snapNames } from './lib/voice-names.mjs';
 import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
@@ -123,7 +123,10 @@ if (hub.conductor) {
 const hosts = extraHosts();
 
 // Voice (decision 61 A): the local helper runs only while the voice switch is on; every open page hears its state.
-const voice = new Voice({ onChange: v => hub.emit({ type: 'voice', voice: v }) });
+const voice = new Voice({ onChange: v => { if (!v.on) speech.clear(); hub.emit({ type: 'voice', voice: v }); } });
+// The answer to a spoken message, read aloud: its sentences are made in memory as soon as it is logged.
+const speech = new SpeechCache(voice);
+hub.on(ev => { if (ev.logged && ev.type === 'voice_say' && ev.project === CONDUCTOR && voice.state === 'ready') speech.prepare(ev); });
 if (hub.settings.get('voice')) voice.start();
 // The names a transcript's near-misses snap to: projects, their live agents, and the Conductor.
 const voiceNames = () => ['Conductor', ...[...hub.projects.values()].flatMap(p => [p.name, ...[...p.agents.values()].filter(a => a.state !== 'retired').map(a => a.name)]), hub.conductor?.holder?.()?.name].filter(Boolean);
@@ -311,14 +314,23 @@ const routes = {
   },
   // A clip (16 kHz 16-bit mono PCM, base64): heard by the helper in memory, near-miss names snapped, and sent at once
   // as your message to the Conductor, marked as spoken (R011). What was heard is kept when a name was snapped.
-  'POST /api/voice/listen': async ({ audio }) => {
+  // client: the page that spoke; only it plays the answer back.
+  'POST /api/voice/listen': async ({ audio, client }) => {
     if (!hub.conductor) throw new Error('Voice talks to the Conductor, and this hub has none.');
     const r = await voice.listen(decodeClip(audio));
     const heard = String(r.text || '').replace(/\s+/g, ' ').trim();
     if (!heard) throw new Error('Nothing was heard. Tap the mic and try again.');
     const { text, snapped } = snapNames(heard, voiceNames(), hubCfg.voiceAliases);
+    hub.conductor.expectVoice(client);
     hub.fromYou(hub.place(CONDUCTOR), 'conductor', text, [], { voice: true, ...(snapped.length ? { heard } : {}) });
     return { text, ...(snapped.length ? { heard } : {}), seconds: r.seconds, ms: r.ms };
+  },
+  // One sentence of an answer read aloud, as a WAV made in memory: { id: the voice_say event, n: its sentence }.
+  // Handed over once and dropped; nothing is stored.
+  'POST /api/voice/say': async ({ id, n }) => {
+    const ev = hub.conductor?.home.log.events.find(e => e.type === 'voice_say' && e.id === String(id || ''));
+    if (!ev) throw new GuardError('Nothing to say for that.', 404);
+    return { raw: await speech.take(ev, Number(n) || 0), type: 'audio/wav' };
   },
 
   'POST /api/pick': ({ project, picks }) => ({ picked: hub.pickMany(hub.project(project), picks).map(d => d.id) }),
@@ -466,6 +478,7 @@ async function handle(req, res) {
       }
       const out = await route(input, ctx);
       AFTER[key]?.(input, ctx);
+      if (out?.raw instanceof Buffer) return send(res, 200, out.raw, out.type, ctx.headers);   // voice: speech as a WAV
       return send(res, 200, out, 'application/json', ctx.headers);
     }
 
