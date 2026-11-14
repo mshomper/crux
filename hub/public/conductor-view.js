@@ -39,8 +39,75 @@ export function applyEvent(c, ev) {
 
 // What its thread shows, oldest first: messages, round summaries, notices, pictures, reminders and the update batches
 // that woke it. Usage and start-up events stay out.
-const SHOWS = new Set(['message', 'summary', 'notice', 'visual', 'lesson_proposed', 'wake', 'reminder']);
+const SHOWS = new Set(['message', 'summary', 'notice', 'visual', 'lesson_proposed', 'wake', 'reminder', 'cards']);
 export const threadItems = c => (c?.events || []).filter(e => e.thread === CONDUCTOR_THREAD && SHOWS.has(e.type));
+
+// ---------- cards in its chat (decision 60 A) ----------
+// A "cards" event holds the real cards the hub put in its thread: { items: [{ project, card }], digest?: 'return' |
+// 'away' }. The Conductor's notes on them come as "cards_note" events: { of: <cards event id>, intro?, items: [{
+// project, card, summary, recommend, fill }] }; the latest note per card wins.
+export const itemKey = it => `${it.project}|${it.card}`;
+export const cardKind = card => String(card || '').slice(0, String(card || '').indexOf(':'));
+export const cardId = card => String(card || '').slice(String(card || '').indexOf(':') + 1);
+export const KIND_LABEL = { approval: 'Permission', question: 'Question', decision: 'Decision' };
+export function cardNotes(events, id) {
+  const out = { intro: '', items: new Map() };
+  for (const e of events || []) if (e.type === 'cards_note' && e.of === id) {
+    if (e.intro) out.intro = e.intro;
+    for (const it of e.items || []) out.items.set(itemKey(it), it);
+  }
+  return out;
+}
+
+// The option letter the Conductor's pre-fill names: a clean letter ("A", "A, Web Mercator"), else the one valid option
+// letter written as a word in it ("I'd pick B"). '' when there is none, or more than one: then that card offers no
+// Take of its own in the chat and stays out of Take all, so the note and the button always agree.
+export function pickLetter(fill, options = []) {
+  const s = String(fill || '').trim();
+  const first = s.match(/^([A-Za-z])\b/)?.[1]?.toUpperCase();
+  const named = new Set([...(first ? [first] : []), ...[...s.matchAll(/\b([A-Z])\b/g)].map(m => m[1])].filter(l => options.includes(l)));
+  return named.size === 1 ? [...named][0] : '';   // "A or B" names two: no pick
+}
+
+// What "Take all recommendations" sends, for the cards still waiting. look(item) describes one card as the page sees
+// it: null when it no longer waits, else { kind, options (decision letters), status (decision), open (question rows
+// [{ i }]), edited (question: you typed in or cleared its box), stops (permission hard stops), escalated (permission
+// sent to you by the orchestrator or the hub) }.
+// - a decision: the letter the Conductor's note names (pickLetter), never the record's own as a stand-in; a found
+//   decision only on "confirm" or "reject";
+// - a question with one row still open whose box still shows the Conductor's suggestion: that text, which is what the
+//   box shows. A box you typed in or cleared takes its own Send; several rows are answered on the card;
+// - a permission card: "allow" or "deny", never one carrying a hard stop or escalated to you (those take their own tap).
+// Returns [{ project, kind, id, choice | text + index | allow }].
+export function recommendedActions(ev, notes, look) {
+  const out = [];
+  for (const it of ev?.items || []) {
+    const c = look(it);
+    if (!c) continue;
+    const fill = String(notes.items.get(itemKey(it))?.fill || '').trim(), id = cardId(it.card);
+    if (c.kind === 'decision') {
+      if (c.status === 'found') { const w = /^(confirm|yes)\b/i.test(fill) ? 'confirm' : /^reject\b/i.test(fill) ? 'reject' : ''; if (w) out.push({ project: it.project, kind: 'decision', id: Number(id), choice: w }); continue; }
+      const choice = pickLetter(fill, c.options || []);
+      if (choice) out.push({ project: it.project, kind: 'decision', id: Number(id), choice });
+    } else if (c.kind === 'question') {
+      if (fill && !c.edited && c.open?.length === 1) out.push({ project: it.project, kind: 'question', id, index: c.open[0].i, text: fill });
+    } else if (c.kind === 'approval') {
+      if (c.stops?.length || c.escalated) continue;
+      if (/^allow\b/i.test(fill)) out.push({ project: it.project, kind: 'approval', id, allow: true });
+      else if (/^deny\b/i.test(fill)) out.push({ project: it.project, kind: 'approval', id, allow: false });
+    }
+  }
+  return out;
+}
+
+// Does a digest still hold a card that waits? (A digest's phone notice clears once none does.)
+export const digestWaiting = (ev, waits) => (ev?.items || []).some(it => waits(it));
+
+// The digest's first line when the Conductor has not written its intro (yet): "4 need you, from 3 projects."
+export function digestLine(waiting, projects) {
+  if (!waiting) return 'Everything here is answered.';
+  return `${waiting} need${waiting === 1 ? 's' : ''} you, from ${projects} project${projects === 1 ? '' : 's'}.`;
+}
 
 // The latest few (n: SHOWN on a desk, SHOWN_PHONE on a phone), or all once you asked for the earlier ones.
 // hidden: how many are folded.
@@ -51,18 +118,19 @@ export function shownItems(items, open = false, n = SHOWN) {
 
 // One line for the thread list and the section's head: its latest word, else what it is for.
 export function lastLine(c) {
-  const ev = threadItems(c).filter(e => ['message', 'summary', 'notice'].includes(e.type)).at(-1);
+  const ev = threadItems(c).filter(e => ['message', 'summary', 'notice', 'cards'].includes(e.type)).at(-1);
   if (!ev) return 'Ask what waits for you across projects';
   if (ev.type === 'summary') return `Summary: ${(ev.done || [])[0] || ev.next_step || 'posted'}`;
+  if (ev.type === 'cards') { const n = ev.items?.length || 0; return `${ev.digest ? 'Digest: ' : ''}${n} card${n === 1 ? '' : 's'} for you`; }
   return `${ev.from === 'you' ? 'You: ' : ''}${String(ev.text || '').replace(/^\[Hub: [^\]]*\]\s*/, '')}`;
 }
 
 // All projects' Waiting row (decision 59 B). fold: what you opened or folded ({ waiting }); n: how much waits.
-// On a phone it opens by default whenever something waits (decision 32); with nothing waiting it is closed and your
-// last choice is forgotten, so the next card opens it again.
-export function waitingOpen(fold, n, phone) {
+// Folded by default on the phone too since decision 60: new cards come into the chat, so an open Waiting showed each
+// one twice. It opens on a tap and keeps its red count; with nothing waiting it is closed and your choice forgotten.
+export function waitingOpen(fold, n) {
   if (!n) { delete fold.waiting; return false; }
-  return fold.waiting ?? !!phone;
+  return !!fold.waiting;
 }
 // After you send from the All projects box: Waiting folds, so the Conductor's reply lands in view under your message.
 export function foldAfterSend(fold) { fold.waiting = false; return fold; }

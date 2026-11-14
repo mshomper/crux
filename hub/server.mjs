@@ -105,10 +105,19 @@ hub.usage.start();   // decision 36: the plan meters, asked of any live agent ev
 const push = new Push();
 const decisionStatus = (project, id) => { try { return hub.project(project).board.decision(id)?.status; } catch { return undefined; } };
 const decisionOpen = (project, id) => ['open', 'found'].includes(decisionStatus(project, id));
-// The Conductor's own thread (decision 55) sends no phone notifications in this build; projects' cards still do.
+// The Conductor's own thread (decision 55) sends no per-event notices; its digest sends one (decision 60, below).
 const pushCtx = { get approvals() { return hub.approvals; }, decisionOpen, decisionStatus, events: name => hub.project(name).log.events };
 hub.on(ev => { if (ev.logged && ev.project !== CONDUCTOR) push.handle(ev, pushCtx); });
 push.resume(pushCtx);   // decision 58: phone follow-ups for PC notices sent before a restart
+// Decision 60 A: the Conductor is live while you are here and holds cards for one digest while you are away, judged by
+// the presence the hub already tracks. Your return (a page or the desktop app reporting in) posts the digest; while
+// away, questions and decisions wait for its one notice instead of one each.
+if (hub.conductor) {
+  hub.presence = () => push.present();
+  push.onPresence = () => { try { hub.conductor.presenceReport(); } catch (e) { console.warn('Conductor digest failed:', e.message); } };
+  push.holdForDigest = card => hub.conductor.holdsCard(card);   // only cards the Conductor really holds
+  hub.digestNotice = info => push.digest(info, pushCtx);
+}
 const hosts = extraHosts();
 
 // The write guard (decision 47 B): paired devices, their passkeys, and alerts on any change to those or to the push

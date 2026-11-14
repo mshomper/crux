@@ -64,10 +64,16 @@ test('updates are batched: several summaries and cards within the window wake it
   await sleep(80);
   const wakes = sent.filter(([n]) => n === 'conductor-1');
   assert.equal(wakes.length, 1);
-  assert.match(wakes[0][1], /\[Hub: updates/);
-  assert.match(wakes[0][1], /alpha: orchestrator-1 posted a round summary/);
-  assert.match(wakes[0][1], /beta: .*1 question/);
-  assert.match(wakes[0][1], /beta: a permission card from w1/);
+  assert.match(wakes[0][1], /\[Hub: new cards for/);
+  assert.match(wakes[0][1], /alpha · question:\S+ · question from orchestrator-1: Merge the lens picker today\?/);
+  assert.match(wakes[0][1], /beta · question:\S+ · question from orchestrator-1: Ship it\?/);
+  assert.match(wakes[0][1], /beta · approval:ap1 · permission: w1 wants to use Bash/);
+  // One cards event in its chat: by project in the hub's order, then permission cards before questions.
+  const cards = c.home.log.ofType('cards');
+  assert.equal(cards.length, 1);
+  assert.deepEqual(cards[0].items.map(i => `${i.project} ${i.card.split(':')[0]}`), ['alpha question', 'beta approval', 'beta question']);
+  assert.equal(cards[0].thread, CONDUCTOR_THREAD);
+  assert.equal(cards[0].digest, undefined);
 });
 
 test('routine summaries (worker or orchestrator), a routed request and its own events do not wake it', async () => {
@@ -91,32 +97,33 @@ test('no wakes from projects with the switch off, or with a single project', asy
   }
 });
 
-test('updates that land while it works ride on its next turn, not a second wake', async () => {
+test('cards that come while it works go up at once; its notes on them come at the end of its turn, not a second wake', async () => {
   const { hub, c, a } = await setup();
   c.fromYou('Brief me');   // now working
-  hub.postSummary(a, hub.ensureOrchestrator(a), summary({ questions: ['?'] }));
+  hub.postSummary(a, hub.ensureOrchestrator(a), summary({ questions: ['Which lens picker ships first?'] }));
   await sleep(80);
   assert.equal(sent.filter(([n]) => n === 'conductor-1').length, 1);   // still only your message
+  assert.equal(c.home.log.ofType('cards').length, 1);                   // the card is in its chat already
   const holder = c.holder();
   holder.state = 'idle';
   hub.onIdle(c.home, holder);
-  await sleep(80);   // one batching window after its turn
   assert.equal(sent.filter(([n]) => n === 'conductor-1').length, 2);
-  assert.match(sent.at(-1)[1], /alpha: orchestrator-1/);
+  assert.match(sent.at(-1)[1], /\[Hub: new cards for/);
+  assert.match(sent.at(-1)[1], /alpha · question:\S+ · question from orchestrator-1: Which lens picker ships first\?/);
 });
 
-test('hard cap: at most 6 automatic wakes an hour; your message and a due reminder still wake it', async () => {
+test('hard cap: at most 6 automatic wakes an hour; cards still go up, your message and a due reminder still wake it', async () => {
   const { hub, c, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
   for (let i = 0; i < 6; i++) c.home.log.append('wake', { thread: CONDUCTOR_THREAD, agent: 'conductor-1', text: 'x', auto: true });
   sent.length = 0;
   hub.postSummary(a, orch, summary({ questions: ['Seventh?'] }));
   await sleep(80);
-  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);   // held back
-  assert.equal(c.pending.length, 1);
-  c.fromYou('Anything new?');   // yours always goes, and the held update rides along with it
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);   // no turn for its notes past the cap
+  assert.equal(c.home.log.ofType('cards').length, 1);                         // the card is in its chat all the same
+  assert.equal(c.pending.length, 0);
+  c.fromYou('Anything new?');   // yours always goes
   assert.equal(sent.at(-1)[1], 'Anything new?');
-  assert.match(c.holder().notes?.[0] || '', /alpha: orchestrator-1 posted a round summary, 1 question/);
   c.holder().state = 'idle';
   c.setReminder(new Date(Date.now() + 1000).toISOString(), 'Stretch', 'conductor-1');
   assert.equal(c.dueReminders(Date.now() + 5000), 1);
@@ -125,25 +132,18 @@ test('hard cap: at most 6 automatic wakes an hour; your message and a due remind
   assert.equal(c.autoWakes(Date.now() + 61 * 60000).length, 0);
 });
 
-test('no back-and-forth: the orchestrator\'s answer to a Conductor brief does not wake it, even with a question', async () => {
+test('a summary answering a Conductor brief still brings its question to you: anything that asks you is never skipped', async () => {
   const { hub, c, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
   assert.equal(c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.'), "Sent to alpha's orchestrator.");
-  hub.postSummary(a, orch, summary({ done: ['scoped it'], questions: ['Red or amber?'] }));
+  hub.postSummary(a, orch, summary({ done: ['scoped it'], questions: ['Red or amber for the frost warning?'] }));
   await sleep(80);
-  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);
-  assert.equal(c.pending.length, 0);
-  // Only the first summary after the brief is its answer: the next one with a question wakes it again.
-  hub.postSummary(a, orch, summary({ questions: ['Ship the warning?'] }));
-  await sleep(80);
+  assert.equal(c.home.log.ofType('cards').length, 1);   // the card is in the chat, so the digest and its notice cover it too
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
-  sent.length = 0;
-  c.holder().state = 'idle';
-  // After your own message to that orchestrator, its next summary with a question wakes it again.
-  hub.fromYou(a, 'orchestrator', 'Also check the calendar.');
-  hub.postSummary(a, orch, summary({ questions: ['Which calendar?'] }));
+  // A summary that asks nothing still wakes nothing.
+  hub.postSummary(a, orch, summary({ done: ['shipped it'] }));
   await sleep(80);
-  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
+  assert.equal(c.home.log.ofType('cards').length, 1);
 });
 
 test('an old brief does not silence a project: a first summary more than 30 minutes later wakes it', async () => {
@@ -478,14 +478,16 @@ test('only a real repeat is hidden: never the longer question, never a short exa
   assert.deepEqual(openQuestions(a.log.events).map(q => q.from), ['orchestrator-1']);
 });
 
-test('All projects on the phone: Waiting opens by default while something waits, and folds when you send', () => {
+test('All projects: Waiting starts folded, phone and desk alike (decision 60: the cards are in the chat); a tap opens it', () => {
   const fold = {};
-  assert.equal(CP.waitingOpen(fold, 2, true), true);    // phone, something waits: open
-  assert.equal(CP.waitingOpen(fold, 2, false), false);  // desk: closed until you open it
+  assert.equal(CP.waitingOpen(fold, 2), false);         // something waits: still folded, its red count shows on the row
+  fold.waiting = true;                                  // your tap
+  assert.equal(CP.waitingOpen(fold, 2), true);
   CP.foldAfterSend(fold);
-  assert.equal(CP.waitingOpen(fold, 2, true), false);   // after your message: folded, the reply lands in view
-  assert.equal(CP.waitingOpen(fold, 0, true), false);   // nothing waits: closed, and your choice is forgotten
-  assert.equal(CP.waitingOpen(fold, 1, true), true);    // the next card opens it again
+  assert.equal(CP.waitingOpen(fold, 2), false);         // after your message: folded, the reply lands in view
+  fold.waiting = true;
+  assert.equal(CP.waitingOpen(fold, 0), false);         // nothing waits: closed, and your choice is forgotten
+  assert.equal(CP.waitingOpen(fold, 1), false);         // the next card leaves it folded
 });
 
 test('after a restart your unread message and an unread Conductor brief are both resent, oldest first', async () => {
@@ -545,8 +547,9 @@ test('no wake for cards you settled before it came: no turn, no reply; one still
   await sleep(80);
   const wakes = sent.filter(([n]) => n === 'conductor-1');
   assert.equal(wakes.length, 1);
-  assert.match(wakes[0][1], /beta: orchestrator-1 posted a round summary, 1 question/);
+  assert.match(wakes[0][1], /beta · question:\S+ · question from orchestrator-1: Pause beta tonight\?/);
   assert.doesNotMatch(wakes[0][1], /alpha/);
+  assert.deepEqual(c.home.log.ofType('cards').flatMap(e => e.items.map(i => i.project)), ['beta']);   // nor in its chat
 });
 
 test('a worker question its orchestrator answers within the window wakes nothing either', async () => {
@@ -569,7 +572,7 @@ test('quiet turns: stay_quiet and post_summary end its turn with no Claude Code 
   c.fromYou('[Hub: updates since you last heard]\n- alpha: a card');
   const k = c.holder();
   const o = k.queryOptions();
-  assert.deepEqual(o.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS.split(','), ['mcp__crux__post_summary', 'mcp__crux__stay_quiet']);
+  assert.deepEqual(o.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS.split(','), ['mcp__crux__post_summary', 'mcp__crux__stay_quiet']);   // not note_cards (decision 60 review)
   assert.ok(o.env.PATH || o.env.Path, 'the clean environment is kept underneath');
   assert.ok(o.allowedTools.includes('mcp__crux__stay_quiet'));
   assert.equal(c.decide('mcp__crux__stay_quiet', {}, k).behavior, 'allow');

@@ -54,6 +54,7 @@ const S = {
   activity: {},
   pending: new Set(),
   drafts: store.get('drafts', {}),   // answers typed in Needs you, by "<summary id>:<question place>"
+  cdEdited: new Set(store.get('cd-edited', [])),   // draft keys you typed in or cleared: no Conductor suggestion there (decision 60)
   boardOpen: store.get('board-open', {}),   // board sections you opened or closed, by key
   retiredOpen: store.get('retired-open', false),   // the Retired section of the thread list, folded by default
   retiredOlder: false   // "Show older" in it: for this visit only, so old ones age out again on the next load
@@ -334,13 +335,17 @@ function visualEl(p, ev, compact) {
 // takes it out of Needs you without telling the agent; the summary stays in its thread.
 // Drafts live in S.drafts, so the list can redraw while you type.
 const draftKey = (id, i) => `${id}:${i}`;
-function filledAnswers(ev) { return ev.open.map(q => ({ index: q.i, text: (S.drafts[draftKey(ev.id, q.i)] || '').trim() })).filter(a => a.text); }
-function questionCard(ev, p = proj()) {
+// suggest: { [draft key]: text }, the Conductor's pre-fill for a card in its chat (decision 60). It shows in that copy's
+// box only, while you have not typed or cleared anything for that question in any copy (S.cdEdited); it is never saved
+// as a draft, so Needs you and the thread copies stay empty and a reload never refills a box you cleared.
+const boxText = (k, suggest) => S.drafts[k] ?? (suggest?.[k] && !S.cdEdited.has(k) ? suggest[k] : '');
+function filledAnswers(ev, suggest = null) { return ev.open.map(q => ({ index: q.i, text: boxText(draftKey(ev.id, q.i), suggest).trim() })).filter(a => a.text); }
+function questionCard(ev, p = proj(), { suggest = null } = {}) {
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
   const where = ev.thread === 'orchestrator' ? 'the orchestrator thread' : ev.thread;
-  const filled = filledAnswers(ev).length;
+  const filled = filledAnswers(ev, suggest).length;
   const rows = ev.open.map(q => {
-    const k = draftKey(ev.id, q.i), draft = S.drafts[k] || '';
+    const k = draftKey(ev.id, q.i), draft = boxText(k, suggest);
     const yn = isYesNo(q.text) ? ['Yes', 'No'].map(w => `<button class="qquick ${draft === w ? 'on' : ''}" data-quick="${esc(k)}" data-word="${w}" aria-pressed="${draft === w}">${w}</button>`).join('') : '';
     return `<div class="qrow">
       <p class="qtext">${esc(q.text)}</p>
@@ -360,10 +365,11 @@ function questionCard(ev, p = proj()) {
 }
 const sendLabel = (n, of) => !n ? 'Send answers' : n === 1 && of === 1 ? 'Send answer' : `Send ${n} answer${n === 1 ? '' : 's'}`;
 // p: the project the card belongs to (projectOf), so answers from All projects reach the right agent.
-function sendAnswers(id, p = proj()) {
+// suggest: the Conductor's pre-fill when Send is pressed on its chat copy (what that box shows).
+function sendAnswers(id, p = proj(), suggest = null) {
   const ev = openQuestions(p).find(q => q.id === id);
   if (!ev || S.sending) return;
-  const answers = filledAnswers(ev);
+  const answers = filledAnswers(ev, suggest);
   if (!answers.length) return;
   S.sending = true;
   act(async () => {
@@ -379,6 +385,8 @@ function draftChanged(box) {
   S.drafts[box.dataset.answer] = box.value;
   if (!box.value) delete S.drafts[box.dataset.answer];
   store.set('drafts', S.drafts);
+  // Your own words now, in every copy: the Conductor's suggestion no longer shows, and Take all leaves this one alone.
+  if (!S.cdEdited.has(box.dataset.answer)) { S.cdEdited.add(box.dataset.answer); store.set('cd-edited', [...S.cdEdited].slice(-300)); }
   growBox(box, 140);
   const ev = openQuestions(projectOf(box)).find(q => q.id === box.dataset.q);
   const btn = box.closest('.card')?.querySelector('[data-send-answers]');
@@ -544,17 +552,20 @@ function retiredSection(p, workers) {
 }
 
 // ---------- render: cards ----------
-function decisionCard(p, d) {
+// take (a card in the Conductor's chat, decision 60): the letter its note names, offered by the Take button and lit on
+// its option; 'none' when the note names no option, so no Take button disagrees with it.
+function decisionCard(p, d, { take = null } = {}) {
   if (!d) return '';
+  const offer = take === 'none' ? null : take || d.recommended;
   const open = d.status === 'open', found = d.status === 'found';
   const opts = (d.options || []).map(o => `
-    <button class="opt ${o.key === d.recommended ? 'rec' : ''} ${o.key === d.chosen ? 'chosen' : ''}" data-pick="${d.id}" data-choice="${o.key}" ${open ? '' : 'disabled'}>
+    <button class="opt ${o.key === d.recommended ? 'rec' : ''} ${take && o.key === take ? 'offer' : ''} ${o.key === d.chosen ? 'chosen' : ''}" data-pick="${d.id}" data-choice="${o.key}" ${open ? '' : 'disabled'}>
       <span class="key">${esc(o.key)}</span>
       <span class="oname">${esc(o.name)}${o.key === d.recommended ? `<span class="chip rec">${icon('star')}recommended${d.confidence ? ' · ' + esc(d.confidence) : ''}</span>` : ''}</span>
       <span class="osum">${esc(o.summary || '')}</span>
     </button>`).join('');
   const foot = open
-    ? `${d.recommended ? `<button class="btn primary" data-pick="${d.id}" data-choice="${d.recommended}">${icon('check')}Take ${esc(d.recommended)}</button>` : ''}<span class="faint">or reply "${d.id}${esc(d.recommended || 'A')}"</span>`
+    ? `${offer ? `<button class="btn primary" data-pick="${d.id}" data-choice="${esc(offer)}">${icon('check')}Take ${esc(offer)}</button>` : ''}<span class="faint">or reply "${d.id}${esc(offer || 'A')}"</span>`
     : found
       ? `<button class="btn good" data-pick="${d.id}" data-choice="confirm">${icon('check')}Confirm</button><button class="btn" data-pick="${d.id}" data-choice="reject">${icon('x')}Reject</button>`
       : `<span class="chip ${esc(d.status)}">${esc(d.status)}${d.chosen ? ' · ' + esc(d.chosen) : ''}</span>`;
@@ -762,11 +773,11 @@ function agentRow(p, a) {
 }
 // ---------- All projects with the Conductor (decisions 55 and 59 B) ----------
 // The Conductor's chat and the message box fill the column, like any thread. Two compact rows on top open in place:
-// what waits for you (red count, decision 31) and every project's agents. On a phone the waiting row opens by default
-// whenever something waits (decision 32); one tap folds it. Without a Conductor the column is drawn as before.
+// what waits for you (red count, decision 31) and every project's agents. Both start folded, on the phone too: since
+// decision 60 new cards come into the chat itself; one tap opens Waiting. Without a Conductor the column is as before.
 S.hubFold = {};   // { waiting, agents }: what you opened or folded; waiting goes back to its default once nothing waits
 function hubFoldOpen(k, n) {
-  return k === 'waiting' ? CP.waitingOpen(S.hubFold, n, phoneMq.matches) : !!S.hubFold[k];
+  return k === 'waiting' ? CP.waitingOpen(S.hubFold, n) : !!S.hubFold[k];
 }
 function conductorItem(ev) {
   const place = S.cplace;
@@ -778,8 +789,101 @@ function conductorItem(ev) {
       case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (under Waiting)</div>`;
       case 'reminder': return `<div class="notice">${icon('clock')}Reminder set for ${esc(new Date(ev.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}: ${esc(ev.text)}</div>`;
       case 'wake': return `<div class="notice cd-wake" title="${esc(ev.text)}">${esc(CP.wakeLine(ev))} · ${timeOf(ev.ts)}</div>`;
+      case 'cards': return cardsBlock(ev);
       default: return '';
   }
+}
+
+// ---------- cards in the Conductor's chat (decision 60 A) ----------
+// The real cards, drawn by the same code as Needs you, each inside its project's data-pj section, so a tap or reply
+// goes to that project through the same path as in Needs you and counts as yours there. Above each: the Conductor's
+// one-line summary and recommendation (its note), and the card comes pre-filled where it allows. A card answered
+// anywhere (here, Needs you, its thread) leaves both on the same redraw and shows here as one line.
+// look(): one card as the page sees it, or null once it no longer waits (CP.recommendedActions).
+function chatCard(it) {
+  const p = S.projects.find(x => x.name === it.project);
+  if (!p) return null;
+  const kind = CP.cardKind(it.card), id = CP.cardId(it.card);
+  if (kind === 'approval') {
+    const ev = p.events.find(e => e.type === 'approval' && e.approval === id);
+    return ev && S.pending.has(id) ? { kind, p, ev, stops: ev.stops || [], escalated: !!escalation(p, id) } : null;
+  }
+  if (kind === 'decision') {
+    const d = openDecisions(p).find(x => x.id === Number(id));
+    return d ? { kind, p, d, status: d.status, options: (d.options || []).map(o => o.key) } : null;
+  }
+  if (kind === 'question') {
+    const q = openQuestions(p).find(x => x.id === id);
+    const keys = q ? q.open.map(x => draftKey(q.id, x.i)) : [];
+    return q ? { kind, p, q, open: q.open, edited: keys.some(k => S.cdEdited.has(k) || k in S.drafts) } : null;
+  }
+  return null;
+}
+// The Conductor's note on a card, from the latest cards event in its chat that holds it.
+function noteFor(project, card) {
+  const evs = S.conductor?.events || [];
+  const ev = evs.findLast(e => e.type === 'cards' && e.items.some(i => i.project === project && i.card === card));
+  return ev ? CP.cardNotes(evs, ev.id).items.get(CP.itemKey({ project, card })) || null : null;
+}
+// Its pre-fill for a question card's chat copy (one open row only), as questionCard's suggest.
+function suggestFor(project, q) {
+  const fill = String(noteFor(project, `question:${q.id}`)?.fill || '').trim();
+  return fill && q.open.length === 1 ? { [draftKey(q.id, q.open[0].i)]: fill } : null;
+}
+// The Conductor's pre-fill when el sits in its chat copy of question card id (what that box shows), else null.
+function chatSuggestAt(el, p, id) {
+  const q = el?.closest?.('.cd-item') && openQuestions(p).find(x => x.id === id);
+  return q ? suggestFor(p.name, q) : null;
+}
+function cardsBlock(ev) {
+  const notes = CP.cardNotes(S.conductor?.events, ev.id);
+  const rows = ev.items.map(it => ({ it, c: chatCard(it), note: notes.items.get(CP.itemKey(it)) }));
+  const live = rows.filter(r => r.c);
+  const recs = CP.recommendedActions(ev, notes, it => rows.find(r => r.it === it)?.c || null);
+  const label = r => `${esc(r.it.project)} · ${CP.KIND_LABEL[CP.cardKind(r.it.card)] || 'Card'}`;
+  // Settled ones fold to one line each; a block with nothing left waiting folds to a single line.
+  if (!live.length) return `<div class="notice cd-cards-done">${icon('check')}${ev.digest ? 'Digest' : 'Cards'} from ${timeOf(ev.ts)}: all ${ev.items.length} answered</div>`;
+  const item = r => {
+    if (!r.c) return `<div class="cd-item done"><span class="cd-k">${label(r)}</span><span class="cd-done">${icon('check')}Answered</span></div>`;
+    const fill = String(r.note?.fill || '').trim();
+    const sum = r.note ? `<p class="cd-sum">${esc(r.note.summary)}${r.note.recommend ? ` <b class="cd-rec">I recommend ${esc(r.note.recommend.replace(/\.$/, ''))}.</b>` : ''}</p>` : '';
+    let card = '', rec = '';
+    if (r.c.kind === 'question') card = questionCard(r.c.q, r.c.p, { suggest: suggestFor(r.it.project, r.c.q) });
+    // With a note, the Take button offers the letter it names, or none at all, so the two always agree.
+    else if (r.c.kind === 'decision') card = decisionCard(r.c.p, r.c.d, r.note ? { take: CP.pickLetter(fill, r.c.options) || 'none' } : {});
+    else { rec = /^allow\b/i.test(fill) ? ' rec-allow' : /^deny\b/i.test(fill) ? ' rec-deny' : ''; card = approvalCard(r.c.ev, r.c.p); }
+    return `<section class="cd-item hub-group${rec}" data-pj="${esc(r.it.project)}"><span class="cd-k">${label(r)}</span>${sum}${card}</section>`;
+  };
+  const nProj = new Set(live.map(r => r.it.project)).size;
+  const take = recs.length ? `<button class="btn primary" data-take-recs="${esc(ev.id)}" title="Answer each card below with the recommendation shown on it, as if you tapped each one">${icon('check')}Take ${recs.length === 1 ? 'the recommendation' : `all ${recs.length} recommendations`}</button>` : '';
+  const head = ev.digest
+    ? `<div class="cd-digest" data-card="digest:${esc(ev.id)}"><div class="cd-dk">${icon('projects')}<b>Digest</b><span class="time">${timeOf(ev.ts)}</span></div>
+        <p class="cd-intro"><b>${esc(CP.digestLine(live.length, nProj))}</b>${notes.intro ? ` ${esc(notes.intro)}` : ''}</p>
+        ${take ? `<div class="row">${take}<span class="faint">or answer one by one below</span></div>` : ''}</div>`
+    : `<div class="cd-cards-k asks">${icon('inbox')}<b>New for you</b><span class="faint">${live.length} card${live.length === 1 ? '' : 's'}</span><span class="time">${timeOf(ev.ts)}</span>${recs.length > 1 ? take : ''}</div>`;
+  const foot = ev.digest ? `<p class="faint cd-foot">While you're away, new cards wait here for one digest, at most every ${S.conductor?.digestMinutes || 30} minutes, with one phone notice. Your answers here count as yours in each project.</p>` : '';
+  return `<div class="cd-cards${ev.digest ? ' is-digest' : ''}">${head}${rows.map(item).join('')}${foot}</div>`;
+}
+// "Take all recommendations": each still-waiting card answered with its recommendation, through the same calls as
+// tapping it (picks, answers, Allow or Deny), so each counts as yours in its project. A question goes only while its
+// box still shows the Conductor's suggestion (what you see is what is sent); one you typed in waits for its own Send,
+// and your drafts are left as they are.
+function takeRecommendations(id) {
+  const ev = S.conductor?.events.find(e => e.id === id && e.type === 'cards');
+  if (!ev || S.sending) return;
+  const notes = CP.cardNotes(S.conductor.events, id);
+  const recs = CP.recommendedActions(ev, notes, it => chatCard(it));
+  if (!recs.length) return;
+  S.sending = true;
+  act(async () => {
+    try {
+      for (const name of new Set(recs.filter(r => r.kind === 'decision').map(r => r.project))) {
+        await sendPicks(S.projects.find(p => p.name === name), recs.filter(r => r.kind === 'decision' && r.project === name).map(r => ({ id: r.id, choice: r.choice })));
+      }
+      for (const r of recs.filter(x => x.kind === 'question')) await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });
+      for (const r of recs.filter(x => x.kind === 'approval')) await api('/api/approval', { id: r.id, allow: r.allow });
+    } finally { S.sending = false; }
+  });
 }
 // Every project's waiting cards, grouped by project and answerable in place.
 const hubCards = ({ p, waiting: w }) => w.approvals.map(ev => approvalCard(ev, p)).join('') + w.questions.map(ev => questionCard(ev, p)).join('')
@@ -1077,6 +1181,15 @@ function openCard(project, card, { undo = false } = {}) {
   switchProject(project);
   const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];
   if (kind === 'devices') return guardUI.openDevices();   // decision 47: a change to the devices or push devices
+  // Decision 60 A: the Conductor's digest notice opens All projects at the digest.
+  if (kind === 'digest') {
+    $('#app').classList.remove('show-side');
+    S.hubFold.waiting = false;   // the digest holds the cards: Waiting stays folded so it is in view
+    selectThread(AP.HUB_THREAD);
+    const el = document.querySelector(`[data-card="digest:${CSS.escape(id)}"]`);
+    if (el) { el.scrollIntoView({ block: 'start' }); lockOn(el); }
+    return;
+  }
   const p = proj();
   if (!p) return;
   // A level raised to Trusted or dropped at start, or the hub restarting (push.mjs, guard.mjs): the notice is in the
@@ -1164,7 +1277,9 @@ function cardWaiting(tag) {
   const [kind, id] = [tag.slice(0, tag.indexOf(':')), tag.slice(tag.indexOf(':') + 1)];
   return S.projects.some(p => kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
     : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
-      : kind === 'question' ? openQuestions(p).some(q => q.id === id) : true);
+      : kind === 'question' ? openQuestions(p).some(q => q.id === id)
+        // Decision 60: the Conductor's digest notice, until every card in that digest is settled.
+        : kind === 'digest' ? CP.digestWaiting(S.conductor?.events.find(e => e.id === id && e.type === 'cards'), it => !!chatCard(it)) : true);
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.projects.length) phone.clearSettled(cardWaiting); });
 
@@ -1260,6 +1375,8 @@ document.addEventListener('click', e => {
   // The pick shows at once (AP.applyPick): every card for that decision, in every column, goes on this redraw; a
   // failed pick is put back by the reload.
   if (pick && !pick.disabled) return sendPicks(projectOf(pick), [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }]);
+  const takeRecs = e.target.closest('[data-take-recs]');
+  if (takeRecs) return takeRecommendations(takeRecs.dataset.takeRecs);
   if (e.target.closest('[data-take-all]')) {
     const picks = openDecisions(proj()).filter(d => d.status === 'open' && d.recommended).map(d => ({ id: d.id, choice: d.recommended }));
     return sendPicks(proj(), picks);
@@ -1291,12 +1408,13 @@ document.addEventListener('click', e => {
   if (dq) return act(() => api('/api/dismiss', { project: projectOf(dq).name, question: dq.dataset.dismiss, ...('index' in dq.dataset ? { index: Number(dq.dataset.index) } : {}) }));
   const qq = e.target.closest('[data-quick]');
   if (qq) {
-    const box = [...document.querySelectorAll('.qbox')].find(x => x.dataset.answer === qq.dataset.quick);
+    // This copy's box (the same question can be drawn in the chat, Needs you and its thread at once).
+    const box = qq.closest('.qrow')?.querySelector(`.qbox[data-answer="${CSS.escape(qq.dataset.quick)}"]`);
     if (box) { box.value = box.value === qq.dataset.word ? '' : qq.dataset.word; draftChanged(box); focusIfDesk(box); }   // a thumb on Yes needs no keyboard
     return;
   }
   const sa = e.target.closest('[data-send-answers]');
-  if (sa && !sa.disabled) return sendAnswers(sa.dataset.sendAnswers, projectOf(sa));
+  if (sa && !sa.disabled) return sendAnswers(sa.dataset.sendAnswers, projectOf(sa), chatSuggestAt(sa, projectOf(sa), sa.dataset.sendAnswers));
   const ls = e.target.closest('[data-lesson]');
   if (ls) return act(() => api('/api/lessons', { project: projectOf(ls).name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
   const lu = e.target.closest('[data-level-undo]'); if (lu) return undoLevel(proj(), lu.dataset.levelUndo);
@@ -1390,7 +1508,7 @@ $('#cols').addEventListener('keydown', e => {
   if (what === 'native') return;
   e.preventDefault();
   if (what === 'newline') insertLineBreak(e.target);
-  else sendAnswers(e.target.dataset.q, projectOf(e.target));
+  else sendAnswers(e.target.dataset.q, projectOf(e.target), chatSuggestAt(e.target, projectOf(e.target), e.target.dataset.q));
 });
 
 function toggleRouting() {
