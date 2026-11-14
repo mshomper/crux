@@ -56,8 +56,9 @@ test('your message starts conductor-1 in its own thread and reaches it at once',
 test('updates are batched: several summaries and cards within the window wake it once', async () => {
   const { hub, c, a, b } = await setup();
   const orch = hub.ensureOrchestrator(a);
-  hub.postSummary(a, orch, summary({ done: ['x'], decisions_needed: [4] }));
+  hub.postSummary(a, orch, summary({ done: ['x'], questions: ['Merge the lens picker today?'] }));
   hub.postSummary(b, hub.ensureOrchestrator(b), summary({ questions: ['Ship it?'] }));
+  hub.approvals.set('ap1', { p: b });   // a permission card really waiting (the wake checks it still is)
   b.log.append('approval', { thread: 'w1', approval: 'ap1', agent: 'w1', tool: 'Bash', input: {}, routedTo: null });
   sent.length = 0;
   await sleep(80);
@@ -431,8 +432,10 @@ test('once you answer or dismiss the first card, its repeat counts as answered; 
     const orch = s.hub.ensureOrchestrator(s.a), w = s.hub.startWorker(s.a, 'w1', 'task');
     s.hub.postSummary(s.a, w, summary({ questions: [Q] }));
     s.hub.postSummary(s.a, orch, summary({ questions: [Q] }));
+    const workerCard = s.a.log.events.find(e => e.type === 'summary' && e.from === 'w1');
+    s.a.log.events.findLast(e => e.type === 'summary').ts = workerCard.ts;   // both in the same millisecond: order still decides
     assert.deepEqual(openQuestions(s.a.log.events).map(q => q.from), ['w1']);
-    return { ...s, orch, w, workerCard: s.a.log.events.find(e => e.type === 'summary' && e.from === 'w1') };
+    return { ...s, orch, w, workerCard };
   };
   // You answer w1's card in Needs you: the orchestrator's repeat does not come back.
   let s = await askBoth();
@@ -515,4 +518,33 @@ test('one card per decision, and a pick takes every copy away at once', async ()
   assert.deepEqual(AP.openDecisions(p), []);
   assert.equal(AP.waiting(p, new Set()).decisions.length, 0);
   assert.equal(AP.applyPick(p, 4, 'A'), false);   // already decided: nothing to do
+});
+
+test('no wake for cards you settled before it came: no turn, no reply; one still waiting wakes it with that line only', async () => {
+  const { hub, c, a, b } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  hub.postSummary(a, orch, summary({ questions: ['Merge the lens picker today?'] }));
+  hub.approvals.set('ap7', { p: b });
+  b.log.append('approval', { thread: 'w1', approval: 'ap7', agent: 'w1', tool: 'Bash', input: {}, routedTo: null });
+  // Within the batching window you answer the question and the permission card.
+  hub.fromYou(a, 'orchestrator', 'Yes, merge it.');
+  hub.approvals.delete('ap7');
+  await sleep(80);
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);   // no turn at all
+  assert.equal(c.pending.length, 0);
+  assert.ok(c.home.log.events.some(e => e.type === 'wake_taken' && e.skipped === 2));
+  assert.equal(c.home.log.events.some(e => e.type === 'wake'), false);
+  // Nothing comes back after a restart either.
+  const { root } = { root: join(a.dir, '..') };
+  const again = new Hub({ projects: [a.dir, b.dir], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }), conductorDir: join(root, 'data', 'conductor') });
+  assert.equal(again.conductor.pending.length, 0);
+  // Two lines, one settled: the wake carries only the one still waiting.
+  hub.postSummary(b, hub.ensureOrchestrator(b), summary({ questions: ['Pause beta tonight?'] }));
+  hub.postSummary(a, orch, summary({ questions: ['Ship the lens picker on Friday or wait?'] }));
+  hub.dismissQuestion(a, a.log.events.findLast(e => e.type === 'summary').id);
+  await sleep(80);
+  const wakes = sent.filter(([n]) => n === 'conductor-1');
+  assert.equal(wakes.length, 1);
+  assert.match(wakes[0][1], /beta: orchestrator-1 posted a round summary, 1 question/);
+  assert.doesNotMatch(wakes[0][1], /alpha/);
 });

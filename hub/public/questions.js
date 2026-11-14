@@ -53,7 +53,8 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
     if (e.type === 'question_dismissed') { e.index == null ? dismissed.add(e.question) : mark(e.question, e.index); continue; }
     if (e.type === 'agent_retired') retired.add(e.agent);
     if (!e.thread) continue;
-    if (e.type === 'summary' && e.questions?.length) { const s = { ev: e, answered: false, byYou: false }; last.set(e.thread, s); asked.push(s); }
+    // at: its place in the log, so "earlier" never ties (two summaries can share a millisecond)
+    if (e.type === 'summary' && e.questions?.length) { const s = { ev: e, at: asked.length, answered: false, byYou: false }; last.set(e.thread, s); asked.push(s); }
     else if (e.type === 'message') {
       if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index); continue; }
       // A Conductor brief (decision 55) logged in a project's thread is never an answer: only you (or the orchestrator
@@ -64,12 +65,12 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
     }
   }
   const settled = [];
-  for (const { ev, byYou } of asked) {
+  for (const { ev, at, byYou } of asked) {
     const done = gone.get(ev.id) || new Set(), all = byYou || dismissed.has(ev.id);
-    ev.questions.forEach((text, i) => { if (all || done.has(i) || answeredByPicks(text, decisionStatus)) settled.push({ ts: ev.ts, thread: ev.thread, from: ev.from, text }); });
+    ev.questions.forEach((text, i) => { if (all || done.has(i) || answeredByPicks(text, decisionStatus)) settled.push({ at, thread: ev.thread, from: ev.from, text }); });
   }
   const cards = [];
-  for (const { ev, answered } of last.values()) {
+  for (const { ev, at, answered } of last.values()) {
     if (answered || dismissed.has(ev.id) || retired.has(ev.from)) continue;
     const done = gone.get(ev.id) || new Set();
     let byPicks = 0;
@@ -79,7 +80,7 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
       if (answeredByPicks(text, decisionStatus)) { byPicks++; return; }
       open.push({ i, text });
     });
-    if (open.length) cards.push({ ...ev, open, byPicks, repeats: [] });
+    if (open.length) cards.push({ ...ev, open, byPicks, repeats: [], at });
   }
   return { cards, settled };
 }
@@ -92,12 +93,12 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
 // that thread), the repeat shows again by itself.
 function withoutRepeatCards(cards, settled = []) {
   const shown = [];
-  for (const c of [...cards].sort((a, b) => String(a.ts).localeCompare(String(b.ts)))) {
+  for (const c of [...cards].sort((a, b) => a.at - b.at)) {
     const earlier = shown.filter(d => d.thread !== c.thread);
     const open = [];
     for (const q of c.open) {
       const holder = earlier.find(d => d.open.some(w => isRepeat(q.text, w.text)));
-      const yours = !holder && settled.find(s => s.thread !== c.thread && String(s.ts) < String(c.ts) && isRepeat(q.text, s.text));
+      const yours = !holder && settled.find(s => s.thread !== c.thread && s.at < c.at && isRepeat(q.text, s.text));
       if (holder) c.repeats.push({ ...q, of: holder.from, thread: holder.thread });
       else if (yours) c.repeats.push({ ...q, of: yours.from, thread: yours.thread, answered: true });
       else open.push(q);
