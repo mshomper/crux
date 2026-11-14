@@ -4,7 +4,7 @@ import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
 import { hudBoot, openPanel, closePanel } from './hud.js';
-import { isYesNo } from './questions.js';
+import { isYesNo, repeatsIn, pageStatus } from './questions.js';
 import * as AP from './all-projects.js';
 import * as CP from './conductor-view.js';
 import { hubProjects } from './map-hub.js';
@@ -620,12 +620,15 @@ function permLine(ev) {
 }
 
 // only: the decision ids to draw under this summary (AP.decisionCardsOnce: one card per decision in a thread).
-function summaryCard(p, ev, only = null) {
+// reps: questions of this summary hidden as repeats of another card still open (questions.js repeatsIn); each gets a
+// small note saying where it waits, so it is asked in one card only.
+function summaryCard(p, ev, only = null, reps = null) {
   const sec = (label, xs) => xs?.length ? `<dt>${label}</dt><dd><ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul></dd>` : '';
+  const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· also in ${esc(r.of)}'s card</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
   const decisions = (only || ev.decisions_needed || []).map(id => p.board.decisions.find(d => d.id === Number(id))).filter(Boolean);
   return `<article class="card summary">
     <div class="card-head">${icon('check')}<h3>${esc(ev.from)} finished a round</h3><span class="time">${timeOf(ev.ts)}</span></div>
-    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${sec('Questions', ev.questions)}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
+    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${qs}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
       isTall([ev.done, ev.changed, ev.questions, ev.blocked_on, ev.next_step].flat().filter(Boolean).join('\n'), 700))}
   </article>${decisions.map(d => decisionCard(p, d)).join('')}`;
 }
@@ -672,7 +675,7 @@ function modelChip(a, { button = false, mini = false } = {}) {
   const style = hue ? ` style="--mh:${hue}"` : '';
   const tip = `${describe(a)}${a.restartPending ? '. The change applies once it finishes what it is doing' : ''}`;
   return button
-    ? `<button class="${cls}"${style} data-mchip="${esc(a.name)}" aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}. Change model or effort">${inner}${icon('chevron')}</button>`
+    ? `<button class="${cls}"${style} data-mchip="${esc(a.name)}"${a.role === 'conductor' ? ` data-mplace="${CP.CONDUCTOR}"` : ''} aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}. Change model or effort">${inner}${icon('chevron')}</button>`
     : `<span class="${cls}"${style} title="${esc(tip)}">${inner}</span>`;
 }
 
@@ -701,7 +704,7 @@ const TYPE_TIP = 'Agent types are Claude Code agent files: ~/.claude/agents for 
 
 // The chip's menu: change model, effort or type in place. Every change applies at once; Escape or a click outside closes it.
 // The agent the open menu is for: the Conductor's holder (decision 55) or one of this project's agents.
-const menuAgent = () => S.mmenu && (S.conductor?.name === S.mmenu ? CP.agentOf(S.conductor) : proj()?.agents.find(x => x.name === S.mmenu && x.state !== 'retired'));
+const menuAgent = () => S.mmenu && (S.mmenuPlace === CP.CONDUCTOR ? (S.conductor?.name ? CP.agentOf(S.conductor) : null) : proj()?.agents.find(x => x.name === S.mmenu && x.state !== 'retired'));
 function renderModelMenu() {
   const el = $('#mmenu'), p = proj();
   const a = menuAgent();
@@ -763,8 +766,7 @@ function agentRow(p, a) {
 // whenever something waits (decision 32); one tap folds it. Without a Conductor the column is drawn as before.
 S.hubFold = {};   // { waiting, agents }: what you opened or folded; waiting goes back to its default once nothing waits
 function hubFoldOpen(k, n) {
-  if (k === 'waiting' && !n) { delete S.hubFold.waiting; return false; }
-  return S.hubFold[k] ?? (k === 'waiting' && phoneMq.matches);
+  return k === 'waiting' ? CP.waitingOpen(S.hubFold, n, phoneMq.matches) : !!S.hubFold[k];
 }
 function conductorItem(ev) {
   const place = S.cplace;
@@ -836,10 +838,11 @@ function feedFor(t) {
     return html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
     const evs = threadEvents(p, t), once = AP.decisionCardsOnce(evs);   // one card per decision in a thread
+    const reps = repeatsIn(p.events, { decisionStatus: pageStatus(p) });   // repeats of a card still open elsewhere
     const html = evs.map(ev => {
       switch (ev.type) {
         case 'message': return messageEl(p, ev, t);
-        case 'summary': return summaryCard(p, ev, once(ev));
+        case 'summary': return summaryCard(p, ev, once(ev), reps.get(ev.id));
         case 'notice': return `<div class="notice">${esc(ev.text)}</div>`;
         case 'pick': return `<div class="notice">You picked D${pad(ev.decision)} · ${esc(ev.label)}</div>`;
         case 'approval': return approvalCard(ev, p);
@@ -1148,7 +1151,12 @@ const cols = new Columns({
       return api('/api/send', { project, thread: t === 'needs' ? 'orchestrator' : t, text, ...(attachments.length ? { attachments } : {}) });
     },
     // After a message from Needs you the orchestrator's chat opens, as before, unless Needs you is pinned (it stays).
-    sent: (c, r) => { if (r.picked) load(); else if (c.thread === 'needs' && !cols.isPinned('needs')) selectThread('orchestrator'); }
+    // From All projects (decision 59 B): Waiting folds and the chat follows to its latest message, so the
+    // Conductor's reply lands in view under yours (on the phone Waiting is open by default).
+    sent: (c, r) => {
+      if (c.thread === AP.HUB_THREAD) { CP.foldAfterSend(S.hubFold); c.justOpened = true; return render(); }
+      if (r.picked) load(); else if (c.thread === 'needs' && !cols.isPinned('needs')) selectThread('orchestrator');
+    }
   }
 });
 // Does the card a phone notification points at still wait for you, in any project? (Tags are card ids.)
@@ -1202,7 +1210,7 @@ phoneMq.addEventListener('change', () => { placeBell(); render(); });
 $('#mmenu').addEventListener('change', e => {
   const field = { 'mm-model': 'model', 'mm-effort': 'effort', 'mm-type': 'type' }[e.target.name];
   if (!field || !S.mmenu) return;
-  const agent = S.mmenu, project = S.conductor?.name === agent ? CP.CONDUCTOR : proj().name;
+  const agent = S.mmenu, project = S.mmenuPlace === CP.CONDUCTOR ? CP.CONDUCTOR : proj().name;   // by place, not name
   act(async () => { await api('/api/agent-settings', { project, agent, [field]: e.target.value }); await load(); });
 });
 $('#hud').addEventListener('click', () => closeModelMenu(), true);   // the map opening over it
@@ -1228,7 +1236,7 @@ document.addEventListener('click', e => {
     return render();
   }
   const mc = e.target.closest('[data-mchip]');
-  if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; cols.render(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
+  if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; S.mmenuPlace = mc.dataset.mplace || null; cols.render(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
   // The pin on a thread row (decision 39): pin opens it as a column beside the current one; unpin closes its column.
   const rp = e.target.closest('[data-row-pin]');
   if (rp) { const id = rp.dataset.rowPin; cols.isPinned(id) ? cols.unpin(id) : cols.pin(id); render(); phone.viewChanged(); return document.querySelector(`[data-row-pin="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); }

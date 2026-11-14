@@ -57,6 +57,16 @@ export function lastLine(c) {
   return `${ev.from === 'you' ? 'You: ' : ''}${String(ev.text || '').replace(/^\[Hub: [^\]]*\]\s*/, '')}`;
 }
 
+// All projects' Waiting row (decision 59 B). fold: what you opened or folded ({ waiting }); n: how much waits.
+// On a phone it opens by default whenever something waits (decision 32); with nothing waiting it is closed and your
+// last choice is forgotten, so the next card opens it again.
+export function waitingOpen(fold, n, phone) {
+  if (!n) { delete fold.waiting; return false; }
+  return fold.waiting ?? !!phone;
+}
+// After you send from the All projects box: Waiting folds, so the Conductor's reply lands in view under your message.
+export function foldAfterSend(fold) { fold.waiting = false; return fold; }
+
 // "Updates from 3 projects woke it": the batch line, short, with the projects named.
 export function wakeLine(ev) {
   const lines = String(ev.text || '').split('\n').filter(l => l.startsWith('- '));

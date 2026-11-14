@@ -39,7 +39,10 @@ export function answeredByPicks(question, decisionStatus = () => undefined) {
 
 // The summaries still asking you something, one per thread. Each has `open`: [{ i, text }] for the questions
 // still waiting (i is the question's place in the summary), and `byPicks`: how many your picks answered.
-export function openQuestions(events, { decisionStatus = () => undefined } = {}) {
+export function openQuestions(events, opts) { return withoutRepeatCards(readCards(events, opts)); }
+
+// Every summary card still asking something, before repeats are set aside.
+function readCards(events, { decisionStatus = () => undefined } = {}) {
   const dismissed = new Set(), retired = new Set();
   const gone = new Map();   // summary id -> Set of question places answered or dismissed one by one
   const mark = (id, i) => { if (!gone.has(id)) gone.set(id, new Set()); gone.get(id).add(Number(i)); };
@@ -58,7 +61,7 @@ export function openQuestions(events, { decisionStatus = () => undefined } = {})
       if (q && e.from !== q.ev.from) q.answered = true;
     }
   }
-  const out = [];
+  const cards = [];
   for (const { ev, answered } of last.values()) {
     if (answered || dismissed.has(ev.id) || retired.has(ev.from)) continue;
     const done = gone.get(ev.id) || new Set();
@@ -69,29 +72,48 @@ export function openQuestions(events, { decisionStatus = () => undefined } = {})
       if (answeredByPicks(text, decisionStatus)) { byPicks++; return; }
       open.push({ i, text });
     });
-    if (open.length) out.push({ ...ev, open, byPicks });
+    if (open.length) cards.push({ ...ev, open, byPicks, repeats: [] });
   }
+  return cards;
+}
+
+// A question lives in one card (Matt, 2026-11-14). Where a later card in this project repeats a question an earlier
+// card from another thread still holds open (an orchestrator re-asking its worker's question), the repeat is hidden
+// here, where cards are drawn, and listed under the card's `repeats` ({ i, text, of: who holds it }). Nothing is
+// dropped from the log: once the earlier card closes for any reason, the repeat shows again by itself.
+function withoutRepeatCards(cards) {
+  const shown = [];
+  for (const c of [...cards].sort((a, b) => String(a.ts).localeCompare(String(b.ts)))) {
+    const earlier = shown.filter(d => d.thread !== c.thread);
+    const open = [];
+    for (const q of c.open) {
+      const holder = earlier.find(d => d.open.some(w => isRepeat(q.text, w.text)));
+      if (holder) c.repeats.push({ ...q, of: holder.from, thread: holder.thread }); else open.push(q);
+    }
+    c.open = open;
+    if (open.length) shown.push(c);
+  }
+  return cards.filter(c => c.open.length);
+}
+
+// The repeats hidden from each summary's card, by summary id, for the small "also in w1's card" note in its thread.
+export function repeatsIn(events, opts) {
+  const cards = readCards(events, opts), out = new Map();
+  withoutRepeatCards(cards);
+  for (const c of cards) if (c.repeats.length) out.set(c.id, c.repeats);
   return out;
 }
 
 export function questionOpen(events, id, opts) { return openQuestions(events, opts).some(q => q.id === id); }
 
-// Two questions that ask the same thing: equal once case, punctuation and spacing are set aside, or one holds the
-// other whole (24 characters or more). A question lives in one card only (Matt, 2026-11-14): an orchestrator does not
-// re-ask its worker's waiting question, and the Conductor does not re-ask a project's.
+// Is `asked` a repeat of `open`, already waiting? Equal once case, punctuation and spacing are set aside, or shorter
+// and found whole inside it; never a longer question (it asks more), and never a short one (under 24 characters
+// cleaned: "Ship it?" is too common to match).
 const plainWords = q => String(q || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-export function sameQuestion(a, b) {
-  const x = plainWords(a), y = plainWords(b);
-  if (!x || !y) return false;
-  if (x === y) return true;
-  const [s, l] = x.length < y.length ? [x, y] : [y, x];
-  return s.length >= 24 && l.includes(s);
-}
-// questions minus those already waiting elsewhere (texts): { kept, dropped }.
-export function withoutRepeats(questions = [], waiting = []) {
-  const kept = [], dropped = [];
-  for (const q of questions) (waiting.some(w => sameQuestion(q, w)) ? dropped : kept).push(q);
-  return { kept, dropped };
+export function isRepeat(asked, open) {
+  const x = plainWords(asked), y = plainWords(open);
+  if (x.length < 24 || !y) return false;
+  return x === y || (x.length < y.length && y.includes(x));
 }
 
 // The page's project state ({ events, board: { decisions } }) to the options above.

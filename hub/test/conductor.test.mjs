@@ -16,8 +16,7 @@ import { robot, conductorBot } from '../public/robots.js';
 import * as CP from '../public/conductor-view.js';
 import { composerHint } from '../public/composer-keys.js';
 import * as AP from '../public/all-projects.js';
-import { sameQuestion } from '../public/questions.js';
-import { summaryReply } from '../lib/tools.mjs';
+import { isRepeat, openQuestions, repeatsIn } from '../public/questions.js';
 
 const sent = [];
 Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'working'; };
@@ -400,26 +399,71 @@ test('after a restart a brief the orchestrator never acted on is delivered again
   assert.deepEqual(hub.resumePlan(a), []);
 });
 
-test('a question lives in one card: the Conductor and an orchestrator cannot re-ask one already waiting', async () => {
-  const { hub, c, a } = await setup();
+test('a question lives in one card: a repeat is hidden while the first card is open, and comes back when it closes', async () => {
+  const { hub, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
   const w = hub.startWorker(a, 'w1', 'task');
-  hub.postSummary(a, w, summary({ questions: ['Should the preview update while dragging, or only on release?'] }));
-  // The orchestrator repeats its worker's question (reworded case and punctuation): left out, and told why.
-  const r = hub.postSummary(a, orch, summary({ questions: ['should the preview update while dragging or only on release', 'Ship on Friday?'] }));
-  assert.deepEqual(r.dropped, ['should the preview update while dragging or only on release']);
-  assert.deepEqual(a.log.events.findLast(e => e.type === 'summary').questions, ['Ship on Friday?']);
-  assert.match(summaryReply(r), /One question was left out because the same question already waits for \{\{who\}\} in Needs you/);
-  // The Conductor repeating either project question gets no card of its own; a question of its own still does.
+  const Q = 'Should the preview update while dragging, or only on release?';
+  hub.postSummary(a, w, summary({ questions: [Q] }));
+  // The orchestrator repeats it (case and punctuation differ) and asks one of its own: nothing is dropped from the log.
+  hub.postSummary(a, orch, summary({ questions: ['should the preview update while dragging or only on release', 'Ship the lens picker on Friday or wait?'] }));
+  assert.equal(a.log.events.findLast(e => e.type === 'summary').questions.length, 2);
+  const open = () => openQuestions(a.log.events).map(q => [q.from, q.open.map(x => x.text)]);
+  assert.deepEqual(open(), [['w1', [Q]], ['orchestrator-1', ['Ship the lens picker on Friday or wait?']]]);
+  const note = repeatsIn(a.log.events).get(a.log.events.findLast(e => e.type === 'summary').id);
+  assert.deepEqual(note.map(r => [r.i, r.of]), [[0, 'w1']]);   // the "also in w1's card" note
+  // The worker's card closes without your answer (its orchestrator writes to it): the repeat shows again by itself.
+  hub.orchestratorToWorker(a, orch, 'w1', 'Hold on, I am asking Matt.');
+  assert.deepEqual(open(), [['orchestrator-1', ['should the preview update while dragging or only on release', 'Ship the lens picker on Friday or wait?']]]);
+  // The Conductor's own summary is never hidden against a project's cards (its prompt keeps it from re-asking).
+  const { hub: h2, c } = await setup();
   const cd = { name: 'conductor-1', thread: CONDUCTOR_THREAD, role: 'conductor' };
-  const r2 = hub.postSummary(c.home, cd, summary({ questions: ['Ship on Friday?', 'Should the preview update while dragging, or only on release?', 'Pause beta tonight?'], decisions_needed: [4] }));
-  assert.equal(r2.dropped.length, 2);
+  h2.postSummary(c.home, cd, summary({ questions: [Q, 'Pause beta tonight?'], decisions_needed: [4] }));
   const mine = c.home.log.events.findLast(e => e.type === 'summary');
-  assert.deepEqual(mine.questions, ['Pause beta tonight?']);
+  assert.equal(mine.questions.length, 2);
   assert.deepEqual(mine.decisions_needed, []);   // decisions are the projects' cards, never the Conductor's
-  assert.equal(c.view().questions[0].open.length, 1);
-  assert.ok(sameQuestion('Merge PR #12 now?', 'merge pr 12 now'));
-  assert.equal(sameQuestion('Ship it?', 'Ship it tomorrow?'), false);   // short ones must match whole
+});
+
+test('only a real repeat is hidden: never the longer question, never a short exact one; a retired holder lets it back', async () => {
+  const merge = 'Should I merge PR #63 now?';
+  assert.equal(isRepeat('should i merge pr 63 now', merge), true);   // equal once cleaned (24+ characters)
+  assert.equal(isRepeat('Should I merge PR #63 now, or wait for #64 and merge both?', merge), false);   // asks more: stays
+  assert.equal(isRepeat('merge pr 63 now', 'Should I merge PR #63 now, or wait for #64 and merge both?'), false);   // under 24 cleaned
+  assert.equal(isRepeat('Ship it?', 'Ship it?'), false);   // short exact matches are too common
+  const { hub, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  const w = hub.startWorker(a, 'w1', 'task');
+  hub.postSummary(a, w, summary({ questions: [merge] }));
+  hub.postSummary(a, orch, summary({ questions: ['Should I merge PR #63 now, or wait for #64 and merge both?'] }));
+  assert.equal(openQuestions(a.log.events).length, 2);   // the longer one is its own card
+  hub.postSummary(a, orch, summary({ questions: ['Should I merge PR #63 now?'] }));
+  assert.equal(openQuestions(a.log.events).length, 1);   // the same one is hidden behind w1's card
+  hub.finishRetire(a, w);   // w1 retires unanswered: its card goes, the orchestrator's repeat shows
+  assert.deepEqual(openQuestions(a.log.events).map(q => q.from), ['orchestrator-1']);
+});
+
+test('All projects on the phone: Waiting opens by default while something waits, and folds when you send', () => {
+  const fold = {};
+  assert.equal(CP.waitingOpen(fold, 2, true), true);    // phone, something waits: open
+  assert.equal(CP.waitingOpen(fold, 2, false), false);  // desk: closed until you open it
+  CP.foldAfterSend(fold);
+  assert.equal(CP.waitingOpen(fold, 2, true), false);   // after your message: folded, the reply lands in view
+  assert.equal(CP.waitingOpen(fold, 0, true), false);   // nothing waits: closed, and your choice is forgotten
+  assert.equal(CP.waitingOpen(fold, 1, true), true);    // the next card opens it again
+});
+
+test('after a restart your unread message and an unread Conductor brief are both resent, oldest first', async () => {
+  const { hub, c, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  orch.sessionId = 's1';
+  c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.');
+  hub.fromYou(a, 'orchestrator', 'And check the build.');
+  const plan = hub.resumePlan(a);
+  assert.deepEqual(plan.map(r => r.message.from), ['conductor-1', 'you']);
+  sent.length = 0;
+  for (const r of plan) hub.resumeOne(a, r);
+  assert.match(sent[0][1], /^\[From the Conductor, conductor-1/);
+  assert.equal(sent[1][1], 'And check the build.');
 });
 
 test('one card per decision, and a pick takes every copy away at once', async () => {
