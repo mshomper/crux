@@ -18,14 +18,24 @@ test('a hub is started again with the same node, flags, script, projects and fol
   saveLaunch(spec, env);
   assert.ok(existsSync(launchFile(4752, env)));
   assert.ok(launchFile(4752, env).startsWith(env.CRUX_HUB_DATA), 'kept in the hub data folder, outside the repo');
-  assert.deepEqual(readLaunch(4752, env), spec);
+  assert.deepEqual(readLaunch(4752, env, () => true), spec);
   assert.ok(!existsSync(launchFile(4747, env)), 'one file per port, so a test hub never replaces the main one');
+});
+
+test('a saved start whose node, script or folder is gone is passed over for the plain start', () => {
+  const env = tempData();
+  saveLaunch({ port: 4752, node: 'C:/old/node.exe', args: ['C:/old/hub/server.mjs', '--port', '4752'], cwd: 'C:/old/hub' }, env);
+  const gone = f => !String(f).replace(/\\/g, '/').startsWith('C:/old/hub/server');
+  assert.deepEqual(readLaunch(4752, env, gone).args, [join(HUB_DIR, 'server.mjs'), '--port', '4752'], 'the script is gone');
+  assert.equal(readLaunch(4752, env, f => f !== 'C:/old/node.exe').node, process.execPath, 'node is gone');
+  assert.equal(readLaunch(4752, env, () => true).node, 'C:/old/node.exe', 'all there: the saved start');
 });
 
 test('a test hub refuses to start without project folders, and a normal start is unchanged', async () => {
   assert.match(testHubFolderError({ noAgents: true, folders: [] }), /refused/);
   assert.equal(testHubFolderError({ noAgents: true, folders: ['C:/tmp/p'] }), '');
   assert.equal(testHubFolderError({ noAgents: false, folders: [] }), '', 'the live hub still falls back to hub.json');
+  assert.equal(testHubFolderError({ noAgents: true, folders: [], tempHome: true }), '', 'a throwaway hub.json in the temp folder may give the folders');
   // The real script, in a temp data folder (a test hub), with no folders: it exits at once, before any port or log.
   const home = mkdtempSync(join(tmpdir(), 'crux-guard-'));
   try {

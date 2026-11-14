@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en" data-hud>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Set up Crux Hub</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#0b0d11">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="hud.css">
+<link rel="stylesheet" href="setup.css">
+</head>
+<body class="su-body">
+<!-- Decisions 52 and 54: the desktop app's first run. setup.js fills it from GET /api/setup. -->
+<main class="su" id="su" aria-labelledby="su-title">
+  <header class="su-head">
+    <img src="icon.svg" alt="" width="26" height="26">
+    <h1 id="su-title">Set up Crux Hub</h1>
+    <button class="su-x" id="su-x" type="button" aria-label="Close setup" title="Close without changing anything (Esc)"><svg class="icon"><use href="#i-x"/></svg></button>
+  </header>
+
+  <div class="su-body-in" id="su-steps">
+    <p class="su-lead">Three things and Crux is running: your Anthropic API key, the project folders agents work in, and Claude Code, which runs the agents.</p>
+
+    <section class="su-step" id="st-key" aria-labelledby="st-key-h">
+      <div class="su-step-head"><span class="su-mark" data-mark="1"></span><h2 id="st-key-h">Anthropic API key</h2>
+        <span class="su-help" tabindex="0" title="Create one at console.anthropic.com, under API keys. It is kept on this PC only, in your .crux-hub folder, and Anthropic bills the agents' use to it."><svg class="icon"><use href="#i-help"/></svg></span></div>
+      <div class="su-done" id="key-done" hidden><svg class="icon"><use href="#i-check"/></svg><span id="key-done-text">Key saved</span><button class="btn ghost" type="button" id="key-change">Change</button></div>
+      <form class="su-row" id="key-form" autocomplete="off">
+        <label class="su-field"><svg class="icon"><use href="#i-key"/></svg><input id="key-in" type="password" placeholder="sk-ant-..." aria-label="Anthropic API key" spellcheck="false" autocomplete="off"></label>
+        <button class="btn primary" id="key-save" type="submit">Save key</button>
+      </form>
+      <p class="su-err" id="key-err" role="alert" hidden></p>
+    </section>
+
+    <section class="su-step" id="st-folders" aria-labelledby="st-folders-h">
+      <div class="su-step-head"><span class="su-mark" data-mark="2"></span><h2 id="st-folders-h">Project folders</h2>
+        <span class="su-help" tabindex="0" title="Each project is a folder on this PC, usually a git repository. Agents read and change files there, and Crux keeps its records inside it. You can add more later."><svg class="icon"><use href="#i-help"/></svg></span></div>
+      <ul class="su-list" id="folder-list"></ul>
+      <form class="su-row" id="folder-form" autocomplete="off">
+        <label class="su-field"><svg class="icon"><use href="#i-folder"/></svg><input id="folder-in" type="text" placeholder="Paste a folder path, like C:\Users\you\Documents\my-project" aria-label="Folder path" spellcheck="false"></label>
+        <button class="btn" id="folder-add" type="submit"><svg class="icon"><use href="#i-plus"/></svg>Add</button>
+        <button class="btn" id="folder-browse" type="button" title="Pick a folder with the Windows folder picker"><svg class="icon"><use href="#i-search"/></svg>Browse</button>
+      </form>
+      <p class="su-err" id="folder-err" role="alert" hidden></p>
+    </section>
+
+    <section class="su-step" id="st-claude" aria-labelledby="st-claude-h">
+      <div class="su-step-head"><span class="su-mark" data-mark="3"></span><h2 id="st-claude-h">Claude Code</h2>
+        <span class="su-help" tabindex="0" title="Crux's agents run on Anthropic's Claude Code. Crux downloads the exact version it was built with, straight from Anthropic, checks it, and keeps it in your .crux-hub folder, so app updates never remove it."><svg class="icon"><use href="#i-help"/></svg></span></div>
+      <div class="su-done" id="cc-done" hidden><svg class="icon"><use href="#i-check"/></svg><span id="cc-done-text">Ready</span></div>
+      <div class="su-row" id="cc-get">
+        <p class="su-note" id="cc-note">Download Claude Code from Anthropic.</p>
+        <button class="btn primary" id="cc-btn" type="button"><svg class="icon"><use href="#i-download"/></svg><span id="cc-btn-text">Download</span></button>
+      </div>
+      <div class="su-prog" id="cc-prog" hidden>
+        <div class="su-bar" role="progressbar" aria-label="Downloading Claude Code" aria-valuemin="0" aria-valuemax="100" id="cc-bar"><i id="cc-fill"></i></div>
+        <span class="su-prog-text" id="cc-prog-text"></span>
+      </div>
+      <p class="su-err" id="cc-err" role="alert" hidden></p>
+    </section>
+  </div>
+
+  <footer class="su-foot" id="su-foot">
+    <p class="su-foot-note" id="foot-note">Kept on this PC. Nothing here is shared.</p>
+    <button class="btn primary su-start" id="su-start" type="button" disabled><svg class="icon"><use href="#i-send"/></svg>Start Crux</button>
+  </footer>
+
+  <div class="su-closed" id="su-closed" hidden>
+    <p>Crux needs at least one project folder before it can open.</p>
+    <button class="btn primary" id="su-reopen" type="button"><svg class="icon"><use href="#i-setup"/></svg>Set up</button>
+  </div>
+
+  <div class="su-closed" id="su-remote" hidden>
+    <p class="su-warn">Setup is not finished. It can only be finished on the PC Crux runs on.</p>
+    <button class="btn primary" id="su-back" type="button" hidden><svg class="icon"><use href="#i-x"/></svg>Back to the hub</button>
+  </div>
+
+  <div class="su-starting" id="su-starting" role="status" aria-live="polite" hidden>
+    <svg class="rs-ring" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="20"/><path d="M24 4a20 20 0 0 1 20 20"/></svg>
+    <span>Starting Crux with your projects…</span>
+  </div>
+</main>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.2"/><circle cx="8" cy="12" r="1.2"/><path d="M12.2 12H21M17.5 12v3.2M20.5 12v2.4"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8"/><circle cx="12" cy="17.2" r=".6"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.3v.2"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/></symbol>
+    <symbol id="i-setup" viewBox="0 0 24 24"><path d="M14.5 5.5a4 4 0 0 0-5 5L4 16v4h4l5.5-5.5a4 4 0 0 0 5-5l-2.5 2.5-2.5-.5-.5-2.5z"/></symbol>
+  </defs>
+</svg>
+<script type="module" src="setup.js"></script>
+</body>
+</html>

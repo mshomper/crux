@@ -92,7 +92,11 @@ async function api(path, body) {
 $('#pair-btn').addEventListener('click', () => guardUI.openPair());
 
 async function load() {
-  const { projects, retireAt, models, settings, boot, version, build, usage, bootAt } = await api('/api/state');
+  const { projects, retireAt, models, settings, boot, version, build, usage, bootAt, setup } = await api('/api/state');
+  // Decisions 52 and 54: the desktop app's first run (no key, no folders or no Claude Code yet) opens the setup
+  // screen. Closing it there comes back here for this visit; with no project folder at all there is nothing to show.
+  let skipped = false; try { skipped = sessionStorage.getItem('crux-hub:setup-closed') === '1'; } catch { }
+  if (setup?.needed && (!projects.length || !skipped)) { location.replace('/setup.html'); return new Promise(() => { }); }
   // The hub now serves different page files (a restart onto new code): reload, so the new page runs (M014+).
   if (S.build && build && build !== S.build) return reloadForUpdate(version);
   S.build ||= build;

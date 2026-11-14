@@ -9,9 +9,18 @@
 // capability names it, so neither the hub page nor anything an agent wrote can reach native features (CVE-2026-42184).
 // The page reaches the hub straight from loopback, so the hub takes it as this PC (decision 48) with no change.
 //
+// Decision 52 A (as amended by 54 B): the installer carries Node and the hub (runtime/ beside the exe, filled by
+// app/scripts/stage.mjs), but not Claude Code, which the hub's first-run screen downloads. The app still only attaches.
+//
 // Settings (all optional) in ~/crux/hub.json, or $CRUX_HOME/hub.json:  { "app": { "port": 4747, "hubDir": "C:/.../hub" } }
-// The hub folder is, in order: app.hubDir; the folder of the hub as last started on that port (~/.crux-hub, or
-// $CRUX_HUB_DATA, launch-<port>.json); the clone this app was built from.
+// The hub folder is, in order: app.hubDir; the git clone the hub on that port was last started from (~/.crux-hub,
+// or $CRUX_HUB_DATA, launch-<port>.json), so a clone such as Matt's keeps running with no setup and no hand edit; the
+// hub that came with the app (runtime/hub); the clone this app was built from.
+//
+// Updates (tauri-plugin-updater): checked a minute after launch and once a day against latest.json on GitHub
+// Releases, verified with the public key in tauri.conf.json. A ready update shows as "Install update x.y.z" at the top
+// of the tray menu and installs only when clicked, because installing restarts the hub. The installer stops the
+// app's own hub first (installer-hooks.nsh, runtime/stop-bundled-hub.mjs); the app starts it again after.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::{Read, Write};
@@ -19,16 +28,17 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent, Wry};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const MAIN: &str = "main";
@@ -36,8 +46,6 @@ const TRAY: &str = "crux";
 const DEFAULT_PORT: u16 = 4747;
 // Given to the app when Windows starts it at sign-in: start in the tray, with no window.
 const HIDDEN_ARG: &str = "--hidden";
-// The value name of the start-at-sign-in entry (HKCU\...\CurrentVersion\Run); installer-hooks.nsh uses it too.
-const AUTOSTART_NAME: &str = "Crux Hub";
 
 // What the app needs to know about the hub it sits on.
 struct Hub {
@@ -50,6 +58,16 @@ struct Hub {
 struct State {
     hub: Hub,
     busy: AtomicBool, // a start or restart is running
+    menu: Mutex<Option<Menu<Wry>>>,
+    update_item: Mutex<Option<MenuItem<Wry>>>,
+    update: Mutex<Option<Update>>, // a checked, ready update, installed only from the tray
+    installing: AtomicBool,
+}
+
+// The folder beside the exe that holds the app's own Node and hub (Tauri resources; in dev builds too).
+fn runtime_dir() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.join("runtime");
+    dir.is_dir().then_some(dir)
 }
 
 fn home() -> PathBuf {
@@ -85,19 +103,33 @@ impl Hub {
             .and_then(|a| a.as_array())
             .and_then(|a| a.iter().filter_map(|s| s.as_str()).find(|s| s.ends_with("server.mjs")))
             .and_then(|s| Path::new(s).parent().map(Path::to_path_buf));
+        let runtime = runtime_dir();
+        let bundled_hub = runtime.as_ref().map(|r| r.join("hub"));
+        // A hub last started from a git clone (its folder's parent holds .git, as in Matt's crux clone) stays in
+        // charge with no setup: the app keeps using that clone, as 0.1.0 did. The app's own hub is used only when
+        // there is no such clone, or hubDir names it.
+        let from_clone = from_launch.clone().filter(|d| d.parent().map(|p| p.join(".git").exists()).unwrap_or(false));
         let candidates = [
             app.get("hubDir").and_then(|d| d.as_str()).map(PathBuf::from),
+            from_clone,
+            bundled_hub.clone(),
             from_launch,
             launch.get("cwd").and_then(|d| d.as_str()).map(PathBuf::from),
             Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("hub")),
         ];
         let dir = candidates.into_iter().flatten().find(|d| has_restart(d)).unwrap_or_default();
-        let node = launch
-            .get("node")
-            .and_then(|n| n.as_str())
-            .filter(|n| Path::new(n).is_file())
-            .unwrap_or("node")
-            .to_string();
+        // The app's own Node runs its own hub; a clone runs on the Node it was last started with, or the one on PATH.
+        let own_node = runtime.map(|r| r.join("node").join("node.exe")).filter(|n| n.is_file());
+        let node = match (&own_node, bundled_hub.as_deref() == Some(dir.as_path())) {
+            (Some(n), true) => n.to_string_lossy().into_owned(),
+            _ => launch
+                .get("node")
+                .and_then(|n| n.as_str())
+                .filter(|n| Path::new(n).is_file())
+                .map(str::to_string)
+                .or_else(|| own_node.as_ref().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "node".to_string()),
+        };
         let url = Url::parse(&format!("http://crux.localhost:{port}/")).expect("hub address");
         Hub { port, dir, node, url }
     }
@@ -215,8 +247,9 @@ fn run_hub(app: &AppHandle, restart_running: bool) {
 
 // Windows' start at sign-in is turned on once, and only in the installed app (the NSIS installer puts
 // uninstall.exe beside it). Dev runs and the bare exe in target/ never touch it.
+// CRUX_APP_NO_AUTOSTART=1 keeps a test install (into a temp folder) from adding the sign-in entry.
 fn turn_on_autostart_once(app: &AppHandle) {
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) || std::env::var("CRUX_APP_NO_AUTOSTART").as_deref() == Ok("1") {
         return;
     }
     let installed = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("uninstall.exe").is_file())).unwrap_or(false);
@@ -234,9 +267,102 @@ fn turn_on_autostart_once(app: &AppHandle) {
     }
 }
 
+// ---------- updates ----------
+fn set_tooltip(app: &AppHandle, text: &str) {
+    if let Some(t) = app.tray_by_id(TRAY) {
+        let _ = t.set_tooltip(Some(text));
+    }
+}
+
+// The updater, pointed at latest.json on GitHub Releases (tauri.conf.json). CRUX_APP_UPDATE_URL points it elsewhere
+// for a rehearsal; the signature is checked against the same public key either way.
+fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<tauri_plugin_updater::Updater> {
+    let mut b = app.updater_builder();
+    if let Some(url) = std::env::var("CRUX_APP_UPDATE_URL").ok().and_then(|u| Url::parse(&u).ok()) {
+        b = b.endpoints(vec![url])?;
+    }
+    b.build()
+}
+
+// Ask for an update; when one is ready, put "Install update x.y.z" at the top of the tray menu. Nothing installs here.
+async fn check_update(app: AppHandle) {
+    let state = app.state::<Arc<State>>().inner().clone();
+    if state.installing.load(Ordering::SeqCst) {
+        return;
+    }
+    let Ok(up) = updater(&app) else { return };
+    let Ok(Some(update)) = up.check().await else { return };
+    let label = format!("Install update {}", update.version);
+    *state.update.lock().unwrap() = Some(update);
+    let menu = state.menu.lock().unwrap().clone();
+    let item = state.update_item.lock().unwrap().clone();
+    if let (Some(menu), Some(item)) = (menu, item) {
+        let _ = item.set_text(&label);
+        if !menu.items().map(|v| v.iter().any(|i| i.id() == item.id())).unwrap_or(false) {
+            let _ = menu.insert(&item, 0);
+        }
+    }
+    set_tooltip(&app, &format!("Crux Hub: update {} ready (tray menu)", label.trim_start_matches("Install update ")));
+}
+
+// From the tray: download, check and run the installer. On Windows the updater then closes the app; the installer
+// stops the app's own hub before replacing files, and starts the new app, which starts the hub again.
+fn install_update(app: &AppHandle) {
+    let state = app.state::<Arc<State>>().inner().clone();
+    let Some(update) = state.update.lock().unwrap().take() else { return };
+    if state.installing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut got: u64 = 0;
+        let progress = app.clone();
+        let result = update
+            .download_and_install(
+                move |chunk, total| {
+                    got += chunk as u64;
+                    if let Some(t) = total.filter(|t| *t > 0) {
+                        set_tooltip(&progress, &format!("Crux Hub: downloading the update, {}%", got * 100 / t));
+                    }
+                },
+                || {},
+            )
+            .await;
+        // Reached only when installing failed (on success the app has already closed).
+        if let Err(e) = result {
+            set_tooltip(&app, &format!("Crux Hub: the update did not install ({e})"));
+            *app.state::<Arc<State>>().update.lock().unwrap() = Some(update);
+            app.state::<Arc<State>>().installing.store(false, Ordering::SeqCst);
+        }
+    });
+}
+
+// A minute after launch, then once a day. Dev runs check only when CRUX_APP_UPDATE_URL is set.
+fn schedule_update_checks(app: &AppHandle) {
+    if cfg!(debug_assertions) && std::env::var("CRUX_APP_UPDATE_URL").is_err() {
+        return;
+    }
+    let first = std::env::var("CRUX_APP_UPDATE_URL").map(|_| 5).unwrap_or(60);
+    let app = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(first));
+        loop {
+            tauri::async_runtime::block_on(check_update(app.clone()));
+            thread::sleep(Duration::from_secs(24 * 60 * 60));
+        }
+    });
+}
+
 fn main() {
     let hidden = std::env::args().any(|a| a == HIDDEN_ARG);
-    let state = Arc::new(State { hub: Hub::find(), busy: AtomicBool::new(false) });
+    let state = Arc::new(State {
+        hub: Hub::find(),
+        busy: AtomicBool::new(false),
+        menu: Mutex::new(None),
+        update_item: Mutex::new(None),
+        update: Mutex::new(None),
+        installing: AtomicBool::new(false),
+    });
 
     let app = tauri::Builder::default()
         // Registered first: a second launch brings the open window forward instead of starting another app.
@@ -246,9 +372,11 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_window_state::Builder::default().with_state_flags(StateFlags::all() & !StateFlags::VISIBLE).build())
-        // The sign-in entry's name is fixed: the uninstaller removes it by this name (installer-hooks.nsh).
-        .plugin(tauri_plugin_autostart::Builder::new().app_name(AUTOSTART_NAME).arg(HIDDEN_ARG).build())
+        // The sign-in entry is named after the product ("Crux Hub", as in 0.1.0); the uninstaller removes it by that
+        // name (installer-hooks.nsh, PRODUCTNAME).
+        .plugin(tauri_plugin_autostart::Builder::new().arg(HIDDEN_ARG).build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -289,6 +417,10 @@ fn main() {
             let restart = MenuItem::with_id(app, "restart", "Restart hub", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit (the hub keeps running)", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &restart, &PredefinedMenuItem::separator(app)?, &quit])?;
+            // Added at the top of the menu only when an update is ready (check_update).
+            let update_item = MenuItem::with_id(app, "update", "Install update", true, None::<&str>)?;
+            *state.menu.lock().unwrap() = Some(menu.clone());
+            *state.update_item.lock().unwrap() = Some(update_item);
             let mut tray = TrayIconBuilder::with_id(TRAY)
                 .tooltip("Crux Hub")
                 .menu(&menu)
@@ -296,6 +428,7 @@ fn main() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => show_main(app),
                     "restart" => run_hub(app, true),
+                    "update" => install_update(app),
                     "quit" => {
                         let _ = app.save_window_state(StateFlags::all() & !StateFlags::VISIBLE);
                         app.exit(0);
@@ -313,6 +446,7 @@ fn main() {
             tray.build(app)?;
 
             turn_on_autostart_once(&handle);
+            schedule_update_checks(&handle);
             if !up {
                 run_hub(&handle, false);
             }
