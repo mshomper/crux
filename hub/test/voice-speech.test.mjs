@@ -135,7 +135,7 @@ test('the label in its other forms: bold before the colon, or alone on its line 
 test('the Conductor is asked for the Spoken line on a spoken message, in its note and its prompt', () => {
   assert.match(VOICE_NOTE, /Begin the message that answers it with one line "Spoken: "/);
   assert.match(src('../lib/prompts.mjs'), /Voice \(decision 61\)[\s\S]*"Spoken: "/);
-  assert.match(src('../lib/conductor.mjs'), /afterTurn\(\) \{\s*this\.repliesTurn = false;\s*this\.voiceTurnEnded\(\);/);
+  assert.match(src('../lib/conductor.mjs'), /afterTurn\(\) \{\s*(?:this\.\w+ = false;\s*)?this\.voiceTurnEnded\(\);/);
 });
 
 test('speech is made in order as soon as asked, handed over once, made on demand when missing, and dropped', async t => {

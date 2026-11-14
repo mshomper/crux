@@ -7,6 +7,7 @@
 // Nothing animates under prefers-reduced-motion: the still map draws the same picture at t = 0.
 
 import { robot } from './robots.js';
+import { vchip } from './agent-name.js';
 import { hueOf, rgb01 } from './models.js';
 import { clamp, lerp } from './map-layout.js';
 import { COLORS, TONE } from './map-particles.js';
@@ -42,10 +43,11 @@ export class SectorView {
         e = { bay: this.button('hb'), bot: this.button('hp-bot'), tag: this.button('hp-tag') };
         this.els.set(p.name, e);
       }
-      const key = JSON.stringify([p.count, p.model, p.effort, p.state, p.ctx == null ? null : Math.round(p.ctx), p.retireAt, p.workers.length, p.workers.filter(w => busy(w.state)).length]);
+      const key = JSON.stringify([p.v, p.count, p.model, p.effort, p.state, p.ctx == null ? null : Math.round(p.ctx), p.retireAt, p.workers.length, p.workers.filter(w => busy(w.state)).length]);
       if (e.key === key) continue;
       e.key = key;
       const l = labelLines(p), hue = hueOf(p.model) || '#6fe3ff', title = projectTitle(p);
+      const vc = p.v != null ? ` ${vchip(p.v)}` : '';   // the orchestrator's holder number beside the project name
       const agent = { model: p.model, effort: p.effort, state: p.state === 'vacant' ? 'asleep' : p.state, role: 'orchestrator' };
       const bot = size => robot(agent, { size, needs: p.count > 0, cls: 'calm' });
       const pct = p.ctx == null ? 0 : clamp(p.ctx, 0, 100), near = p.ctx != null && p.ctx >= p.retireAt - NEAR;
@@ -58,13 +60,13 @@ export class SectorView {
         el.classList.toggle('asleep', p.state === 'asleep' || p.state === 'vacant');
         el.style.setProperty('--h', hue);
       }
-      e.bay.innerHTML = `${bot(28)}<span class="hb-t"><b>${esc(p.name)}</b><i>${esc(p.count ? `${p.count} waiting` : p.state === 'vacant' ? 'no orchestrator' : p.state)}</i>`
+      e.bay.innerHTML = `${bot(28)}<span class="hb-t"><b>${esc(p.name)}${vc}</b><i>${esc(p.count ? `${p.count} waiting` : p.state === 'vacant' ? 'no orchestrator' : p.state)}</i>`
         + `<span class="hb-bar"><s style="width:${pct}%${near ? ';background:#f5c96a' : ''}"></s><u style="left:${clamp(p.retireAt, 0, 100)}%"></u></span></span>${badge}`;
       e.bot.innerHTML = bot(48) + badge;
-      e.tag.innerHTML = `<b>${esc(l.name)}</b><span class="w">${esc(l.waiting)}</span><span class="m">${esc(l.model)}</span><span class="m">${esc(l.agents)}</span>`
+      e.tag.innerHTML = `<b>${esc(l.name)}${vc}</b><span class="w">${esc(l.waiting)}</span><span class="m">${esc(l.model)}</span><span class="m">${esc(l.agents)}</span>`
         // the one-line fold: the name first (it never gives way), the count as a red number, else the state word,
         // which shortens if it must
-        + `<span class="ln"><b>${esc(l.name)}</b>${p.count ? `<span class="n" aria-label="${p.count} waiting">${p.count}</span>` : `<span class="w">${esc(busy(p.state) ? 'working' : p.state === 'vacant' ? '–' : p.state)}</span>`}</span>`;
+        + `<span class="ln"><b>${esc(l.name)}</b>${vc}${p.count ? `<span class="n" aria-label="${p.count} waiting">${p.count}</span>` : `<span class="w">${esc(busy(p.state) ? 'working' : p.state === 'vacant' ? '–' : p.state)}</span>`}</span>`;
     }
   }
 

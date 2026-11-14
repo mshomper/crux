@@ -174,8 +174,9 @@ test('the readout carries the numbers the sphere does not', () => {
   m.setProject(project(), new Set());
   const r = coreReadout(m.core(), { busy: 1, resting: 2 });
   const row = k => r.rows.find(x => x.k === k);
-  assert.equal(r.title, 'orchestrator-3');
-  assert.equal(r.sub, 'Generation 3');
+  // shown by its project with its holder number (Matt, 2026-11-14): "p v3", not "orchestrator-3" or "Generation 3"
+  assert.equal(r.title, 'p v3');
+  assert.equal(r.sub, 'Orchestrator');
   assert.equal(r.state, 'Working');
   assert.equal(row('Model').v, 'Opus 5.5');
   assert.equal(row('Effort').v, 'High');

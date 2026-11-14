@@ -5,13 +5,19 @@
 // VAPID keys and subscriptions live in ~/.crux-hub (or CRUX_HUB_DATA), never in a repo.
 //
 // Decision 58 A adds the desktop app as a target for the same cards and the same few words: the PC while it is in
-// use, the phone as backup (see PC_IDLE_MS below). Security and restart notices (guard.mjs) stay phone-only.
+// use, the phone as backup (see PC_IDLE_MS below). Security notices (guard.mjs) stay phone-only; restart notices go
+// through the same PC-or-phone routing (decision 64, restartNotice).
+//
+// Decision 64 A: one notice per choice. A summary's cards go as one notice; a question asked again behind another
+// card notifies (if at all) for the card that holds it; a decision notified once is never notified again, even after
+// a restart (notified-decisions.json).
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { questionOpen } from '../public/questions.js';
+import { questionOpen, askedBefore } from '../public/questions.js';
 import { HUB_THREAD } from '../public/all-projects.js';
+import { nameText } from '../public/agent-name.js';   // orchestrators by their project and "vN" (crux v6)
 
 const pad = n => String(n).padStart(4, '0');
 export const QUESTION_GRACE_MS = 60 * 1000; // the orchestrator often answers a worker's question itself
@@ -29,7 +35,7 @@ export function cardsFor(ev, { decisionOpen = () => true } = {}) {
   const project = ev.project;
   // A request with the orchestrator (decision 21) buzzes your phone only once it comes to you: escalated or timed out.
   if ((ev.type === 'approval' && !ev.routedTo) || ev.type === 'approval_escalated') {
-    return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${ev.agent} is waiting for Allow`, body: `${project} · wants to use ${ev.tool}` }]; // kept minimal on purpose: it can show on a locked phone
+    return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${nameText(ev.agent, project)} is waiting for Allow`, body: `${project} · wants to use ${ev.tool}` }]; // kept minimal on purpose: it can show on a locked phone
   }
   // A project raised to Trusted (decision 45): always told, so a raise nobody made on purpose is seen at once.
   // Decision 47: with an Undo on the notification where the phone shows actions, and in the thread everywhere.
@@ -44,9 +50,41 @@ export function cardsFor(ev, { decisionOpen = () => true } = {}) {
     out.push({ kind: 'decision', card: `decision:${id}`, project, thread: 'needs', title: `Decision D${pad(id)} is ready to pick`, body: project });
   }
   if (ev.questions?.length) {
-    out.push({ kind: 'question', card: `question:${ev.id}`, project, thread: ev.thread, title: `${ev.from} has a question`, body: project, delayMs: QUESTION_GRACE_MS, asker: ev.from, askedAt: ev.id });
+    out.push({ kind: 'question', card: `question:${ev.id}`, project, thread: ev.thread, title: `${nameText(ev.from, project)} has a question`, body: project, delayMs: QUESTION_GRACE_MS, asker: ev.from, askedAt: ev.id });
   }
   return out;
+}
+
+// Decision 64: one notice per summary, however many cards it carries. Its decisions and its question become one card
+// (members), titled for the lot and opening on the first decision; it goes at once when it holds a decision (a
+// question alone keeps its grace). Members already notified are left out before this is called.
+export function groupCard(ev, cards) {
+  if (cards.length < 2) return cards[0] || null;
+  const main = cards.find(c => c.kind === 'decision') || cards[0];
+  return { ...main, from: ev.from, members: cards, title: groupTitle(ev.from, cards) };
+}
+function groupTitle(from, cards) {
+  const d = cards.filter(c => c.kind === 'decision').length, q = cards.some(c => c.kind === 'question');
+  return `${nameText(from, cards[0]?.project)} has ${d ? `${d} decision${d === 1 ? '' : 's'}` : ''}${d && q ? ' and ' : ''}${q ? 'a question' : ''} for you`;
+}
+// Who asked for a restart: an orchestrator's name already says its project ("Asked by crux v6"); anyone else keeps
+// "in <project>" ("Asked by builder in crux").
+function restartBy(agent, project) {
+  const orch = /^orchestrator-\d+$/.test(String(agent || ''));
+  return `Asked by ${nameText(agent, project)}${orch ? '' : ` in ${project}`}`;
+}
+// A card's key in the sent lists: its project and id ("decision:12" alone is in many projects).
+const keyOf = card => `${card.project}|${card.card}`;
+const DECISIONS_KEPT = 2000;
+// A decision's key in the kept list (notified-decisions.json): its project and number, plus how many times it was
+// picked, parked or rejected and a short hash of its title, date and challenge. A decision that comes back (unparked,
+// challenged, or its number used again after a clear) is a new one and can notify again.
+export function decisionKey(project, id, { events = [], decisions = [] } = {}) {
+  const n = Number(id);
+  const picks = events.filter(e => e.type === 'pick' && Number(e.decision) === n).length;
+  const d = decisions.find(x => Number(x.id) === n);
+  const sig = d ? createHash('sha256').update(`${d.title || ''}|${d.date || ''}|${d.challenge ? JSON.stringify(d.challenge) : ''}`).digest('hex').slice(0, 8) : '';
+  return `${project}|decision:${n}@${picks}.${sig}`;
 }
 
 // Is someone already looking at this card in an open hub page? Pages report where they are and how long since
@@ -66,11 +104,16 @@ export function isLooking(card, presences, now = Date.now()) {
 
 // Is the card still waiting by the time we would send it? Questions follow the same rule as the Needs you list
 // (public/questions.js): answered, dismissed, asked by an agent that has retired, or answered by your picks.
-export function stillOpen(card, { approvals, decisionOpen, decisionStatus, events }) {
+// decisions: the project's decision records, and decisionNotified(id) (decision 64: an open decision card hides a
+// question that asks only what it asks, once that decision has been notified). A summary's grouped card (members)
+// waits while any of its cards does.
+export function stillOpen(card, state) {
+  const { approvals, decisionOpen, decisionStatus, decisions = [], decisionNotified = () => false, events } = state;
+  if (card.members) return card.members.some(m => stillOpen(m, state));
   if (card.kind === 'approval') return approvals.has(card.card.slice('approval:'.length));
   if (card.kind === 'decision') return decisionOpen(Number(card.card.slice('decision:'.length)));
-  if (card.kind === 'question') return questionOpen(events, card.askedAt, { decisionStatus });
-  if (card.kind === 'level' || card.kind === 'digest') return true;   // notices, not cards that get settled
+  if (card.kind === 'question') return questionOpen(events, card.askedAt, { decisionStatus, decisions, decisionNotified });
+  if (card.kind === 'level' || card.kind === 'digest' || card.kind === 'restart') return true;   // notices, not cards that get settled
   return false;
 }
 
@@ -110,6 +153,66 @@ export class Push {
     this.followFile = join(dir, 'desk-followups.json');
     const saved = existsSync(this.followFile) ? safeJson(this.followFile, []) : [];
     this.follow = new Map((Array.isArray(saved) ? saved : []).filter(f => f?.card?.card && Number.isFinite(f.due)).map(f => [f.card.card, f]));
+    // Decision 64: every decision notified (PC or phone, or in a digest), by project, kept across restarts, so a
+    // decision a later summary names again never notifies twice.
+    this.decisionsFile = join(dir, 'notified-decisions.json');
+    const told = existsSync(this.decisionsFile) ? safeJson(this.decisionsFile, []) : [];
+    this.decisionsSent = new Set(Array.isArray(told) ? told.filter(k => typeof k === 'string') : []);
+    // A summary's grouped notice (decision 64) is taken down only once every card in it is settled: card key -> group.
+    this.memberOf = new Map();
+  }
+
+  // The kept key of a decision card in its present state (decisionKey).
+  dkey(card, ctx = this.ctx) {
+    let events = [], decisions = [];
+    try { events = ctx?.events?.(card.project) || []; } catch { }
+    try { decisions = ctx?.decisions?.(card.project) || []; } catch { }
+    return decisionKey(card.project, String(card.card).slice('decision:'.length), { events, decisions });
+  }
+  // Has a notice already gone for this card? A decision: ever, in its present state (kept across restarts); anything
+  // else: in this run.
+  already(card) {
+    if (card.kind === 'decision') return this.decisionsSent.has(this.dkey(card));
+    const k = keyOf(card);
+    return this.sent.has(k) || this.sentDesk.has(k);
+  }
+  // A notice went out for this card, every card it stands for (members) and the decisions a digest carries (marks), to
+  // `where` (the phone's or the PC's list).
+  markSent(card, where) {
+    let told = false;
+    for (const c of [card, ...(card.members || []), ...(card.marks || [])]) {
+      if (!card.marks?.includes(c)) where.add(keyOf(c));
+      if (c.kind === 'decision' && !this.decisionsSent.has(this.dkey(c))) { this.decisionsSent.add(this.dkey(c)); told = true; }
+    }
+    if (card.members?.length > 1) {
+      const g = { key: keyOf(card), tag: card.card, left: new Set(card.members.map(keyOf)) };
+      for (const k of g.left) this.memberOf.set(k, g);
+    }
+    while (where.size > 400) where.delete(where.values().next().value);
+    if (told) this.saveDecisions();
+  }
+  // A card was settled (key: project|card id). A summary's grouped notice comes down only when its last card settles.
+  settle(key, cardId) {
+    let tag = cardId, tagKey = key;
+    const g = this.memberOf.get(key);
+    if (g) {
+      this.memberOf.delete(key);
+      g.left.delete(key);
+      if (g.left.size) return;
+      tag = g.tag; tagKey = g.key;
+    }
+    if (this.sent.has(tagKey)) { this.settled.add(tag); if (this.settled.size > 50) this.settled.delete(this.settled.values().next().value); }
+    if (this.sentDesk.has(tagKey)) { this.toDesktops('clear', { card: tag }); this.unfollow(tag); }   // the app takes the notice down
+  }
+  // The question rules' options for a project, with which decisions have been notified (decision 64).
+  askOpts(project, ctx) {
+    let decisions = [];
+    try { decisions = ctx.decisions?.(project) || []; } catch { }
+    return { decisionStatus: id => ctx.decisionStatus?.(project, id), decisions, decisionNotified: id => this.already({ kind: 'decision', project, card: `decision:${id}` }) };
+  }
+  saveDecisions() {
+    while (this.decisionsSent.size > DECISIONS_KEPT) this.decisionsSent.delete(this.decisionsSent.values().next().value);
+    try { mkdirSync(this.dir, { recursive: true }); writeFileSync(this.decisionsFile, JSON.stringify([...this.decisionsSent]), { mode: 0o600 }); } catch { }
   }
 
   async lib() {
@@ -180,14 +283,26 @@ export class Push {
   // Decision 60 A: one notice for the Conductor's digest, in place of one per card: after 30 minutes away, or when you
   // come back (then routed as any card: the PC while in use, else the phone; none while a page shows All projects).
   // It opens the digest in All projects. info: { id (the digest event), count, projects }.
+  // Decision 64: no notice when every card in it was already notified on its own (a permission card, say) and it
+  // brings no replies; its decisions count as notified once its notice has gone (marks).
   digest(info, ctx = this.ctx) {
+    if (ctx) this.ctx = ctx;
+    const items = (info.items || []).map(c => ({ ...c, kind: String(c.card).slice(0, String(c.card).indexOf(':')) }));
+    if (items.length && !info.replies && items.every(c => this.already(c))) return this.log(`digest:${info.id}: no notice, every card in it was already notified`);
     const n = info.count, m = info.projects, r = info.replies || 0;
     // Decision 62: replies from orchestrators that came while you were away join the digest and its one notice.
     const cards = `${n} card${n === 1 ? '' : 's'}`, reps = `${r} repl${r === 1 ? 'y' : 'ies'} from orchestrators`;
     const title = !r ? `${cards} need${n === 1 ? 's' : ''} you` : !n ? reps : `${cards} and ${reps}`;
     const card = { kind: 'digest', card: `digest:${info.id}`, project: '~conductor', thread: HUB_THREAD,
-      title, body: `The Conductor's digest · ${m} project${m === 1 ? '' : 's'}` };
+      title, body: `The Conductor's digest · ${m} project${m === 1 ? '' : 's'}`, marks: items.filter(c => c.kind === 'decision') };
     this.route(card, ctx);
+  }
+
+  // Decision 64, part 4: a restart through restart_hub (guard.mjs), routed like any card: the PC while it is in use,
+  // else the phone; none while you look at that project's orchestrator thread; no phone follow-up. Returns the send.
+  restartNotice({ project, agent }, ctx = this.ctx) {
+    const card = { kind: 'restart', card: 'notice:restart', project, thread: 'orchestrator', title: 'The hub is restarting', body: restartBy(agent, project) };
+    return this.route(card, ctx) || Promise.resolve(0);
   }
 
   // ---------- decision 58: the desktop app on this PC ----------
@@ -236,28 +351,56 @@ export class Push {
 
   // Called for every logged hub event. `ctx` gives the live state: approvals, decisionOpen(project, id),
   // decisionStatus(project, id) and events(project).
+  // `ctx` also gives decisions(project): the project's decision records (decision 64).
   handle(ev, ctx) {
     this.ctx = ctx;
     const done = settledCard(ev);
-    if (done && this.sent.has(done)) { this.settled.add(done); if (this.settled.size > 50) this.settled.delete(this.settled.values().next().value); }
-    if (done && this.sentDesk.has(done)) { this.toDesktops('clear', { card: done }); this.unfollow(done); }   // the app takes the notice down
-    if (!this.subs.length && !this.desktops.size) return;
-    for (const card of cardsFor(ev, { decisionOpen: id => ctx.decisionOpen(ev.project, id) })) {
-      if (this.sent.has(card.card) || this.sentDesk.has(card.card)) continue;
-      const go = () => this.route(card, ctx);
-      card.delayMs ? this.timers.setTimeout(go, card.delayMs) : go();
+    if (done) this.settle(`${ev.project}|${done}`, done);
+    // Your answers from a card settle a question once nothing in it waits (a grouped notice may wait on it).
+    if (ev.type === 'message' && ev.from === 'you' && Array.isArray(ev.answers)) {
+      for (const id of new Set(ev.answers.map(a => a.question))) {
+        const q = { kind: 'question', card: `question:${id}`, askedAt: id, project: ev.project };
+        try { if (!this.open(q, ctx)) this.settle(keyOf(q), q.card); } catch { }
+      }
     }
+    if (!this.subs.length && !this.desktops.size) return;
+    // Decision 64: one notice for the summary's cards together, leaving out any already notified.
+    const card = groupCard(ev, cardsFor(ev, { decisionOpen: id => ctx.decisionOpen(ev.project, id) }).filter(c => !this.already(c)));
+    if (!card) return;
+    const go = () => this.route(card, ctx);
+    card.delayMs ? this.timers.setTimeout(go, card.delayMs) : go();
   }
 
   // Does the card still wait for you (answered, picked, settled elsewhere)?
   open(card, ctx) {
-    if (card.kind === 'digest') return true;   // a notice of its own; its cards are checked when it is drawn
-    return stillOpen(card, { approvals: ctx.approvals, decisionOpen: id => ctx.decisionOpen(card.project, id), decisionStatus: id => ctx.decisionStatus?.(card.project, id), events: ctx.events(card.project) });
+    if (card.kind === 'digest' || card.kind === 'restart') return true;   // notices of their own; a digest's cards are checked when it is drawn
+    const o = this.askOpts(card.project, ctx);
+    return stillOpen(card, { approvals: ctx.approvals, decisionOpen: id => ctx.decisionOpen(card.project, id), ...o, events: ctx.events(card.project) });
+  }
+
+  // Decision 64: the card a notice really goes for, once its grace is over. A summary's grouped card keeps only the
+  // cards still waiting and not yet notified (one left: that card alone). A question card whose every open question
+  // was asked before in another card you have not answered, and whose notice already went (an orchestrator re-asking
+  // its worker's question after writing to it), shows but needs no second notice. Null: nothing left to tell.
+  live(card, ctx) {
+    if (card.members) {
+      const left = card.members.filter(m => !this.already(m) && this.open(m, ctx));
+      if (!left.length) { this.log(`${card.card} (${card.project}): settled before it went out`); return null; }
+      if (left.length === 1) return this.live(left[0], ctx);
+      const main = left.find(c => c.kind === 'decision') || left[0];
+      return { ...main, from: card.from, members: left, title: groupTitle(card.from, left) };
+    }
+    if (card.kind !== 'question') return card;
+    const before = askedBefore(ctx.events(card.project), card.askedAt, this.askOpts(card.project, ctx));
+    const told = before?.length && before.map(ids => ids.find(id => this.already({ kind: 'question', project: card.project, card: `question:${id}` })));
+    if (told && told.every(Boolean)) { this.log(`${card.card} (${card.project}): asked before in question:${told[0]}, whose notice already went`); return null; }
+    return card;
   }
 
   // Where one card goes, once its grace (if any) is over.
   route(card, ctx) {
-    if (this.sent.has(card.card) || this.sentDesk.has(card.card)) return;
+    card = this.live(card, ctx);
+    if (!card || this.already(card)) return;
     const id = `${card.card} (${card.project})`;
     if (!this.open(card, ctx)) return this.log(`${id}: settled before it went out`);
     // Decision 60 A: a question or decision the Conductor is holding for its digest (you are away) waits for the
@@ -276,16 +419,17 @@ export class Push {
     }
     if (looking) return this.log(`${id}: held, you are looking at it in an open hub page`);
     if (desk) {
-      this.toDesk(card, { follow: this.subs.length > 0 && card.kind !== 'digest' });   // a digest notice has no phone follow-up
-      return this.log(`${id}: PC${this.subs.length ? ', phone in 3 minutes if it still waits' : ''}`);
+      const follow = this.subs.length > 0 && card.kind !== 'digest' && card.kind !== 'restart';   // digest and restart notices have no phone follow-up
+      this.toDesk(card, { follow });
+      return this.log(`${id}: PC${follow ? ', phone in 3 minutes if it still waits' : ''}`);
     }
-    this.toPhone(card);
+    const sent = this.toPhone(card);
     this.log(`${id}: phone${this.desktops.size ? ' (PC idle, locked, asleep or notices off)' : ''}`);
+    return sent;
   }
 
   toDesk(card, { follow }) {
-    this.sentDesk.add(card.card);
-    if (this.sentDesk.size > 200) this.sentDesk.delete(this.sentDesk.values().next().value);
+    this.markSent(card, this.sentDesk);
     this.toDesktops('notify', payloadOf(card));
     if (!follow) return;
     this.follow.set(card.card, { card, due: Date.now() + PHONE_FOLLOWUP_MS });
@@ -299,7 +443,7 @@ export class Push {
     if (!f) return;
     this.unfollow(cardId);
     const id = `${cardId} (${f.card.project})`;
-    if (this.sent.has(cardId)) return;
+    if (this.sent.has(keyOf(f.card))) return;
     if (!this.ctx || !this.open(f.card, this.ctx)) return this.log(`${id}: settled, no phone follow-up`);
     if (this.heldForDigest(f.card)) return this.log(`${id}: no phone follow-up, held for the Conductor's digest`);
     if (isLooking(f.card, this.presences.values())) return this.log(`${id}: no phone follow-up, you are looking at it`);
@@ -316,17 +460,18 @@ export class Push {
   resume(ctx, now = Date.now()) {
     this.ctx = ctx;
     for (const [cardId, f] of this.follow) {
-      this.sentDesk.add(cardId);
+      this.sentDesk.add(keyOf(f.card));
       this.timers.setTimeout(() => this.followUp(cardId), Math.max(0, f.due - now));
     }
   }
 
   toPhone(card) {
-    if (!this.subs.length || this.sent.has(card.card)) return;
-    this.sent.add(card.card);
+    // A decision's repeat check is its kept key (already(), in route): one that came back may go again.
+    if (!this.subs.length || (card.kind !== 'decision' && this.sent.has(keyOf(card)))) return Promise.resolve(0);
+    this.markSent(card, this.sent);
     const close = [...this.settled];
     this.settled.clear();
-    this.send(payloadOf(card, close)).catch(e => console.warn(`Push failed: ${e.message}`));
+    return this.send(payloadOf(card, close)).catch(e => { console.warn(`Push failed: ${e.message}`); return 0; });
   }
 
   async send(payload) {

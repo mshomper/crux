@@ -151,7 +151,8 @@ test('hubProjects reads the All projects groups, and the page decides what waits
       { name: 'reviewer', role: 'worker', model: 'claude-sonnet-5-5', state: 'idle', thread: 'reviewer' }]
   }, { name: 'orchard', count: 0, agents: [] }];
   const P = hubProjects(groups, { retireAt: 60, waitingOf: (g, a) => a.thread === 'reviewer' ? 1 : 0 });
-  assert.deepEqual(P[0], { name: 'atlas', count: 2, retireAt: 55, model: 'claude-opus-5-5', effort: 'high', state: 'working', ctx: 42, workers: [{ name: 'reviewer', model: 'claude-sonnet-5-5', state: 'idle', needs: true }] });
+  assert.deepEqual(P[0], { name: 'atlas', count: 2, retireAt: 55, model: 'claude-opus-5-5', effort: 'high', state: 'working', ctx: 42, workers: [{ name: 'reviewer', model: 'claude-sonnet-5-5', state: 'idle', needs: true }], holder: 'orchestrator-1', v: 1 });
+  assert.equal(P[1].v, null, 'no orchestrator yet: no holder number');
   assert.equal(P[1].state, 'vacant');
   assert.equal(P[1].retireAt, 60);
 });
@@ -200,8 +201,8 @@ test('the core is the Conductor: its state, context and model from /api/state, a
     { holder: 'conductor-1', state: 'working', ctx: 31, retireAt: 55, needs: true, model: 'claude-opus-5-5', mode: 'auto' });
   assert.equal(conductorCore({ name: 'conductor-1', state: 'idle', retiring: 'writing' }).state, 'writing', 'writing its handoff turns the glass gold');
   const r = conductorReadout(c, { projects: 4, waiting: 3 });
-  assert.equal(r.title, 'conductor-1');
-  assert.equal(r.sub, 'Conductor');
+  assert.equal(r.title, 'Conductor v1', 'the Conductor keeps its name, with its own holder number');
+  assert.equal(r.sub, 'Every project');
   assert.ok(r.rows.some(x => x.k === 'Projects' && x.v === '4 projects' && x.note === '3 waiting for you' && x.tone === 'red'));
   assert.ok(r.rows.some(x => x.k === 'Context' && x.note === 'Hands off at 55%'));
   assert.ok(!r.rows.some(x => x.k === 'Permissions'), 'the Conductor answers no permission requests');

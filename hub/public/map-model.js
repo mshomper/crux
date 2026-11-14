@@ -1,6 +1,6 @@
 // What the live map shows, worked out from the hub's project state and event stream.
 // No drawing here: stations, what needs you, the telemetry feed, and which pulses an event fires.
-import { openQuestions, pageStatus } from './questions.js';
+import { openQuestions, pageAsk } from './questions.js';
 
 const MAX_FEED = 16;
 
@@ -78,7 +78,7 @@ export class MapModel {
   // Same rule as the Needs you list (questions.js).
   openQuestions() {
     const p = this.project;
-    return p ? openQuestions(p.events, { decisionStatus: pageStatus(p) }) : [];
+    return p ? openQuestions(p.events, pageAsk(p)) : [];
   }
 
   openDecisions() { return (this.project?.board?.decisions || []).filter(d => d.status === 'open' || d.status === 'found'); }
@@ -121,6 +121,7 @@ export class MapModel {
     const needs = this.needsByThread().has('orchestrator');
     return {
       holder: h ? h.name : null,
+      project: this.project?.name || null,   // the readout names the holder by its project (agent-name.js)
       generation: this.generation,
       state: h ? (h.retiring === 'writing' ? 'writing' : h.state || 'asleep') : 'vacant',
       ctx: h?.contextPct ?? null,
