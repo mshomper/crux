@@ -8,7 +8,7 @@
   "architecture",
   "research and product"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how much the new Conductor agent does. I recommend A: it reads every project and passes your requests to the right orchestrator, but it never edits, merges or answers permissions, and it sleeps until you or a project's update wakes it. Confidence: medium.",
  "for_you": [
   "One thread in All projects you can ask \"what's waiting on me?\" or \"start X in another project\", and it routes the request",
@@ -79,9 +79,9 @@
  "recommendation": "A gives you the one place to ask and route without adding new authority over the orchestrators. Widening it to B later is a small change once it has earned trust.",
  "confidence": "lean",
  "change_mind": "If you find yourself starting and stopping orchestrators by hand often, go B; if you rarely chat to it, C is enough.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [
