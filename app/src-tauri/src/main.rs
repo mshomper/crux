@@ -595,7 +595,12 @@ fn main() {
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(380.0, 520.0)
                 .visible(false)
-                // The window stays on the hub and the app's own pages; any other address opens in the browser.
+                // Files dragged in from Explorer go to the page's own drop zones (attachments in threads). Tauri's
+                // handler would otherwise take every drop first on Windows, and the page would never see it. A file
+                // dropped where the page takes none would open as a file:// address, which on_navigation refuses.
+                .disable_drag_drop_handler()
+                // The window stays on the hub and the app's own pages; any other web address opens in the browser,
+                // and anything else (a dropped file's file:// address included) stays out.
                 .on_navigation(move |url| {
                     if nav_state.hub.owns(url) || local_page(url) || url.scheme() == "about" {
                         return true;
