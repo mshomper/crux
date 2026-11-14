@@ -20,6 +20,7 @@ import { conductorPrompt, RESUME_MESSAGE } from './prompts.mjs';
 import { waiting as waitingFor, pendingLessons } from '../public/all-projects.js';
 import { openQuestions as openAsked } from '../public/questions.js';   // on events (the all-projects one takes a project)
 import { CONNECTOR_SERVERS } from './permission-rules.mjs';
+import { liftSpoken, sentences } from './voice-speech.mjs';
 
 export const CONDUCTOR = '~conductor';          // its place name in URLs and live events; never a project folder's name
 export const CONDUCTOR_THREAD = 'conductor';
@@ -40,6 +41,11 @@ const REMINDER_CHECK_MS = 60 * 1000;
 const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
 const EVENTS_SHOWN = 400;                        // the page gets this many of its latest events
 const REMINDER_MAX_DAYS = 400;
+// Decision 61 A: in front of a message {{who}} said by voice. The hub has already snapped near-miss project and agent
+// names to known ones; {{who}} sees the message with a mic mark and corrects it after if it was misheard (R011).
+export const VOICE_NOTE = '[Hub: {{who}} said this by voice and the hub transcribed it. A word, name or number may be misheard: if it reads oddly, go by what {{who}} most likely meant, and ask when it matters. Begin the message that answers it with one line "Spoken: " and 1-3 short plain sentences to read aloud; then reply as usual.]';
+// A spoken message's answer is read aloud only if it comes within this long.
+export const VOICE_TURN_MS = 10 * 60 * 1000;
 
 // Its board tools, by name. These and nothing else: the permission callback refuses every other tool.
 export const CONDUCTOR_TOOLS = ['hub_overview', 'needs_you', 'board_index', 'board_read', 'latest_handoff', 'list_agents',
@@ -164,7 +170,59 @@ export class Conductor {
     const note = this.wakeText({ cards, replies, then: 'message' });
     if (replies.length) this.takeReplies(replies, 'message');
     if (note) a.noteForNextTurn(note);
+    // Voice (decision 61 A): a spoken message was transcribed, so a name or number in it may be off; its answer is
+    // read aloud on the page that sent it (expectVoice). A turn already running when it came is marked busy.
+    if (extra.voice) {
+      a.noteForNextTurn(VOICE_NOTE);
+      this.voiceTurn = { client: this.voiceClient || '', at: Date.now(), busy: ['working', 'starting'].includes(a.state), last: null };
+      this.voiceClient = '';
+    }
     a.send(text, attachments);
+  }
+
+  // ---------- voice (decision 61 A): reading the answer to a spoken message aloud ----------
+  // The page that sends the next spoken message; only it plays the answer.
+  expectVoice(client) { this.voiceClient = String(client || '').slice(0, 64); }
+  // A message the Conductor wrote, before it is logged: during a voice turn its Spoken line comes off. Returns the
+  // text to log and the spoken words, or null outside a voice turn.
+  // A Spoken line comes off any reply logged after the spoken message, even one from a turn that was already running:
+  // Claude Code may take a message sent mid-turn into that turn, and the note asking for the line rides with it.
+  voiceSaid(text) {
+    const t = this.voiceTurn;
+    if (!t) return null;
+    if (Date.now() - t.at > VOICE_TURN_MS) { this.voiceTurn = null; return null; }
+    return liftSpoken(text);
+  }
+  // After it is logged (ev, or null when the message was only the Spoken line): the words go up to be read. Without
+  // one, a reply from a turn that started after the spoken message is kept for the end-of-turn fallback; a reply from
+  // the turn already running is never read (it only shows that turn took the message in).
+  voiceLogged(ev, { spoken }) {
+    const t = this.voiceTurn;
+    if (!t) return;
+    if (spoken) { this.voiceTurn = null; this.say(ev?.id || null, sentences(spoken), t.client, 'spoken'); }
+    else if (t.busy) t.sawInBusy = true;
+    else if (ev) t.last = { id: ev.id, text: ev.text };
+  }
+  // The end of a turn. The turn that was running when you spoke: if it replied after your message, it took the message
+  // in and gave no Spoken line, so nothing is read; if it did not, the next turn is the answer. Any other turn with no
+  // Spoken line has its last reply's first sentences read. Past 10 minutes nothing is read.
+  voiceTurnEnded() {
+    const t = this.voiceTurn;
+    if (!t) return;
+    if (Date.now() - t.at > VOICE_TURN_MS) { this.voiceTurn = null; return; }
+    if (t.busy) {
+      if (t.sawInBusy) this.voiceTurn = null;
+      else { t.busy = false; t.last = null; }
+      return;
+    }
+    this.voiceTurn = null;
+    const s = t.last ? sentences(t.last.text) : [];
+    if (s.length) this.say(t.last.id, s, t.client, 'first sentences');
+  }
+  // One event per answer read aloud: its sentences (text only; the sound is made in memory and never kept).
+  say(of, list, client, from) {
+    if (!list.length) return;
+    this.home.log.append('voice_say', { thread: CONDUCTOR_THREAD, of, sentences: list, client, from });
   }
 
   // message_agent: to a project's orchestrator only (never a worker). Logged in that project's orchestrator thread
@@ -656,6 +714,7 @@ ${lines.join('\n')}`;
   // reminder at once, other lines (replies too) after the window. Its turn is over: stay_quiet is allowed again.
   afterTurn() {
     this.repliesTurn = false;
+    this.voiceTurnEnded();   // decision 61 A: a spoken message's answer with no Spoken line is read from its first sentences
     if (this.owed.length) this.askNotes(this.owed.splice(0), Date.now(), []);
     if (!this.pending.length) return;
     if (this.pending.some(x => x.reminder)) { clearTimeout(this.timer); this.timer = null; this.flush(); }
