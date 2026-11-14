@@ -76,6 +76,24 @@ export function openQuestions(events, { decisionStatus = () => undefined } = {})
 
 export function questionOpen(events, id, opts) { return openQuestions(events, opts).some(q => q.id === id); }
 
+// Two questions that ask the same thing: equal once case, punctuation and spacing are set aside, or one holds the
+// other whole (24 characters or more). A question lives in one card only (Matt, 2026-11-14): an orchestrator does not
+// re-ask its worker's waiting question, and the Conductor does not re-ask a project's.
+const plainWords = q => String(q || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+export function sameQuestion(a, b) {
+  const x = plainWords(a), y = plainWords(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [s, l] = x.length < y.length ? [x, y] : [y, x];
+  return s.length >= 24 && l.includes(s);
+}
+// questions minus those already waiting elsewhere (texts): { kept, dropped }.
+export function withoutRepeats(questions = [], waiting = []) {
+  const kept = [], dropped = [];
+  for (const q of questions) (waiting.some(w => sameQuestion(q, w)) ? dropped : kept).push(q);
+  return { kept, dropped };
+}
+
 // The page's project state ({ events, board: { decisions } }) to the options above.
 export const pageStatus = p => id => (p?.board?.decisions || []).find(d => d.id === Number(id))?.status;
 

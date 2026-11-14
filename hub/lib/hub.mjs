@@ -16,7 +16,7 @@ import { HubSettings, HANDOFF_NUMBERS } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
-import { answerMessage, answerNote } from '../public/questions.js';
+import { answerMessage, answerNote, openQuestions, withoutRepeats } from '../public/questions.js';
 import { Usage } from './usage.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE } from './conductor.mjs';
@@ -373,9 +373,16 @@ export class Hub {
     w.send(`[From the orchestrator, ${orch.name}]\n${text}`);
   }
 
+  // Returns { dropped }: questions left out because the same question already waits for you in another card. A
+  // question lives in one place (Matt, 2026-11-14): an orchestrator's summary does not repeat a worker's waiting
+  // question, and the Conductor's does not repeat any project's. The card already waiting is the one you answer.
+  // The Conductor never lists decisions of its own: they are the projects' cards; it may only mention them.
   postSummary(p, agent, s) {
-    p.log.append('summary', { thread: agent.thread, from: agent.name, ...s });
-    if (agent.role !== 'worker') return;
+    const { kept, dropped } = withoutRepeats(s.questions || [], this.waitingElsewhere(p, agent));
+    const decisions = agent.role === CONDUCTOR_ROLE ? [] : s.decisions_needed || [];
+    p.log.append('summary', { thread: agent.thread, from: agent.name, ...s, questions: kept, decisions_needed: decisions, ...(dropped.length ? { repeats_dropped: dropped } : {}) });
+    s = { ...s, questions: kept, decisions_needed: decisions };
+    if (agent.role !== 'worker') return { dropped };
     const orch = p.orchestrator();
     if (!orch && !s.questions.length && !s.decisions_needed.length) return; // nothing to route; you see it in the thread
     const lines = [`[Summary from worker ${agent.name}]`];
@@ -384,6 +391,16 @@ export class Hub {
     if (s.decisions_needed.length) lines.push(`Decisions waiting on {{who}}: ${s.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
     if (s.next_step) lines.push(`Proposed next step: ${s.next_step}`);
     this.ensureOrchestrator(p).send(lines.join('\n'));
+  }
+
+  // The questions already waiting for you in other cards, as text: for an orchestrator, its project's other threads
+  // (its workers' cards); for the Conductor, every project's. Others: none (a worker's question is its own card).
+  waitingElsewhere(p, agent) {
+    const open = (pp, skip) => openQuestions(pp.log.events, { decisionStatus: id => pp.board.decision(id)?.status })
+      .filter(q => q.thread !== skip).flatMap(q => q.open.map(x => x.text));
+    if (agent.role === 'orchestrator') return open(p, agent.thread);
+    if (agent.role === CONDUCTOR_ROLE) return [...this.projects.values()].flatMap(pp => open(pp, null));
+    return [];
   }
 
   // ---------- questions from round summaries (M010) ----------

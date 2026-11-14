@@ -20,6 +20,7 @@ import { conductorPrompt, RESUME_MESSAGE } from './prompts.mjs';
 import { waiting as waitingFor, pendingLessons } from '../public/all-projects.js';
 import { openQuestions as openAsked } from '../public/questions.js';   // on events (the all-projects one takes a project)
 import { CONNECTOR_SERVERS } from './permission-rules.mjs';
+import { summaryReply } from './tools.mjs';
 
 export const CONDUCTOR = '~conductor';          // its place name in URLs and live events; never a project folder's name
 export const CONDUCTOR_THREAD = 'conductor';
@@ -384,12 +385,12 @@ export class Conductor {
       tool('post_summary', hub.memory.personalize('Post your round summary to your thread, where {{who}} sees it.'),
         {
           done: list, changed: list, questions: list.describe('Questions for {{who}}, in plain words.'),
-          decisions_needed: z.array(z.number()).optional().default([]), blocked_on: list, next_step: z.string().optional().default(''),
+          blocked_on: list, next_step: z.string().optional().default(''),   // no decisions_needed: decisions are the projects' cards
           visuals: list.describe('Ids from post_visual.'),
           handoff_notes: z.object({ in_flight: list, promises: list, risks: list, next_steps: list }).optional().describe('Your handoff judgement as of now, a line or two per heading. The hub keeps the newest as a rolling draft.'),
           approvals: list, open_questions: list
         },
-        safe(args => { hub.postSummary(home, agent, args); return 'Summary posted. Stop here and wait.'; })),
+        safe(args => summaryReply(hub.postSummary(home, agent, args)))),
       tool('propose_lesson', hub.memory.personalize('Record a lasting lesson about how {{who}} wants work done across projects. It waits for {{who}}\'s OK before it joins the core profile.'),
         { lesson: z.string().max(400) }, safe(({ lesson }) => hub.proposeLesson(home, agent, 'core', lesson))),
       tool('post_visual', hub.memory.personalize('Show {{who}} a picture (png, jpg, gif, webp, svg) or a small self-contained HTML page from a file the hub can read. Returns an id for post_summary visuals.'),

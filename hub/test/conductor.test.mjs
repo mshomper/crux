@@ -15,6 +15,9 @@ import { orchestratorPrompt, conductorPrompt } from '../lib/prompts.mjs';
 import { robot, conductorBot } from '../public/robots.js';
 import * as CP from '../public/conductor-view.js';
 import { composerHint } from '../public/composer-keys.js';
+import * as AP from '../public/all-projects.js';
+import { sameQuestion } from '../public/questions.js';
+import { summaryReply } from '../lib/tools.mjs';
 
 const sent = [];
 Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'working'; };
@@ -395,4 +398,44 @@ test('after a restart a brief the orchestrator never acted on is delivered again
   // With no one holding the role, the brief waits: no orchestrator is started for it.
   hub.finishRetire(a, orch);
   assert.deepEqual(hub.resumePlan(a), []);
+});
+
+test('a question lives in one card: the Conductor and an orchestrator cannot re-ask one already waiting', async () => {
+  const { hub, c, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  const w = hub.startWorker(a, 'w1', 'task');
+  hub.postSummary(a, w, summary({ questions: ['Should the preview update while dragging, or only on release?'] }));
+  // The orchestrator repeats its worker's question (reworded case and punctuation): left out, and told why.
+  const r = hub.postSummary(a, orch, summary({ questions: ['should the preview update while dragging or only on release', 'Ship on Friday?'] }));
+  assert.deepEqual(r.dropped, ['should the preview update while dragging or only on release']);
+  assert.deepEqual(a.log.events.findLast(e => e.type === 'summary').questions, ['Ship on Friday?']);
+  assert.match(summaryReply(r), /One question was left out because the same question already waits for \{\{who\}\} in Needs you/);
+  // The Conductor repeating either project question gets no card of its own; a question of its own still does.
+  const cd = { name: 'conductor-1', thread: CONDUCTOR_THREAD, role: 'conductor' };
+  const r2 = hub.postSummary(c.home, cd, summary({ questions: ['Ship on Friday?', 'Should the preview update while dragging, or only on release?', 'Pause beta tonight?'], decisions_needed: [4] }));
+  assert.equal(r2.dropped.length, 2);
+  const mine = c.home.log.events.findLast(e => e.type === 'summary');
+  assert.deepEqual(mine.questions, ['Pause beta tonight?']);
+  assert.deepEqual(mine.decisions_needed, []);   // decisions are the projects' cards, never the Conductor's
+  assert.equal(c.view().questions[0].open.length, 1);
+  assert.ok(sameQuestion('Merge PR #12 now?', 'merge pr 12 now'));
+  assert.equal(sameQuestion('Ship it?', 'Ship it tomorrow?'), false);   // short ones must match whole
+});
+
+test('one card per decision, and a pick takes every copy away at once', async () => {
+  // Two summaries in a thread name D0004: its card is drawn once, under the latest.
+  const evs = [{ id: 's1', type: 'summary', decisions_needed: [4, 7] }, { id: 's2', type: 'summary', decisions_needed: [4, 4] }];
+  const once = AP.decisionCardsOnce(evs);
+  assert.deepEqual(once(evs[0]), [7]);
+  assert.deepEqual(once(evs[1]), [4]);
+  // A decision read twice (main folder and worktree copy) is still one waiting card.
+  const p = { board: { decisions: [{ id: 4, status: 'open', options: [{ key: 'A' }, { key: 'B' }] }, { id: 4, status: 'open' }, { id: 5, status: 'decided' }] }, events: [] };
+  assert.deepEqual(AP.openDecisions(p).map(d => d.id), [4]);
+  // The pick shows in the page's own state before the hub answers: nothing waits for it any more, in any view.
+  assert.equal(AP.applyPick(p, 4, 'B'), true);
+  assert.equal(p.board.decisions[0].status, 'decided');
+  assert.equal(p.board.decisions[0].chosen, 'B');
+  assert.deepEqual(AP.openDecisions(p), []);
+  assert.equal(AP.waiting(p, new Set()).decisions.length, 0);
+  assert.equal(AP.applyPick(p, 4, 'A'), false);   // already decided: nothing to do
 });

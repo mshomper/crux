@@ -11,7 +11,27 @@ import { openQuestions as askedOpen, pageStatus } from './questions.js';
 export const HUB_THREAD = 'all';
 
 // ---------- what waits for Matt in one project ----------
-export const openDecisions = p => p.board.decisions.filter(d => d.status === 'open' || d.status === 'found');
+// One card per decision (Matt, 2026-11-14): by number, whatever read it twice.
+export const openDecisions = p => p.board.decisions.filter((d, i, all) => (d.status === 'open' || d.status === 'found') && all.findIndex(x => x.id === d.id) === i);
+
+// In a list of round summaries, a decision named by several of them gets one card, under the latest that names it.
+// Returns ev => the decision ids to draw under that summary.
+export function decisionCardsOnce(events) {
+  const last = new Map();
+  for (const e of events || []) if (e.type === 'summary') for (const n of e.decisions_needed || []) last.set(Number(n), e.id);
+  return ev => [...new Set((ev.decisions_needed || []).map(Number))].filter(id => last.get(id) === ev.id);
+}
+
+// A pick shown at once in the page's own state, before the hub answers: the decision stops waiting, so every card for
+// it (Needs you, All projects, a thread, any column) goes on the same redraw. The next load confirms it. False when
+// there is nothing open to pick.
+export function applyPick(p, id, choice) {
+  const d = p?.board?.decisions?.find(x => x.id === Number(id));
+  if (!d || !(d.status === 'open' || d.status === 'found')) return false;
+  d.status = choice === 'reject' ? 'rejected' : 'decided';
+  if ((d.options || []).some(o => o.key === choice)) d.chosen = choice;
+  return true;
+}
 // Permission requests still waiting. Those with the orchestrator (decision 21) wait on it, not on you, until it
 // escalates or runs out of time; you can still answer them, which overrides it.
 export function waitingApprovals(p, pending) {

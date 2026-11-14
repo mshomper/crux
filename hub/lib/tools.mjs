@@ -48,7 +48,7 @@ export function cruxTools(hub, project, agent) {
         approvals: list.describe(t('Approvals, decisions or standing instructions {{who}} gave this round (merge #31, keep w1), briefly.')),
         open_questions: list.describe(t('Questions or quick calls you put to {{who}} in chat that are still unanswered.'))
       },
-      async (args) => { hub.postSummary(project, agent, args); return out('Summary posted. Stop here and wait for a reply.'); }),
+      async (args) => out(summaryReply(hub.postSummary(project, agent, args)))),
 
     tool('propose_lesson', t('Record a lasting lesson about how {{who}} wants work done. "project" lessons go straight into this project\'s pack; "core" lessons (true across all projects) wait for {{who}}\'s OK.'),
       { scope: z.enum(['project', 'core']), lesson: z.string().max(400).describe('One or two plain sentences, as a rule.') },
@@ -157,6 +157,13 @@ export function cruxTools(hub, project, agent) {
   }
 
   return createSdkMcpServer({ name: 'crux', version: '0.3.0', tools });
+}
+
+// post_summary's reply. Questions the hub left out (the same question already waits for {{who}} in another card) are
+// named, so the agent points to that card instead of asking again.
+export function summaryReply(r) {
+  const d = r?.dropped || [];
+  return `Summary posted.${d.length ? ` ${d.length === 1 ? 'One question was' : `${d.length} questions were`} left out because the same question already waits for {{who}} in Needs you: ${d.map(q => `"${q}"`).join('; ')}. Don't ask it again; point to that card if needed.` : ''} Stop here and wait for a reply.`;
 }
 
 // set_agent_settings arguments to Hub.setAgentSettings changes: only the keys given; "default" or type "none" is null.
