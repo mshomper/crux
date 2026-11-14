@@ -1,7 +1,7 @@
 # 0064 How do we cut the notices that reach you?
 
-- Status: open
-- Date: 2026-11-14
+- Status: decided
+- Date: 2026-11-14, decided 2026-11-14
 - Lenses: architecture, ui
 - Builds on: 0019, 0021, 0034, 0045, 0058, 0060
 
@@ -17,13 +17,17 @@ For you:
 - Setup: The checker part is security work: built and reviewed on Opus at the highest effort, as before
 - Hard to undo: Each fix is a separate rule that can be turned back; nothing is deleted
 
+## Decision
+
+**A: Fix the causes.** 1) Permission checker: check a command from the agent's own worktree (not the main folder), a merge needs Matt only when main receives it, scan for risky words with quoted text and here-strings removed, plus the dozen one-line rule fixes from the audit and a 5-minute permission timeout. 2) One notice per choice: a re-ask with mostly the same words, or a decision card on the same choice, is hidden behind the first card; the sent list survives restarts. 3) Your yes on 'May I merge #N?' pre-approves exactly that merge for 30 minutes. 4) No restart notice right after a merge you approved; other restarts follow the normal PC-or-phone routing. 5) A question line without a question mark isn't a card. 6) A 30-minute floor for return digests, and the Conductor stays silent about cards already in Needs you while you're present.
+
 ## Context
 
 Matt: 'I'm still getting far too many notifications. The decision cards, the orchestrator follow-ups, your nudges. It's not tenable.' notice-audit replayed every project's event log for 2026-11-14 through the hub's own card rules (memo M038; the notice log and Conductor log sit under ~/.crux-hub and weren't read, so digests and Conductor re-posts aren't counted and card totals are an upper bound). About 102 notices: permission 49 (all allowed, none denied), questions 32, decisions 12, restart pushes 8, pairing 1. Causes ranked: (c) contained commands the checker misread, 25: feature-branch pushes read as pushes to main because the check starts in the main folder, merging main into a feature branch, a risky word anywhere in an opaque command (a commit message, a here-string), inline scripts with 'http', local test-hub curls, a GitHub release curl, pip --version, read-only git in other repos, temp cleanup, a read-only listing read as secrets, a 1-minute timeout. (a) one choice as several cards, 12: a worker's question plus its orchestrator's re-ask in looser words, a question plus a decision card on the same choice, a decision re-sent across a restart. (b) a merge asked again right after Matt's yes, 9 (every crux merge was question + merge card + restart notice = 3). Restart notices, 8. (f) statements in the questions field, 4. Summaries that ask nothing already send none. Return digests have no minimum gap. Conductor chat itself never pushes.
 
 ## Options
 
-### A: Fix the causes (recommended)
+### A: Fix the causes (chosen) (recommended)
 
 1) Permission checker: check a command from the agent's own worktree (not the main folder), a merge needs Matt only when main receives it, scan for risky words with quoted text and here-strings removed, plus the dozen one-line rule fixes from the audit and a 5-minute permission timeout. 2) One notice per choice: a re-ask with mostly the same words, or a decision card on the same choice, is hidden behind the first card; the sent list survives restarts. 3) Your yes on 'May I merge #N?' pre-approves exactly that merge for 30 minutes. 4) No restart notice right after a merge you approved; other restarts follow the normal PC-or-phone routing. 5) A question line without a question mark isn't a card. 6) A 30-minute floor for return digests, and the Conductor stays silent about cards already in Needs you while you're present.
 - Pro: Removes about half of today's notices without loosening any real hard stop

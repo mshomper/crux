@@ -8,7 +8,7 @@
   "architecture",
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how to cut your notices. I recommend A: fix the permission checker so harmless commands stop reaching you, send one notice per choice instead of two or three, let your yes on a merge cover the merge itself, and quiet the restart and digest notices. On today's numbers that removes about half. Confidence: medium.",
  "for_you": [
   "Today you got about 102 notices (plus digests): 49 permission cards, 32 questions, 12 decisions, 8 restart notices, 1 pairing alert",
@@ -80,9 +80,9 @@
  "recommendation": "A removes the counted causes at the source, so notices drop without hiding anything you need. The quiet switch in C is easy to add later if A isn't enough.",
  "confidence": "lean",
  "change_mind": "If notices still feel heavy after A, add C's quiet switch; if you'd rather not touch the checker now, take B.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [],
