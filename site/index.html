@@ -82,7 +82,7 @@
     <p class="lead">Crux stops Claude at the handful of choices that matter, shows you the options as pictures, and keeps a record every later session reads. Crux Hub is a chat app on your own computer for directing several Claude agents at once, from your desk or your phone.</p>
     <div class="cta">
       <a class="btn primary" href="#setup"><svg class="icon"><use href="#i-down"/></svg>Get the skill</a>
-      <a class="btn" href="#setup-hub">Run the Hub<svg class="icon"><use href="#i-arrow"/></svg></a>
+      <a class="btn" href="#setup-desktop">Run the Hub<svg class="icon"><use href="#i-arrow"/></svg></a>
     </div>
     <p class="fine">Free and open source. Runs on your own machine.</p>
   </div>
@@ -520,7 +520,7 @@
   <header class="sec-head"><span class="num">17</span><p class="k">The desktop app</p><h2>The Hub in its own window, with a tray icon, on Windows</h2></header>
   <div class="stack">
     <div class="prose">
-      <p>The desktop app is a window and a tray icon that sit on top of the Hub running on your PC. It shows the live Hub, so everything above works the same in it. It does not hold a copy of the Hub or run the agents: the Hub keeps doing that, and the app is another way in, next to your browser tab and your phone.</p>
+      <p>The desktop app is a window and a tray icon that sit on top of the Hub running on your PC. It shows the live Hub, so everything above works the same in it. The Windows installer carries the Hub and its own copy of Node, so there is nothing else to install. The app does not own the Hub or run the agents: the Hub keeps doing that, and the app is another way in, next to your browser tab and your phone.</p>
     </div>
     <div class="tiles">
       <article class="plate tile" data-n="A / Window">
@@ -555,11 +555,12 @@
           <p>Right-click the tray icon.</p>
         </div>
         <dl class="cmds">
+          <div><dt><code>Install update</code></dt><dd>Only shows when a new version is ready</dd></div>
           <div><dt><code>Open Crux Hub</code></dt><dd>Bring the window up</dd></div>
           <div><dt><code>Restart hub</code></dt><dd>The same restart as the one in the Hub's own menu</dd></div>
           <div><dt><code>Quit</code></dt><dd>Close the app only; the Hub keeps running</dd></div>
         </dl>
-        <p class="note">Because the app holds no copy of the Hub, every Hub update shows in it after a restart. The Hub page inside the window gets no access to your PC beyond what a browser tab has, and links to other sites open in your browser. Not in the app yet: notifications on your PC.</p>
+        <p class="note">The app looks for updates once a day. They are signed and come from GitHub Releases; your settings, key and Claude Code stay. The Hub page inside the window gets no access to your PC beyond what a browser tab has, and links to other sites open in your browser. Not in the app yet: notifications on your PC.</p>
       </div>
     </div>
   </div>
@@ -586,30 +587,37 @@
   </div>
 </section>
 
-<section class="sec" id="setup-hub">
-  <header class="sec-head"><span class="num">19</span><p class="k">Set up the Hub</p><h2>The Hub takes four more</h2></header>
+<section class="sec" id="setup-desktop">
+  <header class="sec-head"><span class="num">19</span><p class="k">Set up the Hub, on Windows</p><h2>Download it, run it, answer three questions</h2></header>
   <div class="split">
     <div class="prose">
-      <p>The Hub runs its agents with <strong>your own Anthropic API key</strong>, from the Anthropic Console. Anthropic bills the tokens they use to that key.</p>
+      <p>The Windows installer carries the Hub and its own copy of Node, so there is no git clone, no npm and no terminal. The Hub runs its agents with <strong>your own Anthropic API key</strong>, from the Anthropic Console. Anthropic bills the tokens they use to that key.</p>
+      <!-- DOWNLOAD LINK: always points at the latest release (v0.2.0 so far), so it needs no change for new versions. The installer file is named CruxHub_<version>_x64-setup.exe. -->
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/mshomper/crux/releases/latest"><svg class="icon"><use href="#i-down"/></svg>Download for Windows</a>
+      </div>
       <ul class="needs" aria-label="You need">
-        <li>Node 20 or newer</li><li>git</li><li>An Anthropic API key</li>
+        <li>Windows</li><li>An Anthropic API key</li><li>git, for your projects</li>
         <li class="opt-l">Optional: GitHub CLI</li><li class="opt-l">Optional: Tailscale</li>
       </ul>
-      <p class="note">Without the second setting in step 2, the Hub falls back to whatever Claude Code sign-in is already on the PC. That is for your own personal use only; the Hub neither offers nor manages it.</p>
-      <p class="note">The <a href="https://github.com/mshomper/crux/blob/main/hub/README.md">Hub guide</a> covers every setting, restarting, and desktop shortcuts on Windows.</p>
+      <p class="note">Using a Claude plan sign-in instead of a key is for your own personal use only; the Hub neither offers nor manages it.</p>
+      <p class="note">On Mac or Linux, or to run it from source, use the four steps in the next section. The <a href="https://github.com/mshomper/crux/blob/main/hub/README.md">Hub guide</a> covers every setting, and the <a href="https://github.com/mshomper/crux/blob/main/app/README.md">app guide</a> covers building the app yourself.</p>
     </div>
     <ol class="steps">
-      <li class="plate"><span class="key">1</span><div><b class="t">Install it</b><p>In the Crux folder you cloned for the skill:</p><pre><code>cd crux/hub
-npm install</code></pre></div></li>
-      <li class="plate"><span class="key">2</span><div><b class="t">Give it your key</b><p>In PowerShell on Windows:</p><pre><code>$env:ANTHROPIC_API_KEY = "sk-ant-..."
-$env:CRUX_HUB_USE_API_KEY = "1"</code></pre><p>On Mac or Linux (untested):</p><pre><code>export ANTHROPIC_API_KEY=sk-ant-...
-export CRUX_HUB_USE_API_KEY=1</code></pre></div></li>
-      <li class="plate"><span class="key">3</span><div><b class="t">Start it on your project</b><p>Give it one or more project folders. Each should be a git repository.</p><pre><code>npm start -- C:/path/to/your/project</code></pre></div></li>
-      <li class="plate"><span class="key">4</span><div><b class="t">Open it</b><p>In your browser, then say hello to the orchestrator.</p><pre><code>http://localhost:4747</code></pre></div></li>
+      <li class="plate"><span class="key">1</span><div><b class="t">Download the installer</b><p>From the Releases page on GitHub, get the file named:</p><pre><code>CruxHub_&lt;version&gt;_x64-setup.exe</code></pre></div></li>
+      <li class="plate"><span class="key">2</span><div><b class="t">Run it</b><p>It installs for your user only, with no admin rights. The installer is not signed yet, so Windows may show "Windows protected your PC". Choose <strong>More info</strong>, then <strong>Run anyway</strong>.</p></div></li>
+      <li class="plate"><span class="key">3</span><div><b class="t">Answer the first-run screen</b><p>Open Crux Hub from the Start menu. A setup screen asks for your API key and your project folders (each should be a git repository), then downloads Claude Code from Anthropic: about 330 MB, once, checked before it is kept. It needs an internet connection.</p><p>Then the Hub opens. Say hello to the orchestrator. From then on the app starts with Windows, hidden in the tray, and offers updates there.</p></div></li>
     </ol>
   </div>
 
   <div class="stack" style="margin-top:26px">
+    <details class="fold">
+      <summary><svg class="icon"><use href="#i-chev"/></svg>Optional settings<span>port, Hub folder</span></summary>
+      <div class="in">
+        <p class="note">Without any settings, the app uses port 4747 and the Hub it carries. If you already run the Hub from a git clone, the app finds that one and uses it, with no setup screen. To change the port, or to name a Hub folder yourself, add this to <code>~/crux/hub.json</code>:</p>
+        <pre><code>{ "app": { "port": 4747, "hubDir": "C:/path/to/crux/hub" } }</code></pre>
+      </div>
+    </details>
     <details class="fold">
       <summary><svg class="icon"><use href="#i-chev"/></svg>Reach it from your phone<span>6 steps</span></summary>
       <div class="in">
@@ -631,54 +639,46 @@ export CRUX_HUB_USE_API_KEY=1</code></pre></div></li>
           <li><strong>A profile.</strong> Copy the <code>profile-template</code> folder to <code>~/crux/profile/</code> and write down how you like work done. Every agent reads the short core. Keep that folder private and out of any public repository.</li>
           <li><strong>Agent types.</strong> Put agent files in <code>~/.claude/agents/</code> for every project, or in a project's own <code>.claude/agents/</code> folder. Each can set a model, an effort level and standing instructions.</li>
           <li><strong>Auto mode for a project.</strong> Flip the Ask/Auto switch beside the project's name in the Hub, or commit a <code>.crux-hub.json</code> file containing <code>{ "permissions": "auto" }</code>.</li>
-          <li><strong>Several projects.</strong> List them after <code>npm start --</code>, or in <code>~/crux/hub.json</code>, and switch between them in the Hub.</li>
+          <li><strong>Several projects.</strong> Add them on the app's first-run screen, list them after <code>npm start --</code>, or put them in <code>~/crux/hub.json</code>, and switch between them in the Hub.</li>
         </ul>
       </div>
     </details>
   </div>
 </section>
 
-<section class="sec" id="setup-desktop">
-  <header class="sec-head"><span class="num">20</span><p class="k">Set up the desktop app</p><h2>Optional, Windows only: download it and run it</h2></header>
+<section class="sec" id="setup-hub">
+  <header class="sec-head"><span class="num">20</span><p class="k">Set up the Hub from source</p><h2>On Mac, Linux, or from source: four steps</h2></header>
   <div class="split">
     <div class="prose">
-      <p>The app is a window on the Hub, not a copy of it, so the Hub still has to be set up once on your PC (the four steps above). After that, the app starts the Hub for you.</p>
-      <!-- DOWNLOAD LINK: always points at the latest release (v0.1.0 so far), so it needs no change for new versions. -->
-      <div class="cta">
-        <a class="btn primary" href="https://github.com/mshomper/crux/releases/latest"><svg class="icon"><use href="#i-down"/></svg>Download for Windows</a>
-      </div>
+      <p>This is the route for Mac and Linux (both untested), and for anyone who wants to run the Hub from a clone or work on it. On Windows the installer above is simpler. Here the Hub also runs on <strong>your own Anthropic API key</strong>, and Anthropic bills the tokens to that key.</p>
       <ul class="needs" aria-label="You need">
-        <li>Windows</li><li>The Hub, set up once</li>
+        <li>Node 20 or newer</li><li>git</li><li>An Anthropic API key</li>
+        <li class="opt-l">Optional: GitHub CLI</li><li class="opt-l">Optional: Tailscale</li>
       </ul>
-      <p class="note">The app starts the Hub with the settings it has itself, so set <code>ANTHROPIC_API_KEY</code> and <code>CRUX_HUB_USE_API_KEY</code> as user environment variables first (Windows: Settings, search "environment variables").</p>
-      <p class="note">Developers can build the app from source instead: see the <a href="https://github.com/mshomper/crux/blob/main/app/README.md">app guide</a>.</p>
+      <p class="note">Without the second setting in step 2, the Hub falls back to whatever Claude Code sign-in is already on the PC. That is for your own personal use only; the Hub neither offers nor manages it.</p>
+      <p class="note">The phone and extras notes in the section above apply here too. The desktop app finds a Hub you run this way and uses it.</p>
     </div>
     <ol class="steps">
-      <li class="plate"><span class="key">1</span><div><b class="t">Set up the Hub once</b><p>Follow the four Hub steps above, and keep your key in user environment variables as noted here.</p></div></li>
-      <li class="plate"><span class="key">2</span><div><b class="t">Download the installer</b><p>From the Releases page on GitHub, get the file named:</p><pre><code>Crux Hub_&lt;version&gt;_x64-setup.exe</code></pre></div></li>
-      <li class="plate"><span class="key">3</span><div><b class="t">Run it</b><p>It installs for your user only, with no admin rights. The installer is not signed yet, so Windows may show "Windows protected your PC". Choose <strong>More info</strong>, then <strong>Run anyway</strong>.</p><p>Then open Crux Hub from the Start menu. From then on it starts with Windows, hidden in the tray.</p></div></li>
+      <li class="plate"><span class="key">1</span><div><b class="t">Install it</b><p>In the Crux folder you cloned for the skill:</p><pre><code>cd crux/hub
+npm install</code></pre></div></li>
+      <li class="plate"><span class="key">2</span><div><b class="t">Give it your key</b><p>In PowerShell on Windows:</p><pre><code>$env:ANTHROPIC_API_KEY = "sk-ant-..."
+$env:CRUX_HUB_USE_API_KEY = "1"</code></pre><p>On Mac or Linux (untested):</p><pre><code>export ANTHROPIC_API_KEY=sk-ant-...
+export CRUX_HUB_USE_API_KEY=1</code></pre></div></li>
+      <li class="plate"><span class="key">3</span><div><b class="t">Start it on your project</b><p>Give it one or more project folders. Each should be a git repository.</p><pre><code>npm start -- C:/path/to/your/project</code></pre></div></li>
+      <li class="plate"><span class="key">4</span><div><b class="t">Open it</b><p>In your browser, then say hello to the orchestrator.</p><pre><code>http://localhost:4747</code></pre></div></li>
     </ol>
-  </div>
-  <div class="stack" style="margin-top:26px">
-    <details class="fold">
-      <summary><svg class="icon"><use href="#i-chev"/></svg>Optional settings<span>port, Hub folder</span></summary>
-      <div class="in">
-        <p class="note">Without any settings, the app uses port 4747 and the Hub folder it was last started from. To change either, add this to <code>~/crux/hub.json</code>:</p>
-        <pre><code>{ "app": { "port": 4747, "hubDir": "C:/path/to/crux/hub" } }</code></pre>
-      </div>
-    </details>
   </div>
 </section>
 
 <section class="sec" id="limits">
   <header class="sec-head"><span class="num">21</span><p class="k">Honest limits</p><h2>What it is not, yet</h2></header>
   <ul class="limits">
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Early software.</strong> Hub version 0.17. Built and used by one person so far. Expect rough edges.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Early software.</strong> Hub version 0.18, desktop app 0.2. Built and used by one person so far. Expect rough edges.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>It runs on your own PC, for one person.</strong> If the PC sleeps, the agents stop and your phone can't reach the Hub.</span></li>
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Windows first.</strong> Mac and Linux are untested. The restart shortcut, the desktop opener and the desktop app are Windows-only.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Windows first.</strong> Mac and Linux are untested and use the source route. The restart shortcut, the desktop opener and the one-download desktop app are Windows-only.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>API use is billed per token.</strong> Several agents use more, faster. The spend shown in the Hub is an estimate.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Starting with an API key is new.</strong> The steps above come from the code and have not yet been tested end to end on a fresh machine.</span></li>
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>The desktop app is unsigned and new.</strong> Windows may warn about it when you run the installer. It shows no notifications on your PC yet, and it is Windows only.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>The Windows installer is unsigned.</strong> Windows may show "Windows protected your PC" when you run it: choose More info, then Run anyway. The app shows no notifications on your PC yet. Version 0.1.0 had no updater, so if you have it, install the newest version by hand once; after that, updates arrive from the tray icon.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Terminal sessions can't join yet.</strong> Only agents started by the Hub appear in it.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Notifications open the card.</strong> There are no answer buttons on the lock screen. On iPhone they need iOS 16.4 or later and the home-screen app.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Your PC's name becomes public</strong> when you turn on secure addresses for phone access. Pick a neutral name.</span></li>

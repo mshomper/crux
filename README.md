@@ -21,7 +21,9 @@ To see what the pages look like first, open [example/demo-decisions/index.html](
 
 ## Run the Hub
 
-You need Node 20 or newer, git, and your own Anthropic API key. The GitHub CLI (`gh`) and Tailscale are optional.
+**Windows:** download `CruxHub_<version>_x64-setup.exe` from [GitHub Releases](https://github.com/mshomper/crux/releases/latest) and run it (per-user, no admin). It carries the Hub and its own Node, so there is no clone and no npm. A first-run screen asks for your own Anthropic API key and your project folders, then downloads the matching Claude Code from Anthropic (about 330 MB, once). Updates come from the tray icon, signed, from GitHub Releases; if you have 0.1.0, which had no updater, install the newest version by hand once. The installer is unsigned, so Windows may show "Windows protected your PC": choose More info, then Run anyway. Build it from source: [app/README.md](app/README.md).
+
+**Mac, Linux, or from source:** you need Node 20 or newer, git, and your own Anthropic API key. The GitHub CLI (`gh`) and Tailscale are optional.
 
 ```bash
 cd crux/hub
@@ -31,9 +33,7 @@ npm install
 npm start -- /path/to/your/project
 ```
 
-Then open http://localhost:4747. API use is billed per token by Anthropic.
-
-**Desktop app (Windows):** a window and tray icon on top of the Hub that starts it for you and can start with Windows. Set up the Hub once as above, then download `Crux Hub_<version>_x64-setup.exe` from [GitHub Releases](https://github.com/mshomper/crux/releases/latest) and run it (per-user, no admin). It is unsigned, so Windows may show "Windows protected your PC": choose More info, then Run anyway. Developers can build it from source: see [app/README.md](app/README.md).
+Then open http://localhost:4747. API use is billed per token by Anthropic. The desktop app finds a Hub run this way and uses it.
 
 
 ## Learn more
@@ -44,7 +44,7 @@ Then open http://localhost:4747. API use is billed per token by Anthropic.
 
 ## Status
 
-Early software. Hub version 0.17. Built and used on Windows first; Mac and Linux are untested. Made for one person, running on your own PC.
+Early software. Hub version 0.18, desktop app 0.2. Built and used on Windows first; Mac and Linux are untested. Made for one person, running on your own PC.
 
 ## License
 
