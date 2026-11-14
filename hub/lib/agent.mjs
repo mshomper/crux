@@ -6,6 +6,7 @@ import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
 import { rulesEntry, CONNECTOR_SERVERS } from './permission-rules.mjs';
 import { UsageLedger, baselineFor } from './usage.mjs';
+import { isNoOutputNudge } from './conductor.mjs';
 
 class Inbox {
   constructor() { this.items = []; this.waiters = []; this.closed = false; }
@@ -141,12 +142,18 @@ export class Agent {
     };
   }
 
+  // options() plus the process environment: the clean one, with what the role adds on top (the Conductor's quiet tools).
+  queryOptions() {
+    const options = this.options();
+    options.env = { ...cleanEnv(), ...(options.env || {}) };
+    return options;
+  }
+
   start() {
     const p = this.project;
     this.inbox = new Inbox();
     this.beginRun();
-    const options = this.options();
-    options.env = cleanEnv();
+    const options = this.queryOptions();
     // Decision 54 B: the desktop app's hub runs the Claude Code its setup screen downloaded (or one installed on the
     // PC); a clone's SDK finds its own copy, and no path is passed.
     const claude = this.hub.claudeCode?.();
@@ -186,33 +193,41 @@ export class Agent {
   }
 
   async loop(q) {
-    for await (const m of q) {
-      if (m.type === 'system' && m.subtype === 'init') {
-        if (m.model && m.model !== this.modelSeen) this.modelSeen = m.model;
-        if (m.session_id !== this.sessionId) {
-          this.sessionId = m.session_id;
-          this.project.log.append('agent_session', { agent: this.name, sessionId: m.session_id, model: m.model, effort: this.effort, agentType: this.type });
-        }
-      } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
-        const blocks = m.message?.content || [];
-        const said = blocks.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-        if (said) this.hub.agentSaid(this.project, this, said);
-        for (const b of blocks.filter(b => b.type === 'tool_use')) {
-          this.hub.emit({ type: 'activity', project: this.project.name, thread: this.thread, agent: this.name, text: describeTool(b) });
-        }
-      } else if (m.type === 'rate_limit_event') {
-        this.hub.usage?.rateLimit(m.rate_limit_info, this.project);
-      } else if (m.type === 'result') {
-        this.logUsage(m);
-        try { this.contextPct = Math.round((await q.getContextUsage()).percentage); } catch { /* older CLI */ }
-        if (/not logged in/i.test(m.result || '')) {
-          this.hub.notice(this.project, this.thread, 'Claude Code is not signed in on this machine. Stop the hub, run "npm run login" in the hub folder, sign in with your Claude plan, then start the hub again.');
-        } else if (m.is_error && m.subtype !== 'success') {
-          this.hub.notice(this.project, this.thread, `${this.name} stopped: ${m.subtype.replace(/_/g, ' ')}`);
-        }
-        this.setState('idle');
-        this.hub.onIdle(this.project, this);
+    for await (const m of q) await this.onMessage(m, q);
+  }
+
+  // One SDK message. Kept apart from loop() so tests can feed it messages.
+  async onMessage(m, q) {
+    if (isNoOutputNudge(m)) {
+      // The Conductor may end a turn with no text (a wake that needs nothing). Should Claude Code still ask it for
+      // visible output, what it writes in reply stays out of its thread, and no summary is posted, until the result.
+      if (this.role === 'conductor') this.quietTurn = true;
+    } else if (m.type === 'system' && m.subtype === 'init') {
+      if (m.model && m.model !== this.modelSeen) this.modelSeen = m.model;
+      if (m.session_id !== this.sessionId) {
+        this.sessionId = m.session_id;
+        this.project.log.append('agent_session', { agent: this.name, sessionId: m.session_id, model: m.model, effort: this.effort, agentType: this.type });
       }
+    } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
+      const blocks = m.message?.content || [];
+      const said = blocks.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+      if (said && !this.quietTurn) this.hub.agentSaid(this.project, this, said);
+      for (const b of blocks.filter(b => b.type === 'tool_use')) {
+        this.hub.emit({ type: 'activity', project: this.project.name, thread: this.thread, agent: this.name, text: describeTool(b) });
+      }
+    } else if (m.type === 'rate_limit_event') {
+      this.hub.usage?.rateLimit(m.rate_limit_info, this.project);
+    } else if (m.type === 'result') {
+      this.quietTurn = false;
+      this.logUsage(m);
+      try { this.contextPct = Math.round((await q.getContextUsage()).percentage); } catch { /* older CLI */ }
+      if (/not logged in/i.test(m.result || '')) {
+        this.hub.notice(this.project, this.thread, 'Claude Code is not signed in on this machine. Stop the hub, run "npm run login" in the hub folder, sign in with your Claude plan, then start the hub again.');
+      } else if (m.is_error && m.subtype !== 'success') {
+        this.hub.notice(this.project, this.thread, `${this.name} stopped: ${m.subtype.replace(/_/g, ' ')}`);
+      }
+      this.setState('idle');
+      this.hub.onIdle(this.project, this);
     }
   }
 

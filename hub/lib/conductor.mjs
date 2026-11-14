@@ -36,7 +36,15 @@ const REMINDER_MAX_DAYS = 400;
 // Its board tools, by name. These and nothing else: the permission callback refuses every other tool.
 export const CONDUCTOR_TOOLS = ['hub_overview', 'needs_you', 'board_index', 'board_read', 'latest_handoff', 'list_agents',
   'message_agent', 'plan_usage', 'profile_read', 'post_summary', 'propose_lesson', 'post_visual',
-  'set_reminder', 'list_reminders', 'clear_reminder', 'write_handoff'];
+  'set_reminder', 'list_reminders', 'clear_reminder', 'write_handoff', 'stay_quiet'];
+// Tools that end its turn as soon as they succeed, with no text after them (Claude Code's CLAUDE_CODE_TERMINAL_MCP_TOOLS).
+// Without this, a turn that ends with no text gets Claude Code's own follow-up, "Your previous response had no visible
+// output. Please continue and produce a user-visible response", and the Conductor learned to write a needless line
+// every time (Matt, 0.19.5: "nothing is waiting in crux"). stay_quiet does nothing else: it adds no authority.
+export const CONDUCTOR_QUIET_TOOLS = ['post_summary', 'stay_quiet'].map(n => `mcp__crux__${n}`);
+// Claude Code's follow-up after a turn with no text (seen as a synthetic user message in the SDK stream).
+export const isNoOutputNudge = m => m?.type === 'user' && !!m.isSynthetic
+  && /^\[Your previous response had no visible output\b/.test([].concat(m.message?.content ?? []).map(b => typeof b === 'string' ? b : b?.text || '').join(''));
 // Named as well as switched off (tools: []), so a later SDK default can never hand them back.
 export const CONDUCTOR_DENIED = ['Bash', 'PowerShell', 'BashOutput', 'KillShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit',
   'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'Skill', 'SlashCommand',
@@ -368,6 +376,7 @@ export class Conductor {
       allowedTools: allowed,
       disallowedTools: [...CONDUCTOR_DENIED, ...CONNECTOR_SERVERS],
       settings: { disableClaudeAiConnectors: true },
+      env: { CLAUDE_CODE_TERMINAL_MCP_TOOLS: CONDUCTOR_QUIET_TOOLS.join(',') },   // added to the clean env at start
       permissionMode: 'default',
       canUseTool: async (toolName, input) => this.decide(toolName, input, agent),
       ...(agent.model ? { model: agent.model } : {}),
@@ -418,7 +427,13 @@ export class Conductor {
           handoff_notes: z.object({ in_flight: list, promises: list, risks: list, next_steps: list }).optional().describe('Your handoff judgement as of now, a line or two per heading. The hub keeps the newest as a rolling draft.'),
           approvals: list, open_questions: list
         },
-        safe(args => { hub.postSummary(home, agent, args); return 'Summary posted. Stop here and wait.'; })),
+        safe(args => {
+          // A summary written only because Claude Code asked for visible output is not posted (see isNoOutputNudge).
+          if (agent.quietTurn) return 'Not posted: this turn had already ended quietly. Stop here.';
+          hub.postSummary(home, agent, args); return 'Summary posted. Stop here and wait.';
+        })),
+      tool('stay_quiet', hub.memory.personalize('End this turn without writing anything to {{who}}: for a wake or update that needs nothing from you. Nothing shows in your thread.'), {},
+        safe(() => { home.log.append('quiet', { agent: agent.name }); return 'Turn ended quietly.'; })),
       tool('propose_lesson', hub.memory.personalize('Record a lasting lesson about how {{who}} wants work done across projects. It waits for {{who}}\'s OK before it joins the core profile.'),
         { lesson: z.string().max(400) }, safe(({ lesson }) => hub.proposeLesson(home, agent, 'core', lesson))),
       tool('post_visual', hub.memory.personalize('Show {{who}} a picture (png, jpg, gif, webp, svg) or a small self-contained HTML page from a file the hub can read. Returns an id for post_summary visuals.'),

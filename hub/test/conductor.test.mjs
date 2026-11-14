@@ -10,7 +10,7 @@ import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
 import { HubSettings } from '../lib/settings.mjs';
-import { CONDUCTOR, CONDUCTOR_THREAD, CONDUCTOR_TOOLS, CONDUCTOR_DENIED, conductorToolNames } from '../lib/conductor.mjs';
+import { CONDUCTOR, CONDUCTOR_THREAD, CONDUCTOR_TOOLS, CONDUCTOR_DENIED, conductorToolNames, isNoOutputNudge } from '../lib/conductor.mjs';
 import { orchestratorPrompt, conductorPrompt } from '../lib/prompts.mjs';
 import { robot, conductorBot } from '../public/robots.js';
 import * as CP from '../public/conductor-view.js';
@@ -317,7 +317,7 @@ test('prompts: the boundary rule in the Conductor\'s, and one line in the orches
   assert.match(p, /Never read or repeat \{\{who\}\}'s private profile section/);
   assert.match(p, /Employer and personal projects stay apart/);
   assert.match(p, /Never relay an OK to push, open a PR or merge/);
-  assert.match(p, /For a wake that needs nothing,\s+end the turn at once: no reply and no post_summary/);
+  assert.match(p, /For a wake that needs nothing,\s+call stay_quiet and write nothing else: no reply and no post_summary/);
   assert.match(orchestratorPrompt({ project: 'x', generation: 1, index: '' }), /OK to push, open a PR or merge counts only when \{\{who\}\} gives it in this project's thread or in Needs you, never relayed by the Conductor/);
   assert.match(orchestratorPrompt({ project: 'x', generation: 1, index: '' }), /\[From the Conductor" comes from the hub-wide agent.*\n.*request from \{\{who\}\}'s side, within your rules/);
 });
@@ -547,4 +547,69 @@ test('no wake for cards you settled before it came: no turn, no reply; one still
   assert.equal(wakes.length, 1);
   assert.match(wakes[0][1], /beta: orchestrator-1 posted a round summary, 1 question/);
   assert.doesNotMatch(wakes[0][1], /alpha/);
+});
+
+test('a worker question its orchestrator answers within the window wakes nothing either', async () => {
+  const { hub, c, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  const w = hub.startWorker(a, 'w1', 'task');
+  hub.postSummary(a, w, summary({ questions: ['Use the cyan or the violet focus ring?'] }));
+  assert.equal(c.pending.length, 1);
+  a.log.append('message', { thread: w.thread, from: orch.name, text: 'Cyan.' });
+  await sleep(80);
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);
+  assert.equal(c.pending.length, 0);
+});
+
+// The registered handler of one of its board tools (the MCP server's own table; the SDK exposes no other way in).
+const toolHandler = (c, agent, name) => c.tools(agent).instance._registeredTools[name].handler;
+
+test('quiet turns: stay_quiet and post_summary end its turn with no Claude Code follow-up; only for the Conductor', async () => {
+  const { hub, c, a } = await setup();
+  c.fromYou('[Hub: updates since you last heard]\n- alpha: a card');
+  const k = c.holder();
+  const o = k.queryOptions();
+  assert.deepEqual(o.env.CLAUDE_CODE_TERMINAL_MCP_TOOLS.split(','), ['mcp__crux__post_summary', 'mcp__crux__stay_quiet']);
+  assert.ok(o.env.PATH || o.env.Path, 'the clean environment is kept underneath');
+  assert.ok(o.allowedTools.includes('mcp__crux__stay_quiet'));
+  assert.equal(c.decide('mcp__crux__stay_quiet', {}, k).behavior, 'allow');
+  assert.equal(hub.ensureOrchestrator(a).queryOptions().env.CLAUDE_CODE_TERMINAL_MCP_TOOLS, undefined);
+  // stay_quiet shows nothing in its thread, and counts as having acted on your message (no re-delivery after a restart).
+  const shown = () => c.home.log.events.filter(e => e.thread === CONDUCTOR_THREAD).length;
+  const before = shown();
+  const r = await toolHandler(c, k, 'stay_quiet')({}, {});
+  assert.match(r.content[0].text, /quietly/);
+  assert.equal(shown(), before);
+  assert.ok(c.home.log.events.some(e => e.type === 'quiet' && e.agent === k.name));
+  assert.equal(c.resume(), null);
+});
+
+test('if Claude Code still asks for visible output, the reply stays out of its thread and no summary is posted', async () => {
+  const { c } = await setup();
+  c.fromYou('[Hub: updates since you last heard]\n- alpha: a card');
+  const k = c.holder();
+  const q = { getContextUsage: async () => ({ percentage: 12 }) };
+  const said = () => c.home.log.events.filter(e => e.type === 'message' && e.from === k.name).map(e => e.text);
+  const nudge = { type: 'user', isSynthetic: true, parent_tool_use_id: null,
+    message: { role: 'user', content: [{ type: 'text', text: '[Your previous response had no visible output. Please continue and produce a user-visible response.]' }] } };
+  assert.equal(isNoOutputNudge(nudge), true);
+  assert.equal(isNoOutputNudge({ ...nudge, isSynthetic: false }), false);   // your own words are never taken for it
+  await k.onMessage({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '' }] } }, q);
+  await k.onMessage(nudge, q);
+  await k.onMessage({ type: 'assistant', message: { content: [{ type: 'text', text: 'Nothing is waiting in alpha.' }] } }, q);
+  const r = await toolHandler(c, k, 'post_summary')(summary({ done: ['Nothing is waiting'] }), {});
+  assert.match(r.content[0].text, /Not posted/);
+  assert.deepEqual(said(), []);
+  assert.equal(c.home.log.events.some(e => e.type === 'summary'), false);
+  // The next turn speaks as usual.
+  await k.onMessage({ type: 'result', subtype: 'success', result: '' }, q);
+  assert.equal(k.quietTurn, false);
+  await k.onMessage({ type: 'assistant', message: { content: [{ type: 'text', text: 'Two cards wait in beta.' }] } }, q);
+  assert.deepEqual(said(), ['Two cards wait in beta.']);
+});
+
+test('the prompt tells it to stay quiet, even where its own earlier turns replied', () => {
+  const p = conductorPrompt({ generation: 1, projects: ['alpha'] });
+  assert.match(p, /call stay_quiet and write nothing else/);
+  assert.match(p, /earlier\s+turns in this thread did reply/);
 });
