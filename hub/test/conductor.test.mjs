@@ -540,6 +540,22 @@ test('after a restart your unread message and an unread Conductor brief are both
   assert.equal(sent[1][1], 'And check the build.');
 });
 
+test('two unread messages logged in the same millisecond are resent in log order, either way round', async () => {
+  for (const conductorFirst of [true, false]) {
+    const { hub, c, a } = await setup();
+    const orch = hub.ensureOrchestrator(a);
+    orch.sessionId = 's1';
+    const brief = () => c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.');
+    const yours = () => hub.fromYou(a, 'orchestrator', 'And check the build.');
+    if (conductorFirst) { brief(); yours(); } else { yours(); brief(); }
+    // Force the tie: both messages carry the very same time stamp.
+    const ts = new Date().toISOString();
+    for (const e of a.log.events) if (e.type === 'message' && e.thread === 'orchestrator') e.ts = ts;
+    const order = hub.resumePlan(a).map(r => r.message.from);
+    assert.deepEqual(order, conductorFirst ? ['conductor-1', 'you'] : ['you', 'conductor-1']);
+  }
+});
+
 test('one card per decision, and a pick takes every copy away at once', async () => {
   // Two summaries in a thread name D0004: its card is drawn once, under the latest.
   const evs = [{ id: 's1', type: 'summary', decisions_needed: [4, 7] }, { id: 's2', type: 'summary', decisions_needed: [4, 4] }];

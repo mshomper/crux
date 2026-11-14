@@ -124,10 +124,12 @@ export class Hub {
         if (!m || now - Date.parse(m.ts) > RESUME_WINDOW_MS) continue;
         // Starting up (agent_created, agent_session, agent_busy) is not acting on it; a reply, summary, card or pick is.
         const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
-        if (!actedOn) out.push(m);
+        if (!actedOn) out.push({ m, i });
       }
     }
-    return out.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    // Oldest first by place in the log, never by time stamp: two messages logged in the same millisecond keep the
+    // order they were written in.
+    return out.sort((a, b) => a.i - b.i).map(x => x.m);
   }
 
   // Who wakes after a restart, and why: an agent whose last logged turn had not ended (it was working when the hub
