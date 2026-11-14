@@ -3,9 +3,9 @@
 // notice). Agents and web push are stubbed; the hub and the push routing run for real.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -23,7 +23,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function setup({ here = true } = {}) {
   await sleep(2);
-  const root = mkdtempSync(join(tmpdir(), 'crux-digest-test-'));
+  const root = makeTmp('crux-digest-test-');
   const dirs = ['alpha', 'beta'].map(n => { const d = join(root, n); mkdirSync(join(d, '.crux'), { recursive: true }); return d; });
   const hub = new Hub({ projects: dirs, memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }), conductorDir: join(root, 'data', 'conductor') });
   const c = hub.conductor;
@@ -294,7 +294,7 @@ test('Take all recommendations: what it sends, card by card (page rules)', () =>
 
 // ---------- notices (push.mjs) ----------
 function pushWith() {
-  const root = mkdtempSync(join(tmpdir(), 'crux-digest-push-'));
+  const root = makeTmp('crux-digest-push-');
   const pushed = [], logged = [];
   const sender = { generateVAPIDKeys: () => ({ publicKey: 'pub', privateKey: 'priv' }), sendNotification: async (_s, body) => { pushed.push(JSON.parse(body)); } };
   const push = new Push({ dir: join(root, 'data'), sender, timers: { setTimeout: (f) => f(), clearTimeout() { } }, log: s => logged.push(s) });

@@ -2,9 +2,10 @@
 // the Trusted record checked at start, the alerts, restart_hub and the --test-pair guard.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Guard, stepUpNeed, settingsNeed, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, addressOf, pcRedirect, projectScope, projectTag, cutScope, fromThisPC, guardOff, THIS_PC, OPEN_POSTS, STEP_UP_MS } from '../lib/guard.mjs';
 import { verifyRegistration, verifyAssertion, parseAuthData } from '../lib/webauthn.mjs';
 import { Push, cardsFor, payloadOf } from '../lib/push.mjs';
@@ -19,9 +20,7 @@ const PORT = 4790;
 const H = { host: `localhost:${PORT}`, origin: `http://localhost:${PORT}` };
 // The newest code the hub printed.
 const codeIn = lines => [...lines.join('\n').matchAll(/Pairing code \([^)]*\): ([A-Z0-9]{4}-[A-Z0-9]{4})/g)].at(-1)?.[1];
-const roots = [];
-const tmp = name => { const d = mkdtempSync(join(tmpdir(), `crux-guard-${name}-`)); roots.push(d); return d; };
-test.after(() => { for (const d of roots) rmSync(d, { recursive: true, force: true }); });
+const tmp = name => makeTmp(`crux-guard-${name}-`);
 
 // interactive: as a hub running in a window (the only place a console code is shown).
 function newGuard(opts = {}) {

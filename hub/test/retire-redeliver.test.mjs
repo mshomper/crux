@@ -1,9 +1,9 @@
 // Retiring a finished worker, and delivering messages that a hub restart cut off. Agents are stubbed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -13,7 +13,7 @@ Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'w
 Agent.prototype.close = function () {};
 
 function setup(events = []) {
-  const root = mkdtempSync(join(tmpdir(), 'crux-hub-test-'));
+  const root = makeTmp('crux-hub-test-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   if (events.length) writeFileSync(join(dir, '.crux', 'events.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');

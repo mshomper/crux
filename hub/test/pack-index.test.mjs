@@ -1,13 +1,13 @@
 // Which pack a project folder loads: the packs index may list globs with a note in brackets, as people write it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Memory } from '../lib/memory.mjs';
 
 function home(index, packs) {
-  const root = mkdtempSync(join(tmpdir(), 'crux-packs-'));
+  const root = makeTmp('crux-packs-');
   const dir = join(root, 'profile', 'packs');
   mkdirSync(dir, { recursive: true });
   if (index) writeFileSync(join(dir, '_index.md'), index);

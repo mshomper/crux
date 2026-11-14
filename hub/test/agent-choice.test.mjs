@@ -2,9 +2,9 @@
 // live in a temp folder that stands in for the home folder, never the real ~/.claude/agents.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -16,7 +16,7 @@ Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'w
 Agent.prototype.close = function () { this.closed = (this.closed || 0) + 1; this.q = null; };
 
 function setup({ homeTypes = {}, projectTypes = {}, defaults = {} } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'crux-hub-types-'));
+  const root = makeTmp('crux-hub-types-');
   const home = join(root, 'home'), dir = join(root, 'proj');
   mkdirSync(join(home, '.claude', 'agents'), { recursive: true });
   mkdirSync(join(dir, '.claude', 'agents'), { recursive: true });

@@ -2,9 +2,9 @@
 // saving, and the settings card's pure parts. Paths are only compared, never touched, except throwaway temp folders.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { classify, mergeNeedsOwner, MERGE_RULE, defaultRules } from '../lib/permission-rules.mjs';
 import { HubSettings, projectKey, SETTING_DEFAULTS } from '../lib/settings.mjs';
 import { Agent } from '../lib/agent.mjs';
@@ -21,9 +21,7 @@ const PROJ = 'C:\\Users\\someone\\Documents\\GitHub\\garden-planner';
 const at = (level, tool, input) => classify({ tool, input, projectDir: PROJ, tmp: TEMP, home: HOME, level });
 const bash = (level, command) => at(level, 'Bash', { command }).route;
 
-const roots = [];
-const scratch = name => { const r = mkdtempSync(join(tmpdir(), `crux-psettings-${name}-`)); roots.push(r); return r; };
-test.after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
+const scratch = name => makeTmp(`crux-psettings-${name}-`);
 
 // ---------- the Trusted level (decision 45) ----------
 test('Trusted allows installing packages into the project; Auto still sends them to you', () => {

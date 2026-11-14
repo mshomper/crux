@@ -9,10 +9,10 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { request, createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync, copyFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { makeTmp, removeTmp } from './helpers/tmp.mjs';
 import { projectKey } from '../lib/settings.mjs';
 import { pidsOnPort, stopTree } from '../lib/relaunch.mjs';
 import { FakePasskey } from './fake-passkey.mjs';
@@ -45,7 +45,7 @@ async function stopAll() {
 test.before(async () => {
   do { port = await freePort(); } while (port === 4747);
   do { rport = await freePort(); } while (rport === 4747 || rport === 4748 || rport === port);
-  root = mkdtempSync(join(tmpdir(), 'crux-guard-http-'));
+  root = makeTmp('crux-guard-http-');
   proj = join(root, 'proj'); data = join(root, 'data'); crux = join(root, 'crux');
   for (const d of [join(proj, '.crux'), join(proj, '.decisions', 'images'), join(crux, 'media', 'proj'), join(root, 'home'), data]) mkdirSync(d, { recursive: true });
   // Agent-written things the hub serves: a decision record (its page is built at start), a picture, the roll-up, a visual.
@@ -66,7 +66,7 @@ test.before(async () => {
 test.after(async () => {
   await stopAll();
   await sleep(500);
-  for (let i = 0; i < 10; i++) { try { rmSync(root, { recursive: true, force: true }); break; } catch { await sleep(500); } }
+  removeTmp(root);   // the hub is stopped first, so its files are free
 });
 
 // A request as the hub's own page would send it (Host, Origin, JSON), or with a different host.

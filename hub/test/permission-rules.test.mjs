@@ -1,12 +1,13 @@
 // The hub's own hard stops (R001, R002): these never reach the orchestrator, whatever shape the command takes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
+import { homedir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { classify, rulesEntry } from '../lib/permission-rules.mjs';
 
-const root = mkdtempSync(join(tmpdir(), 'crux-rules-'));
+const root = makeTmp('crux-rules-');
 // The project lives outside the temp folder in real life; here a fake temp folder stands in so both can be told apart.
 const projectDir = join(root, 'proj');
 const tmp = join(root, 'tmp');

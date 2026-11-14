@@ -1,10 +1,10 @@
 // Marking a finished memo done (Matt's yes, 2026-11-12): a new event, never an edit to the log; off the index, still
 // read in full; undo puts it back; superseded or retired wins; the orchestrator's tool refuses what it cannot mark.
-import test, { after } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { EventLog } from '../lib/events.mjs';
 import { Board } from '../lib/board.mjs';
 import { markEntryDone, cruxToolNames } from '../lib/tools.mjs';
@@ -12,12 +12,8 @@ import { tidyUps } from '../lib/handoff-facts.mjs';
 import { checkRequest } from '../lib/access.mjs';
 import { groupBoard, canMarkDone, canUndoDone } from '../public/board.js';
 
-const roots = [];
-after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
-
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'crux-mark-done-'));
-  roots.push(root);
+  const root = makeTmp('crux-mark-done-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const board = new Board(dir, new EventLog(dir));

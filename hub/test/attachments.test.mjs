@@ -2,9 +2,9 @@
 // agents receive real image blocks, and only the hub's own page may read them. All in a temp folder.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -21,7 +21,7 @@ const GIF = Buffer.from('GIF89a\x01\x00\x01\x00', 'latin1');
 const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBPVP8 ')]);
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'crux-hub-att-'));
+  const root = makeTmp('crux-hub-att-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'crux')), agentHome: join(root, 'home') });

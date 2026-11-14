@@ -2,9 +2,9 @@
 // The "GitHub" here is a local bare repo and a fake gh, so nothing leaves this machine.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { execFileSync } from 'node:child_process';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
@@ -20,7 +20,7 @@ const record = (id, status = 'open') => ({ id, slug: `d${id}`, title: `Decision 
 
 // A project cloned from a bare "GitHub" repo, with decisions 1 and 2 open on main.
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'crux-desk-'));
+  const root = makeTmp('crux-desk-');
   const bare = join(root, 'remote.git');
   git(root, 'init', '-q', '--bare', '-b', 'main', bare);
   const seed = join(root, 'seed');
@@ -178,7 +178,7 @@ test('a test hub commits picks locally and never pushes them or opens a PR', asy
 });
 
 test('a project that is not a git repo keeps its records in place', () => {
-  const root = mkdtempSync(join(tmpdir(), 'crux-desk-plain-'));
+  const root = makeTmp('crux-desk-plain-');
   const dir = join(root, 'plain');
   mkdirSync(join(dir, '.decisions'), { recursive: true });
   writeFileSync(join(dir, '.decisions', '0001-d1.json'), JSON.stringify(record(1), null, 1));

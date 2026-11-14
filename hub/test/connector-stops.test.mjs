@@ -2,9 +2,10 @@
 // mode; reads and Gmail drafts go to the orchestrator; anything not on the read list is a hard stop by default.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { classify, connectorTool } from '../lib/permission-rules.mjs';
 import { CommandPolicy } from '../lib/permissions.mjs';
 import { Agent } from '../lib/agent.mjs';
@@ -57,7 +58,7 @@ test('"Always allow" is never offered for a connector tool', () => {
 
 function setup(auto) {
   sent.length = 0;
-  const root = mkdtempSync(join(tmpdir(), 'crux-connectors-'));
+  const root = makeTmp('crux-connectors-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   if (auto) writeFileSync(join(dir, '.crux-hub.json'), '{ "permissions": "auto" }');

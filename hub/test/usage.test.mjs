@@ -1,9 +1,9 @@
 // Decision 36: usage accounting and the plan meters.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -79,7 +79,7 @@ test('cache tokens are counted apart from input and output', () => {
 // ---------- the event, through a real hub ----------
 Agent.prototype.start = function () { this.beginRun(); this.q = { close() { } }; this.inbox = { push() { } }; };
 function hubWith(...names) {
-  const root = mkdtempSync(join(tmpdir(), 'crux-usage-'));
+  const root = makeTmp('crux-usage-');
   const dirs = names.map(n => { const d = join(root, n); mkdirSync(join(d, '.crux'), { recursive: true }); return d; });
   const hub = new Hub({ projects: dirs, memory: new Memory(join(root, 'home')), noAgents: true });
   return { hub, root };
