@@ -112,11 +112,11 @@ export function lastLine(c) {
 }
 
 // All projects' Waiting row (decision 59 B). fold: what you opened or folded ({ waiting }); n: how much waits.
-// On a phone it opens by default whenever something waits (decision 32); with nothing waiting it is closed and your
-// last choice is forgotten, so the next card opens it again.
-export function waitingOpen(fold, n, phone) {
+// Folded by default on the phone too since decision 60: new cards come into the chat, so an open Waiting showed each
+// one twice. It opens on a tap and keeps its red count; with nothing waiting it is closed and your choice forgotten.
+export function waitingOpen(fold, n) {
   if (!n) { delete fold.waiting; return false; }
-  return fold.waiting ?? !!phone;
+  return !!fold.waiting;
 }
 // After you send from the All projects box: Waiting folds, so the Conductor's reply lands in view under your message.
 export function foldAfterSend(fold) { fold.waiting = false; return fold; }

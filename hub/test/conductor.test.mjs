@@ -485,14 +485,16 @@ test('only a real repeat is hidden: never the longer question, never a short exa
   assert.deepEqual(openQuestions(a.log.events).map(q => q.from), ['orchestrator-1']);
 });
 
-test('All projects on the phone: Waiting opens by default while something waits, and folds when you send', () => {
+test('All projects: Waiting starts folded, phone and desk alike (decision 60: the cards are in the chat); a tap opens it', () => {
   const fold = {};
-  assert.equal(CP.waitingOpen(fold, 2, true), true);    // phone, something waits: open
-  assert.equal(CP.waitingOpen(fold, 2, false), false);  // desk: closed until you open it
+  assert.equal(CP.waitingOpen(fold, 2), false);         // something waits: still folded, its red count shows on the row
+  fold.waiting = true;                                  // your tap
+  assert.equal(CP.waitingOpen(fold, 2), true);
   CP.foldAfterSend(fold);
-  assert.equal(CP.waitingOpen(fold, 2, true), false);   // after your message: folded, the reply lands in view
-  assert.equal(CP.waitingOpen(fold, 0, true), false);   // nothing waits: closed, and your choice is forgotten
-  assert.equal(CP.waitingOpen(fold, 1, true), true);    // the next card opens it again
+  assert.equal(CP.waitingOpen(fold, 2), false);         // after your message: folded, the reply lands in view
+  fold.waiting = true;
+  assert.equal(CP.waitingOpen(fold, 0), false);         // nothing waits: closed, and your choice is forgotten
+  assert.equal(CP.waitingOpen(fold, 1), false);         // the next card leaves it folded
 });
 
 test('after a restart your unread message and an unread Conductor brief are both resent, oldest first', async () => {

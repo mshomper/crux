@@ -764,11 +764,11 @@ function agentRow(p, a) {
 }
 // ---------- All projects with the Conductor (decisions 55 and 59 B) ----------
 // The Conductor's chat and the message box fill the column, like any thread. Two compact rows on top open in place:
-// what waits for you (red count, decision 31) and every project's agents. On a phone the waiting row opens by default
-// whenever something waits (decision 32); one tap folds it. Without a Conductor the column is drawn as before.
+// what waits for you (red count, decision 31) and every project's agents. Both start folded, on the phone too: since
+// decision 60 new cards come into the chat itself; one tap opens Waiting. Without a Conductor the column is as before.
 S.hubFold = {};   // { waiting, agents }: what you opened or folded; waiting goes back to its default once nothing waits
 function hubFoldOpen(k, n) {
-  return k === 'waiting' ? CP.waitingOpen(S.hubFold, n, phoneMq.matches) : !!S.hubFold[k];
+  return k === 'waiting' ? CP.waitingOpen(S.hubFold, n) : !!S.hubFold[k];
 }
 function conductorItem(ev) {
   const place = S.cplace;
