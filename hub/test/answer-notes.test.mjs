@@ -71,10 +71,8 @@ test("the orchestrator's own questions: no extra line, no note", () => {
   const s = p.log.ofType('summary').at(-1);
   const notices = p.log.ofType('notice').length;
   hub.answerQuestions(p, s.id, [{ index: 0, text: 'Yes' }]);
-  // No "answered" line; the one new line is decision 64's merge pass (a yes to "Merge #23 now?").
-  const added = p.log.ofType('notice').slice(notices).map(n => n.text);
-  assert.equal(added.length, 1);
-  assert.match(added[0], /pre-approves gh pr merge 23,/);
+  // No "answered" line (and no merge pass: this answer is not marked as your own words, decision 64).
+  assert.equal(p.log.ofType('notice').length, notices);
   assert.deepEqual(orch.notes || [], []);
   assert.equal(p.log.ofType('message').at(-1).thread, 'orchestrator', 'the answer itself goes to its thread, as before');
 });

@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { questionOpen, holderOf } from '../public/questions.js';
+import { questionOpen, askedBefore } from '../public/questions.js';
 import { HUB_THREAD } from '../public/all-projects.js';
 
 const pad = n => String(n).padStart(4, '0');
@@ -69,6 +69,16 @@ function groupTitle(from, cards) {
 // A card's key in the sent lists: its project and id ("decision:12" alone is in many projects).
 const keyOf = card => `${card.project}|${card.card}`;
 const DECISIONS_KEPT = 2000;
+// A decision's key in the kept list (notified-decisions.json): its project and number, plus how many times it was
+// picked, parked or rejected and a short hash of its title, date and challenge. A decision that comes back (unparked,
+// challenged, or its number used again after a clear) is a new one and can notify again.
+export function decisionKey(project, id, { events = [], decisions = [] } = {}) {
+  const n = Number(id);
+  const picks = events.filter(e => e.type === 'pick' && Number(e.decision) === n).length;
+  const d = decisions.find(x => Number(x.id) === n);
+  const sig = d ? createHash('sha256').update(`${d.title || ''}|${d.date || ''}|${d.challenge ? JSON.stringify(d.challenge) : ''}`).digest('hex').slice(0, 8) : '';
+  return `${project}|decision:${n}@${picks}.${sig}`;
+}
 
 // Is someone already looking at this card in an open hub page? Pages report where they are and how long since
 // the last click or key; a focused page with recent input that shows the card's thread (or Needs you) counts.
@@ -87,14 +97,15 @@ export function isLooking(card, presences, now = Date.now()) {
 
 // Is the card still waiting by the time we would send it? Questions follow the same rule as the Needs you list
 // (public/questions.js): answered, dismissed, asked by an agent that has retired, or answered by your picks.
-// decisions: the project's decision records (decision 64: an open decision card hides a question it already asks).
-// A summary's grouped card (members) waits while any of its cards does.
+// decisions: the project's decision records, and decisionNotified(id) (decision 64: an open decision card hides a
+// question that asks only what it asks, once that decision has been notified). A summary's grouped card (members)
+// waits while any of its cards does.
 export function stillOpen(card, state) {
-  const { approvals, decisionOpen, decisionStatus, decisions = [], events } = state;
+  const { approvals, decisionOpen, decisionStatus, decisions = [], decisionNotified = () => false, events } = state;
   if (card.members) return card.members.some(m => stillOpen(m, state));
   if (card.kind === 'approval') return approvals.has(card.card.slice('approval:'.length));
   if (card.kind === 'decision') return decisionOpen(Number(card.card.slice('decision:'.length)));
-  if (card.kind === 'question') return questionOpen(events, card.askedAt, { decisionStatus, decisions });
+  if (card.kind === 'question') return questionOpen(events, card.askedAt, { decisionStatus, decisions, decisionNotified });
   if (card.kind === 'level' || card.kind === 'digest' || card.kind === 'restart') return true;   // notices, not cards that get settled
   return false;
 }
@@ -140,22 +151,57 @@ export class Push {
     this.decisionsFile = join(dir, 'notified-decisions.json');
     const told = existsSync(this.decisionsFile) ? safeJson(this.decisionsFile, []) : [];
     this.decisionsSent = new Set(Array.isArray(told) ? told.filter(k => typeof k === 'string') : []);
+    // A summary's grouped notice (decision 64) is taken down only once every card in it is settled: card key -> group.
+    this.memberOf = new Map();
   }
 
-  // Has a notice already gone for this card (this run, or a decision ever)?
-  already(card) {
-    const k = keyOf(card);
-    return this.sent.has(k) || this.sentDesk.has(k) || (card.kind === 'decision' && this.decisionsSent.has(k));
+  // The kept key of a decision card in its present state (decisionKey).
+  dkey(card, ctx = this.ctx) {
+    let events = [], decisions = [];
+    try { events = ctx?.events?.(card.project) || []; } catch { }
+    try { decisions = ctx?.decisions?.(card.project) || []; } catch { }
+    return decisionKey(card.project, String(card.card).slice('decision:'.length), { events, decisions });
   }
-  // A notice went out for this card (and every card it stands for) to `where` (the phone's or the PC's list).
+  // Has a notice already gone for this card? A decision: ever, in its present state (kept across restarts); anything
+  // else: in this run.
+  already(card) {
+    if (card.kind === 'decision') return this.decisionsSent.has(this.dkey(card));
+    const k = keyOf(card);
+    return this.sent.has(k) || this.sentDesk.has(k);
+  }
+  // A notice went out for this card, every card it stands for (members) and the decisions a digest carries (marks), to
+  // `where` (the phone's or the PC's list).
   markSent(card, where) {
     let told = false;
-    for (const c of [card, ...(card.members || [])]) {
-      where.add(keyOf(c));
-      if (c.kind === 'decision' && !this.decisionsSent.has(keyOf(c))) { this.decisionsSent.add(keyOf(c)); told = true; }
+    for (const c of [card, ...(card.members || []), ...(card.marks || [])]) {
+      if (!card.marks?.includes(c)) where.add(keyOf(c));
+      if (c.kind === 'decision' && !this.decisionsSent.has(this.dkey(c))) { this.decisionsSent.add(this.dkey(c)); told = true; }
     }
-    if (where.size > 400) where.delete(where.values().next().value);
+    if (card.members?.length > 1) {
+      const g = { key: keyOf(card), tag: card.card, left: new Set(card.members.map(keyOf)) };
+      for (const k of g.left) this.memberOf.set(k, g);
+    }
+    while (where.size > 400) where.delete(where.values().next().value);
     if (told) this.saveDecisions();
+  }
+  // A card was settled (key: project|card id). A summary's grouped notice comes down only when its last card settles.
+  settle(key, cardId) {
+    let tag = cardId, tagKey = key;
+    const g = this.memberOf.get(key);
+    if (g) {
+      this.memberOf.delete(key);
+      g.left.delete(key);
+      if (g.left.size) return;
+      tag = g.tag; tagKey = g.key;
+    }
+    if (this.sent.has(tagKey)) { this.settled.add(tag); if (this.settled.size > 50) this.settled.delete(this.settled.values().next().value); }
+    if (this.sentDesk.has(tagKey)) { this.toDesktops('clear', { card: tag }); this.unfollow(tag); }   // the app takes the notice down
+  }
+  // The question rules' options for a project, with which decisions have been notified (decision 64).
+  askOpts(project, ctx) {
+    let decisions = [];
+    try { decisions = ctx.decisions?.(project) || []; } catch { }
+    return { decisionStatus: id => ctx.decisionStatus?.(project, id), decisions, decisionNotified: id => this.already({ kind: 'decision', project, card: `decision:${id}` }) };
   }
   saveDecisions() {
     while (this.decisionsSent.size > DECISIONS_KEPT) this.decisionsSent.delete(this.decisionsSent.values().next().value);
@@ -231,18 +277,17 @@ export class Push {
   // come back (then routed as any card: the PC while in use, else the phone; none while a page shows All projects).
   // It opens the digest in All projects. info: { id (the digest event), count, projects }.
   // Decision 64: no notice when every card in it was already notified on its own (a permission card, say) and it
-  // brings no replies; its decisions count as notified from here on.
+  // brings no replies; its decisions count as notified once its notice has gone (marks).
   digest(info, ctx = this.ctx) {
+    if (ctx) this.ctx = ctx;
     const items = (info.items || []).map(c => ({ ...c, kind: String(c.card).slice(0, String(c.card).indexOf(':')) }));
     if (items.length && !info.replies && items.every(c => this.already(c))) return this.log(`digest:${info.id}: no notice, every card in it was already notified`);
-    const fresh = items.filter(c => c.kind === 'decision' && !this.decisionsSent.has(keyOf(c)));
-    if (fresh.length) { for (const c of fresh) this.decisionsSent.add(keyOf(c)); this.saveDecisions(); }
     const n = info.count, m = info.projects, r = info.replies || 0;
     // Decision 62: replies from orchestrators that came while you were away join the digest and its one notice.
     const cards = `${n} card${n === 1 ? '' : 's'}`, reps = `${r} repl${r === 1 ? 'y' : 'ies'} from orchestrators`;
     const title = !r ? `${cards} need${n === 1 ? 's' : ''} you` : !n ? reps : `${cards} and ${reps}`;
     const card = { kind: 'digest', card: `digest:${info.id}`, project: '~conductor', thread: HUB_THREAD,
-      title, body: `The Conductor's digest · ${m} project${m === 1 ? '' : 's'}` };
+      title, body: `The Conductor's digest · ${m} project${m === 1 ? '' : 's'}`, marks: items.filter(c => c.kind === 'decision') };
     this.route(card, ctx);
   }
 
@@ -302,9 +347,15 @@ export class Push {
   // `ctx` also gives decisions(project): the project's decision records (decision 64).
   handle(ev, ctx) {
     this.ctx = ctx;
-    const done = settledCard(ev), key = done && `${ev.project}|${done}`;
-    if (done && this.sent.has(key)) { this.settled.add(done); if (this.settled.size > 50) this.settled.delete(this.settled.values().next().value); }
-    if (done && this.sentDesk.has(key)) { this.toDesktops('clear', { card: done }); this.unfollow(done); }   // the app takes the notice down
+    const done = settledCard(ev);
+    if (done) this.settle(`${ev.project}|${done}`, done);
+    // Your answers from a card settle a question once nothing in it waits (a grouped notice may wait on it).
+    if (ev.type === 'message' && ev.from === 'you' && Array.isArray(ev.answers)) {
+      for (const id of new Set(ev.answers.map(a => a.question))) {
+        const q = { kind: 'question', card: `question:${id}`, askedAt: id, project: ev.project };
+        try { if (!this.open(q, ctx)) this.settle(keyOf(q), q.card); } catch { }
+      }
+    }
     if (!this.subs.length && !this.desktops.size) return;
     // Decision 64: one notice for the summary's cards together, leaving out any already notified.
     const card = groupCard(ev, cardsFor(ev, { decisionOpen: id => ctx.decisionOpen(ev.project, id) }).filter(c => !this.already(c)));
@@ -316,29 +367,27 @@ export class Push {
   // Does the card still wait for you (answered, picked, settled elsewhere)?
   open(card, ctx) {
     if (card.kind === 'digest' || card.kind === 'restart') return true;   // notices of their own; a digest's cards are checked when it is drawn
-    return stillOpen(card, { approvals: ctx.approvals, decisionOpen: id => ctx.decisionOpen(card.project, id), decisionStatus: id => ctx.decisionStatus?.(card.project, id), decisions: ctx.decisions?.(card.project) || [], events: ctx.events(card.project) });
+    const o = this.askOpts(card.project, ctx);
+    return stillOpen(card, { approvals: ctx.approvals, decisionOpen: id => ctx.decisionOpen(card.project, id), ...o, events: ctx.events(card.project) });
   }
 
   // Decision 64: the card a notice really goes for, once its grace is over. A summary's grouped card keeps only the
-  // cards still waiting and not yet notified (one left: that card alone). A question hidden as a repeat of another
-  // card goes for the card that holds it, when that one has had no notice yet (an orchestrator's re-ask of its
-  // worker's question: the worker's card shows again, so its notice goes). Null: nothing left to tell.
+  // cards still waiting and not yet notified (one left: that card alone). A question card whose every open question
+  // was asked before in another card you have not answered, and whose notice already went (an orchestrator re-asking
+  // its worker's question after writing to it), shows but needs no second notice. Null: nothing left to tell.
   live(card, ctx) {
     if (card.members) {
       const left = card.members.filter(m => !this.already(m) && this.open(m, ctx));
       if (!left.length) { this.log(`${card.card} (${card.project}): settled before it went out`); return null; }
-      if (left.length === 1) return left[0];
+      if (left.length === 1) return this.live(left[0], ctx);
       const main = left.find(c => c.kind === 'decision') || left[0];
       return { ...main, from: card.from, members: left, title: groupTitle(card.from, left) };
     }
-    if (card.kind !== 'question' || this.open(card, ctx)) return card;
-    const events = ctx.events(card.project);
-    const h = holderOf(events, card.askedAt, { decisionStatus: id => ctx.decisionStatus?.(card.project, id), decisions: ctx.decisions?.(card.project) || [] });
-    const ev = h?.holder && events.find(e => e.id === h.holder);
-    const hc = ev && cardsFor({ ...ev, project: card.project, decisions_needed: [] }).find(c => c.kind === 'question');
-    if (!hc || this.already(hc) || !this.open(hc, ctx)) return card;
-    this.log(`${card.card} (${card.project}): asked again behind ${hc.card}, so the notice goes for that card`);
-    return hc;
+    if (card.kind !== 'question') return card;
+    const before = askedBefore(ctx.events(card.project), card.askedAt, this.askOpts(card.project, ctx));
+    const told = before?.length && before.map(ids => ids.find(id => this.already({ kind: 'question', project: card.project, card: `question:${id}` })));
+    if (told && told.every(Boolean)) { this.log(`${card.card} (${card.project}): asked before in question:${told[0]}, whose notice already went`); return null; }
+    return card;
   }
 
   // Where one card goes, once its grace (if any) is over.
@@ -410,7 +459,8 @@ export class Push {
   }
 
   toPhone(card) {
-    if (!this.subs.length || this.sent.has(keyOf(card))) return Promise.resolve(0);
+    // A decision's repeat check is its kept key (already(), in route): one that came back may go again.
+    if (!this.subs.length || (card.kind !== 'decision' && this.sent.has(keyOf(card)))) return Promise.resolve(0);
     this.markSent(card, this.sent);
     const close = [...this.settled];
     this.settled.clear();

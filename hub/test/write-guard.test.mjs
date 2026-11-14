@@ -428,7 +428,7 @@ test('restart_hub: orchestrator only, with a reason, not within a minute of star
   assert.ok(cruxToolNames({ role: 'orchestrator' }).includes('mcp__crux__restart_hub'));
   assert.ok(!cruxToolNames({ role: 'worker' }).includes('mcp__crux__restart_hub'), 'workers do not get it');
   const notes = [], push = fakePush(), env = {};
-  push.restartNotice = async info => { push.sent.push({ title: 'The hub is restarting', body: `Asked by ${info.agent} in ${info.project}`, routed: true }); return 1; };   // decision 64: routed, see push-restart.test.mjs
+  push.restartNotice = async info => { push.sent.push({ title: 'The hub is restarting', body: `Asked by ${info.agent} in ${info.project}`, routed: true }); return 1; };   // decision 64: routed, see fewer-notices.test.mjs
   let restarted = 0, now = 1_000_000;
   const hub = { notice: (p, t, text) => notes.push([t, text]) };
   hub.restartHub = makeRestartHub({ hub, push, restart: () => restarted++, bootAt: now, now: () => now, delayMs: 0, env });

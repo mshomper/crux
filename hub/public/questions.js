@@ -39,49 +39,53 @@ export function answeredByPicks(question, decisionStatus = () => undefined) {
 
 // The summaries still asking you something, one per thread. Each has `open`: [{ i, text }] for the questions
 // still waiting (i is the question's place in the summary), and `byPicks`: how many your picks answered.
-// opts: { decisionStatus(id), decisions: the project's decision records ({ id, title, status, options }) }.
+// opts: { decisionStatus(id), decisions: the project's decision records ({ id, title, status, options }),
+// decisionNotified(id): the server's notices say whether that decision's notice went (the page leaves it out: there the
+// decision card shows next to it) }.
 export function openQuestions(events, opts) { const r = readCards(events, opts); return withoutRepeatCards(r, opts); }
 
-// Every summary card still asking something, before repeats are set aside (cards), and every question you yourself
-// settled, in any summary (settled: { ts, thread, from, text }): answered, dismissed, or answered by your picks.
-// dormant: worker cards the orchestrator closed by writing into the worker's thread. Decision 64: one of those still
-// holds a question the orchestrator then asks you again, so the re-ask is hidden behind it and it shows again.
+// Every summary card still asking something, before repeats are set aside (cards), every summary that asked
+// (asked: { ev, at, pos }), and every question you yourself settled, in any summary (settled: { id, i, at, thread,
+// from, text, when }): answered, dismissed, or answered by your picks; `when` is the settling event's place in the log.
 function readCards(events, { decisionStatus = () => undefined } = {}) {
-  const dismissed = new Set(), retired = new Set();
-  const gone = new Map();   // summary id -> Set of question places answered or dismissed one by one (by you)
-  const mark = (id, i) => { if (!gone.has(id)) gone.set(id, new Set()); gone.get(id).add(Number(i)); };
-  const last = new Map();   // thread -> { ev, answered, byYou }
+  const dismissed = new Map(), retired = new Set();
+  const gone = new Map();   // summary id -> Map of question place -> where you answered or dismissed it one by one
+  const mark = (id, i, pos) => { if (!gone.has(id)) gone.set(id, new Map()); gone.get(id).set(Number(i), pos); };
+  const last = new Map();   // thread -> { ev, answered, byYou, when }
   const asked = [];         // every summary that asked something, with how it was closed
-  const picked = new Map(); // decision number -> its latest pick's place in the log (decision 64)
+  const picked = new Map(); // decision number -> its latest pick's place in the log
   let pos = 0;
   for (const e of events || []) {
     pos++;
     if (e.type === 'pick') picked.set(Number(e.decision), pos);
-    if (e.type === 'question_dismissed') { e.index == null ? dismissed.add(e.question) : mark(e.question, e.index); continue; }
+    if (e.type === 'question_dismissed') { e.index == null ? dismissed.set(e.question, pos) : mark(e.question, e.index, pos); continue; }
     if (e.type === 'agent_retired') retired.add(e.agent);
     if (!e.thread) continue;
     // at: its place among the asking summaries, so "earlier" never ties (two summaries can share a millisecond);
     // pos: its place in the whole log
     if (e.type === 'summary' && e.questions?.length) { const s = { ev: e, at: asked.length, pos, answered: false, byYou: false }; last.set(e.thread, s); asked.push(s); }
     else if (e.type === 'message') {
-      if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index); continue; }
+      if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index, pos); continue; }
       // A Conductor brief (decision 55) logged in a project's thread is never an answer: only you (or the orchestrator
       // answering its worker) can settle a question that waits on you.
       if (e.conductor) continue;
       const q = last.get(e.thread);
-      if (q && e.from !== q.ev.from && !q.answered) { q.answered = true; q.byYou = e.from === 'you'; q.byOrch = e.thread !== 'orchestrator' && ORCH.test(String(e.from)); }
-      else if (q?.byOrch && e.from === 'you') { q.byYou = true; q.byOrch = false; }   // you replied after the orchestrator did
+      if (q && e.from !== q.ev.from && !q.answered) { q.answered = true; q.byYou = e.from === 'you'; q.when = pos; }
     }
   }
   const settled = [];
-  for (const { ev, at, byYou } of asked) {
-    const done = gone.get(ev.id) || new Set(), all = byYou || dismissed.has(ev.id);
-    ev.questions.forEach((text, i) => { if (all || done.has(i) || answeredByPicks(text, decisionStatus)) settled.push({ at, thread: ev.thread, from: ev.from, text }); });
+  for (const { ev, at, byYou, when } of asked) {
+    const done = gone.get(ev.id) || new Map();
+    ev.questions.forEach((text, i) => {
+      const byPick = answeredByPicks(text, decisionStatus) ? Math.max(0, ...decisionRefs(text).map(n => picked.get(n) || 0)) : null;
+      const at2 = byYou ? when : dismissed.has(ev.id) ? dismissed.get(ev.id) : done.has(i) ? done.get(i) : byPick;
+      if (at2 != null) settled.push({ id: ev.id, i, at, thread: ev.thread, from: ev.from, text, when: at2 });
+    });
   }
-  const cards = [], dormant = [];
-  for (const { ev, at, pos, answered, byOrch } of last.values()) {
-    if (dismissed.has(ev.id) || retired.has(ev.from) || (answered && !byOrch)) continue;
-    const done = gone.get(ev.id) || new Set();
+  const cards = [];
+  for (const { ev, at, pos, answered } of last.values()) {
+    if (answered || dismissed.has(ev.id) || retired.has(ev.from)) continue;
+    const done = gone.get(ev.id) || new Map();
     let byPicks = 0;
     const open = [];
     ev.questions.forEach((text, i) => {
@@ -89,53 +93,40 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
       if (answeredByPicks(text, decisionStatus)) { byPicks++; return; }
       open.push({ i, text });
     });
-    if (open.length) (answered ? dormant : cards).push({ ...ev, open, byPicks, repeats: [], at, pos });
+    if (open.length) cards.push({ ...ev, open, byPicks, repeats: [], at, pos });
   }
-  return { cards, settled, dormant, picked };
+  return { cards, settled, asked };
 }
-const ORCH = /^orchestrator-\d+$/;   // the holders of the orchestrator role (hub.mjs createAgent names them so)
 
-// A question lives in one card (Matt, 2026-11-14; decision 64). Where a later card in this project repeats a question
-// an earlier card from another thread still holds open (an orchestrator re-asking its worker's question), the repeat
-// is hidden here, where cards are drawn, and listed under the card's `repeats` ({ i, text, of: who holds it, holder:
-// that card's summary id }). Nothing is dropped from the log. Once you answer or dismiss the first one, its repeats
-// count as answered too (answered: true); if the first card closes without you (its agent retired or handed off, a
-// newer summary), the repeat shows again by itself. The orchestrator writing into its worker's thread does not let go
-// of a question it then asks you again: the worker's card shows again with just that question, and holds the re-ask.
-// A question whose choice an open decision card in the project already asks (the decision's title or options match
-// it) is hidden behind that decision (decision: its number); once you pick that decision, after the question was
-// asked, your pick answers it too (answered: true).
-function withoutRepeatCards({ cards, settled = [], dormant = [], picked = new Map() }, { decisions = [] } = {}) {
-  const shown = [], revived = new Map();
-  const all = Array.isArray(decisions) ? decisions : [];
-  const openDecisions = all.filter(d => ['open', 'found'].includes(d?.status));
-  const pickedAfter = c => all.filter(d => !['open', 'found'].includes(d?.status) && (picked.get(Number(d.id)) || 0) > c.pos);
+// A question lives in one card (Matt, 2026-11-14; decision 64, made strict after review). Where a later card in this
+// project repeats a question an earlier card from another thread still holds open (isRepeat: the same words, nothing
+// added), the repeat is hidden here, where cards are drawn, and listed under the card's `repeats` ({ i, text, of: who
+// holds it, holder: that card's summary id }). Nothing is dropped from the log. Only open cards hold repeats. Once you
+// answer or dismiss the holder while the repeat waits behind it, the repeat counts as answered too (answered: true);
+// a question you settled in an earlier round never hides a new one. If the holder closes without you (its agent
+// retired or handed off, a newer summary, the orchestrator wrote into that thread), the repeat shows again by itself.
+// A question that asks only what an open decision card asks (decisionCovers) is hidden behind it (decision: its
+// number), on the server only once that decision has been notified (opts.decisionNotified).
+function withoutRepeatCards({ cards, settled = [] }, { decisions = [], decisionNotified = () => true } = {}) {
+  const shown = [];
+  const openDecisions = (Array.isArray(decisions) ? decisions : []).filter(d => ['open', 'found'].includes(d?.status) && decisionNotified(Number(d.id)));
   for (const c of [...cards].sort((a, b) => a.at - b.at)) {
     const earlier = shown.filter(d => d.thread !== c.thread);
     const open = [];
     for (const q of c.open) {
       const holder = earlier.find(d => d.open.some(w => isRepeat(q.text, w.text)));
-      const yours = !holder && settled.find(s => s.thread !== c.thread && s.at < c.at && isRepeat(q.text, s.text));
-      const sleeper = !holder && !yours && dormant.find(d => d.thread !== c.thread && d.at < c.at && d.open.some(w => isRepeat(q.text, w.text)));
-      const decision = !holder && !yours && !sleeper && openDecisions.find(d => decisionCovers(q.text, d));
-      const pick = !holder && !yours && !sleeper && !decision && pickedAfter(c).find(d => decisionCovers(q.text, d));
-      if (pick) c.repeats.push({ ...q, of: `D${String(pick.id).padStart(4, '0')}`, decision: Number(pick.id), answered: true });
-      else if (holder) c.repeats.push({ ...q, of: holder.from, thread: holder.thread, holder: holder.id });
+      // Settled after this question was asked (it waited behind that card then), never in an earlier round.
+      const yours = !holder && settled.find(s => s.thread !== c.thread && s.at < c.at && s.when > c.pos && isRepeat(q.text, s.text));
+      const decision = !holder && !yours && openDecisions.find(d => decisionCovers(q.text, d));
+      if (holder) c.repeats.push({ ...q, of: holder.from, thread: holder.thread, holder: holder.id });
       else if (yours) c.repeats.push({ ...q, of: yours.from, thread: yours.thread, answered: true });
-      else if (sleeper) {
-        let r = revived.get(sleeper.id);
-        if (!r) { r = { ...sleeper, open: [], repeats: [], revived: true }; revived.set(sleeper.id, r); shown.push(r); }
-        for (const w of sleeper.open) if (isRepeat(q.text, w.text) && !r.open.some(x => x.i === w.i)) r.open.push(w);
-        c.repeats.push({ ...q, of: sleeper.from, thread: sleeper.thread, holder: sleeper.id });
-      }
       else if (decision) c.repeats.push({ ...q, of: `D${String(decision.id).padStart(4, '0')}`, decision: Number(decision.id) });
       else open.push(q);
     }
     c.open = open;
     if (open.length) shown.push(c);
   }
-  for (const r of revived.values()) r.open.sort((a, b) => a.i - b.i);
-  return [...cards, ...revived.values()].filter(c => c.open.length);
+  return cards.filter(c => c.open.length);
 }
 
 // The repeats hidden from each summary's card, by summary id, for the small "also in w1's card" note in its thread.
@@ -148,27 +139,59 @@ export function repeatsIn(events, opts) {
 
 export function questionOpen(events, id, opts) { return openQuestions(events, opts).some(q => q.id === id); }
 
-// Decision 64: the card that holds a summary's questions when its own card is hidden as a repeat, so a phone notice
-// goes for the card that shows: { holder: summary id } (a question card), { decision: n }, or null.
-export function holderOf(events, id, opts) {
-  const reps = repeatsIn(events, opts).get(id) || [];
-  const r = reps.find(x => x.holder) || reps.find(x => x.decision);
-  return r ? (r.holder ? { holder: r.holder } : { decision: r.decision }) : null;
+// Decision 64, for notices only: for each question still open in card `id`, the earlier summaries (other threads)
+// that asked the same question and that you have not answered or dismissed. A card closed without you (the
+// orchestrator wrote into the worker's thread) no longer holds a repeat, so the re-ask shows; but if the first card's
+// notice already went, the re-ask needs no second one. Null when the card is not open.
+export function askedBefore(events, id, opts) {
+  const r = readCards(events, opts);
+  const card = withoutRepeatCards(r, opts).find(c => c.id === id);
+  if (!card) return null;
+  const yours = new Set(r.settled.map(s => `${s.id}#${s.i}`));
+  return card.open.map(q => r.asked
+    .filter(s => s.ev.thread !== card.thread && s.at < card.at && s.ev.questions.some((t, i) => !yours.has(`${s.ev.id}#${i}`) && isRepeat(q.text, t)))
+    .map(s => s.ev.id));
 }
 
-// Is `asked` a repeat of `open`, already waiting? Equal once case, punctuation and spacing are set aside, or shorter
-// and found whole inside it, or (decision 64) mostly the same words: at least 70% of the meaningful words of each are
-// in the other, so a re-ask in looser words still matches. Never a short one (under 24 characters cleaned: "Ship it?"
-// is too common to match), and never on fewer than three meaningful words.
+// Is `asked` a repeat of `held`, a question already waiting? Equal once case, punctuation and spacing are set aside,
+// or shorter and found whole inside it (on word boundaries); never a longer question (it asks more), never a short one
+// (under 24 characters cleaned: "Ship it?" is too common to match). And every number, version, PR id, option letter
+// and name in it appears in the held one too, so "PR 6" never matches "PR 63", nor "option A" a held "option B".
 const plainWords = q => String(q || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-export const REPEAT_OVERLAP = 0.7;
+export function isRepeat(asked, held) {
+  const x = plainWords(asked), y = plainWords(held);
+  if (x.length < 24 || !y) return false;
+  if (!(x === y || (x.length < y.length && ` ${y} `.includes(` ${x} `)))) return false;
+  return factsIn(asked, held);
+}
+
+// The facts a question carries: numbers, versions and ids (any word with a digit), option letters (a capital on its
+// own), and names (a capitalised word inside a sentence, or a word with a hyphen or underscore).
+function facts(text) {
+  const s = String(text || '');
+  const ids = (s.match(/[\p{L}\p{N}._#-]*\d[\p{L}\p{N}._-]*/gu) || []).map(w => w.replace(/^#+/, '').replace(/[._-]+$/, '').toLowerCase());
+  const letters = (s.match(/\b[A-Z]\b/g) || []).filter(l => l !== 'I');
+  const names = [];
+  for (const sentence of s.split(/(?<=[.!?:;])\s+/)) {
+    const words = sentence.match(/[\p{L}\p{N}_-]+/gu) || [];
+    words.forEach((w, k) => { if (/[-_]/.test(w) || (k > 0 && /^\p{Lu}\p{L}/u.test(w))) names.push(w.toLowerCase()); });
+  }
+  return { ids, letters, names };
+}
+// Is every fact of `part` also in `whole`?
+function factsIn(part, whole) {
+  const p = facts(part), w = facts(whole);
+  const wordsOf = new Set((String(whole || '').toLowerCase().match(/[\p{L}\p{N}_-]+/gu) || []));
+  const ids = new Set(w.ids), letters = new Set(w.letters);
+  return p.ids.every(x => ids.has(x)) && p.letters.every(x => letters.has(x)) && p.names.every(x => wordsOf.has(x));
+}
 // Words that carry no meaning of their own here. "no" and "not" are kept: they turn a question round.
 const STOP = new Set(('a an the and or but if then so to of in on at by for with from into onto as is are was were be been being am do does did ' +
   'have has had i me my we us our you your it its this that these those there here what which who whom whose when where why how can could may ' +
   'might shall should will would must yes ok okay please just also too very now still yet any some all each both either than up out about again ' +
   'once more most other such only own same let lets want like go ahead').split(' '));
 const stem = w => w.length > 4 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
-export const meaningfulWords = q => new Set(plainWords(q).split(' ').filter(w => w.length > 1 && !STOP.has(w)).map(stem));
+const meaningfulWords = q => new Set(plainWords(q).split(' ').filter(w => w.length > 1 && !STOP.has(w)).map(stem));
 // The share of `part`'s meaningful words that are also in `whole` (0 when part has none).
 function share(part, whole) {
   if (!part.size) return 0;
@@ -176,26 +199,19 @@ function share(part, whole) {
   for (const w of part) if (whole.has(w)) n++;
   return n / part.size;
 }
-export function wordOverlap(a, b) { const A = meaningfulWords(a), B = meaningfulWords(b); return Math.min(share(A, B), share(B, A)); }
-export function isRepeat(asked, open) {
-  const x = plainWords(asked), y = plainWords(open);
-  if (x.length < 24 || !y) return false;
-  if (x === y || (x.length < y.length && y.includes(x))) return true;
-  if (y.length < 24) return false;
-  const A = meaningfulWords(asked), B = meaningfulWords(open);
-  return A.size >= 3 && B.size >= 3 && share(A, B) >= REPEAT_OVERLAP && share(B, A) >= REPEAT_OVERLAP;
-}
 
-// Decision 64: does an open decision card already ask this question's choice? Its title's meaningful words (three or
-// more) are 70% in the question, or the question names at least two of its options (each option's name, of two or
-// more meaningful words, 70% in it). Naming a decision's number alone is not enough: "D59 is ready; bump the version?"
-// asks something else.
+// Decision 64: does decision card d already ask everything this question asks? Both ways: the question asks the
+// decision's choice (70% of the title's meaningful words, three or more, are in it, or it names two of the options),
+// and it adds nothing beyond the decision's title and options: every meaningful word, number, option letter and name
+// in it is there too. Naming a decision's number alone is never enough ("D59 is ready; bump the version?").
 export function decisionCovers(question, d) {
   if (!d || plainWords(question).length < 24) return false;
   const Q = meaningfulWords(question), T = meaningfulWords(d.title);
-  if (T.size >= 3 && share(T, Q) >= REPEAT_OVERLAP) return true;
-  const named = (d.options || []).filter(o => { const O = meaningfulWords(o?.name); return O.size >= 2 && share(O, Q) >= REPEAT_OVERLAP; });
-  return named.length >= 2;
+  const asks = (T.size >= 3 && share(T, Q) >= 0.7)
+    || (d.options || []).filter(o => { const O = meaningfulWords(o?.name); return O.size >= 2 && share(O, Q) >= 0.7; }).length >= 2;
+  if (!asks) return false;
+  const text = [d.title, ...(d.options || []).flatMap(o => [o?.key, o?.name, o?.summary])].filter(Boolean).join('. ');
+  return share(Q, meaningfulWords(text)) === 1 && factsIn(question, text);
 }
 
 // The page's project state ({ events, board: { decisions } }) to the options above.

@@ -16,7 +16,7 @@ import { HubSettings, HANDOFF_NUMBERS } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
-import { answerMessage, answerNote, openQuestions } from '../public/questions.js';
+import { answerMessage, answerNote } from '../public/questions.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage } from './usage.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
@@ -366,12 +366,7 @@ export class Hub {
     if (p.hubWide) return this.conductor.fromYou(text, attachments, extra);   // the Conductor's thread (decision 55)
     const a = thread === 'orchestrator' ? null : p.agents.get(thread);
     if (thread !== 'orchestrator' && (!a || a.state === 'retired')) throw new Error(`No active agent ${thread}`);
-    // Decision 64: a plain yes typed into the thread answers the card waiting there, so it can pre-approve a merge
-    // too. Read before your message is logged (logging it closes that card). Answers sent from a card name their
-    // questions and are handled in answerQuestions.
-    const passes = extra.answers ? [] : openQuestions(p.log.events, this.askOpts(p)).filter(c => c.thread === thread).flatMap(c => c.open.map(q => [c, q.i]));
     p.log.append('message', { thread, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
-    for (const [c, i] of passes) this.grantMergePass(p, c, i, text);
     (a || this.ensureOrchestrator(p)).send(text, attachments);
   }
 
@@ -395,13 +390,15 @@ export class Hub {
   // Every question is kept as asked: a repeat of a question already waiting in another card is hidden only where cards
   // are drawn (public/questions.js openQuestions), so it comes back by itself if that card closes unanswered.
   // The Conductor never lists decisions of its own: they are the projects' cards; it may only mention them.
-  // Decision 64: a line under questions with no question mark asks nothing, so it is no card: it is kept as a plain
+  // Decision 64: a line under questions with no question mark (that does not open like a question either) asks nothing, so it is no card: it is kept as a plain
   // line (notes) in the summary. Returns { notes } so post_summary can tell the agent.
   postSummary(p, agent, s) {
     const decisions = agent.role === CONDUCTOR_ROLE ? [] : s.decisions_needed || [];
     const asked = (s.questions || []).map(q => String(q).trim()).filter(Boolean);
-    const notes = asked.filter(q => !q.includes('?'));
-    s = { ...s, questions: asked.filter(q => q.includes('?')), decisions_needed: decisions, ...(notes.length ? { notes } : {}) };
+    // A line that opens like a question or a request (Please, Pick, Should, Which...) stays a card even without one.
+    const asks = q => q.includes('?') || /^(please|pick|choose|should|may|can|will|do|is|which|what)\b/i.test(q);
+    const notes = asked.filter(q => !asks(q));
+    s = { ...s, questions: asked.filter(asks), decisions_needed: decisions, ...(notes.length ? { notes } : {}) };
     p.log.append('summary', { thread: agent.thread, from: agent.name, ...s });
     const result = { notes };
     if (agent.role !== 'worker') return result;
@@ -439,14 +436,15 @@ export class Hub {
   answerQuestions(p, id, answers = []) {
     const ev = this.askedIn(p, id);
     const items = (Array.isArray(answers) ? answers : [])
-      .map(a => ({ index: Number(a?.index), answer: String(a?.text ?? '').trim(), suggested: a?.suggested === true }))
+      .map(a => ({ index: Number(a?.index), answer: String(a?.text ?? '').trim(), own: a?.own === true }))
       .filter(a => a.answer && Number.isInteger(a.index) && a.index >= 0 && a.index < ev.questions.length);
     if (!items.length) throw new Error('Type an answer first.');
     const pairs = items.map(a => ({ question: ev.questions[a.index], answer: a.answer }));
     this.fromYou(p, ev.thread, answerMessage(pairs), [], { answers: items.map(a => ({ question: id, index: a.index })) });
-    // Decision 64: your yes on a merge question pre-approves that merge. Never an answer that is still the Conductor's
-    // suggestion (Take all, or its pre-filled box sent as it was).
-    for (const a of items) if (!a.suggested) this.grantMergePass(p, ev, a.index, a.answer);
+    // Decision 64: your yes on a merge question's card pre-approves that merge, only when the page marks the answer as
+    // your own words (own: true). Missing means no pass: the Conductor's suggestion (Take all, or its pre-filled box
+    // sent as it was), or an older page.
+    for (const a of items) if (a.own) this.grantMergePass(p, ev, a.index, a.answer);
     // A worker's questions: one line in the orchestrator thread, and a note the orchestrator reads with its next
     // message, so it knows they are answered and does not ask again. It is not woken just for this. The
     // orchestrator's own questions skip this: the answer already goes to its thread.
@@ -457,22 +455,15 @@ export class Hub {
     return { ok: true, thread: ev.thread, answered: items.map(a => a.index) };
   }
 
-  // The question rules' options for a project (public/questions.js): decision status and the open decision cards.
-  askOpts(p) {
-    const ds = p.board.decisions();
-    return { decisionStatus: id => ds.find(d => d.id === Number(id))?.status, decisions: ds };
-  }
-
-  // Decision 64, part 3: your answer to question i of summary ev. A plain yes to a merge question logs a merge pass
-  // (lib/merge-pass.mjs) and a line in the orchestrator thread saying exactly what it allows. Only called from your
-  // own answers (answerQuestions, and a message of yours in the asker's thread).
+  // Decision 64, part 3: your own answer to question i of summary ev, from its card. A plain yes to a question asking
+  // to merge one PR logs a merge pass (lib/merge-pass.mjs) and a line in the orchestrator thread saying exactly what
+  // it allows. Only called from answerQuestions, for answers the page marks as your own.
   grantMergePass(p, ev, i, answer) {
     const g = passFor(ev.questions?.[i], answer);
     if (!g) return null;
     const pass = randomUUID().slice(0, 8), card = `question:${ev.id}`;
-    const e = p.log.append('merge_pass', { pass, card, asker: ev.from, index: i, numbers: g.numbers, by: 'you' });
-    const what = g.numbers.length ? g.numbers.map(n => `gh pr merge ${n}`).join(' or ') : 'gh pr merge for the pull request it opens (the first one merged)';
-    this.notice(p, 'orchestrator', `Your yes to ${ev.from}'s question pre-approves ${what}, with --merge or --squash or neither, for ${PASS_MS / 60000} minutes. No other command: not --admin, --auto or --delete-branch, and no other repo.`);
+    const e = p.log.append('merge_pass', { pass, card, asker: ev.from, thread: ev.thread, index: i, number: g.number, by: 'you' });
+    this.notice(p, 'orchestrator', `Your yes to ${ev.from}'s question pre-approves gh pr merge ${g.number} (with --merge or --squash or neither), once, by ${ev.from} only, for ${PASS_MS / 60000} minutes. No other command, flag or repo. Dismissing that card, or a no, wait or stop from you in ${ev.thread === 'orchestrator' ? 'the orchestrator thread' : `${ev.thread}'s thread`}, cancels it.`);
     return e;
   }
 
@@ -575,7 +566,7 @@ export class Hub {
     const auto = this.autoAnswer(p, agent, toolName, input);
     if (auto) return Promise.resolve(auto);
     // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).
-    const pass = findPass(p.log.events, toolName, input, { dir: p.dir });
+    const pass = findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
     if (pass) {
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(input?.command || '').slice(0, 400), answer: 'allow', reason: this.memory.personalize(`pre-approved by {{who}}'s answer on ${pass.card} (${pass.asker})`), by: 'hub', pass: pass.pass, passNumber: pass.number });
       return Promise.resolve({ behavior: 'allow', updatedInput: input });

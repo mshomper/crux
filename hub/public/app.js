@@ -345,10 +345,10 @@ const draftKey = (id, i) => `${id}:${i}`;
 // box only, while you have not typed or cleared anything for that question in any copy (S.cdEdited); it is never saved
 // as a draft, so Needs you and the thread copies stay empty and a reload never refills a box you cleared.
 const boxText = (k, suggest) => S.drafts[k] ?? (suggest?.[k] && !S.cdEdited.has(k) ? suggest[k] : '');
-// suggested: the box still shows the Conductor's words, not yours (no draft of yours). Decision 64: such an answer is
-// sent as yours in the thread, but never pre-approves a merge.
+// own: the box holds your own words (typed, or your tap on Yes or No), not the Conductor's suggestion. Decision 64:
+// only an answer marked own can pre-approve a merge; the server gives nothing without it.
 function filledAnswers(ev, suggest = null) {
-  return ev.open.map(q => { const k = draftKey(ev.id, q.i), text = boxText(k, suggest).trim(); return { index: q.i, text, ...(S.drafts[k] == null && text ? { suggested: true } : {}) }; }).filter(a => a.text);
+  return ev.open.map(q => { const k = draftKey(ev.id, q.i), text = boxText(k, suggest).trim(); return { index: q.i, text, ...(S.drafts[k] != null && text ? { own: true } : {}) }; }).filter(a => a.text);
 }
 function questionCard(ev, p = proj(), { suggest = null } = {}) {
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
@@ -905,7 +905,7 @@ function takeRecommendations(id) {
       for (const name of new Set(recs.filter(r => r.kind === 'decision').map(r => r.project))) {
         await sendPicks(S.projects.find(p => p.name === name), recs.filter(r => r.kind === 'decision' && r.project === name).map(r => ({ id: r.id, choice: r.choice })));
       }
-      for (const r of recs.filter(x => x.kind === 'question')) await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text, suggested: true }] });
+      for (const r of recs.filter(x => x.kind === 'question')) await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });   // never own: the Conductor's words
       for (const r of recs.filter(x => x.kind === 'approval')) await api('/api/approval', { id: r.id, allow: r.allow });
     } finally { S.sending = false; }
   });

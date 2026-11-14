@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTmp } from './helpers/tmp.mjs';
-import { isRepeat, wordOverlap, decisionCovers, openQuestions, repeatsIn, holderOf } from '../public/questions.js';
+import { isRepeat, decisionCovers, openQuestions, repeatsIn } from '../public/questions.js';
 import { mergeQuestion, isYes, mergeCommand, findPass, recentApprovedMerge, PASS_MS, RESTART_QUIET_MS } from '../lib/merge-pass.mjs';
 import { Push, cardsFor } from '../lib/push.mjs';
 import { makeRestartHub } from '../lib/guard.mjs';
@@ -45,61 +45,91 @@ function hubWith({ conductor = false, decisions = [] } = {}) {
 }
 
 // ---------- part 2: one notice per choice ----------
-test('a re-ask in looser words is a repeat: about 70% of the meaningful words, both ways, 24+ characters', () => {
-  const worker = 'Should the preview update live while dragging, or only once the drag is released?';
-  const orch = 'w1 asks: should the preview update while dragging or only when the drag is released?';
-  assert.ok(wordOverlap(worker, orch) >= 0.7);
-  assert.equal(isRepeat(orch, worker), true);
-  assert.equal(isRepeat(worker, orch), true, 'both directions');
-  // Shares words but asks something else.
-  assert.equal(isRepeat('Should the preview show a grid while dragging, and snap to it on release?', worker), false);
-  // Asks much more: under 70% the other way.
-  assert.equal(isRepeat('Should the preview update while dragging or only on release, and should the grid snap, and which colour should the handles be?', worker), false);
+test('a repeat only when the words are the same (or contained) and every number, letter and name is in the held one', () => {
+  const held = 'Should the preview update live while dragging, or only once the drag is released?';
+  assert.equal(isRepeat('should the preview update live while dragging or only once the drag is released', held), true, 'equal once cleaned');
+  assert.equal(isRepeat('Should the preview update live while dragging', held), true, 'contained');
+  // Looser words are no longer a repeat (the 70% rule is gone).
+  assert.equal(isRepeat('w1 asks: should the preview update while dragging or only when the drag is released?', held), false);
+  // Contained, but a number or name the held one does not have.
+  assert.equal(isRepeat('Should I merge PR 6', 'Should I merge PR 63 now, after the review?'), false, '6 is not 63');
+  assert.equal(isRepeat('Ship version 0.22.1 with the lens picker today?', 'Ship version 0.22.0 with the lens picker today?'), false);
+  assert.equal(isRepeat('Keep option A for the map strip height?', 'Keep option B for the map strip height?'), false);
+  assert.equal(isRepeat('Should map-core own the strip height setting?', 'Should map-hud own the strip height setting?'), false);
+  assert.equal(isRepeat('Should I merge PR #63 now, or wait for #64 and merge both?', 'Should I merge PR #63 now?'), false, 'never the longer one');
   assert.equal(isRepeat('Ship it now?', 'Ship it now?'), false, 'short ones never match');
 });
 
-test('the worker card keeps holding a question its orchestrator asks again after writing to it; one notice, for that card', async () => {
-  const W = 'Should the preview update live while dragging, or only once the drag is released?';
-  const w = ask('w1', [W]);
-  const relay = ev('message', { thread: 'w1', from: 'orchestrator-1', text: 'Hold on, I am asking Matt.' });
-  const o = ask('orchestrator-1', ['w1 asks: should the preview update while dragging or only when the drag is released?']);
-  const evs = [w, relay, o];
-  const open = openQuestions(evs);
-  assert.deepEqual(open.map(c => [c.from, c.open.map(q => q.text)]), [['w1', [W]]], 'only the worker card shows');
-  assert.deepEqual(repeatsIn(evs).get(o.id).map(r => [r.of, r.holder]), [['w1', w.id]]);
-  assert.deepEqual(holderOf(evs, o.id), { holder: w.id });
-  // Your answer on the worker card covers the re-ask; the orchestrator's own card stays closed.
+test('only open cards hold repeats: never a question you settled in an earlier round, never a closed worker card', () => {
+  const Q = 'Should the preview update live while dragging, or only once the drag is released?';
+  // You answered w1 an hour ago; the orchestrator asks the same today: a new round, so it shows.
+  const w = ask('w1', [Q]);
   const ans = ev('message', { thread: 'w1', from: 'you', text: 'Live.', answers: [{ question: w.id, index: 0 }] });
-  assert.deepEqual(openQuestions([...evs, ans]), []);
-  // Notices: the worker card's grace ended while it was closed (no notice then); the re-ask's notice goes for the
-  // worker card instead, and the re-ask itself never notifies.
-  const root = makeTmp('crux-fewer-push-');
-  const pushed = [];
-  const push = new Push({ dir: root, sender: fakeSender(pushed), timers: { setTimeout: f => f(), clearTimeout() { } }, log: () => { } });
-  push.subscribe({ endpoint: 'https://push.example/p', keys: { p256dh: 'k', auth: 'a' } });
-  const ctx = { approvals: new Map(), decisionOpen: () => true, decisionStatus: () => undefined, decisions: () => [], events: () => evs };
-  push.handle({ ...o, project: 'alpha' }, ctx);
-  await settle();
-  assert.deepEqual(pushed.map(p => [p.card, p.title]), [[`question:${w.id}`, 'w1 has a question']]);
-  push.handle({ ...o, project: 'alpha' }, ctx);
-  await settle();
-  assert.equal(pushed.length, 1, 'once');
+  const o = ask('orchestrator-1', [Q]);
+  assert.deepEqual(openQuestions([w, ans, o]).map(c => c.from), ['orchestrator-1']);
+  // Dismissed in an earlier round: the same.
+  const dis = ev('question_dismissed', { question: w.id });
+  assert.deepEqual(openQuestions([w, dis, o]).map(c => c.from), ['orchestrator-1']);
+  // Asked while w1's card was open, then you answered w1: your answer covers it.
+  assert.deepEqual(openQuestions([w, o, ans]), []);
+  // The orchestrator already answered w1's card: that stale card never comes back, and never hides the re-ask.
+  const relay = ev('message', { thread: 'w1', from: 'orchestrator-1', text: 'Hold on, I am asking Matt.' });
+  assert.deepEqual(openQuestions([w, relay, o]).map(c => [c.from, c.open.length]), [['orchestrator-1', 1]]);
 });
 
-test('a question an open decision card already asks is hidden behind it; your pick answers it; naming a number alone is not enough', () => {
-  assert.equal(decisionCovers('How should the All projects column be laid out now that the Conductor talks there?', D59), true, 'the title');
-  assert.equal(decisionCovers('For All projects, rows fill the column with chat below, or chat fills the column with rows on top?', D59), true, 'two options');
-  assert.equal(decisionCovers('D59 is ready for you; should I also bump the version to 0.22?', D59), false);
-  const q = ask('w1', ['Which layout: chat fills the column with rows on top, or rows fill the column with chat below?']);
-  const other = ask('w2', ['Should the version go to 0.22 with this change?']);
-  assert.deepEqual(openQuestions([q, other], { decisions: [D59] }).map(c => c.from), ['w2']);
+test('a re-ask after the worker card closed shows, but no second notice when the worker card\'s already went', async () => {
+  const Q = 'Should the preview update live while dragging, or only once the drag is released?';
+  const w = ask('w1', [Q]);
+  const relay = ev('message', { thread: 'w1', from: 'orchestrator-1', text: 'Hold on, I am asking Matt.' });
+  const o = ask('orchestrator-1', [Q]);
+  const evs = [w];
+  const h = pushHarness();
+  const ctx = { approvals: new Map(), decisionOpen: () => true, decisionStatus: () => undefined, decisions: () => [], events: () => evs };
+  h.push.handle({ ...w, project: 'alpha' }, ctx);
+  h.timers.queue.shift().fn();
+  await settle();
+  assert.deepEqual(h.pushed.map(p => p.card), [`question:${w.id}`]);
+  evs.push(relay, o);
+  h.push.handle({ ...o, project: 'alpha' }, ctx);
+  h.timers.queue.shift().fn();
+  await settle();
+  assert.equal(h.pushed.length, 1, 'the re-ask shows, with no second notice');
+  assert.ok(h.logged.some(s => new RegExp(`asked before in question:${w.id}, whose notice already went`).test(s)));
+  // Had w1's notice not gone (you were looking at it), the re-ask notifies.
+  const g = pushHarness();
+  g.push.handle({ ...o, project: 'alpha' }, ctx);
+  g.timers.queue.shift().fn();
+  await settle();
+  assert.deepEqual(g.pushed.map(p => p.card), [`question:${o.id}`]);
+});
+
+test('a question is hidden behind a decision only when it asks nothing more, the decision is open, and (for notices) notified', async () => {
+  assert.equal(decisionCovers('How is the All projects column laid out now that the Conductor talks there?', D59), true, 'the title, nothing more');
+  assert.equal(decisionCovers('Rows fill the column with chat below, or chat fills the column with rows on top?', D59), true, 'two options, nothing more');
+  assert.equal(decisionCovers('How is the All projects column laid out, and should the map strip shrink on phones?', D59), false, 'asks more');
+  assert.equal(decisionCovers('Chat fills the column with rows on top, or rows fill the column with chat below, for v0.22?', D59), false, 'a version the decision does not have');
+  assert.equal(decisionCovers('D59 is ready for you; should I also bump the version to 0.22?', D59), false, 'a number alone');
+  const q = ask('w1', ['Rows fill the column with chat below, or chat fills the column with rows on top?']);
+  assert.deepEqual(openQuestions([q], { decisions: [D59] }), [], 'the page: behind the open decision card');
   assert.deepEqual(repeatsIn([q], { decisions: [D59] }).get(q.id).map(r => [r.of, r.decision]), [['D0059', 59]]);
-  // Picked after the question: answered, so it does not come back.
+  assert.equal(openQuestions([q], { decisions: [D59], decisionNotified: () => false }).length, 1, 'the server: not while the decision never notified');
   const pick = ev('pick', { decision: 59, choice: 'B' });
-  assert.deepEqual(openQuestions([q, pick], { decisions: [{ ...D59, status: 'decided', chosen: 'B' }] }), []);
-  assert.equal(repeatsIn([q, pick], { decisions: [{ ...D59, status: 'decided' }] }).get(q.id)[0].answered, true);
-  // Decided long before the question was asked: the question is its own card.
-  assert.equal(openQuestions([pick, q], { decisions: [{ ...D59, status: 'decided' }] }).length, 1);
+  assert.equal(openQuestions([q, pick], { decisions: [{ ...D59, status: 'decided' }] }).length, 1, 'only while open: picked, the question shows again');
+  // Notices: a question behind a decision that never notified gets its own; behind one that did, none.
+  const h = pushHarness();
+  const qa = { ...q, project: 'crux' };
+  const ctx = { approvals: new Map(), decisionOpen: () => true, decisionStatus: id => id === 59 ? 'open' : undefined, decisions: () => [D59], events: () => [q] };
+  h.push.handle(qa, ctx);
+  h.timers.queue.shift().fn();
+  await settle();
+  assert.deepEqual(h.pushed.map(p => p.card), [`question:${q.id}`]);
+  const g = pushHarness();
+  g.push.handle({ id: 'sD', type: 'summary', project: 'crux', thread: 'orchestrator', from: 'orchestrator-1', decisions_needed: [59] }, ctx);
+  await settle();
+  g.push.handle(qa, ctx);
+  g.timers.queue.shift().fn();
+  await settle();
+  assert.deepEqual(g.pushed.map(p => p.card), ['decision:59']);
 });
 
 function pushHarness(dir = makeTmp('crux-fewer-push-')) {
@@ -141,118 +171,183 @@ test('a decision notified once is never notified again, even after a restart; th
   assert.deepEqual(again.pushed.map(p => [p.project, p.card]), [['life', 'decision:60']]);
 });
 
-test('a question hidden behind an open decision gets no notice of its own', async () => {
+test('a decision that comes back (parked then reopened, challenged, or its number reused) can notify again', async () => {
   const h = pushHarness();
-  const q = { id: 'q1', type: 'summary', project: 'crux', thread: 'w1', from: 'w1', questions: ['Which layout: chat fills the column with rows on top, or rows fill the column with chat below?'], decisions_needed: [] };
-  const ctx = { approvals: new Map(), decisionOpen: () => true, decisionStatus: id => id === 59 ? 'open' : undefined, decisions: () => [D59], events: () => [q] };
-  h.push.handle(q, ctx);
-  h.timers.queue.forEach(t => t.fn());
-  await settle();
-  assert.equal(h.pushed.length, 0);
-  assert.ok(h.logged.some(s => /settled before it went out/.test(s)));
+  const events = [], decisions = [{ id: 7, status: 'open', title: 'Which map?', date: '2026-11-14' }];
+  const ctx = { approvals: new Map(), decisionOpen: () => true, decisionStatus: () => 'open', decisions: () => decisions, events: () => events };
+  const ask7 = id => h.push.handle({ id, type: 'summary', project: 'crux', thread: 'orchestrator', from: 'orchestrator-1', decisions_needed: [7] }, ctx);
+  ask7('s1'); await settle();
+  ask7('s2'); await settle();
+  assert.equal(h.pushed.length, 1, 'the same decision, still waiting: once');
+  events.push({ type: 'pick', decision: 7, choice: 'parked' });   // parked, then back
+  ask7('s3'); await settle();
+  assert.equal(h.pushed.length, 2);
+  decisions[0] = { ...decisions[0], challenge: { by: 'w1', why: 'new data' } };   // challenged
+  ask7('s4'); await settle();
+  assert.equal(h.pushed.length, 3);
+  decisions[0] = { id: 7, status: 'open', title: 'Which font?', date: '2026-11-20' };   // the number used again after a clear
+  ask7('s5'); await settle();
+  assert.equal(h.pushed.length, 4);
+});
+
+test('a grouped notice comes down only when every card in it is settled', async () => {
+  const h = pushHarness();
+  const pc = [];
+  h.push.desktopAttach('pc', (e, d) => pc.push([e, d.card]));
+  h.push.desktopPresence('pc', { idleMs: 1000, locked: false });
+  const ctx = { approvals: new Map(), decisionOpen: () => true, decisionStatus: () => 'open', decisions: () => [], events: () => [] };
+  h.push.handle({ id: 's1', type: 'summary', project: 'crux', thread: 'orchestrator', from: 'orchestrator-1', decisions_needed: [3, 4] }, ctx);
+  assert.deepEqual(pc, [['notify', 'decision:3']]);
+  h.push.handle({ type: 'pick', project: 'crux', decision: 3 }, ctx);
+  assert.equal(pc.length, 1, 'D4 still waits: the notice stays');
+  h.push.handle({ type: 'pick', project: 'crux', decision: 4 }, ctx);
+  assert.deepEqual(pc.at(-1), ['clear', 'decision:3']);
+});
+
+test('a question line with no question mark that opens like a question or a request still becomes a card', () => {
+  const { hub, a } = hubWith();
+  const w = hub.startWorker(a, 'w1', 'task');
+  hub.postSummary(a, w, summary({ questions: ['Please pick the strip height', 'Which lens ships first', 'Should I keep the old icon', 'Tests pass on my side'] }));
+  const s = a.log.ofType('summary').at(-1);
+  assert.deepEqual(s.questions, ['Please pick the strip height', 'Which lens ships first', 'Should I keep the old icon']);
+  assert.deepEqual(s.notes, ['Tests pass on my side']);
 });
 
 // ---------- part 3: Matt's yes on a merge question covers that merge ----------
-test('what counts as a merge question, a plain yes, and the one command a pass allows', () => {
-  assert.deepEqual(mergeQuestion('May I open the PR, merge it and restart?'), { numbers: [] });
-  assert.deepEqual(mergeQuestion('PR #74 passed review. Merge #74 now?'), { numbers: [74] });
-  assert.deepEqual(mergeQuestion('Merge PR 12 and pull request 13?'), { numbers: [12, 13] });
-  assert.equal(mergeQuestion('Merge the branch into main?'), null, 'no pull request named');
-  assert.equal(mergeQuestion('I will merge #74 next.'), null, 'not a question');
-  assert.equal(mergeQuestion('May I merge mshomper/acuload#12?'), null, 'another repo');
-  assert.equal(mergeQuestion('Merge https://github.com/x/y/pull/3 ?'), null, 'a link to a pull request elsewhere');
-  for (const y of ['Yes', 'yes, go ahead', 'Go ahead.', 'OK', 'Sure, merge it', 'Yes please']) assert.equal(isYes(y), true, y);
-  for (const y of ['No', 'Yes, but wait for the reviewer', 'Not yet', 'yes after the tests', 'Yes if CI passes', "Don't", 'Hold on', 'Merge #12 instead', '']) assert.equal(isYes(y), false, y);
-  const dir = 'C:/Users/me/GitHub/crux';
-  assert.equal(mergeCommand('Bash', 'gh pr merge 76', dir), 76);
-  assert.equal(mergeCommand('Bash', 'gh pr merge 76 --merge', dir), 76);
-  assert.equal(mergeCommand('PowerShell', 'gh pr merge --squash 76', dir), 76);
-  assert.equal(mergeCommand('Bash', 'cd C:/Users/me/GitHub/crux/.claude/worktrees/x && gh pr merge 76 --squash', dir), 76, 'cd into the project first');
-  assert.equal(mergeCommand('Bash', 'cd /c/Users/me/GitHub/crux && gh pr merge 76', dir), 76, 'Git Bash path');
-  for (const c of ['gh pr merge 76 --admin', 'gh pr merge 76 --delete-branch', 'gh pr merge 76 -d', 'gh pr merge 76 --merge --squash', 'gh pr merge 76 --repo other/repo', 'gh pr merge 76 -R o/r',
-    'gh pr merge 76 --auto', 'gh pr merge 76 && git push --force', 'gh pr merge 76; rm -rf x', 'gh pr merge 76\ngit push', 'cd ../acuload && gh pr merge 76', 'cd C:/Users/me/GitHub/acuload && gh pr merge 76',
-    'cd C:/Users/me/GitHub/crux-other && gh pr merge 76', 'gh pr merge', 'gh pr close 76', 'git merge main', 'gh pr merge 76 --body x',
-    'cd C:/Users/me/GitHub/crux/$(rm -rf ~) && gh pr merge 76', 'cd "C:/Users/me/GitHub/crux/`whoami`" && gh pr merge 76', 'cd "C:/Users/me/GitHub/crux/$HOME" && gh pr merge 76', 'cd $HOME && gh pr merge 76'])
-    assert.equal(mergeCommand('Bash', c, dir), null, c);
-  assert.equal(mergeCommand('Write', 'gh pr merge 76', dir), null);
+test('a merge question names exactly one PR and no condition; the answer is a plain yes; the command is bare', () => {
+  assert.deepEqual(mergeQuestion('PR #74 passed review. Merge #74 now?'), { number: 74 });
+  assert.deepEqual(mergeQuestion('May I merge PR 74?'), { number: 74 });
+  assert.deepEqual(mergeQuestion('Merge PR #74 and restart the hub?'), { number: 74 });
+  for (const q of ['May I open the PR, merge it and restart?', 'Merge PRs 74 and 75?', 'Merge PR 75? (it closes #74)', 'Merge #75 and #74?',
+    'Merge PR 74 once CI passes?', 'Merge PR 74 after the review?', 'Merge PR 74 when ready?', 'Merge PR 74 if the tests pass?', 'Merge PR 74 before lunch?',
+    'Wait, merge PR 74?', 'Merge PR 74 until tonight?', 'Merge the branch into main?', 'I will merge #74 next.', 'May I merge mshomper/acuload#12?',
+    'Merge https://github.com/x/y/pull/3 ?', 'Merge pull request 74?'])
+    assert.equal(mergeQuestion(q), null, q);
+  for (const y of ['Yes', 'yes.', 'Yep!', 'OK', 'okay', 'Sure', 'go', 'Go ahead.', 'do it', 'Merge it', 'approved', 'Yes please', 'yes, thanks']) assert.equal(isYes(y), true, y);
+  for (const y of ['No', 'Yes, but wait for the reviewer', 'yes go ahead and restart too', 'Yes, merge 75 as well', 'Not yet', 'yes after the tests', 'Yeah', 'Sure, merge it and #75', '']) assert.equal(isYes(y), false, y);
+  assert.deepEqual(mergeCommand('Bash', 'gh pr merge 74'), { number: 74, cd: null });
+  assert.deepEqual(mergeCommand('Bash', 'gh pr merge 74 --merge'), { number: 74, cd: null });
+  assert.deepEqual(mergeCommand('PowerShell', 'gh pr merge 74 --squash'), { number: 74, cd: null });
+  assert.deepEqual(mergeCommand('Bash', 'cd C:/x/crux && gh pr merge 74'), { number: 74, cd: 'C:/x/crux' });
+  // '#74' is a shell comment: "gh pr merge #74" merges the current branch's PR, so it is never a pass.
+  for (const c of ['gh pr merge #74', 'gh pr merge 75 #74', 'gh pr merge --squash 74', 'gh pr merge 74 --admin', 'gh pr merge 74 --delete-branch', 'gh pr merge 74 -d',
+    'gh pr merge 74 --merge --squash', 'gh pr merge 74 --repo o/r', 'gh pr merge 74 -R o/r', 'gh pr merge 74 --auto', 'gh pr merge 74 && git push --force',
+    'gh pr merge 74; rm -rf x', 'gh pr merge 74\ngit push', 'cd ../acuload && gh pr merge 74', 'cd C:/x/crux/$(rm -rf ~) && gh pr merge 74',
+    'cd "C:/x/crux/`whoami`" && gh pr merge 74', 'cd $HOME && gh pr merge 74', 'gh pr merge', 'gh pr close 74', 'gh pr merge 74 --body x'])
+    assert.equal(mergeCommand('Bash', c), null, c);
+  assert.equal(mergeCommand('Write', 'gh pr merge 74'), null);
 });
 
-test('your yes on "open the PR and merge it" lets exactly that merge through, logged; nothing else, and not for long', async () => {
+// A project whose git remote the tests set (no real git): the main folder and its worktrees share it.
+const origins = dir => (/acuload/i.test(dir) ? 'github.com/me/acuload' : 'github.com/me/alpha');
+const askMerge = (hub, a, agent, q = 'PR #80 is green. Merge #80?') => { hub.postSummary(a, agent, summary({ questions: [q] })); return a.log.ofType('summary').at(-1); };
+
+test('your own yes on that card lets exactly that merge through, once, by the asker only, logged', async () => {
   const { hub, a } = hubWith();
+  hub.gitOrigin = origins;
   const orch = hub.ensureOrchestrator(a);
-  hub.postSummary(a, orch, summary({ questions: ['Small batch on fix/x, tests pass. May I open the PR, merge it and restart?'] }));
-  const s = a.log.ofType('summary').at(-1);
-  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes' }]);
+  const w = hub.startWorker(a, 'w1', 'task');
+  const s = askMerge(hub, a, orch, 'Small batch on fix/x, tests pass. May I merge PR #76 and restart?');
+  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes', own: true }]);
   const pass = a.log.ofType('merge_pass').at(-1);
-  assert.deepEqual([pass.card, pass.asker, pass.numbers, pass.by], [`question:${s.id}`, 'orchestrator-1', [], 'you']);
-  assert.match(a.log.ofType('notice').at(-1).text, /pre-approves gh pr merge for the pull request it opens .* for 30 minutes/);
-  // The merge goes through at once, logged with where the yes came from.
-  const r = await hub.requestApproval(a, orch, 'Bash', { command: 'gh pr merge 76 --merge' });
+  assert.deepEqual([pass.card, pass.asker, pass.number, pass.by], [`question:${s.id}`, 'orchestrator-1', 76, 'you']);
+  assert.match(a.log.ofType('notice').at(-1).text, /pre-approves gh pr merge 76 .*once, by orchestrator-1 only, for 30 minutes/);
+  // Another agent cannot use it.
+  hub.requestApproval(a, w, 'Bash', { command: 'gh pr merge 76' });
+  assert.equal(a.log.ofType('approval').at(-1)?.agent, 'w1', 'w1 gets a card');
+  // The asker, in the project's main folder: through at once, logged with where the yes came from.
+  const r = await hub.requestApproval(a, orch, 'Bash', { command: `cd ${a.dir.replace(/\\/g, '/')} && gh pr merge 76 --merge` });
   assert.equal(r.behavior, 'allow');
   const log = a.log.ofType('permission_answer').at(-1);
-  assert.equal(log.answer, 'allow');
   assert.match(log.reason, new RegExp(`^pre-approved by .+'s answer on question:${s.id}`));
-  assert.deepEqual([log.pass, log.passNumber], [pass.pass, 76]);
-  assert.equal(a.log.ofType('approval').length, 0, 'no card');
-  // Again for the same PR (a retry) is fine; another PR, a flag it does not cover, or another command is a card.
-  assert.equal((await hub.requestApproval(a, orch, 'Bash', { command: 'gh pr merge 76' })).behavior, 'allow');
-  for (const command of ['gh pr merge 77', 'gh pr merge 76 --admin', 'gh pr merge 76 --delete-branch', 'git push origin main']) {
+  assert.deepEqual([log.pass, log.passNumber, log.answer], [pass.pass, 76, 'allow']);
+  // Once only; another PR, flag or command is a card.
+  for (const command of ['gh pr merge 76', 'gh pr merge 77', 'gh pr merge 76 --admin', 'git push origin main']) {
     hub.requestApproval(a, orch, 'Bash', { command });
     assert.equal(a.log.ofType('approval').at(-1)?.input.command, command, command);
   }
-  // After 30 minutes the pass has lapsed.
-  pass.ts = new Date(Date.now() - PASS_MS - 1000).toISOString();
-  assert.equal(findPass(a.log.events, 'Bash', { command: 'gh pr merge 76' }, { dir: a.dir }), null);
 });
 
-test('only your own answer gives a pass: never the Conductor\'s suggestion, an agent\'s words, or a yes with a condition', async () => {
+test('the folder: main folder or the asker\'s own worktree, with the project\'s own remote; never elsewhere', () => {
+  const dir = 'C:/x/alpha';
+  const evs = [{ type: 'merge_pass', ts: new Date().toISOString(), pass: 'p1', card: 'question:s1', asker: 'w1', thread: 'w1', index: 0, number: 9 }];
+  const find = (command, origin = origins) => findPass(evs, 'Bash', { command }, { dir, agent: 'w1', origin });
+  assert.ok(find('gh pr merge 9'));
+  assert.ok(find('cd C:/x/alpha && gh pr merge 9'));
+  assert.ok(find('cd C:/x/alpha/.claude/worktrees/w1 && gh pr merge 9'), 'its own worktree');
+  assert.equal(find('cd C:/x/alpha/.claude/worktrees/w2 && gh pr merge 9'), null, 'another agent\'s worktree');
+  assert.equal(find('cd C:/x/alpha/hub && gh pr merge 9'), null, 'a subfolder');
+  assert.equal(find('cd C:/x/acuload && gh pr merge 9'), null, 'another repo');
+  assert.equal(find('cd C:/x/alpha/.claude/worktrees/w1 && gh pr merge 9', d => /w1/.test(d) ? 'github.com/me/acuload' : 'github.com/me/alpha'), null, 'a worktree of another repo');
+  assert.equal(find('cd C:/x/alpha && gh pr merge 9', () => null), null, 'no remote readable: no pass');
+});
+
+test('only your own answer on the card gives a pass: never a typed reply, the Conductor\'s suggestion, an agent, or an old page', () => {
   const { hub, a } = hubWith({ conductor: true });
   const orch = hub.ensureOrchestrator(a);
   const w = hub.startWorker(a, 'w1', 'task');
-  const askMerge = (agent, q = 'PR #80 is green. Merge #80?') => { hub.postSummary(a, agent, summary({ questions: [q] })); return a.log.ofType('summary').at(-1); };
-  let s = askMerge(orch);
-  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes', suggested: true }]);   // Take all, or its pre-filled box
-  assert.equal(a.log.ofType('merge_pass').length, 0, 'the Conductor\'s suggestion');
-  s = askMerge(orch);
+  let s = askMerge(hub, a, orch);
+  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes' }]);   // no own flag: Take all, a pre-filled box, an older page
+  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes', suggested: true }]);
+  assert.equal(a.log.ofType('merge_pass').length, 0, 'fails closed');
+  s = askMerge(hub, a, w);
+  hub.fromYou(a, 'w1', 'yes');
+  assert.equal(a.log.ofType('merge_pass').length, 0, 'a reply typed into the thread');
+  s = askMerge(hub, a, orch);
   hub.conductor.toOrchestrator('alpha', 'conductor-1', 'Matt says yes, merge #80.');
   hub.orchestratorToWorker(a, orch, 'w1', 'Yes, merge #80.');
   a.log.append('message', { thread: 'orchestrator', from: 'w1', text: 'yes' });
   assert.equal(a.log.ofType('merge_pass').length, 0, 'agents and the Conductor');
-  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes, but after the reviewer passes it' }]);
-  assert.equal(a.log.ofType('merge_pass').length, 0, 'a yes with a condition');
-  // Your plain yes typed into the asker's thread counts.
-  s = askMerge(w);
-  hub.fromYou(a, 'w1', 'yes go ahead');
-  assert.deepEqual(a.log.ofType('merge_pass').map(e => [e.asker, e.numbers]), [['w1', [80]]]);
-  assert.equal(findPass(a.log.events, 'Bash', { command: 'gh pr merge 81' }, { dir: a.dir }), null, 'a numbered pass covers its number only');
-  assert.ok(findPass(a.log.events, 'Bash', { command: 'gh pr merge 80 --squash' }, { dir: a.dir }));
-  // A pass in one project never covers another.
-  assert.equal(findPass(hub.project('beta').log.events, 'Bash', { command: 'gh pr merge 80' }, { dir: hub.project('beta').dir }), null);
+  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes, but after the reviewer passes it', own: true }]);
+  assert.equal(a.log.ofType('merge_pass').length, 0, 'more than a plain yes');
+  s = askMerge(hub, a, orch, 'Merge PRs 80 and 81?');
+  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes', own: true }]);
+  s = askMerge(hub, a, orch, 'Merge PR 81? It closes #80.');
+  hub.answerQuestions(a, s.id, [{ index: 0, text: 'Yes', own: true }]);
+  assert.equal(a.log.ofType('merge_pass').length, 0, 'two PRs, or the #80 comment trick');
+});
+
+test('a pass is cancelled by dismissing its card or a no, wait or stop from you, and lapses after 30 minutes', () => {
+  const dir = 'C:/x/alpha', t = Date.now();
+  const pass = { type: 'merge_pass', ts: new Date(t).toISOString(), pass: 'p1', card: 'question:s1', asker: 'orchestrator-1', thread: 'orchestrator', index: 0, number: 9 };
+  const find = (later, now = t) => findPass([pass, ...later], 'Bash', { command: 'gh pr merge 9' }, { dir, agent: 'orchestrator-1', now, origin: origins });
+  assert.ok(find([]));
+  assert.equal(find([{ type: 'question_dismissed', question: 's1' }]), null, 'the card dismissed');
+  assert.equal(find([{ type: 'question_dismissed', question: 's1', index: 0 }]), null, 'that question dismissed');
+  assert.ok(find([{ type: 'question_dismissed', question: 's1', index: 1 }]), 'another question in the card');
+  for (const text of ['No', 'wait', 'Stop, not yet', "don't merge"]) assert.equal(find([{ type: 'message', thread: 'orchestrator', from: 'you', text }]), null, text);
+  assert.ok(find([{ type: 'message', thread: 'w1', from: 'you', text: 'wait' }]), 'another thread');
+  assert.ok(find([{ type: 'message', thread: 'orchestrator', from: 'orchestrator-1', text: 'wait' }]), 'not yours');
+  assert.equal(find([], t + PASS_MS + 1000), null, 'lapsed');
+  assert.equal(findPass([pass], 'Bash', { command: 'gh pr merge 9' }, { dir, agent: 'w1', origin: origins }), null, 'not the asker');
 });
 
 // ---------- part 4: restart notices ----------
 test('no restart notice within 10 minutes of a merge you approved; other restarts go the PC-or-phone way', async () => {
   const t0 = Date.parse('2026-11-14T12:00:00Z');
   const passEv = { type: 'permission_answer', ts: new Date(t0).toISOString(), answer: 'allow', pass: 'p1', passNumber: 76 };
-  assert.equal(recentApprovedMerge([[passEv]], t0 + 5 * 60000), true);
-  assert.equal(recentApprovedMerge([[passEv]], t0 + RESTART_QUIET_MS + 1000), false);
+  assert.equal(recentApprovedMerge([passEv], t0 + 5 * 60000), true);
+  assert.equal(recentApprovedMerge([passEv], t0 + RESTART_QUIET_MS + 1000), false);
   const card = { type: 'approval', approval: 'ap1', input: { command: 'gh pr merge 77 --merge' } };
-  assert.equal(recentApprovedMerge([[card, { type: 'approval_result', approval: 'ap1', how: 'allowed', ts: new Date(t0).toISOString() }]], t0 + 60000), true, 'your Allow on a merge card');
-  assert.equal(recentApprovedMerge([[card, { type: 'approval_result', approval: 'ap1', how: 'allowed by orchestrator-4', ts: new Date(t0).toISOString() }]], t0 + 60000), false, 'not the orchestrator\'s');
-  assert.equal(recentApprovedMerge([[{ ...card, input: { command: 'npm test' } }, { type: 'approval_result', approval: 'ap1', how: 'allowed', ts: new Date(t0).toISOString() }]], t0 + 60000), false, 'not a merge');
+  assert.equal(recentApprovedMerge([card, { type: 'approval_result', approval: 'ap1', how: 'allowed', ts: new Date(t0).toISOString() }], t0 + 60000), true, 'your Allow on a merge card');
+  assert.equal(recentApprovedMerge([card, { type: 'approval_result', approval: 'ap1', how: 'allowed by orchestrator-4', ts: new Date(t0).toISOString() }], t0 + 60000), false, 'not the orchestrator\'s');
+  assert.equal(recentApprovedMerge([{ ...card, input: { command: 'npm test' } }, { type: 'approval_result', approval: 'ap1', how: 'allowed', ts: new Date(t0).toISOString() }], t0 + 60000), false, 'not a merge');
 
   const calls = [], logs = [], env = {};
   const push = { restartNotice: async info => { calls.push(info); return 1; }, log: s => logs.push(s) };
-  const events = [passEv];
-  const hub = { notice() { }, projects: new Map([['proj', { log: { events } }]]) };
+  const proj = { name: 'proj', log: { events: [passEv] } }, other = { name: 'other', log: { events: [] } };
+  const hub = { notice() { } };
   const orch = { name: 'orchestrator-4', role: 'orchestrator' };
   let now = t0 + 3 * 60000;
-  await makeRestartHub({ hub, push, restart() { }, bootAt: t0 - 3600e3, now: () => now, delayMs: 0, env })({ name: 'proj' }, orch, 'merged #76');
+  await makeRestartHub({ hub, push, restart() { }, bootAt: t0 - 3600e3, now: () => now, delayMs: 0, env })(proj, orch, 'merged #76');
   assert.equal(calls.length, 0);
-  assert.match(logs[0], /no notice, a merge you approved went through in the last 10 minutes/);
+  assert.match(logs[0], /no notice, a merge you approved in proj went through in the last 10 minutes/);
+  // Another project's orchestrator restarting in that window still notifies: the quiet is for the merge's own project.
+  await makeRestartHub({ hub, push, restart() { }, bootAt: t0 - 3600e3, now: () => now, delayMs: 0, env })(other, orch, 'new settings');
+  assert.deepEqual(calls, [{ project: 'other', agent: 'orchestrator-4' }]);
   now = t0 + 20 * 60000;
-  await makeRestartHub({ hub, push, restart() { }, bootAt: t0 - 3600e3, now: () => now, delayMs: 0, env })({ name: 'proj' }, orch, 'new settings');
-  assert.deepEqual(calls, [{ project: 'proj', agent: 'orchestrator-4' }]);
+  await makeRestartHub({ hub, push, restart() { }, bootAt: t0 - 3600e3, now: () => now, delayMs: 0, env })(proj, orch, 'new settings');
+  assert.equal(calls.length, 2, 'past 10 minutes it notifies');
 
   // The routing: the PC while it is in use (no phone follow-up), else the phone; none while you look at that thread.
   const h = pushHarness();

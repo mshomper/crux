@@ -447,13 +447,11 @@ test('a question lives in one card: a repeat is hidden while the first card is o
   assert.deepEqual(open(), [['w1', [Q]], ['orchestrator-1', ['Ship the lens picker on Friday or wait?']]]);
   const note = repeatsIn(a.log.events).get(a.log.events.findLast(e => e.type === 'summary').id);
   assert.deepEqual(note.map(r => [r.i, r.of]), [[0, 'w1']]);   // the "also in w1's card" note
-  // Decision 64: the orchestrator writing to its worker does not let go of the question it asks you again: w1's card
-  // keeps holding it (and shows again with just that question), so it is still asked in one card.
+  // The worker's card closes without your answer (its orchestrator writes to it): the repeat shows again by itself
+  // (only open cards hold repeats; its notice is skipped when w1's already went: fewer-notices.test.mjs).
   hub.orchestratorToWorker(a, orch, 'w1', 'Hold on, I am asking Matt.');
-  assert.deepEqual(open(), [['orchestrator-1', ['Ship the lens picker on Friday or wait?']], ['w1', [Q]]]);
-  // w1 retires unanswered: then the repeat shows by itself.
-  hub.finishRetire(a, w);
   assert.deepEqual(open(), [['orchestrator-1', ['should the preview update while dragging or only on release ?', 'Ship the lens picker on Friday or wait?']]]);
+  assert.ok(w);
   // The Conductor's own summary is never hidden against a project's cards (its prompt keeps it from re-asking).
   const { hub: h2, c } = await setup();
   const cd = { name: 'conductor-1', thread: CONDUCTOR_THREAD, role: 'conductor' };

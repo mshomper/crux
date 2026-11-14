@@ -527,7 +527,7 @@ export function dropUnbackedTrusted({ hub, guard, push, warn = s => console.warn
 // restart_hub (orchestrator only): through the hub process itself, no HTTP. A note in the thread, a one-line notice,
 // then the same restart as the hub menu's. Not within a minute of the hub starting, and at most 3 in 15 minutes (the
 // times travel to the restarted hub in CRUX_HUB_RESTARTS), so a confused loop stays slow and stops.
-// Decision 64: no notice within 10 minutes of a merge you approved (lib/merge-pass.mjs); any other restart notice goes
+// Decision 64: no notice within 10 minutes of a merge you approved in that orchestrator's project (lib/merge-pass.mjs); any other restart notice goes
 // the PC-or-phone way (decision 58), not straight to the phone.
 export const RESTARTS_MAX = 3, RESTARTS_WINDOW_MS = 15 * 60 * 1000;
 export function makeRestartHub({ hub, push, restart, bootAt = Date.now(), now = () => Date.now(), minUpMs = 60 * 1000, delayMs = 1500, env = process.env, warn = s => console.warn(s) }) {
@@ -544,8 +544,9 @@ export function makeRestartHub({ hub, push, restart, bootAt = Date.now(), now = 
     env.CRUX_HUB_RESTARTS = [...recent, now()].join(',');
     going = true;
     hub.notice(project, 'orchestrator', `${agent.name} restarted the hub: ${reason}`);
-    const merged = recentApprovedMerge([...(hub.projects?.values?.() || [])].map(p => p.log?.events || []), now());
-    if (merged) push.log?.(`notice:restart (${project.name}): no notice, a merge you approved went through in the last 10 minutes`);
+    // Only a merge in this orchestrator's own project counts (its own merge, then its restart).
+    const merged = recentApprovedMerge(project.log?.events || [], now());
+    if (merged) push.log?.(`notice:restart (${project.name}): no notice, a merge you approved in ${project.name} went through in the last 10 minutes`);
     else try {
       await Promise.race([push.restartNotice({ project: project.name, agent: agent.name }),
         new Promise(r => { const t = setTimeout(r, 3000); t.unref?.(); })]);

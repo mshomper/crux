@@ -347,8 +347,8 @@ const routes = {
   'POST /api/retire': ({ project, agent }) => { const p = hub.place(project); hub.retire(p, p.hubWide ? p.orchestrator() : agent || p.orchestrator()); return { ok: true }; },
   'POST /api/dismiss': ({ project, question, index }) => hub.dismissQuestion(hub.place(project), String(question || ''), 'you', index ?? null),
   // Answers typed in Needs you: { question: summary event id, answers: [{ index, text }] }.
-  // An answer marked suggested ({ index, text, suggested: true }) is still the Conductor's pre-fill: sent as yours, but it
-  // never pre-approves a merge (decision 64).
+  // Only an answer the page marks as your own words ({ index, text, own: true }) can pre-approve a merge (decision 64);
+  // without the mark (the Conductor's pre-fill, Take all, an older page) it is sent as yours but gives no pass.
   'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.place(project), String(question || ''), answers),
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
