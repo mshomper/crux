@@ -3,9 +3,9 @@
 // the card still waits 3 minutes after a PC notice. One test starts a throwaway test hub on port 4798.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp, removeTmp } from './helpers/tmp.mjs';
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { Push, PC_IDLE_MS, PHONE_FOLLOWUP_MS } from '../lib/push.mjs';
@@ -17,7 +17,7 @@ const settle = () => new Promise(r => setImmediate(r));
 
 const raiseEv = { id: 'r1', type: 'project_settings', project: 'crux', permissionMode: 'trusted', was: 'auto', raised: true, by: 'you', thread: 'orchestrator' };
 
-function harness({ phone = true, dir = mkdtempSync(join(tmpdir(), 'crux-desk-')) } = {}) {
+function harness({ phone = true, dir = makeTmp('crux-desk-') } = {}) {
   const phoneSent = [], desk = [], logged = [];
   const timers = { queue: [], setTimeout(fn, ms) { this.queue.push({ fn, ms }); }, clearTimeout() { }, run(ms) { for (const t of this.queue.splice(0)) if (t.ms === ms) t.fn(); else this.queue.push(t); } };
   const sender = { generateVAPIDKeys: () => ({ publicKey: 'pub', privateKey: 'priv' }), sendNotification: async (_s, body) => { phoneSent.push(JSON.parse(body)); } };
@@ -26,7 +26,7 @@ function harness({ phone = true, dir = mkdtempSync(join(tmpdir(), 'crux-desk-'))
   const approvals = new Map([['ap-1', {}]]);
   const ctx = { approvals, decisionOpen: () => false, events: () => [] };
   const listener = push.desktopAttach('desk-app-1', (event, data) => desk.push({ event, ...data }));
-  return { push, timers, phoneSent, desk, logged, approvals, ctx, listener, dir, done: () => rmSync(dir, { recursive: true, force: true }) };
+  return { push, timers, phoneSent, desk, logged, approvals, ctx, listener, dir, done: () => removeTmp(dir) };
 }
 
 test('PC in use: the notice goes to the PC only, and to the phone 3 minutes later if the card still waits', async () => {
@@ -174,7 +174,7 @@ test('a refused notice sends the card to the phone at once; a late close of an o
 });
 
 test('the desktop stream and its reports are for this PC only; a raise to Trusted reaches the app', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'crux-desk-hub-')), port = 4798;
+  const dir = makeTmp('crux-desk-hub-'), port = 4798;
   mkdirSync(join(dir, 'proj'));
   const child = spawn(process.execPath, [join(HUB_DIR, 'server.mjs'), '--port', String(port), '--no-agents', join(dir, 'proj')], {
     env: { ...process.env, CRUX_HUB_DATA: join(dir, 'data'), CRUX_HOME: join(dir, 'home'), CRUX_HUB_GUARD: 'off' }, stdio: ['ignore', 'ignore', 'pipe']
@@ -211,6 +211,6 @@ test('the desktop stream and its reports are for this PC only; a raise to Truste
   } finally {
     child.kill();
     await new Promise(r => child.once('exit', r));
-    rmSync(dir, { recursive: true, force: true });
+    removeTmp(dir);   // the hub is stopped first, so its files are free
   }
 });

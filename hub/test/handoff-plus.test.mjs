@@ -3,9 +3,9 @@
 // Agents are stubbed and git is a fake, so nothing starts and nothing reaches GitHub.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub, DRAFT_FRESH_MS } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -30,7 +30,7 @@ function fakeRun(cmd, args, cwd) {
 }
 
 function setup(events = [], settings = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'crux-hub-test-'));
+  const root = makeTmp('crux-hub-test-');
   const dir = DIR = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   if (events.length) writeFileSync(join(dir, '.crux', 'events.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');

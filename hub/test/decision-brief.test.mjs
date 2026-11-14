@@ -3,16 +3,16 @@
 // the card's brief button. Everything runs in temp folders.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { leadOf, forYouOf, sketchUri, briefData } from '../../crux/scripts/brief.mjs';
 import { placedImages } from '../../crux/scripts/images.mjs';
 import { build } from '../../crux/scripts/build.mjs';
 import { Board } from '../lib/board.mjs';
 import { briefButton, briefHtml, Brief } from '../public/brief.js';
 
-const temp = t => { const d = mkdtempSync(join(tmpdir(), 'crux-brief-')); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
+const temp = t => makeTmp('crux-brief-', t);
 const record = (id, extra = {}) => ({ id, slug: `d${id}`, title: `Decision ${id}`, status: 'open', date: '2026-11-12', mode: 'full', context: 'History for later sessions.',
   options: [{ key: 'A', name: 'Aye', summary: 'First', pros: ['Quick'], cons: ['Drifts'], effort: 'Small' }, { key: 'B', name: 'Bee', summary: 'Second' }],
   recommended: 'A', confidence: 'lean', recommendation: 'A is quicker.', ...extra });

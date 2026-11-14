@@ -3,10 +3,10 @@
 // branch, and temp subfolders the agent made. The hard stops stay hard stops.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { classify } from '../lib/permission-rules.mjs';
 
 // Matt's machine, as in the real cards. Paths are only compared, never touched.
@@ -63,7 +63,7 @@ test('cmd /c rmdir without /s, on a junction in the project', () => {
 });
 
 test('temp subfolders this agent made are its own to delete, whatever their name', () => {
-  const root = mkdtempSync(join(tmpdir(), 'crux-tune-'));
+  const root = makeTmp('crux-tune-');
   const tmp = join(root, 'tmp');
   mkdirSync(join(tmp, 'shared'), { recursive: true });
   const p = (c, x) => classify({ tool: 'Bash', input: { command: c }, projectDir: join(root, 'proj'), tmp, home: HOME, ...x });
@@ -79,7 +79,7 @@ test('temp subfolders this agent made are its own to delete, whatever their name
 });
 
 test('git rebase: contained on an unpushed branch, unsure on a pushed one, main or a detached HEAD', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'crux-rebase-'));
+  const dir = makeTmp('crux-rebase-');
   const git = (...a) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { stdio: 'pipe' });
   git('init', '-q', '-b', 'feat/x');
   writeFileSync(join(dir, 'a.txt'), '1');

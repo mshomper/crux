@@ -3,13 +3,13 @@
 // on a test hub (port 4752), never on 4747.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp, removeTmp } from './helpers/tmp.mjs';
 import { testHubFolderError, launchSpec, saveLaunch, readLaunch, startDetached, listeningPids, openApp, launchFile, logFile, HUB_DIR } from '../lib/relaunch.mjs';
 
-const tempData = () => ({ CRUX_HUB_DATA: mkdtempSync(join(tmpdir(), 'crux-hub-data-')) });
+const tempData = () => ({ CRUX_HUB_DATA: makeTmp('crux-hub-data-') });
 
 test('a hub is started again with the same node, flags, script, projects and folder', () => {
   const spec = launchSpec({ port: 4752, execPath: 'C:/node/node.exe', execArgv: ['--no-warnings'], argv: ['C:/node/node.exe', 'C:/hub/server.mjs', '--port', '4752', 'C:/proj'], cwd: 'C:/hub' });
@@ -37,13 +37,13 @@ test('a test hub refuses to start without project folders, and a normal start is
   assert.equal(testHubFolderError({ noAgents: false, folders: [] }), '', 'the live hub still falls back to hub.json');
   assert.equal(testHubFolderError({ noAgents: true, folders: [], tempHome: true }), '', 'a throwaway hub.json in the temp folder may give the folders');
   // The real script, in a temp data folder (a test hub), with no folders: it exits at once, before any port or log.
-  const home = mkdtempSync(join(tmpdir(), 'crux-guard-'));
+  const home = makeTmp('crux-guard-');
   try {
     const r = spawnSync(process.execPath, [join(HUB_DIR, 'server.mjs'), '--port', '4799', '--no-agents'], { env: { ...process.env, CRUX_HUB_DATA: join(home, 'data'), CRUX_HOME: join(home, 'home') }, encoding: 'utf8', timeout: 20000 });
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /Test hub refused/);
     assert.ok(!existsSync(join(home, 'data')), 'nothing written');
-  } finally { rmSync(home, { recursive: true, force: true }); }
+  } finally { removeTmp(home); }
 });
 
 test('with nothing saved, the script starts node server.mjs in the hub folder', () => {

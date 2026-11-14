@@ -3,9 +3,9 @@
 // tools, enforced in its tool list and its permission callback. Agents are stubbed: nothing starts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -25,7 +25,7 @@ const summary = (over = {}) => ({ done: [], changed: [], questions: [], decision
 
 async function setup({ projects = ['alpha', 'beta'], settings = {} } = {}) {
   await sleep(2);   // earlier hubs' start-up timers (resume after a restart) fire before this one is built
-  const root = mkdtempSync(join(tmpdir(), 'crux-conductor-test-'));
+  const root = makeTmp('crux-conductor-test-');
   const dirs = projects.map(n => { const d = join(root, n); mkdirSync(join(d, '.crux'), { recursive: true }); return d; });
   const hub = new Hub({ projects: dirs, memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null, initial: settings }), conductorDir: join(root, 'data', 'conductor') });
   hub.conductor.wakeMs = 30;

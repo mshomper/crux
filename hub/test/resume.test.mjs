@@ -2,9 +2,9 @@
 // in every project, a few seconds apart. Agents are stubbed: nothing here starts Claude Code.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub, RESUME_GAP_MS } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -26,7 +26,7 @@ function project(root, name, events) {
 const created = (agent, role = 'worker', min = 120) => ev('agent_created', min, { agent, role, thread: role === 'orchestrator' ? 'orchestrator' : agent, generation: role === 'orchestrator' ? 1 : 0 });
 
 test('each turn\'s start and end are logged, but not while the hub is stopping', () => {
-  const root = mkdtempSync(join(tmpdir(), 'crux-resume-'));
+  const root = makeTmp('crux-resume-');
   const hub = new Hub({ projects: [project(root, 'p', [created('w1')])], memory: new Memory(join(root, 'home')) });
   const p = hub.project('p'), w = p.agents.get('w1');
   w.setState('starting'); w.setState('working'); w.setState('idle'); w.setState('asleep');
@@ -40,7 +40,7 @@ test('each turn\'s start and end are logged, but not while the hub is stopping',
 test('who resumes: mid-turn agents and unread messages, in every project; resting agents stay asleep', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   sent.length = 0;
-  const root = mkdtempSync(join(tmpdir(), 'crux-resume-'));
+  const root = makeTmp('crux-resume-');
   const a = project(root, 'lab', [
     created('orchestrator-1', 'orchestrator'),
     created('busy'), ev('agent_busy', 30, { agent: 'busy', busy: true }),
@@ -74,7 +74,7 @@ test('who resumes: mid-turn agents and unread messages, in every project; restin
 });
 
 test('a message the agent already acted on is not resent; neither is one to a worker that has retired', () => {
-  const root = mkdtempSync(join(tmpdir(), 'crux-resume-'));
+  const root = makeTmp('crux-resume-');
   const hub = new Hub({ projects: [project(root, 'p', [
     created('w1'), ev('message', 10, { thread: 'w1', from: 'orchestrator-1', text: 'Go' }), ev('message', 9, { thread: 'w1', from: 'w1', text: 'On it' }),
     created('w2'), ev('message', 5, { thread: 'w2', from: 'you', text: 'Hi' }), ev('agent_retired', 4, { agent: 'w2', thread: 'w2' })
@@ -83,7 +83,7 @@ test('a message the agent already acted on is not resent; neither is one to a wo
 });
 
 test('the page fingerprint changes when any page file does', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'crux-build-'));
+  const dir = makeTmp('crux-build-');
   mkdirSync(join(dir, 'icons'));
   writeFileSync(join(dir, 'app.js'), 'one');
   writeFileSync(join(dir, 'icons', 'a.svg'), '<svg/>');

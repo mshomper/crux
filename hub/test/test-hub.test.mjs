@@ -2,9 +2,10 @@
 // Agent.start is stubbed here so that a broken guard would show up as a failed test, never as a real agent.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -25,7 +26,7 @@ test('which hubs count as test hubs', () => {
 });
 
 test('in a test hub a message is kept but no agent starts, with one note in the thread', () => {
-  const root = mkdtempSync(join(tmpdir(), 'crux-hub-noagents-'));
+  const root = makeTmp('crux-hub-noagents-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), noAgents: true });

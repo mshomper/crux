@@ -2,9 +2,10 @@
 // escalations, timeouts and the off switch bring the card to you. Agents are stubbed; nothing reaches Claude.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';   // homedir: a path outside both the project and temp
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -19,7 +20,7 @@ Agent.prototype.close = function () { this.q = null; };
 const RULES = 'The orchestrator may ALLOW project work. ALWAYS goes to Matt: pushing to main.';
 function setup({ rules = true, orchestrator = true, live = true, settings = {} } = {}) {
   sent.length = 0;
-  const root = mkdtempSync(join(tmpdir(), 'crux-route-test-'));
+  const root = makeTmp('crux-route-test-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null, initial: settings }) });

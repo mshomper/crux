@@ -2,9 +2,10 @@
 // Auto / Ask switch (page beats the repo file beats the default).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { classify } from '../lib/permission-rules.mjs';
 import { HubSettings, projectKey } from '../lib/settings.mjs';
 import { Agent } from '../lib/agent.mjs';
@@ -44,7 +45,7 @@ test('deleting temp folders: the agent\'s own are contained, others go to the or
 test('a temp folder an agent creates becomes its own to delete later (tracked by the hub)', async () => {
   Agent.prototype.send = function () { this.state = 'working'; };
   Agent.prototype.close = function () {};
-  const root = mkdtempSync(join(tmpdir(), 'crux-temp-own-'));
+  const root = makeTmp('crux-temp-own-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   writeFileSync(join(dir, '.crux-hub.json'), '{ "permissions": "auto" }');
@@ -99,7 +100,7 @@ test('easy cases the hub now classifies itself: cygpath, env prefixes, test-hub 
 
 test('Auto / Ask per project: the page beats the repo file, which beats the default', () => {
   Agent.prototype.send = function () { this.state = 'working'; };
-  const root = mkdtempSync(join(tmpdir(), 'crux-mode-'));
+  const root = makeTmp('crux-mode-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const file = join(root, 'data', 'settings.json');

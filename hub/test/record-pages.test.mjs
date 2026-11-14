@@ -2,9 +2,9 @@
 // of git by a .gitignore inside .decisions, and rebuilt by the hub when a pull leaves them missing or stale.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { execFileSync } from 'node:child_process';
 import { ensureGitignore, pagesStale, refreshPages } from '../../crux/scripts/build.mjs';
 import { Agent } from '../lib/agent.mjs';
@@ -17,7 +17,7 @@ Agent.prototype.close = function () {};
 
 const git = (cwd, ...args) => String(execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
 const record = (id, status = 'open') => ({ id, slug: `d${id}`, title: `Decision ${id}`, status, options: [{ key: 'A', name: 'Aye' }, { key: 'B', name: 'Bee' }], recommended: 'A' });
-const temp = t => { const d = mkdtempSync(join(tmpdir(), 'crux-pages-')); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
+const temp = t => makeTmp('crux-pages-', t);
 const decisionsIn = (root, records) => {
   const d = join(root, '.decisions'); mkdirSync(d, { recursive: true });
   for (const r of records) writeFileSync(join(d, `${String(r.id).padStart(4, '0')}-${r.slug}.json`), JSON.stringify(r, null, 1));

@@ -3,9 +3,9 @@
 // for a card settled afterwards is cleared with the next push. The hub runs for real; agents and web push are stubbed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -16,7 +16,7 @@ Agent.prototype.send = function () { this.state = 'working'; };
 Agent.prototype.close = function () { this.q = null; };
 
 function setup({ orchestrator = true, settings = {} } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'crux-push-route-'));
+  const root = makeTmp('crux-push-route-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null, initial: settings }) });

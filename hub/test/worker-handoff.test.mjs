@@ -3,9 +3,9 @@
 // existing machinery (decision 16), and the floor setting. Agents are stubbed, so nothing starts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -18,9 +18,6 @@ const sent = [];
 Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'working'; };
 Agent.prototype.close = function () {};
 
-const roots = [];
-test.after(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
-
 const ago = min => new Date(Date.now() - min * 60000).toISOString();
 const ev = (type, min, extra) => ({ id: `${type}-${Math.random()}`, ts: ago(min), type, ...extra });
 const summary = (over = {}) => ({ done: [], changed: [], questions: [], decisions_needed: [], blocked_on: [], next_step: '', visuals: [], approvals: [], open_questions: [], ...over });
@@ -28,8 +25,7 @@ const NOTES = { in_flight: ['the export panel, half built'], promises: ['none'],
 
 // An orchestrator and worker w1 (Sonnet, effort medium) that ended its last turn at pct% of its context.
 function setup({ pct = 45, draft = false, settings = {}, file = null } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'crux-hub-test-'));
-  roots.push(root);
+  const root = makeTmp('crux-hub-test-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const events = [
@@ -160,8 +156,7 @@ test('the automatic handoff at the mark stays as it was', () => {
 
 test('the floor: 35% by default, saved like the other numbers, bad values fall back', () => {
   assert.equal(SETTING_DEFAULTS.workerHandoffFloorPct, 35);
-  const root = mkdtempSync(join(tmpdir(), 'crux-hub-test-'));
-  roots.push(root);
+  const root = makeTmp('crux-hub-test-');
   const file = join(root, 'settings.json');
   const s = new HubSettings({ file });
   assert.equal(s.get('workerHandoffFloorPct'), 35);

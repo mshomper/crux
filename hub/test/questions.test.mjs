@@ -2,9 +2,9 @@
 // retires, or when every decision a question names is picked. One rule for the page, the map and phone pushes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { decisionRefs, answeredByPicks, openQuestions, questionOpen, pageStatus, isYesNo, answerMessage, QUOTE_MAX } from '../public/questions.js';
 import { cardsFor, stillOpen } from '../lib/push.mjs';
 import { Agent } from '../lib/agent.mjs';
@@ -91,7 +91,7 @@ test('a phone notification for a question is not sent once it is dismissed, its 
 });
 
 function hubWithWorker() {
-  const root = mkdtempSync(join(tmpdir(), 'crux-hub-q-'));
+  const root = makeTmp('crux-hub-q-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')) });

@@ -3,9 +3,9 @@
 // the hub's commit and pick paths, the board field, and the card's pictures button. Everything runs in temp folders.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, symlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { execFileSync } from 'node:child_process';
 import { deflateSync } from 'node:zlib';
 import { placeImages, placedImages, isPlaced, shrinkPng, decodePng, encodePng, sniffImage, stripJpeg, insideAny, MAX_WIDTH } from '../../crux/scripts/images.mjs';
@@ -20,7 +20,7 @@ Agent.prototype.send = function () { this.state = 'working'; };
 Agent.prototype.close = function () {};
 
 const git = (cwd, ...args) => String(execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
-const temp = t => { const d = mkdtempSync(join(tmpdir(), 'crux-pics-')); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
+const temp = t => makeTmp('crux-pics-', t);
 const record = (id, extra = {}) => ({ id, slug: `d${id}`, title: `Decision ${id}`, status: 'open', date: '2026-11-12', options: [{ key: 'A', name: 'Aye', summary: 'First' }, { key: 'B', name: 'Bee', summary: 'Second' }], recommended: 'A', ...extra });
 const writeRecord = (dir, r) => { mkdirSync(dir, { recursive: true }); const f = join(dir, `${String(r.id).padStart(4, '0')}-${r.slug}.json`); writeFileSync(f, JSON.stringify(r, null, 1)); return f; };
 const readRecord = (dir, id) => JSON.parse(readFileSync(join(dir, `${String(id).padStart(4, '0')}-d${id}.json`), 'utf8'));

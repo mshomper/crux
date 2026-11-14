@@ -3,9 +3,9 @@
 // the network: the download is fed a package built in memory. One test starts a throwaway test hub on port 4796.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp, removeTmp } from './helpers/tmp.mjs';
 import { gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -14,7 +14,7 @@ import { Secrets, KEY_SHAPE, keyEnd, checkFolders, saveProjects, readHubConfig, 
 import { TarPick, ClaudeDownload, resolveClaude, claudeReady, downloadedPath, installedBinary, expected } from '../lib/claude-code.mjs';
 import { HUB_DIR } from '../lib/relaunch.mjs';
 
-const temp = p => mkdtempSync(join(tmpdir(), p));
+const temp = p => makeTmp(p);
 const KEY = 'sk-ant-api03-' + 'a'.repeat(40) + 'WXYZ';
 
 // A tar with the given files, as npm packs them (package/<name>).
@@ -80,7 +80,7 @@ test('the download keeps the program only when its checksum matches, in the hub 
     await off.start();
     await until(() => off.state().state === 'error');
     assert.match(off.state().error, /internet connection/);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTmp(dir); }
 });
 
 test('a copy already on the PC, or an earlier download, stands in only while the download cannot be reached (decision 54 B)', async () => {
@@ -107,7 +107,7 @@ test('a copy already on the PC, or an earlier download, stands in only while the
     await ok.start(); await until(() => ok.state().state === 'done');
     assert.equal(resolveClaude({ env, exp }).source, 'downloaded');
     assert.ok(!existsSync(join(env.CRUX_HUB_DATA, 'claude-code', '9.9.8')), 'the earlier version was removed');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTmp(dir); }
 });
 
 test('the SDK manifest names the program, its size and checksum, and the package it comes from', () => {
@@ -144,7 +144,7 @@ test('the key is shape-checked, kept in secrets.json in the hub data folder, and
     const own = { ANTHROPIC_API_KEY: 'sk-ant-own', CRUX_HUB_USE_API_KEY: '1' };
     assert.equal(s.apply(own), 'environment');
     assert.equal(own.ANTHROPIC_API_KEY, 'sk-ant-own', 'a key set in the environment wins');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTmp(dir); }
 });
 
 test('checking the key with Anthropic: refused, accepted, or unchecked when it cannot be reached', async () => {
@@ -170,7 +170,7 @@ test('folders must exist and be full paths; saving keeps the rest of hub.json', 
     assert.deepEqual(after.projects, [a.replace(/\\/g, '/')]);
     assert.deepEqual(after.app, { port: 4791 });
     assert.deepEqual(after.defaults, { worker: { model: 'sonnet' } });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTmp(dir); }
 });
 
 // A throwaway test hub on a port of its own (never 4747), with its data and home in the temp folder.
@@ -208,7 +208,7 @@ test('a hub run from a clone never takes up a saved key: it stays on its own log
       assert.equal(s.needed, false, 'and no setup screen');
       assert.equal((await call('POST', '/api/setup/key', { body: { apiKey: KEY } })).status, 404, 'nor can one be set on it');
     } finally { await stop(); }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTmp(dir); }
 });
 
 test('a test hub playing the desktop app starts with no project, asks for setup, and takes the key from this PC only', async () => {
@@ -236,6 +236,6 @@ test('a test hub playing the desktop app starts with no project, asks for setup,
     assert.equal(remote.key.end, '', 'the last four only to this PC');
   } finally {
     await stop();
-    rmSync(dir, { recursive: true, force: true });
+    removeTmp(dir);
   }
 });

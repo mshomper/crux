@@ -2,9 +2,9 @@
 // orchestrator reads with its next message, so it does not ask them again. Not for the orchestrator's own questions.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { questionGist, answerNote, GIST_MAX, NOTE_MAX } from '../public/questions.js';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
@@ -16,7 +16,7 @@ Agent.prototype.send = function (t) { got.push([this.name, this.withNotes(t)]); 
 Agent.prototype.close = function () { };
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'crux-answer-notes-'));
+  const root = makeTmp('crux-answer-notes-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')) });

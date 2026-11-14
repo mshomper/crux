@@ -2,9 +2,9 @@
 // hub's built-in default rules, and the orchestrator is asked once to draft an entry for Matt.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -17,7 +17,7 @@ Agent.prototype.close = function () {};
 
 function setup({ auto = true, entry = false } = {}) {
   sent.length = 0;
-  const root = mkdtempSync(join(tmpdir(), 'crux-defaults-'));
+  const root = makeTmp('crux-defaults-');
   const dir = join(root, 'lab');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   if (auto) writeFileSync(join(dir, '.crux-hub.json'), '{ "permissions": "auto" }');

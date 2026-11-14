@@ -1,9 +1,10 @@
 // Card and rules wording names the person from their own profile (R007 item 3), and reads naturally with no profile.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
@@ -16,7 +17,7 @@ Agent.prototype.close = function () {};
 
 function setup(name) {
   sent.length = 0;
-  const root = mkdtempSync(join(tmpdir(), 'crux-card-names-'));
+  const root = makeTmp('crux-card-names-');
   const dir = join(root, 'proj');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   writeFileSync(join(dir, '.crux-hub.json'), '{ "permissions": "auto" }');

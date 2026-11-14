@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTmp, removeTmp } from './helpers/tmp.mjs';
 import { cardsFor, isLooking, stillOpen, payloadOf, Push, QUESTION_GRACE_MS } from '../lib/push.mjs';
 
 const approvalEv = { id: 'e1', type: 'approval', project: 'crux', thread: 'phone-reach', approval: 'ap-1', agent: 'phone-reach', tool: 'Bash', input: { command: 'rm -rf secret-folder' } };
@@ -54,7 +54,7 @@ test('a card answered before the push goes out is not sent', () => {
 });
 
 function harness() {
-  const dir = mkdtempSync(join(tmpdir(), 'crux-push-'));
+  const dir = makeTmp('crux-push-');
   const sent = [];
   const timers = { queue: [], setTimeout(fn, ms) { this.queue.push({ fn, ms }); }, clearTimeout() { } };
   const sender = {
@@ -64,7 +64,7 @@ function harness() {
   const push = new Push({ dir, sender, timers });
   const sub = ep => ({ endpoint: ep, keys: { p256dh: 'k', auth: 'a' } });
   const ctx = { approvals: new Map([['ap-1', {}]]), decisionOpen: (_p, id) => id === 20, events: () => [summaryEv] };
-  return { dir, sent, timers, push, sub, ctx, done: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, sent, timers, push, sub, ctx, done: () => removeTmp(dir) };
 }
 const settle = () => new Promise(r => setImmediate(r));
 
