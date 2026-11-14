@@ -346,7 +346,7 @@ export class Hub {
   fromYou(p, thread, text, ids = [], extra = {}) {
     if (ids.length > MAX_PER_MESSAGE) throw new Error(`Up to ${MAX_PER_MESSAGE} attachments per message.`);
     const attachments = ids.map(x => x && typeof x === 'object' ? p.attachments.ref(String(x.id || ''), x.name) : p.attachments.ref(String(x)));
-    if (p.hubWide) return this.conductor.fromYou(text, attachments);   // the Conductor's thread (decision 55)
+    if (p.hubWide) return this.conductor.fromYou(text, attachments, extra);   // the Conductor's thread (decision 55)
     const a = thread === 'orchestrator' ? null : p.agents.get(thread);
     if (thread !== 'orchestrator' && (!a || a.state === 'retired')) throw new Error(`No active agent ${thread}`);
     p.log.append('message', { thread, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });

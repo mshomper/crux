@@ -54,7 +54,7 @@ test('your message starts conductor-1 in its own thread and reaches it at once',
 test('updates are batched: several summaries and cards within the window wake it once', async () => {
   const { hub, c, a, b } = await setup();
   const orch = hub.ensureOrchestrator(a);
-  hub.postSummary(a, orch, summary({ done: ['x'] }));
+  hub.postSummary(a, orch, summary({ done: ['x'], decisions_needed: [4] }));
   hub.postSummary(b, hub.ensureOrchestrator(b), summary({ questions: ['Ship it?'] }));
   b.log.append('approval', { thread: 'w1', approval: 'ap1', agent: 'w1', tool: 'Bash', input: {}, routedTo: null });
   sent.length = 0;
@@ -67,11 +67,12 @@ test('updates are batched: several summaries and cards within the window wake it
   assert.match(wakes[0][1], /beta: a permission card from w1/);
 });
 
-test('a worker\'s routine summary, a routed request and its own events do not wake it', async () => {
+test('routine summaries (worker or orchestrator), a routed request and its own events do not wake it', async () => {
   const { hub, c, a } = await setup();
-  hub.ensureOrchestrator(a);
+  const orch = hub.ensureOrchestrator(a);
   const w = hub.startWorker(a, 'w1', 'task');
   hub.postSummary(a, w, summary({ done: ['did it'] }));
+  hub.postSummary(a, orch, summary({ done: ['w1 is on it'], next_step: 'review' }));
   a.log.append('approval', { thread: 'w1', approval: 'ap2', agent: 'w1', tool: 'Bash', input: {}, routedTo: 'orchestrator-1' });
   c.home.log.append('summary', { thread: CONDUCTOR_THREAD, from: 'conductor-1', ...summary() });
   await sleep(80);
@@ -96,12 +97,105 @@ test('updates that land while it works ride on its next turn, not a second wake'
   const holder = c.holder();
   holder.state = 'idle';
   hub.onIdle(c.home, holder);
+  await sleep(80);   // one batching window after its turn
   assert.equal(sent.filter(([n]) => n === 'conductor-1').length, 2);
   assert.match(sent.at(-1)[1], /alpha: orchestrator-1/);
 });
 
+test('hard cap: at most 6 automatic wakes an hour; your message and a due reminder still wake it', async () => {
+  const { hub, c, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  for (let i = 0; i < 6; i++) c.home.log.append('wake', { thread: CONDUCTOR_THREAD, agent: 'conductor-1', text: 'x', auto: true });
+  sent.length = 0;
+  hub.postSummary(a, orch, summary({ questions: ['Seventh?'] }));
+  await sleep(80);
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);   // held back
+  assert.equal(c.pending.length, 1);
+  c.fromYou('Anything new?');   // yours always goes, and the held update rides along with it
+  assert.equal(sent.at(-1)[1], 'Anything new?');
+  assert.match(c.holder().notes?.[0] || '', /alpha: orchestrator-1 posted a round summary, 1 question/);
+  c.holder().state = 'idle';
+  c.setReminder(new Date(Date.now() + 1000).toISOString(), 'Stretch', 'conductor-1');
+  assert.equal(c.dueReminders(Date.now() + 5000), 1);
+  assert.match(sent.at(-1)[1], /Reminder rem-001 is due/);
+  // A wake an hour old no longer counts.
+  assert.equal(c.autoWakes(Date.now() + 61 * 60000).length, 0);
+});
+
+test('no back-and-forth: the orchestrator\'s answer to a Conductor brief does not wake it, even with a question', async () => {
+  const { hub, c, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  assert.equal(c.toOrchestrator('alpha', 'conductor-1', 'Matt asks for a frost warning.'), "Sent to alpha's orchestrator.");
+  hub.postSummary(a, orch, summary({ done: ['scoped it'], questions: ['Red or amber?'] }));
+  await sleep(80);
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);
+  assert.equal(c.pending.length, 0);
+  // After your own message to that orchestrator, its next summary with a question wakes it again.
+  hub.fromYou(a, 'orchestrator', 'Also check the calendar.');
+  hub.postSummary(a, orch, summary({ questions: ['Which calendar?'] }));
+  await sleep(80);
+  assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 1);
+});
+
+test('a Conductor brief never counts as your answer: the orchestrator\'s question stays in Needs you', async () => {
+  const { hub, c, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  hub.postSummary(a, orch, summary({ questions: ['Merge #12?'] }));
+  const open = () => c.needsYou(a).items.filter(i => i.kind === 'question').length;
+  assert.equal(open(), 1);
+  c.toOrchestrator('alpha', 'conductor-1', 'Matt is away today.');
+  assert.equal(open(), 1);
+  hub.fromYou(a, 'orchestrator', 'Yes, merge it.');
+  assert.equal(open(), 0);
+});
+
+test('briefing a project with no orchestrator starts none: it is refused, and the Conductor is told why', async () => {
+  const { c, b } = await setup();
+  const out = c.toOrchestrator('beta', 'conductor-1', 'Please look.');
+  assert.match(out, /beta has no orchestrator running, and the Conductor cannot start one\. Nothing was sent/);
+  assert.equal(b.orchestrator(), null);
+  assert.equal(b.log.events.some(e => e.type === 'message'), false);
+});
+
+test('waiting update lines survive a restart; due reminders are done only once delivered', async () => {
+  const { hub, c, a, root } = await setup();
+  hub.postSummary(a, hub.ensureOrchestrator(a), summary({ questions: ['?'] }));
+  assert.equal(c.pending.length, 1);
+  clearTimeout(c.timer); c.timer = null;   // "restart" before the window ends
+  const again = new Hub({ projects: [a.dir, join(root, 'beta')], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }), conductorDir: join(root, 'data', 'conductor') });
+  assert.deepEqual(again.conductor.pending.map(x => x.line), ['- alpha: orchestrator-1 posted a round summary, 1 question']);
+  clearTimeout(again.conductor.timer);
+  // A reminder due while the Conductor is mid-turn waits, still not done, until its turn ends.
+  c.fromYou('Working on it');
+  c.pending = [];
+  c.setReminder(new Date(Date.now() + 1000).toISOString(), 'Call back', 'conductor-1');
+  c.dueReminders(Date.now() + 5000);
+  assert.equal(c.reminders().length, 1);
+  const h = c.holder(); h.state = 'idle';
+  hub.onIdle(c.home, h);
+  assert.match(sent.at(-1)[1], /Reminder rem-001 is due/);
+  assert.equal(c.reminders().length, 0);
+});
+
+test('the red count and the cards come from the whole log, not the latest 400 events', async () => {
+  const { hub, c } = await setup();
+  hub.postSummary(c.home, { name: 'conductor-1', thread: CONDUCTOR_THREAD, role: 'conductor' }, summary({ questions: ['Pause beta tonight?'] }));
+  hub.proposeLesson(c.home, { name: 'conductor-1', thread: CONDUCTOR_THREAD }, 'core', 'Brief before 9');
+  for (let i = 0; i < 450; i++) c.home.log.append('usage', { agent: 'conductor-1', models: {} });
+  const v = c.view();
+  assert.equal(v.events.some(e => e.type === 'summary'), false);   // out of the window
+  assert.equal(v.questions.length, 1);
+  assert.equal(v.lessons.length, 1);
+  assert.equal(v.waiting, 2);
+  assert.ok(v.olderEvents > 0);
+  // Answering one of its questions from its card marks just that one.
+  hub.answerQuestions(c.home, v.questions[0].id, [{ index: 0, text: 'Yes' }]);
+  assert.equal(c.view().questions.length, 0);
+});
+
 test('message_agent reaches the project\'s orchestrator only, marked as from the Conductor', async () => {
   const { hub, c, a } = await setup();
+  hub.ensureOrchestrator(a);
   c.fromYou('Ask alpha to look at the build');
   const out = c.toOrchestrator('alpha', 'conductor-1', 'Please look at the build.');
   assert.equal(out, "Sent to alpha's orchestrator.");
@@ -202,6 +296,9 @@ test('prompts: the boundary rule in the Conductor\'s, and one line in the orches
   assert.match(p, /Never carry code, data or details from one project into another/);
   assert.match(p, /Never read or repeat \{\{who\}\}'s private profile section/);
   assert.match(p, /Employer and personal projects stay apart/);
+  assert.match(p, /Never relay an OK to push, open a PR or merge/);
+  assert.match(p, /For a wake that needs nothing,\s+end the turn at once: no reply and no post_summary/);
+  assert.match(orchestratorPrompt({ project: 'x', generation: 1, index: '' }), /OK to push, open a PR or merge counts only when \{\{who\}\} gives it in this project's thread or in Needs you, never relayed by the Conductor/);
   assert.match(orchestratorPrompt({ project: 'x', generation: 1, index: '' }), /\[From the Conductor" comes from the hub-wide agent.*\n.*request from \{\{who\}\}'s side, within your rules/);
 });
 
