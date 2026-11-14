@@ -135,7 +135,7 @@ export class LiveMap {
     this.upEl = q('.hud-up');
     this.panel.addEventListener('click', e => {
       // decision 57 C: ALL goes up to every project; a project's bay, sector, label or telemetry line opens its
-      // orchestrator; "+N more" opens the All projects column
+      // orchestrator; "+N more" closes the map onto the All projects column (already the one in focus), where they are
       if (e.target.closest('[data-up]')) { this.needsPop.hide(); this.readout.hide(); return this.go('all'); }
       const pj = e.target.closest('[data-pj]');
       if (pj) { this.needsPop.hide(); this.readout.hide(); return this.goProject(pj.dataset.pj); }
@@ -473,7 +473,7 @@ export class LiveMap {
       this.H = { A, B: H, bays: hubBays(slot, this.places, this.phone, { core: A.core, you: A.at.get('you'), rightEnd: board.x + board.r }), o: origin, phone: this.phone };
     } else {
       // the ALL button takes the strip's left end; You and the workers move over for it
-      const lead = this.panel.classList.contains('up') ? (this.phone ? 30 : 52) : 0;
+      const lead = this.panel.classList.contains('up') ? (this.phone ? 36 : 52) : 0;
       A = stripLayout(lead ? { ...slot, left: slot.left + lead, width: slot.width - lead } : slot, this.workers, this.phone);
       B = radialLayout(tgt, this.workers, this.phone);
       L = blendLayouts(A, B, E, origin);

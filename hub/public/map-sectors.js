@@ -62,7 +62,9 @@ export class SectorView {
         + `<span class="hb-bar"><s style="width:${pct}%${near ? ';background:#f5c96a' : ''}"></s><u style="left:${clamp(p.retireAt, 0, 100)}%"></u></span></span>${badge}`;
       e.bot.innerHTML = bot(48) + badge;
       e.tag.innerHTML = `<b>${esc(l.name)}</b><span class="w">${esc(l.waiting)}</span><span class="m">${esc(l.model)}</span><span class="m">${esc(l.agents)}</span>`
-        + `<span class="ln"><b>${esc(l.name)}</b><span class="w">${esc(p.count ? `${p.count} waiting` : busy(p.state) ? 'working' : p.state === 'vacant' ? '–' : p.state)}</span></span>`;
+        // the one-line fold: the name first (it never gives way), the count as a red number, else the state word,
+        // which shortens if it must
+        + `<span class="ln"><b>${esc(l.name)}</b>${p.count ? `<span class="n" aria-label="${p.count} waiting">${p.count}</span>` : `<span class="w">${esc(busy(p.state) ? 'working' : p.state === 'vacant' ? '–' : p.state)}</span>`}</span>`;
     }
   }
 
@@ -277,7 +279,8 @@ export class SectorView {
       const names = m.of.map(i => this.places[i]?.name).filter(Boolean);
       const text = m.strip ? `+${m.n}` : `+${m.n} more`;
       if (el.textContent !== text) el.textContent = text;
-      el.title = `${names.join(', ')}: open All projects to see ${m.n === 1 ? 'it' : 'them'}`;
+      // All projects is already the column in focus: a click closes the map (or, in the strip, leaves you there)
+      el.title = m.strip ? `${names.join(', ')}: in the All projects list below` : `${names.join(', ')}: close the map to see ${m.n === 1 ? 'it' : 'them'} in All projects`;
       el.classList.toggle('strip', !!m.strip);
       el.classList.toggle('r', m.align === 'right');
       el.classList.toggle('hot', m.of.some(i => this.places[i]?.count > 0));

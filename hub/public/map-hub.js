@@ -18,6 +18,10 @@ const busy = s => s === 'working' || s === 'starting';
 export const RING = { inner: 1.98, outer: 2.5, gauge: 2.62 };
 
 // Label sizes in px: a full label (name, waiting, model and context, agents) and the one-line fold (name and count).
+// How wide You's words under its circle are on a phone ("YOU" over "3 WAITING": 64px measured at 390 and 320), with a
+// little room for "12 WAITING".
+export const YOU_WORDS = 72;
+
 export const LABEL = {
   desk: { full: 92, line: 30, width: 210, lead: 46 },
   phone: { full: 76, line: 24, lead: 0 }
@@ -27,7 +31,9 @@ export const LABEL = {
 // agent's wait on you (threadWaiting), so the page's rule is the only rule.
 export function hubProjects(groups, { retireAt = 60, waitingOf = () => 0 } = {}) {
   return (groups || []).map(g => {
-    const orch = g.agents.find(a => a.role === 'orchestrator') || null;
+    // during a handoff two agents hold the role for a while: the incoming one (not retiring) is the project's now
+    const orchs = g.agents.filter(a => a.role === 'orchestrator');
+    const orch = orchs.find(a => !a.retiring) || orchs[0] || null;
     const workers = g.agents.filter(a => a.role !== 'orchestrator').map(a => ({
       name: a.name, model: a.model || a.modelSeen || null, state: a.state || 'asleep', needs: (waitingOf(g, a) || 0) > 0
     }));
@@ -157,7 +163,11 @@ export function hubLayout(rect, projects, phone) {
     const r = clamp(rg / RING.gauge, 22, 104);
     const cy = ay + topH + 8 + rg;
     const ring = { r1: r * RING.inner, r2: r * RING.outer, rg: r * RING.gauge };
-    const colW = aw / 2 - youR - 12;
+    // You sits in the bottom band: rows beside its circle stop short of the circle; the row level with its words
+    // ("3 WAITING", wider than the circle) stops short of those (review, 2026-11-13: it overlapped them by 3.4px)
+    const youY = ay + ah - youR - 30, wordsTop = youY + youR + 4;
+    const wide = aw / 2 - youR - 12, narrow = aw / 2 - YOU_WORDS / 2 - 8;
+    const widthAt = (band, y) => band === 'bottom' && y + h / 2 > wordsTop ? narrow : wide;
     const labels = [], more = [];
     for (const band of ['top', 'bottom']) {
       const cap = band === 'top' ? topRows : bottomRows;
@@ -173,12 +183,11 @@ export function hubLayout(rect, projects, phone) {
         keep.forEach((k, j) => {
           const y = base + (j + 0.5) * h;
           const ex = side === 'left' ? x + 18 : x - 18;
-          labels.push({ i: k.i, x, y, align, mode, width: colW, edge: { x: ex, y: band === 'top' ? y + h / 2 - 3 : y - h / 2 + 3 } });
+          labels.push({ i: k.i, x, y, align, mode, width: widthAt(band, y), edge: { x: ex, y: band === 'top' ? y + h / 2 - 3 : y - h / 2 + 3 } });
         });
-        if (rest.length) more.push({ x, y: base + (keep.length + 0.5) * h, align, n: rest.length, of: rest, width: colW });
+        if (rest.length) { const y = base + (keep.length + 0.5) * h; more.push({ x, y, align, n: rest.length, of: rest, width: widthAt(band, y) }); }
       }
     }
-    const youY = ay + ah - youR - 30;
     return { core: { x: cx, y: cy, r }, ring, sectors, labels, more, you: { x: cx, y: youY, r: youR }, reserve: res, mode };
   }
 }

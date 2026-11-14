@@ -2,7 +2,8 @@
 // at 390 wide, never scrolls sideways, labels never overlap, and past about six projects it folds gracefully.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hubProjects, hubSectors, hubLayout, hubBays, hubFeed, labelLines, spread, LABEL, RING } from '../public/map-hub.js';
+import { readFileSync } from 'node:fs';
+import { hubProjects, hubSectors, hubLayout, hubBays, hubFeed, labelLines, spread, LABEL, RING, YOU_WORDS } from '../public/map-hub.js';
 import { stripLayout, stripLane } from '../public/map-layout.js';
 import { conductorCore } from '../public/map-sectors.js';
 import { conductorReadout } from '../public/map-readout.js';
@@ -77,10 +78,14 @@ for (const [label, rect, phone] of [['1920 desktop', DESK, false], ['1366 laptop
       // labels stay off the ring and You
       const { x, y } = L.core, rg = L.ring.rg;
       const ringBox = { left: x - rg, right: x + rg, top: y - rg, bottom: y + rg };
-      const you = { left: L.you.x - L.you.r - 4, right: L.you.x + L.you.r + 4, top: L.you.y - L.you.r, bottom: L.you.y + L.you.r + 30 };
+      // You's circle, and its words under it (on a phone, wider than the circle)
+      const circle = { left: L.you.x - L.you.r - 4, right: L.you.x + L.you.r + 4, top: L.you.y - L.you.r, bottom: L.you.y + L.you.r };
+      const half = phone ? YOU_WORDS / 2 : L.you.r + 4;
+      const words = { left: L.you.x - half, right: L.you.x + half, top: L.you.y + L.you.r + 4, bottom: L.you.y + L.you.r + 30 };
       for (const b of B) {
         assert.ok(!hit(b, ringBox), `n=${n}: a label covers the ring`);
-        assert.ok(!hit(b, you), `n=${n}: a label covers You`);
+        assert.ok(!hit(b, circle), `n=${n}: a label covers You`);
+        assert.ok(!hit(b, words), `n=${n}: a label covers You's words`);
       }
       // the ring sits inside the panel, clear of the top bar, and above You
       assert.ok(x - rg >= rect.left && x + rg <= rect.left + rect.width, `n=${n}: ring leaves the panel`);
@@ -151,6 +156,30 @@ test('hubProjects reads the All projects groups, and the page decides what waits
   assert.equal(P[1].retireAt, 60);
 });
 
+test('during a handoff the project shows its incoming orchestrator, not the one retiring', () => {
+  const [p] = hubProjects([{ name: 'atlas', count: 0, agents: [
+    { name: 'orchestrator-1', role: 'orchestrator', model: 'claude-opus-5-5', state: 'idle', contextPct: 61, retiring: 'overlap' },
+    { name: 'orchestrator-2', role: 'orchestrator', model: 'claude-sonnet-5-5', state: 'working', contextPct: 6 }
+  ] }]);
+  assert.equal(p.model, 'claude-sonnet-5-5');
+  assert.equal(p.ctx, 6);
+  assert.equal(p.workers.length, 0, 'the outgoing orchestrator is not counted as a worker');
+});
+
+// Review MEDIUM 1 (2026-11-13): moving the keyboard between pinned columns left the map in the wrong mode until the
+// next live event. The map update now runs on its own, from render() and from a focus change alike.
+test('moving focus between columns updates the map at once', () => {
+  const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const kb = app.match(/kbChanged: \(\) => \{([^}]*)\}/);
+  assert.ok(kb, 'kbChanged is there');
+  assert.match(kb[1], /updateMap\(\)/, 'a focus change updates the map');
+  const render = app.slice(app.indexOf('function render() {'), app.indexOf('function updateMap() {'));
+  assert.match(render, /updateMap\(\);/, 'render updates the map through the same function');
+  const upd = app.slice(app.indexOf('function updateMap() {'), app.indexOf('// ---------- actions ----------'));
+  assert.match(upd, /hubMap = S\.projects\.length > 1 && cols\.kb === AP\.HUB_THREAD/, 'the mode follows the column in focus');
+  assert.match(upd, /map\.update\(/);
+});
+
 test('the telemetry list puts projects waiting on you first, then working ones', () => {
   const P = fake(4, [2]);
   P[0].state = 'idle'; P[1].state = 'working'; P[3].state = 'idle';
@@ -176,5 +205,6 @@ test('the core is the Conductor: its state, context and model from /api/state, a
   assert.ok(r.rows.some(x => x.k === 'Projects' && x.v === '4 projects' && x.note === '3 waiting for you' && x.tone === 'red'));
   assert.ok(r.rows.some(x => x.k === 'Context' && x.note === 'Hands off at 55%'));
   assert.ok(!r.rows.some(x => x.k === 'Permissions'), 'the Conductor answers no permission requests');
+  assert.equal(r.action, 'Show its thread', 'its thread is in All projects, already in focus: the button says what it does');
   assert.equal(conductorReadout(conductorCore(null), { projects: 2 }).state, 'Not running');
 });

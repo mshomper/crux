@@ -29,7 +29,11 @@ export function coreReadout(core, { busy = 0, resting = 0 } = {}) {
 
 // The Conductor's readout (decision 57 C): the core of the All projects map. core: conductorCore() (map-sectors.js);
 // projects and waiting: how many projects the hub runs and how many things wait on you across them.
-export function conductorReadout(core, { projects = 0, waiting = 0 } = {}) {
+export function conductorReadout(core, opts = {}) {
+  // its thread sits at the top of All projects, the column already in focus: the button closes the map onto it
+  return { ...conductorRows(core, opts), action: 'Show its thread' };
+}
+function conductorRows(core, { projects = 0, waiting = 0 } = {}) {
   const across = { k: 'Projects', v: `${projects} project${projects === 1 ? '' : 's'}`, note: waiting ? `${waiting} waiting for you` : 'Nothing waiting', tone: waiting ? 'red' : '' };
   if (!core || !core.holder) {
     return { title: 'Conductor', sub: 'Every project', state: core?.state === 'vacant' ? 'Not running' : STATE_WORDS.asleep, hue: hueOf(core?.model), effort: null,
@@ -77,7 +81,7 @@ export class CoreReadout {
   set(data) {
     const html = `<header class="cp-head"><b>${esc(data.title)}</b><span>${esc(data.sub)}</span><em>${esc(data.state)}</em></header>
       <dl class="cp-rows">${data.rows.map(r => `<div class="${esc(r.tone || '')}"><dt>${esc(r.k)}</dt><dd><b>${esc(r.v)}</b>${r.pips ? pips(data.effort) : ''}${r.note ? `<i>${esc(r.note)}</i>` : ''}</dd></div>`).join('')}</dl>
-      <button class="cp-open" data-core-open>Open its chat</button>`;
+      <button class="cp-open" data-core-open>${esc(data.action || 'Open its chat')}</button>`;
     if (html !== this.key) { this.key = html; this.el.innerHTML = html; }
     data.hue ? this.el.style.setProperty('--mh', data.hue) : this.el.style.removeProperty('--mh');
   }

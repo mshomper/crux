@@ -961,6 +961,13 @@ function render() {
   $('#open-board').classList.toggle('on', !$('#board').hidden);
   $('#board-filter').placeholder = filterHint({ narrow: phoneMq.matches });
   renderProjects(); cols.render(); renderThreads(); renderBoard(); renderModelMenu();
+  updateMap();
+  usageUI.draw();
+}
+
+// The live map, from the state and the column in focus. Also run when only the focus moves between columns, so the
+// map switches between a project's map and the All projects map at once (decision 57 C).
+function updateMap() {
   // Decision 42: the strip's Needs you counter counts every project and opens All projects (more than one project).
   // The You station's popover lists every project's permission requests then (each answered by its id).
   const v = hub();
@@ -973,7 +980,6 @@ function render() {
     mode: hubMap, conductor: c,
     places: hubMap ? hubProjects(v.groups, { retireAt: S.retireAt || 60, waitingOf: (g, a) => AP.threadWaiting(g.p, a.thread, S.pending) }) : null
   });
-  usageUI.draw();
 }
 
 // ---------- actions ----------
@@ -1093,7 +1099,8 @@ const cols = new Columns({
     focusBox: focusIfDesk,
     scrolled: () => placeModelMenu(),
     // The keyboard moved to another column: the list's light follows, and the hub hears which thread you look at.
-    kbChanged: () => { renderThreads(); phone.viewChanged(); },
+    // The map follows the column in focus too: All projects in focus shows the hub map, any other its project's map.
+    kbChanged: () => { renderThreads(); updateMap(); phone.viewChanged(); },
     // Pins and columns changed: redraw; a rail click also puts the keyboard in the column it opened.
     changed: (fromRail = false) => { render(); phone.viewChanged(); if (fromRail) focusIfDesk(cols.kbConv()?.input); },
     action: (name, c) => columnAction(name, c),
