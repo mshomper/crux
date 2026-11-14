@@ -428,6 +428,7 @@ test('restart_hub: orchestrator only, with a reason, not within a minute of star
   assert.ok(cruxToolNames({ role: 'orchestrator' }).includes('mcp__crux__restart_hub'));
   assert.ok(!cruxToolNames({ role: 'worker' }).includes('mcp__crux__restart_hub'), 'workers do not get it');
   const notes = [], push = fakePush(), env = {};
+  push.restartNotice = async info => { push.sent.push({ title: 'The hub is restarting', body: `Asked by ${info.agent} in ${info.project}`, routed: true }); return 1; };   // decision 64: routed, see push-restart.test.mjs
   let restarted = 0, now = 1_000_000;
   const hub = { notice: (p, t, text) => notes.push([t, text]) };
   hub.restartHub = makeRestartHub({ hub, push, restart: () => restarted++, bootAt: now, now: () => now, delayMs: 0, env });
@@ -442,6 +443,7 @@ test('restart_hub: orchestrator only, with a reason, not within a minute of star
   assert.deepEqual(notes, [['orchestrator', 'orchestrator-4 restarted the hub: merged #53']]);
   assert.equal(push.sent[0].title, 'The hub is restarting');
   assert.equal(push.sent[0].body, 'Asked by orchestrator-4 in proj', 'the push says who and where, not the reason (C001)');
+  assert.equal(push.sent[0].routed, true, 'through the PC-or-phone routing, not straight to the phone');
   assert.match(await restartHub(hub, project, orch, 'again'), /already restarting/);
   assert.match(await restartHub({}, project, orch, 'x'), /cannot restart itself/, 'a hub with no server');
   // at most 3 in 15 minutes: the times travel to the next hub in its environment

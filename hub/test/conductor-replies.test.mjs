@@ -161,6 +161,8 @@ test('a queued reply survives a restart, even after cards went up meanwhile', as
   c.toOrchestrator('beta', 'conductor-1', 'Status?');
   c.replyFrom(a, oa, 'req-001', 'All green.');   // beta has not replied: the round waits
   hub.postSummary(b, ob, summary({ questions: ['Ship the beta build tonight or wait?'] }));
+  // Decision 64: while you are here no card line is queued, so the card is put up directly (a marker for card lines).
+  c.postCards([{ cause: { project: 'beta', summary: b.log.events.findLast(e => e.type === 'summary').id } }]);
   await sleep(80);
   assert.equal(c.home.log.ofType('cards').length, 1, 'a card went up (a marker for card lines)');
   c.stop();

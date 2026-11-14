@@ -27,6 +27,7 @@ import { homedir } from 'node:os';
 import { hostName, hostPort, isLocalHost } from './access.mjs';
 import { b64u, unb64u, sha256, verifyRegistration, verifyAssertion, challengeOf, parseAuthData, signatureOk } from './webauthn.mjs';
 import { projectKey } from './settings.mjs';
+import { recentApprovedMerge } from './merge-pass.mjs';
 
 export const STEP_UP_MS = 60 * 1000;            // a step-up challenge is good for this long, and once
 export const PAIR_MS = 3 * 60 * 1000;           // from Next to the passkey being made
@@ -523,9 +524,11 @@ export function dropUnbackedTrusted({ hub, guard, push, warn = s => console.warn
   return dropped;
 }
 
-// restart_hub (orchestrator only): through the hub process itself, no HTTP. A note in the thread, a one-line push,
+// restart_hub (orchestrator only): through the hub process itself, no HTTP. A note in the thread, a one-line notice,
 // then the same restart as the hub menu's. Not within a minute of the hub starting, and at most 3 in 15 minutes (the
 // times travel to the restarted hub in CRUX_HUB_RESTARTS), so a confused loop stays slow and stops.
+// Decision 64: no notice within 10 minutes of a merge you approved (lib/merge-pass.mjs); any other restart notice goes
+// the PC-or-phone way (decision 58), not straight to the phone.
 export const RESTARTS_MAX = 3, RESTARTS_WINDOW_MS = 15 * 60 * 1000;
 export function makeRestartHub({ hub, push, restart, bootAt = Date.now(), now = () => Date.now(), minUpMs = 60 * 1000, delayMs = 1500, env = process.env, warn = s => console.warn(s) }) {
   let going = false;
@@ -541,8 +544,10 @@ export function makeRestartHub({ hub, push, restart, bootAt = Date.now(), now = 
     env.CRUX_HUB_RESTARTS = [...recent, now()].join(',');
     going = true;
     hub.notice(project, 'orchestrator', `${agent.name} restarted the hub: ${reason}`);
-    try {
-      await Promise.race([push.send({ kind: 'restart', title: 'The hub is restarting', body: `Asked by ${agent.name} in ${project.name}`, card: `notice:restart`, project: project.name, url: `/?project=${encodeURIComponent(project.name)}&card=notice:restart` }),
+    const merged = recentApprovedMerge([...(hub.projects?.values?.() || [])].map(p => p.log?.events || []), now());
+    if (merged) push.log?.(`notice:restart (${project.name}): no notice, a merge you approved went through in the last 10 minutes`);
+    else try {
+      await Promise.race([push.restartNotice({ project: project.name, agent: agent.name }),
         new Promise(r => { const t = setTimeout(r, 3000); t.unref?.(); })]);
     } catch (e) { warn(`Push failed: ${e.message}`); }
     setTimeout(restart, delayMs);

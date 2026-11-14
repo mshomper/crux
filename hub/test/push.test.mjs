@@ -86,13 +86,20 @@ test('pushes go to every device once, questions after a grace period, dropped de
     assert.deepEqual(h.sent.map(s => s.body.card), ['approval:ap-1']);
     assert.deepEqual(h.push.subs.map(s => s.label), ['iPhone'], 'the 410 device is dropped');
 
+    // Decision 64: the summary's decision and its question go as one notice, at once (it holds a decision).
     h.push.handle(summaryEv, h.ctx);
     await settle(); await settle();
-    assert.deepEqual(h.sent.map(s => s.body.card), ['approval:ap-1', 'decision:20'], 'question waits');
+    assert.deepEqual(h.sent.map(s => s.body.card), ['approval:ap-1', 'decision:20']);
+    assert.equal(h.sent[1].body.title, 'w1 has 1 decision and a question for you');
+    assert.equal(h.timers.queue.length, 0, 'no second notice waiting for the question');
+    // A question alone still waits out its grace.
+    const q = { ...summaryEv, id: 'e3', decisions_needed: [] };
+    h.ctx.events = () => [summaryEv, q];
+    h.push.handle(q, h.ctx);
     assert.equal(h.timers.queue.length, 1);
     h.timers.queue[0].fn();
     await settle(); await settle();
-    assert.deepEqual(h.sent.map(s => s.body.card), ['approval:ap-1', 'decision:20', 'question:e2']);
+    assert.deepEqual(h.sent.map(s => s.body.card), ['approval:ap-1', 'decision:20', 'question:e3']);
   } finally { h.done(); }
 });
 
