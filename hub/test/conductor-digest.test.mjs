@@ -85,11 +85,12 @@ test('back within the batching window: a card that came while you were away goes
   await sleep(80);
   assert.equal(s.cards()[0].digest, 'return');
   assert.equal(s.notices.length, 1);
-  // A card that came while you were here stays live, with no digest notice.
+  // A card that came while you were here is in Needs you: decision 64 keeps it out of the Conductor's chat, with no
+  // digest notice (its own notice goes as usual).
   const t = await setup({ here: true });
   t.ask(t.a, 'Retry failed uploads three times before showing the error?');
   await sleep(80);
-  assert.equal(t.cards()[0].digest, undefined);
+  assert.equal(t.cards().length, 0);
   assert.equal(t.notices.length, 0);
 });
 
@@ -162,13 +163,14 @@ test('your message while cards are held: the digest goes up above it, and its no
 });
 
 test('a due reminder with fresh cards: the notes request comes first and says to deal with the reminder after', async () => {
-  const { c, a, ask, toC } = await setup();
+  const { c, a, presence, ask, toC } = await setup({ here: false });
   c.wakeMs = 60000;   // the cards wait in the batching window, and the reminder takes them along
   ask(a, 'Retry failed uploads three times before showing the error?');
+  presence.here = true;   // back, with no presence report yet: the reminder's flush takes them up as the return digest
   c.setReminder(new Date(Date.now() + 1000).toISOString(), 'Stretch', 'conductor-1');
   c.dueReminders(Date.now() + 5000);
   const msg = toC().at(-1)[1];
-  assert.match(msg, /^\[Hub: new cards for/);
+  assert.match(msg, /^\[Hub: digest after time away for/);
   assert.match(msg, /After the notes, deal with the reminder/);
   assert.match(msg, /Reminder rem-001 is due/);
   assert.doesNotMatch(msg, /stay_quiet/);
@@ -208,11 +210,13 @@ test('a due reminder still wakes it while you are away, and leaves the held card
 });
 
 test('note_cards: notes attach to the cards in its chat; unknown cards are ignored; it answers nothing', async () => {
-  const { hub, c, a, b, ask, cards } = await setup();
+  const { hub, c, a, b, presence, ask, cards } = await setup({ here: false });
   const q = ask(a, 'Retry failed uploads three times before showing the error?');
   hub.approvals.set('ap1', { p: b });
   b.log.append('approval', { thread: 'w1', approval: 'ap1', agent: 'w1', tool: 'Bash', input: { command: 'npm test', description: 'Run the tests' }, routedTo: null });
   await sleep(80);
+  presence.here = true;
+  c.presenceReport();
   assert.equal(cards().length, 1);
   const k = c.holder();
   const handler = c.tools(k).instance._registeredTools.note_cards.handler;
@@ -384,7 +388,7 @@ test('notices while away: questions and decisions wait for the digest, permissio
   push.handle({ type: 'approval', approval: 'ap1', project: 'beta', thread: 'w1', agent: 'w1', tool: 'Bash', routedTo: null, logged: true }, ctx);
   await flushAsync();
   assert.deepEqual(pushed.map(x => x.card), ['approval:ap1']);
-  assert.equal(logged.filter(s => /held for the Conductor's digest/.test(s)).length, 2);
+  assert.equal(logged.filter(s => /held for the Conductor's digest/.test(s)).length, 1, 'the summary\'s decision and question as one notice (decision 64)');
   push.digest({ id: 'ev9', count: 3, projects: 2 }, ctx);
   await flushAsync();
   assert.equal(pushed.length, 2);

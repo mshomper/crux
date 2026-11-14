@@ -4,7 +4,7 @@ import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
 import { hudBoot, openPanel, closePanel } from './hud.js';
-import { isYesNo, repeatsIn, pageStatus } from './questions.js';
+import { isYesNo, repeatsIn, pageAsk } from './questions.js';
 import * as AP from './all-projects.js';
 import * as CP from './conductor-view.js';
 import { hubProjects } from './map-hub.js';
@@ -345,7 +345,11 @@ const draftKey = (id, i) => `${id}:${i}`;
 // box only, while you have not typed or cleared anything for that question in any copy (S.cdEdited); it is never saved
 // as a draft, so Needs you and the thread copies stay empty and a reload never refills a box you cleared.
 const boxText = (k, suggest) => S.drafts[k] ?? (suggest?.[k] && !S.cdEdited.has(k) ? suggest[k] : '');
-function filledAnswers(ev, suggest = null) { return ev.open.map(q => ({ index: q.i, text: boxText(draftKey(ev.id, q.i), suggest).trim() })).filter(a => a.text); }
+// own: the box holds your own words (typed, or your tap on Yes or No), not the Conductor's suggestion. Decision 64:
+// only an answer marked own can pre-approve a merge; the server gives nothing without it.
+function filledAnswers(ev, suggest = null) {
+  return ev.open.map(q => { const k = draftKey(ev.id, q.i), text = boxText(k, suggest).trim(); return { index: q.i, text, ...(S.drafts[k] != null && text ? { own: true } : {}) }; }).filter(a => a.text);
+}
 function questionCard(ev, p = proj(), { suggest = null } = {}) {
   const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
   const where = ev.thread === 'orchestrator' ? 'the orchestrator thread' : ev.thread;
@@ -641,12 +645,15 @@ function permLine(ev) {
 // small note saying where it waits, so it is asked in one card only.
 function summaryCard(p, ev, only = null, reps = null) {
   const sec = (label, xs) => xs?.length ? `<dt>${label}</dt><dd><ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul></dd>` : '';
-  const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· ${r.answered ? 'answered' : 'also'} in ${esc(r.of)}'s card</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
+  // Decision 64: a question hidden behind a decision card says so ("also in the D0059 card").
+  const also = r => `${r.answered ? 'answered' : 'also'} in ${r.decision ? `the ${esc(r.of)} card` : `${esc(r.of)}'s card`}`;
+  const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· ${also(r)}</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
   const decisions = (only || ev.decisions_needed || []).map(id => p.board.decisions.find(d => d.id === Number(id))).filter(Boolean);
+  // notes: lines given as questions with no question mark (decision 64): plain lines here, never a card.
   return `<article class="card summary">
     <div class="card-head">${icon('check')}<h3>${esc(ev.from)} finished a round</h3><span class="time">${timeOf(ev.ts)}</span></div>
-    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${qs}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
-      isTall([ev.done, ev.changed, ev.questions, ev.blocked_on, ev.next_step].flat().filter(Boolean).join('\n'), 700))}
+    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${qs}${sec('Notes', ev.notes)}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
+      isTall([ev.done, ev.changed, ev.questions, ev.notes, ev.blocked_on, ev.next_step].flat().filter(Boolean).join('\n'), 700))}
   </article>${decisions.map(d => decisionCard(p, d)).join('')}`;
 }
 
@@ -898,7 +905,7 @@ function takeRecommendations(id) {
       for (const name of new Set(recs.filter(r => r.kind === 'decision').map(r => r.project))) {
         await sendPicks(S.projects.find(p => p.name === name), recs.filter(r => r.kind === 'decision' && r.project === name).map(r => ({ id: r.id, choice: r.choice })));
       }
-      for (const r of recs.filter(x => x.kind === 'question')) await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });
+      for (const r of recs.filter(x => x.kind === 'question')) await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });   // never own: the Conductor's words
       for (const r of recs.filter(x => x.kind === 'approval')) await api('/api/approval', { id: r.id, allow: r.allow });
     } finally { S.sending = false; }
   });
@@ -960,7 +967,7 @@ function feedFor(t) {
     return html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
     const evs = threadEvents(p, t), once = AP.decisionCardsOnce(evs);   // one card per decision in a thread
-    const reps = repeatsIn(p.events, { decisionStatus: pageStatus(p) });   // repeats of a card still open elsewhere
+    const reps = repeatsIn(p.events, pageAsk(p));   // repeats of a card still open elsewhere
     const html = evs.map(ev => {
       switch (ev.type) {
         case 'message': return messageEl(p, ev, t);

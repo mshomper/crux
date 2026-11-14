@@ -17,6 +17,7 @@ import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
 import { answerMessage, answerNote } from '../public/questions.js';
+import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage } from './usage.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
@@ -389,19 +390,27 @@ export class Hub {
   // Every question is kept as asked: a repeat of a question already waiting in another card is hidden only where cards
   // are drawn (public/questions.js openQuestions), so it comes back by itself if that card closes unanswered.
   // The Conductor never lists decisions of its own: they are the projects' cards; it may only mention them.
+  // Decision 64: a line under questions with no question mark (that does not open like a question either) asks nothing, so it is no card: it is kept as a plain
+  // line (notes) in the summary. Returns { notes } so post_summary can tell the agent.
   postSummary(p, agent, s) {
     const decisions = agent.role === CONDUCTOR_ROLE ? [] : s.decisions_needed || [];
-    p.log.append('summary', { thread: agent.thread, from: agent.name, ...s, decisions_needed: decisions });
-    s = { ...s, decisions_needed: decisions };
-    if (agent.role !== 'worker') return;
+    const asked = (s.questions || []).map(q => String(q).trim()).filter(Boolean);
+    // A line that opens like a question or a request (Please, Pick, Should, Which...) stays a card even without one.
+    const asks = q => q.includes('?') || /^(please|pick|choose|should|may|can|will|do|is|which|what)\b/i.test(q);
+    const notes = asked.filter(q => !asks(q));
+    s = { ...s, questions: asked.filter(asks), decisions_needed: decisions, ...(notes.length ? { notes } : {}) };
+    p.log.append('summary', { thread: agent.thread, from: agent.name, ...s });
+    const result = { notes };
+    if (agent.role !== 'worker') return result;
     const orch = p.orchestrator();
-    if (!orch && !s.questions.length && !s.decisions_needed.length) return; // nothing to route; you see it in the thread
+    if (!orch && !s.questions.length && !s.decisions_needed.length) return result; // nothing to route; you see it in the thread
     const lines = [`[Summary from worker ${agent.name}]`];
     const sec = (label, xs) => xs?.length && lines.push(`${label}:\n${xs.map(x => '- ' + x).join('\n')}`);
-    sec('Done', s.done); sec('Changed', s.changed); sec('Questions', s.questions); sec('Blocked on', s.blocked_on);
+    sec('Done', s.done); sec('Changed', s.changed); sec('Questions', s.questions); sec('Notes', s.notes); sec('Blocked on', s.blocked_on);
     if (s.decisions_needed.length) lines.push(`Decisions waiting on {{who}}: ${s.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
     if (s.next_step) lines.push(`Proposed next step: ${s.next_step}`);
     this.ensureOrchestrator(p).send(lines.join('\n'));
+    return result;
   }
 
   // ---------- questions from round summaries (M010) ----------
@@ -427,11 +436,15 @@ export class Hub {
   answerQuestions(p, id, answers = []) {
     const ev = this.askedIn(p, id);
     const items = (Array.isArray(answers) ? answers : [])
-      .map(a => ({ index: Number(a?.index), answer: String(a?.text ?? '').trim() }))
+      .map(a => ({ index: Number(a?.index), answer: String(a?.text ?? '').trim(), own: a?.own === true }))
       .filter(a => a.answer && Number.isInteger(a.index) && a.index >= 0 && a.index < ev.questions.length);
     if (!items.length) throw new Error('Type an answer first.');
     const pairs = items.map(a => ({ question: ev.questions[a.index], answer: a.answer }));
     this.fromYou(p, ev.thread, answerMessage(pairs), [], { answers: items.map(a => ({ question: id, index: a.index })) });
+    // Decision 64: your yes on a merge question's card pre-approves that merge, only when the page marks the answer as
+    // your own words (own: true). Missing means no pass: the Conductor's suggestion (Take all, or its pre-filled box
+    // sent as it was), or an older page.
+    for (const a of items) if (a.own) this.grantMergePass(p, ev, a.index, a.answer);
     // A worker's questions: one line in the orchestrator thread, and a note the orchestrator reads with its next
     // message, so it knows they are answered and does not ask again. It is not woken just for this. The
     // orchestrator's own questions skip this: the answer already goes to its thread.
@@ -440,6 +453,18 @@ export class Hub {
       p.orchestrator()?.noteForNextTurn(`[Hub note] ${answerNote('{{Who}}', ev.from, pairs)}. ${ev.from} has the answers; these questions are settled, so don't ask them again.`);
     }
     return { ok: true, thread: ev.thread, answered: items.map(a => a.index) };
+  }
+
+  // Decision 64, part 3: your own answer to question i of summary ev, from its card. A plain yes to a question asking
+  // to merge one PR logs a merge pass (lib/merge-pass.mjs) and a line in the orchestrator thread saying exactly what
+  // it allows. Only called from answerQuestions, for answers the page marks as your own.
+  grantMergePass(p, ev, i, answer) {
+    const g = passFor(ev.questions?.[i], answer);
+    if (!g) return null;
+    const pass = randomUUID().slice(0, 8), card = `question:${ev.id}`;
+    const e = p.log.append('merge_pass', { pass, card, asker: ev.from, thread: ev.thread, index: i, number: g.number, by: 'you' });
+    this.notice(p, 'orchestrator', `Your yes to ${ev.from}'s question pre-approves gh pr merge ${g.number} (with --merge or --squash or neither), once, by ${ev.from} only, for ${PASS_MS / 60000} minutes. No other command, flag or repo. Dismissing that card, or a no, wait or stop from you in ${ev.thread === 'orchestrator' ? 'the orchestrator thread' : `${ev.thread}'s thread`}, cancels it.`);
+    return e;
   }
 
   // ---------- memory layers (decisions 13 and 15) ----------
@@ -540,6 +565,12 @@ export class Hub {
   requestApproval(p, agent, toolName, input, { signal, title, description, suggestions } = {}) {
     const auto = this.autoAnswer(p, agent, toolName, input);
     if (auto) return Promise.resolve(auto);
+    // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).
+    const pass = findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
+    if (pass) {
+      p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(input?.command || '').slice(0, 400), answer: 'allow', reason: this.memory.personalize(`pre-approved by {{who}}'s answer on ${pass.card} (${pass.asker})`), by: 'hub', pass: pass.pass, passNumber: pass.number });
+      return Promise.resolve({ behavior: 'allow', updatedInput: input });
+    }
     const route = this.routeFor(p, agent, toolName, input);
     if (route.logged) {
       const i = input || {};

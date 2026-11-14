@@ -108,7 +108,9 @@ const push = new Push();
 const decisionStatus = (project, id) => { try { return hub.project(project).board.decision(id)?.status; } catch { return undefined; } };
 const decisionOpen = (project, id) => ['open', 'found'].includes(decisionStatus(project, id));
 // The Conductor's own thread (decision 55) sends no per-event notices; its digest sends one (decision 60, below).
-const pushCtx = { get approvals() { return hub.approvals; }, decisionOpen, decisionStatus, events: name => hub.project(name).log.events };
+// decisions: the project's decision records, so a question an open decision card already asks gets no notice of its own
+// (decision 64).
+const pushCtx = { get approvals() { return hub.approvals; }, decisionOpen, decisionStatus, decisions: name => { try { return hub.project(name).board.decisions(); } catch { return []; } }, events: name => hub.project(name).log.events };
 hub.on(ev => { if (ev.logged && ev.project !== CONDUCTOR) push.handle(ev, pushCtx); });
 push.resume(pushCtx);   // decision 58: phone follow-ups for PC notices sent before a restart
 // Decision 60 A: the Conductor is live while you are here and holds cards for one digest while you are away, judged by
@@ -345,6 +347,8 @@ const routes = {
   'POST /api/retire': ({ project, agent }) => { const p = hub.place(project); hub.retire(p, p.hubWide ? p.orchestrator() : agent || p.orchestrator()); return { ok: true }; },
   'POST /api/dismiss': ({ project, question, index }) => hub.dismissQuestion(hub.place(project), String(question || ''), 'you', index ?? null),
   // Answers typed in Needs you: { question: summary event id, answers: [{ index, text }] }.
+  // Only an answer the page marks as your own words ({ index, text, own: true }) can pre-approve a merge (decision 64);
+  // without the mark (the Conductor's pre-fill, Take all, an older page) it is sent as yours but gives no pass.
   'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.place(project), String(question || ''), answers),
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),

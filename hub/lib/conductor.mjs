@@ -21,6 +21,7 @@ import { waiting as waitingFor, pendingLessons } from '../public/all-projects.js
 import { openQuestions as openAsked } from '../public/questions.js';   // on events (the all-projects one takes a project)
 import { CONNECTOR_SERVERS } from './permission-rules.mjs';
 import { liftSpoken, sentences } from './voice-speech.mjs';
+import { summaryReply } from './tools.mjs';
 
 export const CONDUCTOR = '~conductor';          // its place name in URLs and live events; never a project folder's name
 export const CONDUCTOR_THREAD = 'conductor';
@@ -94,6 +95,8 @@ export class ConductorHome {
 
 const when = ts => new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 const isReply = x => !!x?.cause?.reply;   // a queued line for an orchestrator's reply (decision 62), not a card
+// The question rules' options for a project (decision 64: open decision cards hide the questions they already ask).
+const askOf = p => { const ds = p.board.decisions(); return { decisionStatus: n => ds.find(d => d.id === Number(n))?.status, decisions: ds }; };
 const text = s => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 
 export class Conductor {
@@ -128,7 +131,9 @@ export class Conductor {
   restorePending() {
     const evs = this.home.log.events;
     const from = evs.findLastIndex(e => (e.type === 'wake' && !e.noLines) || e.type === 'wake_taken' || e.type === 'cards');
-    const item = e => ({ line: e.line, cause: e.cause || null, ts: Date.parse(e.ts) || Date.now() });
+    // away: decision 64 queues a card line only while you are away, so every card line comes back as held for the
+    // digest; a reply keeps what was logged.
+    const item = e => ({ line: e.line, cause: e.cause || null, ts: Date.parse(e.ts) || Date.now(), ...(!e.cause?.reply || e.away ? { away: true } : {}) });
     const cards = evs.slice(from + 1).filter(e => e.type === 'wake_pending' && !e.cause?.reply).map(item);
     const taken = new Set(evs.filter(e => e.type === 'replies_taken').flatMap(e => e.replies || []));
     const seen = new Set();
@@ -459,6 +464,9 @@ ${blocks.join('\n')}`;
     }
     const line = this.wakeLine(ev);
     if (!line || !this.wakesOn()) return;
+    // Decision 64: while you are here the card is in Needs you, so the Conductor stays silent about it: no line in its
+    // thread and no wake. Cards that come while you are away still wait for one digest.
+    if (this.present()) return;
     this.queue(line, ev.type === 'summary' ? { project: ev.project, summary: ev.id } : { project: ev.project, approval: ev.approval });
   }
 
@@ -466,8 +474,9 @@ ${blocks.join('\n')}`;
   // arm: false queues without a wake (a reply while wakes are off: it rides with your next message).
   queue(line, cause = null, { arm = true } = {}) {
     // away: it came while you were away, so its card notice is held (push.mjs) and only a digest's notice stands in.
-    this.pending.push({ line, cause, ts: Date.now(), away: !this.present() });
-    this.home.log.append('wake_pending', { line, cause });
+    const away = !this.present();
+    this.pending.push({ line, cause, ts: Date.now(), away });
+    this.home.log.append('wake_pending', { line, cause, ...(away ? { away: true } : {}) });
     if (arm) this.arm(this.wakeMs);
   }
 
@@ -481,7 +490,7 @@ ${blocks.join('\n')}`;
     const status = n => p.board.decision(n)?.status;
     if (kind === 'approval') return this.hub.approvals.has(id);
     if (kind === 'decision') return ['open', 'found'].includes(status(Number(id)));
-    if (kind === 'question') return openAsked(p.log.events, { decisionStatus: status }).some(q => q.id === id);
+    if (kind === 'question') return openAsked(p.log.events, askOf(p)).some(q => q.id === id);
     return false;
   }
 
@@ -519,27 +528,34 @@ ${blocks.join('\n')}`;
 
   // You are away: the card lines wait for one digest, due 30 minutes after the oldest held line (and never sooner than
   // 30 minutes after the last digest). Your return posts it at once (presenceReport, fromYou).
-  hold(now = Date.now()) {
+  // floorOnly (decision 64, a return within 30 minutes of the last digest): due at that 30-minute floor, not 30 minutes
+  // after the oldest held line.
+  hold(now = Date.now(), { floorOnly = false } = {}) {
     if (this.digestTimer) return;
     const held = this.pending.filter(x => !x.reminder);
     if (!held.length) return;
     const oldest = Math.min(...held.map(x => x.ts || now));
-    const last = this.home.log.ofType('cards').filter(e => e.digest).at(-1);
-    const due = Math.max(oldest, last ? Date.parse(last.ts) : 0) + this.digestMs;
+    const last = this.lastDigestAt();
+    const due = floorOnly ? last + this.digestMs : Math.max(oldest, last) + this.digestMs;
     this.digestTimer = setTimeout(() => { this.digestTimer = null; this.flush({ digest: this.present() ? 'return' : 'away' }); }, Math.max(0, due - now));
     this.digestTimer.unref?.();
   }
   unhold() { clearTimeout(this.digestTimer); this.digestTimer = null; }
   holding() { return !!this.digestTimer; }
+  lastDigestAt() { const last = this.home.log.ofType('cards').filter(e => e.digest).at(-1); return last ? Date.parse(last.ts) : 0; }
+  // Decision 64: a return digest keeps the same 30-minute floor as an away digest.
+  digestGapOver(now = Date.now()) { return now - this.lastDigestAt() >= this.digestMs; }
 
   // The hub calls this on every presence report (a hub page, the desktop app). Back while cards are held: the digest
-  // goes up now.
+  // goes up now, or (decision 64) at the 30-minute floor when the last digest was less than 30 minutes ago; the cards
+  // wait in Needs you meanwhile, and any you settle leave the digest.
   // Also a card that came while you were away and is still in the batching window (not yet held): it goes up as the
   // return digest, with its one notice, never live and silent.
-  presenceReport() {
+  presenceReport(now = Date.now()) {
     if (!this.present() || !(this.digestTimer || this.pending.some(x => x.away))) return;
     this.unhold();
     clearTimeout(this.timer); this.timer = null;
+    if (!this.digestGapOver(now)) return this.hold(now, { floorOnly: true });
     this.flush({ digest: 'return' });
   }
 
@@ -562,7 +578,8 @@ ${blocks.join('\n')}`;
     const ev = this.home.log.append('cards', { thread: CONDUCTOR_THREAD, items: list, ...(digest ? { digest } : {}), ...(digest && replies.length ? { replies } : {}) });
     // One notice per digest, away or back (push.mjs routes it: none while a page shows All projects).
     const from = new Set([...list.map(c => c.project), ...replies.map(id => this.home.log.events.find(e => e.id === id)?.project).filter(Boolean)]);
-    if (digest) this.hub.digestNotice?.({ id: ev.id, count: list.length, replies: replies.length, projects: from.size, digest });
+    // items: its cards, so push can skip the notice when every one of them was already notified (decision 64).
+    if (digest) this.hub.digestNotice?.({ id: ev.id, count: list.length, replies: replies.length, projects: from.size, digest, items: list });
     return ev;
   }
 
@@ -578,7 +595,7 @@ ${blocks.join('\n')}`;
       return `permission: ${ev.agent} wants to ${what}${cmd ? ` (${ev.tool}: ${cmd})` : ''}${ev.stops?.length ? `; always ${'{{who}}'}'s: ${ev.stops.join('; ')}` : ''}`;
     }
     if (kind === 'question') {
-      const q = openAsked(p.log.events, { decisionStatus: n => p.board.decision(n)?.status }).find(x => x.id === id);
+      const q = openAsked(p.log.events, askOf(p)).find(x => x.id === id);
       if (!q) return 'a question';
       return `question from ${q.from}: ${q.open.map(x => q.open.length > 1 ? `(${x.i + 1}) ${x.text}` : x.text).join(' ')}`.slice(0, 900);
     }
@@ -684,14 +701,25 @@ ${lines.join('\n')}`;
     const ready = showCards && (digest || this.wakesOn()) ? allReplies.filter(x => digest || this.roundReady(this.roundOf(x), now)) : [];
     for (const x of allReplies) if (!ready.includes(x)) this.armRound(this.roundOf(x));
     let cards = null;
-    if (held.length && showCards) {
+    // Lines that came or were held while you were away go up as a return digest: its one notice stands in for the
+    // card notices push held for them.
+    const kind = digest || (held.some(x => x.away) ? 'return' : null);
+    const cardLines = held.filter(x => !isReply(x));
+    if (held.length && showCards && kind === 'return' && !digest && !this.digestGapOver(now)) {
+      // Decision 64: the same 30-minute floor as an away digest; replies still go as below.
+      this.unhold(); this.hold(now, { floorOnly: true });
+    } else if (held.length && showCards && !kind) {
+      // Decision 64: you are here and none of these came while you were away: the cards are in Needs you, so the
+      // Conductor stays silent about them (no post, no wake). Replies still go.
+      if (cardLines.length) {
+        this.pending = this.pending.filter(x => !cardLines.includes(x));
+        this.home.log.append('wake_taken', { skipped: cardLines.length, why: 'you are here: the cards are in Needs you' });
+      }
+    } else if (held.length && showCards) {
       this.unhold();
       this.pending = this.pending.filter(x => x.reminder || isReply(x));   // replies leave only once handed over
-      // Lines that came or were held while you were away go up as a return digest: its one notice stands in for the
-      // card notices push held for them.
-      const kind = digest || (held.some(x => x.away) ? 'return' : null);
       const inDigest = kind ? ready.filter(x => !x.inDigest) : [];
-      cards = this.postCards(held.filter(x => !isReply(x)), { digest: kind, replies: inDigest.map(x => x.cause.reply) });
+      cards = this.postCards(cardLines, { digest: kind, replies: inDigest.map(x => x.cause.reply) });
       if (cards?.digest) for (const x of inDigest) x.inDigest = cards.id;
     }
     if (busy) {   // replies stay queued for the end of its turn (afterTurn arms the next flush)
@@ -882,7 +910,7 @@ ${lines.join('\n')}`;
         safe(args => {
           // A summary written only because Claude Code asked for visible output is not posted (see isNoOutputNudge).
           if (agent.quietTurn) return 'Not posted: this turn had already ended quietly. Stop here.';
-          hub.postSummary(home, agent, args); return 'Summary posted. Stop here and wait.';
+          return `${summaryReply(hub.postSummary(home, agent, args))} Stop here and wait.`;
         })),
       // Refused (as an error, so Claude Code does not end the turn on it) while this turn carries replies: they are
       // never dropped by a quiet ending.

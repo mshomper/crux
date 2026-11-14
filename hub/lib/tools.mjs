@@ -48,7 +48,7 @@ export function cruxTools(hub, project, agent) {
         approvals: list.describe(t('Approvals, decisions or standing instructions {{who}} gave this round (merge #31, keep w1), briefly.')),
         open_questions: list.describe(t('Questions or quick calls you put to {{who}} in chat that are still unanswered.'))
       },
-      async (args) => { hub.postSummary(project, agent, args); return out('Summary posted. Stop here and wait for a reply.'); }),
+      async (args) => out(`${summaryReply(hub.postSummary(project, agent, args))} Stop here and wait for a reply.`)),
 
     tool('propose_lesson', t('Record a lasting lesson about how {{who}} wants work done. "project" lessons go straight into this project\'s pack; "core" lessons (true across all projects) wait for {{who}}\'s OK.'),
       { scope: z.enum(['project', 'core']), lesson: z.string().max(400).describe('One or two plain sentences, as a rule.') },
@@ -171,6 +171,14 @@ export function settingsChanges({ model, effort, type } = {}) {
   if (effort !== undefined) changes.effort = /^(default)?$/i.test(String(effort).trim()) ? null : effort;
   if (type !== undefined) changes.type = /^(none|default)?$/i.test(String(type).trim()) ? null : String(type).trim();
   return changes;
+}
+
+// post_summary's reply (decision 64): lines under questions with no question mark are kept as plain lines, not cards,
+// and the agent is told so, with where such lines belong.
+export function summaryReply(r) {
+  const n = r?.notes?.length || 0;
+  if (!n) return 'Summary posted.';
+  return `Summary posted. ${n === 1 ? 'One line' : `${n} lines`} under questions had no question mark, so ${n === 1 ? 'it shows' : 'they show'} as a plain line in your summary, not as a question card: ${r.notes.map(x => `"${String(x).slice(0, 80)}"`).join('; ')}. Put status lines in done or next_step, and end real questions with "?".`;
 }
 
 // restart_hub's reply. The server sets hub.restartHub (lib/guard.mjs makeRestartHub); a hub with no server cannot.
