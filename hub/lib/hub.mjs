@@ -83,6 +83,12 @@ export class Hub {
     this.idleTimer = setInterval(() => this.idleCheck(), IDLE_CHECK_MS);
     this.idleTimer.unref?.();
     this.usage.restore();
+    // Decision 64 A raised a shorter saved permission wait to 5 minutes, once: said once in each orchestrator thread.
+    const from = this.settings?.timeoutRaisedFrom;
+    if (from != null) {
+      const label = s => (s % 60 ? `${s} seconds` : `${s / 60} minute${s === 60 ? '' : 's'}`);
+      for (const p of this.projects.values()) this.notice(p, 'orchestrator', `Permission wait raised from ${label(from)} to ${label(this.settings.get('permissionTimeoutSec'))} (decision 64): a request the orchestrator has not answered comes to you after that. Change it on the hub settings card.`);
+    }
     // After listeners are attached: wake the agents a restart interrupted (M014), every project, a few seconds apart.
     this.resumed = [];
     // A test hub has no real agents, so it writes no resume or hint notices into the logs.
@@ -535,12 +541,13 @@ export class Hub {
   // Settled without a card or the orchestrator (R003): reading, searching and read-only commands, for any path,
   // except secrets and your private notes; the orchestrator writing decision records and running the Crux build.
   // Refused without a card: the orchestrator editing anything else.
-  autoAnswer(p, agent, toolName, input) {
+  // cwd: the folder the tool call runs in (decision 64 A), so a glob is matched against what it would really read.
+  autoAnswer(p, agent, toolName, input, cwd = p.dir) {
     const norm = s => String(s || '').replace(/\\/g, '/').toLowerCase();
     const file = norm(input.file_path || input.path || input.notebook_path);
     const privateNotes = norm(join(this.memory.profileDir, 'private.md'));
     const readsPrivate = (file && file === privateNotes) || /private\.md/i.test(String(input.command || input.pattern || ''));
-    if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input)) return { behavior: 'allow', updatedInput: input };
+    if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input, cwd)) return { behavior: 'allow', updatedInput: input };
     // Decision 35: the orchestrator writes records in the decisions worktree, never in the main folder's .decisions.
     const records = p.desk.usable() ? p.desk.decisionsDir : join(p.dir, '.decisions');
     const decisions = norm(records) + '/';
@@ -555,15 +562,15 @@ export class Hub {
       return { behavior: 'allow', updatedInput: input };
     }
     // Commands that only read (listing, git status and diff, versions) run without a card.
-    if (/^(Bash|PowerShell)$/.test(toolName) && CommandPolicy.readOnly(toolName, cmd) && !readsPrivate && !touchesSecrets(toolName, input)) return { behavior: 'allow', updatedInput: input };
+    if (/^(Bash|PowerShell)$/.test(toolName) && CommandPolicy.readOnly(toolName, cmd) && !readsPrivate && !touchesSecrets(toolName, input, cwd)) return { behavior: 'allow', updatedInput: input };
     return null;
   }
 
   // Decision 21 A: a worker's request goes to the orchestrator first, unless the hub's own matcher finds a hard stop
   // in the permission rules (or cannot read it), routing is off, there is no rules entry, or no orchestrator is
   // running. Then it is a card for you, as before. If the orchestrator escalates or does not answer in time, too.
-  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions } = {}) {
-    const auto = this.autoAnswer(p, agent, toolName, input);
+  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID } = {}) {
+    const auto = this.autoAnswer(p, agent, toolName, input, agent.cwdFor?.(toolUseID) || p.dir);
     if (auto) return Promise.resolve(auto);
     // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).
     const pass = findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
@@ -571,7 +578,8 @@ export class Hub {
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(input?.command || '').slice(0, 400), answer: 'allow', reason: this.memory.personalize(`pre-approved by {{who}}'s answer on ${pass.card} (${pass.asker})`), by: 'hub', pass: pass.pass, passNumber: pass.number });
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
-    const route = this.routeFor(p, agent, toolName, input);
+    // Decision 64 A: the checker starts in the folder this tool call runs in (toolUseID -> the hook's cwd).
+    const route = this.routeFor(p, agent, toolName, input, toolUseID);
     if (route.logged) {
       const i = input || {};
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
@@ -595,7 +603,7 @@ export class Hub {
       if (route.to) {
         entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), this.settings.get('permissionTimeoutSec') * 1000);
         entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
-        try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure)); }
+        try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd)); }
         catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
       }
     });
@@ -605,14 +613,21 @@ export class Hub {
   // stops: [why it comes to you], rules: entry id | null }. Hard stops always come to you.
   // Auto mode (decision 34, R004): only requests the hub cannot classify go to the orchestrator.
   // Standard mode (decision 21): everything that is not a hard stop goes to the orchestrator.
-  routeFor(p, agent, toolName, input) {
+  // toolUseID: the SDK's id for this tool call, so the folder the agent's command really runs in (its worktree, from
+  // the hook in agent.mjs) is the one the checker starts from (decision 64 A); unknown: the project folder, as before.
+  routeFor(p, agent, toolName, input, toolUseID = null) {
     const rules = this.rulesFor(p);
     agent.tempDirs ||= new Set();
     const level = this.permissionMode(p);
-    const c = classify({ tool: toolName, input, projectDir: p.dir, agent: agent.name, madeTemp: agent.tempDirs, level });
+    const cwd = agent.cwdFor?.(toolUseID) || null;
+    agent.downloads ||= new Set();
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: agent.downloads, level });
     const { route, tempMade } = c;
     const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
+    // Files it downloads: running one in a later request is a stop too (review of decision 64 A). The newest 200.
+    for (const d of c.downloaded || []) { agent.downloads.delete(d); agent.downloads.add(d); }
+    while (agent.downloads.size > 200) agent.downloads.delete(agent.downloads.values().next().value);
     if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
     if (route === 'allow' && this.autoLike(p)) return { allow: true };
     // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,
@@ -626,7 +641,7 @@ export class Hub {
     // jump to your phone just because it was asleep. It still comes to you on escalate or after the timeout.
     const orch = p.orchestrator();
     if (!orch || orch.retiring || ['error', 'retired'].includes(orch.state)) return { to: null, stops: [], rules: rules.entryId };
-    return { to: orch.name, stops: [], rules: rules.entryId, unsure };
+    return { to: orch.name, stops: [], rules: rules.entryId, unsure, cwd };
   }
 
   // Per project: "standard", "auto" or "trusted" (shown as Ask, Auto and Trusted; decisions 34 and 45). The level set
@@ -735,7 +750,7 @@ export class Hub {
 
   // What the orchestrator gets: the request id, the worker and its goal, the tool and its full input, and the rules.
   // The rules text is in its instructions; it is repeated here only when the board's rules changed since it started.
-  permissionMessage(p, orch, id, worker, toolName, input, rulesId, unsure = []) {
+  permissionMessage(p, orch, id, worker, toolName, input, rulesId, unsure = [], cwd = null) {
     const rules = this.rulesFor(p);
     const changed = rules && orch.rulesSeen !== `${rules.entryId}@${rules.ts}`;
     const shown = toolName === 'Bash' || toolName === 'PowerShell' ? `Command:\n${input.command}${input.description ? `\nIts description: ${input.description}` : ''}` : `Input:\n${JSON.stringify(input, null, 1)}`;
@@ -744,6 +759,7 @@ export class Hub {
       `Worker: ${worker.name}`,
       `Worker's goal: ${worker.goal || String(worker.task || '').split('\n')[0].slice(0, 200) || '(none given)'}`,
       `Tool: ${toolName}`,
+      ...(cwd ? [`Runs in: ${cwd}`] : []),
       shown,
       unsure?.length ? `The hub found no hard stop, but could not classify it: ${unsure.join('; ')}.` : 'The hub found no hard stop in it.',
       rules?.isDefault ? 'This project\'s board has no permission rules entry, so you are working from the hub\'s built-in defaults (in your instructions).' : '',
