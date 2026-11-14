@@ -471,7 +471,7 @@ export class Conductor {
       place: CONDUCTOR, thread: CONDUCTOR_THREAD, role: CONDUCTOR_ROLE,
       name: a?.name || null, state: a ? a.state : 'asleep', contextPct: a?.contextPct ?? null,
       model: a?.model || null, modelSeen: a?.modelSeen || null, effort: a?.effort || null, type: null,
-      live: !!a?.live, retiring: a?.retiring || false,
+      live: !!a?.live, retiring: a?.retiring || false, restartPending: !!a?.restartWhenIdle,
       retireAt: this.hub.retireAtFor(this.home), activity: this.activity, waiting,
       wakes: this.wakesOn(), pendingWake: this.pending.length, questions, lessons,
       ...(events ? { events: evs.slice(-EVENTS_SHOWN), olderEvents: Math.max(0, evs.length - EVENTS_SHOWN) } : {})

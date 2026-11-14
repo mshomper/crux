@@ -15,7 +15,7 @@ export const SHOWN_PHONE = 2;               // on a phone: so the waiting cards 
 export function agentOf(c) {
   if (!c) return null;
   return { name: c.name || 'Conductor', role: 'conductor', thread: CONDUCTOR_THREAD, state: c.state || 'asleep', contextPct: c.contextPct ?? null,
-    model: c.model || null, modelSeen: c.modelSeen || null, effort: c.effort || null, type: null, live: !!c.live, retiring: c.retiring || false };
+    model: c.model || null, modelSeen: c.modelSeen || null, effort: c.effort || null, type: null, live: !!c.live, retiring: c.retiring || false, restartPending: !!c.restartPending };
 }
 
 // Its place, shaped like a project where cards and messages are drawn (attachments come from /att/~conductor/...).

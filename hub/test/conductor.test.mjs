@@ -349,3 +349,50 @@ test('page helpers: thread items fold to the latest six, live events update it, 
   assert.match(composerHint({ thread: 'all' }), /^Message the Conductor/);
   assert.equal(CP.placeOf(c).agents[0].role, 'conductor');
 });
+
+test('its model and effort change like an orchestrator\'s, logged the same way, kept across a restart and a handoff; never a type', async () => {
+  const { hub, c, root, a } = await setup();
+  c.fromYou('hi');
+  const h = c.holder();
+  h.state = 'idle';
+  const r = await hub.setAgentSettings(hub.place(CONDUCTOR), 'orchestrator', { model: 'sonnet', effort: 'medium' });
+  assert.equal(r.changed, true);
+  assert.equal(h.model, 'claude-sonnet-5-5');
+  assert.equal(h.effort, 'medium');
+  assert.ok(c.home.log.events.some(e => e.type === 'agent_settings' && e.agent === 'conductor-1' && e.model === 'claude-sonnet-5-5' && e.thread === CONDUCTOR_THREAD));
+  assert.ok(c.home.log.events.some(e => e.type === 'notice' && /You set conductor-1 to .*Sonnet 5.5 · effort medium/.test(e.text)));
+  await assert.rejects(hub.setAgentSettings(hub.place(CONDUCTOR), 'orchestrator', { type: 'reviewer' }), /The Conductor has no agent type/);
+  assert.equal((await hub.setAgentSettings(hub.place(CONDUCTOR), 'orchestrator', { type: null })).changed, false);   // "none" is a no-op
+  assert.equal(h.type, null);
+  assert.equal(c.view().model, 'claude-sonnet-5-5');
+  // After a restart: read back from the log.
+  const again = new Hub({ projects: [a.dir, join(root, 'beta')], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }), conductorDir: join(root, 'data', 'conductor') });
+  assert.equal(again.conductor.holder().model, 'claude-sonnet-5-5');
+  assert.equal(again.conductor.holder().effort, 'medium');
+  // After a handoff: the successor keeps them.
+  h.sessionId = 's1'; h.contextPct = 80;
+  hub.onIdle(c.home, h);
+  hub.writeHandoff(c.home, h, { in_flight: ['none'], promises: ['none'], risks: ['none'], next_steps: ['none'] });
+  hub.onIdle(c.home, h);
+  assert.equal(c.holder().name, 'conductor-2');
+  assert.equal(c.holder().model, 'claude-sonnet-5-5');
+  assert.equal(c.holder().effort, 'medium');
+  hub.finishRetire(c.home, h);
+});
+
+test('after a restart a brief the orchestrator never acted on is delivered again, marked as from the Conductor; it never starts one', async () => {
+  const { hub, c, a } = await setup();
+  const orch = hub.ensureOrchestrator(a);
+  c.toOrchestrator('alpha', 'conductor-1', 'Please tidy old worktrees.');
+  const plan = hub.resumePlan(a);
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].why, 'message');
+  assert.equal(plan[0].message.from, 'conductor-1');
+  sent.length = 0;
+  hub.resumeOne(a, plan[0]);
+  assert.equal(sent.at(-1)[0], 'orchestrator-1');
+  assert.match(sent.at(-1)[1], /^\[From the Conductor, conductor-1, on /);
+  // With no one holding the role, the brief waits: no orchestrator is started for it.
+  hub.finishRetire(a, orch);
+  assert.deepEqual(hub.resumePlan(a), []);
+});

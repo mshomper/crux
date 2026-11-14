@@ -105,7 +105,8 @@ export class Hub {
       const names = thread === 'orchestrator' ? orchNames : new Set([agent.name]);
       // Messages into the thread: yours, or (in a worker's thread) the orchestrator's. A successor's question to
       // its predecessor is answered within the overlap, not resent.
-      const incoming = e => e.type === 'message' && e.thread === thread && !names.has(e.from) && (e.from === 'you' || (thread !== 'orchestrator' && orchNames.has(e.from)));
+      // A Conductor brief to the orchestrator (decision 55) counts too, so a restart does not lose it.
+      const incoming = e => e.type === 'message' && e.thread === thread && !names.has(e.from) && (e.from === 'you' || (thread === 'orchestrator' && e.conductor) || (thread !== 'orchestrator' && orchNames.has(e.from)));
       const i = evs.findLastIndex(incoming);
       const m = evs[i];
       if (!m || now - Date.parse(m.ts) > RESUME_WINDOW_MS) continue;
@@ -134,7 +135,8 @@ export class Hub {
     }
     // A message of yours to the orchestrator role with no holder yet: the next holder takes it.
     const orphan = messages.get('orchestrator');
-    if (orphan) plan.push({ agent: null, thread: 'orchestrator', why: 'message', message: orphan });
+    // Never a Conductor brief: the Conductor cannot start an orchestrator (decision 55 A), so with no holder it waits.
+    if (orphan && !orphan.conductor) plan.push({ agent: null, thread: 'orchestrator', why: 'message', message: orphan });
     return plan.sort((x, y) => (x.thread === 'orchestrator') - (y.thread === 'orchestrator'));
   }
 
@@ -168,7 +170,7 @@ export class Hub {
         this.notice(p, m.thread, r.wasWorking
           ? `The hub restarted while ${r.agent} was working on ${whose} from ${when}, so it was sent again.`
           : `The hub restarted before ${whose} from ${when} reached its agent, so it was delivered again.`);
-        const text = m.from === 'you' ? m.text : `[From the orchestrator, ${m.from}]\n${m.text}`;
+        const text = m.from === 'you' ? m.text : m.conductor ? `[From the Conductor, ${m.from}, on {{who}}'s side]\n${m.text}` : `[From the orchestrator, ${m.from}]\n${m.text}`;
         if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(text, m.attachments);
         else p.agents.get(m.thread)?.send(text, m.attachments);
       } else {
@@ -284,6 +286,12 @@ export class Hub {
     const a = name === 'orchestrator' ? p.orchestrator() : p.agents.get(name);
     if (!a) throw new Error(`No agent called ${name}`);
     if (a.state === 'retired') throw new Error(`${name} has retired.`);
+    // The Conductor (decision 55) changes model and effort only: an agent type would bring its own tools and
+    // instructions, which it must never have. Its tools are fixed in lib/conductor.mjs whatever is recorded here.
+    if (a.role === CONDUCTOR_ROLE && 'type' in changes) {
+      if (changes.type) throw new Error('The Conductor has no agent type: its tools are fixed (decision 55). Change its model or effort instead.');
+      changes = { ...changes }; delete changes.type;
+    }
     const next = {};
     if ('type' in changes && (changes.type || null) !== a.type) {
       const t = changes.type ? this.agentTypes(p).get(changes.type) : null;

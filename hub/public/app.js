@@ -699,18 +699,22 @@ function typeOptions(p, value) {
 const TYPE_TIP = 'Agent types are Claude Code agent files: ~/.claude/agents for every project, or this project’s .claude/agents';
 
 // The chip's menu: change model, effort or type in place. Every change applies at once; Escape or a click outside closes it.
+// The agent the open menu is for: the Conductor's holder (decision 55) or one of this project's agents.
+const menuAgent = () => S.mmenu && (S.conductor?.name === S.mmenu ? CP.agentOf(S.conductor) : proj()?.agents.find(x => x.name === S.mmenu && x.state !== 'retired'));
 function renderModelMenu() {
   const el = $('#mmenu'), p = proj();
-  const a = S.mmenu && p?.agents.find(x => x.name === S.mmenu && x.state !== 'retired');
+  const a = menuAgent();
   if (!a) { el.hidden = true; el.dataset.html = ''; S.mmenu = null; return; }
-  const hue = hueOf(modelOf(a));
+  const hue = hueOf(modelOf(a)), cd = a.role === 'conductor';
   const live = a.live || ['working', 'starting', 'idle'].includes(a.state);
-  const html = `<div class="mm-head"><b>${esc(a.role === 'orchestrator' ? 'Orchestrator' : a.name)}</b><span class="faint">${esc(describe(a))}</span>
+  // The Conductor has no type row: a type would bring tools it must not have (decision 55). Model and effort only.
+  const html = `<div class="mm-head"><b>${esc(a.role === 'orchestrator' ? 'Orchestrator' : cd ? 'Conductor' : a.name)}</b><span class="faint">${esc(describe(a))}</span>
       <button class="mm-x" data-mm-close aria-label="Close">${icon('x')}</button></div>
     <div class="mm-row"><span class="flabel">Model</span>${modelPicker('mm-model', a.model || '')}</div>
     <div class="mm-row"><span class="flabel">Effort</span>${effortPicker('mm-effort', a.effort || '', hue)}</div>
-    <label class="mm-row" title="${esc(TYPE_TIP)}"><span class="flabel">Type</span><select name="mm-type">${typeOptions(p, a.type)}</select></label>
-    <p class="mm-note faint">${live ? 'Model and effort switch right away. A new type restarts it when it is free; it keeps the conversation.' : 'Applies when it next starts.'}</p>`;
+    ${cd ? '' : `<label class="mm-row" title="${esc(TYPE_TIP)}"><span class="flabel">Type</span><select name="mm-type">${typeOptions(p, a.type)}</select></label>`}
+    <p class="mm-note faint">${cd ? `${live ? 'Model and effort switch right away.' : 'Applies when it next starts.'} The Conductor has no agent type: its tools stay fixed.`
+      : live ? 'Model and effort switch right away. A new type restarts it when it is free; it keeps the conversation.' : 'Applies when it next starts.'}</p>`;
   if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
   el.hidden = false;
   placeModelMenu();
@@ -883,7 +887,7 @@ function headFor(t) {
     // message box writes to it. Without a Conductor (an older hub) the column has no box, as before.
     if (!c) return { title: 'All projects', sub: counts, retired: false, retire: false, finish: false, chips: [], activity: '', noBox: true, top: true, waiting: v.total };
     const a = CP.agentOf(c);
-    const sub = `<span class="chip ${esc(a.state)}">${c.name ? `${esc(c.name)} · ` : 'Conductor · '}${esc(a.state)}</span>${c.name ? modelChip(a) : ''}${c.contextPct != null ? `<span>${c.contextPct}% context</span>` : ''}${counts}`;
+    const sub = `<span class="chip ${esc(a.state)}">${c.name ? `${esc(c.name)} · ` : 'Conductor · '}${esc(a.state)}</span>${c.name ? modelChip(a, { button: true }) : ''}${c.contextPct != null ? `<span>${c.contextPct}% context</span>` : ''}${counts}`;
     return { title: 'All projects', sub, retired: false, retire: !!c.name && !c.retiring, finish: false, chips: [], activity: c.activity || '', top: true, waiting: v.total + (c.waiting || 0) };
   }
   let title = 'Needs you', sub = '';
@@ -1176,8 +1180,8 @@ phoneMq.addEventListener('change', () => { placeBell(); render(); });
 $('#mmenu').addEventListener('change', e => {
   const field = { 'mm-model': 'model', 'mm-effort': 'effort', 'mm-type': 'type' }[e.target.name];
   if (!field || !S.mmenu) return;
-  const agent = S.mmenu;
-  act(async () => { await api('/api/agent-settings', { project: proj().name, agent, [field]: e.target.value }); await load(); });
+  const agent = S.mmenu, project = S.conductor?.name === agent ? CP.CONDUCTOR : proj().name;
+  act(async () => { await api('/api/agent-settings', { project, agent, [field]: e.target.value }); await load(); });
 });
 $('#hud').addEventListener('click', () => closeModelMenu(), true);   // the map opening over it
 $('#mmenu').addEventListener('click', e => { if (e.target.closest('[data-mm-close]')) closeModelMenu(); });

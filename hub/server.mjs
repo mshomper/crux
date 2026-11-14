@@ -291,9 +291,11 @@ const routes = {
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
   // Change an agent's model, effort or type. Only the keys sent change; an empty value means the default.
+  // project "~conductor": the Conductor's model and effort (decision 55: never a type, so never other tools).
   'POST /api/agent-settings': ({ project, agent, ...changes }) => {
     const pick = Object.fromEntries(['type', 'model', 'effort'].filter(k => k in changes).map(k => [k, changes[k] || null]));
-    return hub.setAgentSettings(hub.project(project), agent, pick);
+    const p = hub.place(project);
+    return hub.setAgentSettings(p, p.hubWide ? 'orchestrator' : agent, pick);
   },
   // Phone notifications
   'GET /api/push/key': async () => ({ publicKey: (await push.keys()).publicKey }),

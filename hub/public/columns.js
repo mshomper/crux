@@ -127,8 +127,10 @@ export class Columns {
     const k = key(project, t);
     let c = this.convs.get(k);
     if (!c) {
-      if (!this.composes.has(k)) this.composes.set(k, { text: '', tray: [] });
-      c = new Conversation({ project, thread: t, template: this.template, host: this.convHost, compose: this.composes.get(k) });
+      // All projects writes to the Conductor (decision 55), the same in every project: one draft for the whole hub.
+      const ck = t === HUB_THREAD ? key('*', t) : k;
+      if (!this.composes.has(ck)) this.composes.set(ck, { text: '', tray: [] });
+      c = new Conversation({ project, thread: t, template: this.template, host: this.convHost, compose: this.composes.get(ck) });
       this.convs.set(k, c);
     }
     return c;
