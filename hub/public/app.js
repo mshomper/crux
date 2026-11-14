@@ -752,8 +752,9 @@ function conductorSection() {
   const c = S.conductor, place = S.cplace;
   if (!c) return '';
   const a = CP.agentOf(c), hue = hueOf(modelOf(a));
-  const items = CP.threadItems(c), open = S.open.has('conductor-earlier');
-  const { shown, hidden } = CP.shownItems(items, open);
+  // A phone shows the last two, so the waiting cards below are on the first screen (decision 32); a desk shows six.
+  const items = CP.threadItems(c), open = S.open.has('conductor-earlier'), n = phoneMq.matches ? CP.SHOWN_PHONE : CP.SHOWN;
+  const { shown, hidden } = CP.shownItems(items, open, n);
   const item = ev => {
     switch (ev.type) {
       case 'message': return messageEl(place, ev, CP.CONDUCTOR_THREAD);
@@ -771,7 +772,7 @@ function conductorSection() {
   return `<section class="hub-conductor" data-pj="${CP.CONDUCTOR}">
     <div class="hub-head cd-head"><span class="hub-k"><span class="ava${hue ? ' ring' : ''}"${hue ? ` style="--mh:${hue}"` : ''}>${robot(a, { size: 22, needs: c.waiting > 0 })}</span><b>Conductor</b></span>
       <span class="hub-line"></span><span class="hub-meta">${state}</span>${c.waiting ? `<span class="colbadge" title="${c.waiting} waiting for your call from the Conductor">${c.waiting}</span>` : ''}</div>
-    ${hidden ? `<button class="more cd-earlier" data-expand="conductor-earlier">Show earlier (${hidden})</button>` : open && items.length > CP.SHOWN ? `<button class="more cd-earlier" data-expand="conductor-earlier">Show fewer</button>` : ''}
+    ${hidden ? `<button class="more cd-earlier" data-expand="conductor-earlier">Show earlier (${hidden})</button>` : open && items.length > n ? `<button class="more cd-earlier" data-expand="conductor-earlier">Show fewer</button>` : ''}
     <div class="cd-feed">${shown.map(item).join('') || `<div class="cd-empty"><p>Ask what waits for you across projects, or ask for something in another project: the Conductor passes it to that project's orchestrator.</p></div>`}</div>
     ${lessons.length ? lessonsCard(lessons) : ''}
   </section>`;

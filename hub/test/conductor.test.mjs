@@ -224,6 +224,9 @@ test('page helpers: thread items fold to the latest six, live events update it, 
   assert.equal(items.length, 9);
   assert.deepEqual(CP.shownItems(items).hidden, 3);
   assert.equal(CP.shownItems(items, true).hidden, 0);
+  // A phone shows the last two, so the waiting cards are on the first screen (decision 32).
+  assert.deepEqual(CP.shownItems(items, false, CP.SHOWN_PHONE).shown.map(e => e.text), ['m7', 'm8']);
+  assert.equal(CP.shownItems(items, false, CP.SHOWN_PHONE).hidden, 7);
   assert.equal(CP.applyEvent(c, { project: CONDUCTOR, type: 'agent_state', agent: 'conductor-1', state: 'working', contextPct: 12 }), true);
   assert.equal(c.state, 'working');
   assert.equal(CP.applyEvent(c, { project: 'alpha', type: 'agent_state' }), false);

@@ -8,6 +8,7 @@
 export const CONDUCTOR = '~conductor';      // its place name in URLs and live events (lib/conductor.mjs)
 export const CONDUCTOR_THREAD = 'conductor';
 export const SHOWN = 6;                     // the latest items shown; the rest fold behind "Show earlier"
+export const SHOWN_PHONE = 2;               // on a phone: so the waiting cards are on the first screen (decision 32)
 
 // Its holder as an agent the shared drawing understands (robot, model chip, context ring). With no holder yet it is
 // asleep and has no model: the plain helmet with the halo.
@@ -41,9 +42,10 @@ export function applyEvent(c, ev) {
 const SHOWS = new Set(['message', 'summary', 'notice', 'visual', 'lesson_proposed', 'wake', 'reminder']);
 export const threadItems = c => (c?.events || []).filter(e => e.thread === CONDUCTOR_THREAD && SHOWS.has(e.type));
 
-// The latest few, or all once you asked for the earlier ones. hidden: how many are folded.
-export function shownItems(items, open = false) {
-  const hidden = open ? 0 : Math.max(0, items.length - SHOWN);
+// The latest few (n: SHOWN on a desk, SHOWN_PHONE on a phone), or all once you asked for the earlier ones.
+// hidden: how many are folded.
+export function shownItems(items, open = false, n = SHOWN) {
+  const hidden = open ? 0 : Math.max(0, items.length - n);
   return { shown: items.slice(hidden), hidden };
 }
 
