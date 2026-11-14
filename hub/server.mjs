@@ -19,6 +19,7 @@ import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload 
 import { CONDUCTOR } from './lib/conductor.mjs';
 import { Voice, SpeechCache, decodeClip, MAX_CLIP_S, CLIP_LIMIT_S, LISTEN_RATE } from './lib/voice.mjs';
 import { snapNames } from './lib/voice-names.mjs';
+import { dictate } from './lib/voice-punct.mjs';
 import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
@@ -319,18 +320,22 @@ const routes = {
     if (!local) throw new GuardError('Voice is set up on the PC the hub runs on.', 403);
     return voice.setup({ then: () => { hub.settings.set({ voice: true }); voice.start(); } });
   },
-  // A clip (16 kHz 16-bit mono PCM, base64): heard by the helper in memory, near-miss names snapped, and sent at once
-  // as your message to the Conductor, marked as spoken (R011). What was heard is kept when a name was snapped.
+  // A clip (16 kHz 16-bit mono PCM, base64): heard by the helper in memory, spoken punctuation turned into marks
+  // ("comma" -> ","), near-miss names snapped, and sent at once as your message to the Conductor, marked as spoken
+  // (R011). What was heard is kept (shown on hover) when either changed it.
   // client: the page that spoke; only it plays the answer back.
   'POST /api/voice/listen': async ({ audio, client }) => {
     if (!hub.conductor) throw new Error('Voice talks to the Conductor, and this hub has none.');
     const r = await voice.listen(decodeClip(audio));
     const heard = String(r.text || '').replace(/\s+/g, ' ').trim();
     if (!heard) throw new Error('Nothing was heard. Tap the mic and try again.');
-    const { text, snapped } = snapNames(heard, voiceNames(), hubCfg.voiceAliases);
+    const said = dictate(heard).text;
+    const { text, snapped } = snapNames(said, voiceNames(), hubCfg.voiceAliases);
+    if (!text.trim()) throw new Error('Only punctuation was heard. Tap the mic and try again.');
+    const changed = text !== heard;
     hub.conductor.expectVoice(client);
-    hub.fromYou(hub.place(CONDUCTOR), 'conductor', text, [], { voice: true, ...(snapped.length ? { heard } : {}) });
-    return { text, ...(snapped.length ? { heard } : {}), seconds: r.seconds, ms: r.ms };
+    hub.fromYou(hub.place(CONDUCTOR), 'conductor', text, [], { voice: true, ...(changed ? { heard } : {}) });
+    return { text, ...(changed ? { heard } : {}), snapped: snapped.length, seconds: r.seconds, ms: r.ms };
   },
   // One sentence of an answer read aloud, as a WAV made in memory: { id: the voice_say event, n: its sentence }.
   // Handed over once and dropped; nothing is stored.

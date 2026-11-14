@@ -1300,7 +1300,7 @@ let stopPress = null;   // { x, y, timer } while a tap that stopped her is still
 const voiceStop = $('#voice-stop');
 const hideStop = () => { if (stopPress) { clearTimeout(stopPress.timer); stopPress = null; } voiceStop.hidden = true; };
 const voicePlayer = new VoicePlayer({
-  ctx: () => voiceRec.ctx,
+  ctx: () => voiceRec.playCtx,   // her own sound context, never the mic's (that one is closed after each recording)
   fetchSentence: fetchSpeech,
   onChange: speaking => { if (speaking) voiceStop.hidden = false; else if (!stopPress) voiceStop.hidden = true; renderVoice(); },
   onError: msg => toast(msg)
