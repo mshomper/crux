@@ -11,7 +11,7 @@ One installer with everything in it (decisions 49, 52 and 54): the hub, its own 
 - **Start with Windows:** the installed app turns this on at its first run and starts hidden in the tray. Turn it off in Task Manager, Startup apps. Uninstalling removes it. Dev runs and the bare exe in `target/` never turn it on.
 - The window remembers its size and place.
 - The hub page gets no native access: no Tauri capability names its address, so neither the hub page nor anything an agent wrote can call the app. Links to other sites open in your browser.
-- Not yet: PC notifications (a later step).
+- **PC notices** (decision 58 A): the same cards as the phone's notifications (a permission request that is yours, a decision ready to pick, a question, a raise to Trusted), with the same few words. While you use the PC they come as Windows notices; a click opens that card in the window. When the PC has been idle 5 minutes, is locked or asleep, they go to your phone instead, and a card still waiting 3 minutes after a PC notice goes to the phone too. If Windows notices are switched off (Settings, System, Notifications), cards go straight to the phone. Nothing is sent for a card you are already looking at. A notice for a card settled since stays in the notification list.
 
 ## What the installer holds
 

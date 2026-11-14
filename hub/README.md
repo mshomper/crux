@@ -102,7 +102,7 @@ One download with everything in it (decisions 49, 52 and 54), in [`../app/`](../
 
 On first run a setup screen asks for three things: your Anthropic API key (kept in `~/.crux-hub/secrets.json`, never in a repo or a log), your project folders (saved in `~/crux/hub.json`), and Claude Code, which it downloads from Anthropic in the exact version this hub was built with, checks against the Agent SDK's checksum and keeps in `~/.crux-hub/claude-code/` (about 330 MB, once per version). A Claude Code already installed on the PC is used only when that download is missing. Only the app's own hub shows this screen; a hub run from a clone never does.
 
-The app sits on top of the hub rather than owning it: it starts the hub when it is down, and quitting the app leaves the hub running, so your phone keeps working. A hub you already run from a git clone keeps running: the app finds it from how it was last started and uses it, with no setup screen (or name a folder in `~/crux/hub.json` as `{ "app": { "hubDir": "C:/path/to/crux/hub" } }`). Updates come through the app itself, signed, from GitHub Releases; installing one stops the app's own hub, replaces the files and starts it again, and your settings, key and Claude Code stay. It can start with Windows, hidden in the tray. It has no PC notifications yet. [`../app/README.md`](../app/README.md) has the settings and, for developers, how to build and release it.
+The app sits on top of the hub rather than owning it: it starts the hub when it is down, and quitting the app leaves the hub running, so your phone keeps working. A hub you already run from a git clone keeps running: the app finds it from how it was last started and uses it, with no setup screen (or name a folder in `~/crux/hub.json` as `{ "app": { "hubDir": "C:/path/to/crux/hub" } }`). Updates come through the app itself, signed, from GitHub Releases; installing one stops the app's own hub, replaces the files and starts it again, and your settings, key and Claude Code stay. It can start with Windows, hidden in the tray. While you use the PC, cards come as Windows notices from the app, and a click opens the card; when the PC is idle 5+ minutes, locked or asleep, they go to your phone, and a card still waiting 3 minutes after a PC notice goes to the phone too (decision 58 A). With Windows notices switched off, they go straight to the phone. [`../app/README.md`](../app/README.md) has the settings and, for developers, how to build and release it.
 
 ## Restart the hub
 
@@ -265,7 +265,7 @@ To stop a test hub you started on another port, run `node tools/stop-test-hub.mj
 ## Not yet
 
 These are decided or planned but not built, so don't count on them:
-- PC notifications in the desktop app (see "Desktop app"). Today it shows no desktop notifications, and the installer is unsigned.
+- A code-signed installer (decision 53 C: unsigned for now).
 - A channel for ordinary terminal Claude Code sessions to join the board.
 - Answer buttons on lock-screen notifications. A notification opens the card in the hub.
 - Tested setup on Mac and Linux.

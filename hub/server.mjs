@@ -318,6 +318,11 @@ const routes = {
   'POST /api/push/test': async () => ({ sent: await push.send({ kind: 'test', title: 'Crux Hub', body: 'Notifications reach this device.', card: '', url: '/' }) }),
   // Where an open hub page is and whether you are using it, so cards you are looking at do not buzz your phone.
   'POST /api/presence': ({ client, ...info }) => { push.presence(String(client || ''), info); return { ok: true }; },
+  // Decision 58: the desktop app's report, every 30 s: how long since the PC's last input, and whether it is locked.
+  'POST /api/desktop/presence': ({ client, idleMs, locked, notices }, { local }) => {
+    if (!local) throw new GuardError('Only the desktop app on this PC reports here.', 403);
+    return { known: push.desktopPresence(String(client || ''), { idleMs, locked, notices }), inUse: push.pcInUse() };
+  },
   'POST /api/entry': ({ project, ...entry }) => ({ entryId: hub.project(project).board.addEntry({ ...entry, from: 'you' }).entryId }),
   // Mark a memo done, or back to active, from the board panel: a new event in the log, never an edit.
   'POST /api/entry-status': ({ project, id, status }) => ({ entryId: hub.project(project).board.setEntryStatus(String(id || ''), status === 'active' ? 'active' : 'done', 'you').entryId }),
@@ -370,6 +375,18 @@ async function handle(req, res) {
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); });
+      return;
+    }
+    // Decision 58: the desktop app's notices. This PC only; it carries the same few words as a phone push.
+    if (url.pathname === '/api/desktop/stream' && req.method === 'GET') {
+      if (!local) return send(res, 403, { error: 'The desktop stream is for the app on this PC.' });
+      const client = String(url.searchParams.get('client') || '').slice(0, 64);
+      if (!/^[\w-]{8,64}$/.test(client)) return send(res, 400, { error: 'Give a client id.' });
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+      res.write(': hello\n\n');
+      push.desktopAttach(client, (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+      req.on('close', () => { push.desktopDetach(client); clearInterval(ping); });
       return;
     }
     const key = `${req.method} ${url.pathname}`;

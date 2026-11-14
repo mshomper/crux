@@ -98,8 +98,9 @@ test('every POST route refuses a request with no device cookie (one request per 
   const routes = postRoutes();
   for (const r of ['/api/approval', '/api/pick', '/api/send', '/api/worker', '/api/retire', '/api/answer', '/api/settings', '/api/entry-status', '/api/push/subscribe', '/api/restart', '/api/presence', '/api/auth/challenge'])
     assert.ok(routes.includes(r), `${r} is among the routes checked`);
-  // 29 since the desktop app's setup routes (decisions 52 and 54): /api/setup/key, /claude, /browse, /folders.
-  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 29, `29 routes need a paired device: ${routes.join(' ')}`);
+  // 29 since the desktop app's setup routes (decisions 52 and 54): /api/setup/key, /claude, /browse, /folders;
+  // 30 with the desktop app's reports (decision 58): /api/desktop/presence.
+  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 30, `30 routes need a paired device: ${routes.join(' ')}`);
   for (const path of routes.filter(r => !OPEN.includes(r))) {
     const r = await call('POST', path, { body: {} });
     assert.equal(r.status, 401, `${path} without a cookie: ${r.status} ${r.text}`);

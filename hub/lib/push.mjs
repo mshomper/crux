@@ -3,6 +3,9 @@
 // card's id. No command text and no file contents. The phone opens the hub over the tailnet to see the rest.
 //
 // VAPID keys and subscriptions live in ~/.crux-hub (or CRUX_HUB_DATA), never in a repo.
+//
+// Decision 58 A adds the desktop app as a target for the same cards and the same few words: the PC while it is in
+// use, the phone as backup (see PC_IDLE_MS below). Security and restart notices (guard.mjs) stay phone-only.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -14,6 +17,12 @@ const pad = n => String(n).padStart(4, '0');
 export const QUESTION_GRACE_MS = 60 * 1000; // the orchestrator often answers a worker's question itself
 const LOOK_FRESH_MS = 45 * 1000;             // a presence report older than this is stale
 const LOOK_IDLE_MS = 2 * 60 * 1000;          // no clicks or keys for this long: you have walked away
+// Decision 58 A: PC first, phone as backup. A card goes to the desktop app's notice while the PC is in use (input in
+// the last 5 minutes, not locked); to the phone when the PC is idle, locked or asleep (no fresh report), and also to
+// the phone when it is still waiting 3 minutes after a PC notice.
+export const PC_IDLE_MS = 5 * 60 * 1000;
+export const PHONE_FOLLOWUP_MS = 3 * 60 * 1000;
+const DESK_FRESH_MS = 75 * 1000;              // the app reports every 30 s; older means asleep or gone
 
 // Which card, if any, an event puts in front of you. `decisionOpen(id)` says whether a decision still waits.
 export function cardsFor(ev, { decisionOpen = () => true } = {}) {
@@ -90,6 +99,8 @@ export class Push {
     this.presences = new Map();
     this.sent = new Set();
     this.settled = new Set();   // cards notified about and then settled: cleared from the phone with the next push
+    this.desktops = new Map();  // decision 58: desktop apps listening on this PC: client -> { write, idleMs, locked, ts }
+    this.sentDesk = new Set();
     this.subsFile = join(dir, 'push-subscriptions.json');
     this.subs = existsSync(this.subsFile) ? safeJson(this.subsFile, []) : [];
   }
@@ -142,27 +153,67 @@ export class Push {
     for (const [k, p] of this.presences) if (now - p.ts > 10 * 60 * 1000) this.presences.delete(k);
   }
 
+  // ---------- decision 58: the desktop app on this PC ----------
+  // The app holds a stream open (GET /api/desktop/stream, this PC only) and reports every 30 s how long since the
+  // PC last had keyboard or mouse input, and whether it is locked.
+  desktopAttach(client, write) { if (client) this.desktops.set(client, { write, idleMs: 0, locked: false, notices: true, ts: 0 }); }
+  desktopDetach(client) { this.desktops.delete(client); }
+  // notices: whether Windows lets the app show notices (its master switch and the app's own switch in Settings).
+  desktopPresence(client, { idleMs = 0, locked = false, notices = true } = {}, now = Date.now()) {
+    const d = this.desktops.get(client);
+    if (d) Object.assign(d, { idleMs: Math.max(0, Number(idleMs) || 0), locked: !!locked, notices: notices !== false, ts: now });
+    return !!d;
+  }
+  // The PC is in use and can show a notice: a desktop app reported recently, the PC is not locked, there was input
+  // in the last 5 min, and Windows notices are on. Otherwise the phone gets the card at once.
+  pcInUse(now = Date.now()) {
+    for (const d of this.desktops.values()) {
+      const age = now - d.ts;
+      if (d.ts && age <= DESK_FRESH_MS && !d.locked && d.notices && d.idleMs + age < PC_IDLE_MS) return true;
+    }
+    return false;
+  }
+  // Somewhere a PC notice can show at all (used when no phone is set up).
+  desktopCanShow() { for (const d of this.desktops.values()) if (d.notices) return true; return false; }
+  toDesktops(event, data) {
+    for (const [client, d] of this.desktops) { try { d.write(event, data); } catch { this.desktops.delete(client); } }
+  }
+
   // Called for every logged hub event. `ctx` gives the live state: approvals, decisionOpen(project, id),
   // decisionStatus(project, id) and events(project).
   handle(ev, ctx) {
     const done = settledCard(ev);
     if (done && this.sent.has(done)) { this.settled.add(done); if (this.settled.size > 50) this.settled.delete(this.settled.values().next().value); }
-    if (!this.subs.length) return;
+    if (done && this.sentDesk.has(done)) this.toDesktops('clear', { card: done });   // the app takes the notice down
+    if (!this.subs.length && !this.desktops.size) return;
     const decisionOpen = id => ctx.decisionOpen(ev.project, id);
     const decisionStatus = id => ctx.decisionStatus?.(ev.project, id);
+    const waiting = card => stillOpen(card, { approvals: ctx.approvals, decisionOpen, decisionStatus, events: ctx.events(ev.project) })
+      && (card.always || !isLooking(card, this.presences.values()));
     for (const card of cardsFor(ev, { decisionOpen })) {
-      if (this.sent.has(card.card)) continue;
+      if (this.sent.has(card.card) || this.sentDesk.has(card.card)) continue;
       const go = () => {
-        if (this.sent.has(card.card)) return;
-        if (!stillOpen(card, { approvals: ctx.approvals, decisionOpen, decisionStatus, events: ctx.events(ev.project) })) return;
-        if (!card.always && isLooking(card, this.presences.values())) return;
-        this.sent.add(card.card);
-        const close = [...this.settled];
-        this.settled.clear();
-        this.send(payloadOf(card, close)).catch(e => console.warn(`Push failed: ${e.message}`));
+        if (this.sent.has(card.card) || this.sentDesk.has(card.card) || !waiting(card)) return;
+        // Decision 58 A: the PC while it is in use (or when no phone is set up), with the phone as backup.
+        if (this.desktops.size && (this.pcInUse() || (!this.subs.length && this.desktopCanShow()))) {
+          this.sentDesk.add(card.card);
+          if (this.sentDesk.size > 200) this.sentDesk.delete(this.sentDesk.values().next().value);
+          this.toDesktops('notify', payloadOf(card));
+          if (this.subs.length) this.timers.setTimeout(() => { if (!this.sent.has(card.card) && waiting(card)) this.toPhone(card); }, PHONE_FOLLOWUP_MS);
+          return;
+        }
+        this.toPhone(card);
       };
       card.delayMs ? this.timers.setTimeout(go, card.delayMs) : go();
     }
+  }
+
+  toPhone(card) {
+    if (!this.subs.length || this.sent.has(card.card)) return;
+    this.sent.add(card.card);
+    const close = [...this.settled];
+    this.settled.clear();
+    this.send(payloadOf(card, close)).catch(e => console.warn(`Push failed: ${e.message}`));
   }
 
   async send(payload) {
