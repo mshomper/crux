@@ -7,7 +7,7 @@
  "lenses": [
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how the All projects column fits the Conductor's chat. I recommend B: the chat and its message box fill the column like any thread, with small \"waiting\" and \"agents\" rows on top that open in place. On the phone, \"waiting\" opens by itself whenever something needs you. Confidence: medium.",
  "for_you": [
   "What you type and what the Conductor answers sit together, as in every other thread",
@@ -58,9 +58,9 @@
  "recommendation": "B keeps the chat whole however many cards wait, and the red count on the waiting row still tells you at a glance.",
  "confidence": "lean",
  "change_mind": "If you find yourself opening the waiting row every time on the desktop, take A.",
- "chosen": null,
+ "chosen": "B",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [],

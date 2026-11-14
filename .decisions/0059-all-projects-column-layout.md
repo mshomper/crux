@@ -1,7 +1,7 @@
 # 0059 How is the All projects column laid out now that the Conductor talks there?
 
-- Status: open
-- Date: 2026-11-14
+- Status: decided
+- Date: 2026-11-14, decided 2026-11-14
 - Lenses: ui
 - Builds on: 0032, 0042, 0055
 
@@ -14,6 +14,10 @@ For you:
 - What you type and what the Conductor answers sit together, as in every other thread
 - Waiting cards and the agents list are still one tap away, and on the phone what needs you still comes first
 - Hard to undo: Changes the column order from decision 42; switching back is a page change only
+
+## Decision
+
+**B: Chat fills the column, rows on top.** The chat and message box fill the column like any thread. Two compact rows on top, "2 waiting" and "9 agents", open in place. On the phone, "waiting" opens by itself whenever something waits and folds with one tap.
 
 ## Context
 
@@ -37,7 +41,7 @@ Waiting cards at the top, the agents list folded to one row, then the Conductor 
 - Con: With several cards waiting, the chat drifts away from the box again
 - Effort: Small
 
-### B: Chat fills the column, rows on top (recommended)
+### B: Chat fills the column, rows on top (chosen) (recommended)
 
 The chat and message box fill the column like any thread. Two compact rows on top, "2 waiting" and "9 agents", open in place. On the phone, "waiting" opens by itself whenever something waits and folds with one tap.
 
