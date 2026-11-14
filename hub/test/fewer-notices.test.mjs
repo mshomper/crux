@@ -146,7 +146,7 @@ test('one phone notice per summary, however many cards it carries', async () => 
   h.push.handle(s, ctx);
   await settle();
   assert.equal(h.pushed.length, 1);
-  assert.equal(h.pushed[0].title, 'orchestrator-2 has 5 decisions and a question for you');
+  assert.equal(h.pushed[0].title, 'life v2 has 5 decisions and a question for you');
   assert.equal(h.pushed[0].card, 'decision:10');
   assert.equal(h.timers.queue.length, 0);
   // A later summary naming D12 again notifies nothing.
@@ -366,7 +366,7 @@ test('no restart notice within 10 minutes of a merge you approved; other restart
   assert.equal(h.timers.queue.length, 0, 'no 3-minute phone follow-up');
   const phone = pushHarness();
   await phone.push.restartNotice({ project: 'crux', agent: 'orchestrator-6' }, {});
-  assert.deepEqual(phone.pushed.map(p => [p.kind, p.body]), [['restart', 'Asked by orchestrator-6 in crux']]);
+  assert.deepEqual(phone.pushed.map(p => [p.kind, p.body]), [['restart', 'Asked by crux v6']]);
   const looking = pushHarness();
   looking.push.presence('page', { project: 'crux', thread: 'orchestrator', visible: true, focused: true, idleMs: 0 });
   await looking.push.restartNotice({ project: 'crux', agent: 'orchestrator-6' }, {});

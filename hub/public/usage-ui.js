@@ -7,6 +7,7 @@
 // The core has no meters of its own: its readout stays as it is (Matt's rule).
 import { hueOf, modelLabel, MODEL_HUES } from './models.js';
 import { meterList, aggregate, fmtTokens, fmtCost, fmtLeft } from './usage.js';
+import { nameHtml, nameParts } from './agent-name.js';
 
 export const STALE_MS = 15 * 60 * 1000;   // a snapshot older than this is shown dimmed, with when it was read
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -56,7 +57,7 @@ export function panelHtml({ plan, rows, bootAt, range = 'today', multi = false, 
         <div class="up-wr">${agg.fable.cost > 0 ? `${fmtCost(agg.fable.cost)} of ${fmtCost(agg.total.cost)} estimated · ${Math.round(agg.fable.tokenShare * 100)}% of input and output tokens` : 'No Fable use logged in this period'}${fableWin ? ` · weekly window ${pctText(fableWin.pct)}` : ''}</div></div>`
     : '';
   const modelRow = m => `<li style="--mh:${hueOf(m.id) || '#8792ad'}"><span class="up-dot"></span><div><b>${esc(modelLabel(m.id))}</b><i>${esc(rowTokens(m))}</i></div><em>${fmtCost(m.cost)}</em></li>`;
-  const agentRow = a => `<li style="--mh:${hueOf(a.model) || '#8792ad'}"><span class="up-dot"></span><div><b>${esc(multi ? `${a.project} / ${a.agent}` : a.agent)}</b><i>${esc(a.model ? modelLabel(a.model) + ' · ' : '')}${esc(rowTokens(a))}</i></div><em>${fmtCost(a.cost)}</em></li>`;
+  const agentRow = a => `<li style="--mh:${hueOf(a.model) || '#8792ad'}"><span class="up-dot"></span><div><b>${nameParts(a.agent).v != null ? nameHtml(a.agent, a.project) : esc(multi ? `${a.project} / ${a.agent}` : a.agent)}</b><i>${esc(a.model ? modelLabel(a.model) + ' · ' : '')}${esc(rowTokens(a))}</i></div><em>${fmtCost(a.cost)}</em></li>`;
   const spend = `<div class="up-tabs" role="tablist" aria-label="Period">
       <button role="tab" aria-selected="${range === 'today'}" data-range="today">Today</button><button role="tab" aria-selected="${range === 'session'}" data-range="session">Since hub start</button></div>
     ${empty ? `<p class="up-faint">${range === 'session' ? 'Nothing since the hub started.' : 'Nothing logged today.'} Totals appear after an agent's next reply.</p>` : `

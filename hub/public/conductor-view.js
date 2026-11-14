@@ -5,6 +5,9 @@
 // c: { place, thread, role, name, state, contextPct, model, modelSeen, effort, live, retiring, retireAt, activity,
 //      waiting, wakes, pendingWake, events }
 
+import { nameHtml } from './agent-name.js';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 export const CONDUCTOR = '~conductor';      // its place name in URLs and live events (lib/conductor.mjs)
 export const CONDUCTOR_THREAD = 'conductor';
 export const SHOWN = 6;                     // the latest items shown; the rest fold behind "Show earlier"
@@ -45,6 +48,11 @@ export const replyHead = ev => `${ev.project} · ${ev.from} replied to ${ev.requ
 // Matt (0.20.2): a reply shows as ONE folded line, "crux replied · req-012" and its first few words; a tap opens it.
 // One written to Matt directly (forMatt) shows in full instead.
 export const replyFold = ev => `${ev.project} replied · ${ev.request}`;
+// The same on screen: the orchestrator by its project and "vN" ("crux v6 replied · req-012", "crux v6 to you · req-012"),
+// escaped. A sender that is not an orchestrator name falls back to the project.
+const senderHtml = ev => /^orchestrator-\d+$/.test(String(ev.from || '')) ? nameHtml(ev.from, ev.project) : esc(ev.project);
+export const replyFoldHtml = ev => `${senderHtml(ev)} replied · ${esc(ev.request)}`;
+export const toYouHtml = ev => `${senderHtml(ev)} to you · ${esc(ev.request)}`;
 export function replyGist(text, max = 72) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   if (s.length <= max) return s;

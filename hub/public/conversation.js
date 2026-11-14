@@ -136,7 +136,9 @@ export class Conversation {
     this.form.hidden = !!h.noBox;
     this.activity.hidden = !!h.noBox;
     this.top = h.top ?? this.thread === 'needs';
-    this.title.textContent = h.title;
+    // titleHtml (already escaped) when the title carries a chip: an orchestrator's project and its "vN" (agent-name.js)
+    if (h.titleHtml) { if (this.title.innerHTML !== h.titleHtml) this.title.innerHTML = h.titleHtml; }
+    else this.title.textContent = h.title;
     if (this.subHtml !== h.sub) { this.subHtml = h.sub; this.sub.innerHTML = h.sub; }
     this.retireBtn.hidden = !h.retire;
     this.finishBtn.hidden = !h.finish;

@@ -7,6 +7,7 @@ import { hudBoot, openPanel, closePanel } from './hud.js';
 import { isYesNo, repeatsIn, pageAsk } from './questions.js';
 import * as AP from './all-projects.js';
 import * as CP from './conductor-view.js';
+import * as NM from './agent-name.js';
 import { hubProjects } from './map-hub.js';
 import { enterAction, insertLineBreak, replyHint, filterHint } from './composer-keys.js';
 import { Columns } from './columns.js';
@@ -223,7 +224,7 @@ function renderHubMenu() {
   // M014: who will be resumed, by name (with the project when there are several).
   const busy = working();
   const multi = S.projects.length > 1;
-  const names = busy.map(a => `<b>${esc(a.name)}</b>${multi ? ` <span class="faint">(${esc(a.project)})</span>` : ''}`);
+  const names = busy.map(a => `<b>${NM.nameHtml(a.name, a.project)}</b>${multi ? ` <span class="faint">(${esc(a.project)})</span>` : ''}`);
   const list = names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
   el.innerHTML = S.hubMenu === 'confirm'
     ? `<div class="hm-confirm"><b>Restart the hub now?</b>
@@ -302,11 +303,11 @@ function setConductor(c) {
   S.conductor = c || null;
   S.cplace = c ? CP.placeOf(c) : null;
 }
-function lessonsCard(ls) {
+function lessonsCard(ls, p = proj()) {
   return `<article class="card lessons">
     <div class="card-head">${icon('star')}<h3>${ls.length === 1 ? 'A lesson' : `${ls.length} lessons`} for your core profile</h3></div>
     <p class="muted">Agents noticed these about how you work. Added lessons go to every agent on every project.</p>
-    <ul class="lesson-list">${ls.map(l => `<li><span class="ltext">${esc(l.text)} <span class="faint">· ${esc(l.from)}</span></span>
+    <ul class="lesson-list">${ls.map(l => `<li><span class="ltext">${esc(l.text)} <span class="faint">· ${NM.nameHtml(l.from, p?.name)}</span></span>
       <span class="row"><button class="btn" data-lesson="${esc(l.lesson)}" data-accept="1">${icon('check')}Add</button><button class="btn" data-lesson="${esc(l.lesson)}" data-accept="0">${icon('x')}Skip</button></span></li>`).join('')}</ul>
     ${ls.length > 1 ? `<div class="row"><button class="btn primary" data-lesson="${ls.map(l => esc(l.lesson)).join(',')}" data-accept="1">${icon('check')}Add all ${ls.length}</button></div>` : ''}
   </article>`;
@@ -364,7 +365,7 @@ function questionCard(ev, p = proj(), { suggest = null } = {}) {
     </div>`;
   }).join('');
   return `<article class="card question" data-card="question:${esc(ev.id)}" tabindex="0">
-    <div class="card-head">${icon('inbox')}<h3>${esc(ev.from)} asks</h3><span class="keys">Enter to answer</span><span class="time">${timeOf(ev.ts)}</span></div>
+    <div class="card-head">${icon('inbox')}<h3>${NM.nameHtml(ev.from, p.name)} asks</h3><span class="keys">Enter to answer</span><span class="time">${timeOf(ev.ts)}</span></div>
     ${vis.map(v => visualEl(p, v, true)).join('')}
     <div class="qrows">${rows}</div>
     ${ev.byPicks ? `<p class="faint q-done">${ev.byPicks === 1 ? 'One more question was' : `${ev.byPicks} more questions were`} answered by your picks.</p>` : ''}
@@ -489,12 +490,13 @@ const avaHtml = ({ ava, avaClass = '', agent = null }) => {
   const ring = hue ? ` ring" style="--mh:${hue}" title="${esc(describe(agent))}` : '';
   return `<span class="ava ${avaClass}${ring}">${agent ? robot(agent) : icon(ava)}</span>`;
 };
-function threadButton({ id, name, ava, avaClass = '', last, right, agent = null }) {
+// nameHtml: the name as HTML when it carries a chip (an orchestrator: its project and "vN"); else the plain name.
+function threadButton({ id, name, nameHtml = null, ava, avaClass = '', last, right, agent = null }) {
   const pinned = cols.isPinned(id);
   const tip = pinned ? `Unpin ${name}: close its column` : `Pin ${name}: open it as a column beside the current one`;
   return `<div class="thread-row ${pinned ? 'pinned' : ''}"><button class="thread ${cols.kb === id ? 'on' : ''}" data-thread="${esc(id)}">
     ${avaHtml({ ava, avaClass, agent })}
-    <span class="name">${esc(name)}</span>${right}
+    <span class="name">${nameHtml ?? esc(name)}</span>${right}
     <span class="last">${esc(last)}</span></button><button type="button" class="row-pin" data-row-pin="${esc(id)}" aria-pressed="${pinned}" aria-label="${esc(tip)}" title="${esc(tip)}">${icon('pin')}</button></div>`;
 }
 // A thread's avatar as the rail shows it, with its red count; a click shows it in place of the column named.
@@ -533,7 +535,8 @@ function renderThreads() {
   // A thread on screen in a column is being read: no unread dot for it.
   const dot = (a, t) => `<span class="dot ${!cols.visible(t) && unread(p, t) ? 'unread' : a?.state || ''}"></span>`;
   let html = threadButton({ id: 'needs', name: 'Needs you', ava: 'inbox', avaClass: needs ? 'needs' : '', last: needs ? `${needs} waiting for your call` : 'Nothing waiting', right: needs ? `<span class="badge">${needs}</span>` : '' });
-  html += threadButton({ id: 'orchestrator', name: orch ? `Orchestrator · ${orch.name.replace('orchestrator-', '#')}` : 'Orchestrator', ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator'), agent: orch });
+  // The orchestrator by its project, with its holder number as a small chip (crux v6)
+  html += threadButton({ id: 'orchestrator', name: orch ? NM.nameText(orch.name, p.name) : p.name, nameHtml: orch ? NM.nameHtml(orch.name, p.name) : null, ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator'), agent: orch });
   if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread), agent: a })).join('');
   html += retiredSection(p, workers);
   // Redrawn on every update (an agent's state, its activity): only the rows that changed are swapped, so the list
@@ -603,7 +606,7 @@ function approvalCard(ev, p = proj()) {
   if (!live && !S.open.has(ev.approval)) {
     // Answered: one line. Click to see it again.
     const what = desc || plain || String(input).split('\n')[0];
-    return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${esc(ev.agent)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
+    return `<button class="mini-approval" data-expand="${esc(ev.approval)}">${icon('shield')}<span class="what">${NM.nameHtml(ev.agent, p.name)} · ${esc(what)}</span><span class="chip">${esc(result ? result.how : 'expired')}</span></button>`;
   }
   // Why it is with you (decision 21): a hard stop the hub found, the orchestrator escalating, or no answer in time.
   const esc8 = escalation(p, ev.approval);
@@ -614,7 +617,7 @@ function approvalCard(ev, p = proj()) {
   const tags = (ev.summary?.tags || []).map(t => `<span class="tag ${esc(t.level)}">${esc(t.text)}</span>`).join('');
   const raw = `<pre>${esc(input)}</pre>`;
   return `<article class="card approval ${live ? '' : 'answered'}" data-card="approval:${esc(ev.approval)}" ${live ? 'tabindex="0"' : `data-expand="${esc(ev.approval)}"`}>
-    <div class="card-head">${icon('shield')}<h3>${desc ? `${esc(ev.agent)}: ${esc(desc)}` : `${esc(ev.agent)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}`}</h3>${live ? '<span class="keys">A allow · D deny</span>' : ''}</div>
+    <div class="card-head">${icon('shield')}<h3>${desc ? `${NM.nameHtml(ev.agent, p.name)}: ${esc(desc)}` : `${NM.nameHtml(ev.agent, p.name)} wants to ${plain ? esc(plain[0].toLowerCase() + plain.slice(1)) : `use ${esc(ev.title || ev.tool)}`}`}</h3>${live ? '<span class="keys">A allow · D deny</span>' : ''}</div>
     ${stopNote}
     ${hubReads ? `<p class="muted why">The hub reads: ${esc(hubReads)}</p>` : ''}
     ${tags ? `<div class="tags">${tags}</div>` : ''}
@@ -646,12 +649,12 @@ function permLine(ev) {
 function summaryCard(p, ev, only = null, reps = null) {
   const sec = (label, xs) => xs?.length ? `<dt>${label}</dt><dd><ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul></dd>` : '';
   // Decision 64: a question hidden behind a decision card says so ("also in the D0059 card").
-  const also = r => `${r.answered ? 'answered' : 'also'} in ${r.decision ? `the ${esc(r.of)} card` : `${esc(r.of)}'s card`}`;
+  const also = r => `${r.answered ? 'answered' : 'also'} in ${r.decision ? `the ${esc(r.of)} card` : `${NM.nameHtml(r.of, p.name)}'s card`}`;
   const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· ${also(r)}</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
   const decisions = (only || ev.decisions_needed || []).map(id => p.board.decisions.find(d => d.id === Number(id))).filter(Boolean);
   // notes: lines given as questions with no question mark (decision 64): plain lines here, never a card.
   return `<article class="card summary">
-    <div class="card-head">${icon('check')}<h3>${esc(ev.from)} finished a round</h3><span class="time">${timeOf(ev.ts)}</span></div>
+    <div class="card-head">${icon('check')}<h3>${NM.nameHtml(ev.from, p.name)} finished a round</h3><span class="time">${timeOf(ev.ts)}</span></div>
     ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${qs}${sec('Notes', ev.notes)}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
       isTall([ev.done, ev.changed, ev.questions, ev.notes, ev.blocked_on, ev.next_step].flat().filter(Boolean).join('\n'), 700))}
   </article>${decisions.map(d => decisionCard(p, d)).join('')}`;
@@ -682,7 +685,7 @@ function messageEl(p, ev, t) {
     ? `<span class="chip req done" title="The orchestrator answered this request; the reply went to the Conductor">Replied · ${esc(ev.request)}</span>`
     : `<span class="chip req" title="The Conductor expects a reply (reply_to_conductor)">Reply expected · ${esc(ev.request)}</span>`) : '';
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
-    <span class="who">${said}${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}${req ? ` ${req}` : ''}</span>
+    <span class="who">${said}${you ? 'You' : NM.nameHtml(ev.from, p.name)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}${req ? ` ${req}` : ''}</span>
     ${shots}${ev.text || !shots ? `<div class="bubble">${fold(ev.id, body, isTall(ev.text, relay ? 240 : 900))}</div>` : ''}</div>`;
 }
 
@@ -742,7 +745,7 @@ function renderModelMenu() {
   const hue = hueOf(modelOf(a)), cd = a.role === 'conductor';
   const live = a.live || ['working', 'starting', 'idle'].includes(a.state);
   // The Conductor has no type row: a type would bring tools it must not have (decision 55). Model and effort only.
-  const html = `<div class="mm-head"><b>${esc(a.role === 'orchestrator' ? 'Orchestrator' : cd ? 'Conductor' : a.name)}</b><span class="faint">${esc(describe(a))}</span>
+  const html = `<div class="mm-head"><b>${a.role === 'orchestrator' || cd ? NM.nameHtml(a.name, p?.name) : esc(a.name)}</b><span class="faint">${esc(describe(a))}</span>
       <button class="mm-x" data-mm-close aria-label="Close">${icon('x')}</button></div>
     <div class="mm-row"><span class="flabel">Model</span>${modelPicker('mm-model', a.model || '')}</div>
     <div class="mm-row"><span class="flabel">Effort</span>${effortPicker('mm-effort', a.effort || '', hue)}</div>
@@ -783,10 +786,10 @@ function hubHead(g, meta = '') {
 // One agent: its robot in its model's hue, name, state, model chip, context ring and red count. A click opens its thread.
 function agentRow(p, a) {
   const n = waitingIn(p, a.thread), hue = hueOf(modelOf(a));
-  const name = a.role === 'orchestrator' ? `Orchestrator · ${a.name.replace('orchestrator-', '#')}` : a.name;
-  return `<button type="button" class="hub-agent ${n ? 'asks' : ''}" data-thread="${esc(a.thread)}" title="Open ${esc(name)} in ${esc(p.name)}">
+  // the orchestrator by its project, with its holder number as a small chip; the tooltip keeps the internal name
+  return `<button type="button" class="hub-agent ${n ? 'asks' : ''}" data-thread="${esc(a.thread)}" title="Open ${esc(a.name)} in ${esc(p.name)}">
     <span class="ava${hue ? ' ring' : ''}"${hue ? ` style="--mh:${hue}"` : ''}>${robot(a, { size: 24, needs: n > 0 })}</span>
-    <span class="ha-l1"><b class="ha-name">${esc(name)}</b><span class="dot ${esc(a.state)}" title="${esc(a.state)}"></span><span class="chip ${esc(a.state)}">${esc(a.state)}</span>${modelChip(a, { mini: true })}</span>
+    <span class="ha-l1"><b class="ha-name">${NM.nameHtml(a.name, p.name)}</b><span class="dot ${esc(a.state)}" title="${esc(a.state)}"></span><span class="chip ${esc(a.state)}">${esc(a.state)}</span>${modelChip(a, { mini: true })}</span>
     <span class="ha-l2">${esc(lastLine(p, a.thread) || goalOf(a))}</span>
     ${AP.contextRing(a, { hue, retireAt: p.retireAt || S.retireAt || 60 })}${n ? `<span class="colbadge" title="${n} waiting for your call">${n}</span>` : ''}</button>`;
 }
@@ -803,9 +806,9 @@ function conductorItem(ev) {
   switch (ev.type) {
       case 'message': return messageEl(place, ev, CP.CONDUCTOR_THREAD);
       case 'summary': return summaryCard(place, ev);
-      case 'notice': return `<div class="notice">${esc(ev.text)}</div>`;
-      case 'visual': return `<div class="msg"><span class="who">${esc(ev.from)} · ${timeOf(ev.ts)}</span>${visualEl(place, ev)}</div>`;
-      case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (under Waiting)</div>`;
+      case 'notice': return `<div class="notice"><span>${NM.namesInHtml(ev.text, place.name)}</span></div>`;
+      case 'visual': return `<div class="msg"><span class="who">${NM.nameHtml(ev.from, place.name)} · ${timeOf(ev.ts)}</span>${visualEl(place, ev)}</div>`;
+      case 'lesson_proposed': return `<div class="notice"><span>${NM.nameHtml(ev.from, place.name)} proposed a lesson for your core profile (under Waiting)</span></div>`;
       case 'reminder': return `<div class="notice">${icon('clock')}Reminder set for ${esc(new Date(ev.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}: ${esc(ev.text)}</div>`;
       case 'wake': return `<div class="notice cd-wake" title="${esc(ev.text)}">${esc(CP.wakeLine(ev))} · ${timeOf(ev.ts)}</div>`;
       case 'cards': return cardsBlock(ev);
@@ -819,9 +822,9 @@ function conductorItem(ev) {
 // One folded line each: "crux replied · req-012", its first words and the time; a tap opens the whole reply in place.
 // The Conductor's own answer is the main message. A reply written to you directly (for_matt) shows in full.
 function replyLine(ev) {
-  if (ev.forMatt) return `<div class="cd-reply for-you"><span class="cd-reply-k" title="${esc(ev.from)} in ${esc(ev.project)}, written to you">${icon('orch')}<span>${esc(ev.project)} to you · ${esc(ev.request)}</span><span class="time">${timeOf(ev.ts)}</span></span><div class="cd-reply-t">${md(ev.text)}</div></div>`;
+  if (ev.forMatt) return `<div class="cd-reply for-you"><span class="cd-reply-k" title="${esc(ev.from)} in ${esc(ev.project)}, written to you">${icon('orch')}<span>${CP.toYouHtml(ev)}</span><span class="time">${timeOf(ev.ts)}</span></span><div class="cd-reply-t">${md(ev.text)}</div></div>`;
   const k = `reply:${ev.id}`, open = S.open.has(k);
-  return `<div class="cd-reply-wrap${open ? ' open' : ''}"><button type="button" class="cd-reply-line" data-expand="${esc(k)}" aria-expanded="${open}" title="${open ? 'Fold this reply' : 'Show the whole reply'}">${icon('chevron')}<span class="cd-rl-k">${esc(CP.replyFold(ev))}</span><span class="cd-rl-t">${open ? '' : esc(CP.replyGist(ev.text))}</span><span class="time">${timeOf(ev.ts)}</span></button>${open ? `<div class="cd-reply-t">${md(ev.text)}</div>` : ''}</div>`;
+  return `<div class="cd-reply-wrap${open ? ' open' : ''}"><button type="button" class="cd-reply-line" data-expand="${esc(k)}" aria-expanded="${open}" title="${open ? 'Fold this reply' : 'Show the whole reply'}">${icon('chevron')}<span class="cd-rl-k">${CP.replyFoldHtml(ev)}</span><span class="cd-rl-t">${open ? '' : esc(CP.replyGist(ev.text))}</span><span class="time">${timeOf(ev.ts)}</span></button>${open ? `<div class="cd-reply-t">${md(ev.text)}</div>` : ''}</div>`;
 }
 
 // ---------- cards in the Conductor's chat (decision 60 A) ----------
@@ -924,7 +927,7 @@ function takeRecommendations(id) {
 }
 // Every project's waiting cards, grouped by project and answerable in place.
 const hubCards = ({ p, waiting: w }) => w.approvals.map(ev => approvalCard(ev, p)).join('') + w.questions.map(ev => questionCard(ev, p)).join('')
-  + (w.lessons.length ? lessonsCard(w.lessons) : '') + w.decisions.map(d => decisionCard(p, d)).join('');
+  + (w.lessons.length ? lessonsCard(w.lessons, p) : '') + w.decisions.map(d => decisionCard(p, d)).join('');
 const hubRoster = v => v.groups.map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g, `${g.agents.length} agent${g.agents.length === 1 ? '' : 's'} · ${g.working} working`)}
     <div class="hub-agents">${g.agents.map(a => agentRow(g.p, a)).join('') || '<p class="faint hub-none">No agents yet</p>'}</div></section>`).join('');
 const conductorWaiting = (v, c) => v.total + (c?.waiting || 0);
@@ -939,7 +942,7 @@ function conductorFeed(v) {
       ${icon('orch')}<span class="hr-k">${v.agents} agent${v.agents === 1 ? '' : 's'}</span><span class="hr-m">${v.working} working</span><span class="hr-sp"></span>${chev}</button></div>`;
   // What waits from the Conductor itself comes whole from the hub (c.questions, c.lessons), so the count matches.
   const asks = (c.questions || []).map(q => questionCard(q, place).replace(`data-thread="${CP.CONDUCTOR_THREAD}"`, `data-thread="${AP.HUB_THREAD}"`)).join('')
-    + ((c.lessons || []).length ? lessonsCard(c.lessons) : '');
+    + ((c.lessons || []).length ? lessonsCard(c.lessons, place) : '');
   const waiting = wOpen ? `<div class="hub-drawer">${asks ? `<section class="hub-group" data-pj="${CP.CONDUCTOR}">${asks}</section>` : ''}${v.groups.filter(g => g.count).map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g)}${hubCards(g)}</section>`).join('')}</div>` : '';
   const agents = aOpen ? `<div class="hub-drawer">${hubRoster(v)}</div>` : '';
   const chat = CP.threadItems(c).map(conductorItem).join('')
@@ -973,7 +976,7 @@ function feedFor(t) {
     const nq = qs.reduce((n, q) => n + q.open.length, 0);
     const kinds = [['approval', aps.length, 'permission', 'permissions'], ['question', nq, 'question', 'questions'], ['lessons', ls.length ? 1 : 0, 'lesson card', 'lesson cards'], ['decision', ds.length, 'decision', 'decisions']].filter(k => k[1]);
     html = countBar(aps.length + qs.length + (ls.length ? 1 : 0) + ds.length, kinds) + html;
-    html += aps.map(ev => approvalCard(ev, p)).join('') + qs.map(ev => questionCard(ev, p)).join('') + (ls.length ? lessonsCard(ls) : '') + ds.map(d => decisionCard(p, d)).join('');
+    html += aps.map(ev => approvalCard(ev, p)).join('') + qs.map(ev => questionCard(ev, p)).join('') + (ls.length ? lessonsCard(ls, p) : '') + ds.map(d => decisionCard(p, d)).join('');
     // Requests the orchestrator is answering: not yours to act on, shown so you can watch or step in.
     if (routed.length) html += `<div class="side-label routed-label">With the orchestrator</div>` + routed.map(ev => approvalCard(ev, p)).join('');
     return html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
@@ -984,16 +987,17 @@ function feedFor(t) {
       switch (ev.type) {
         case 'message': return messageEl(p, ev, t);
         case 'summary': return summaryCard(p, ev, once(ev), reps.get(ev.id));
-        case 'notice': return `<div class="notice">${esc(ev.text)}</div>`;
+        // the hub's own lines (handoffs, restarts) name agents: orchestrators show as their project and "vN"
+        case 'notice': return `<div class="notice"><span>${NM.namesInHtml(ev.text, p.name)}</span></div>`;
         case 'pick': return `<div class="notice">You picked D${pad(ev.decision)} · ${esc(ev.label)}</div>`;
         case 'approval': return approvalCard(ev, p);
-        case 'entry': return `<div class="notice">${esc(ev.from)} posted ${esc(ev.entryId)} to the board: ${esc(ev.title)}</div>`;
-        case 'visual': return `<div class="msg"><span class="who">${esc(ev.from)} · ${timeOf(ev.ts)}</span>${visualEl(p, ev)}</div>`;
-        case 'lesson': return `<div class="notice">${esc(ev.from)} added a lesson to the ${esc(ev.pack)} pack: ${esc(ev.text)}</div>`;
-        case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (in Needs you)</div>`;
+        case 'entry': return `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} posted ${esc(ev.entryId)} to the board: ${esc(ev.title)}</span></div>`;
+        case 'visual': return `<div class="msg"><span class="who">${NM.nameHtml(ev.from, p.name)} · ${timeOf(ev.ts)}</span>${visualEl(p, ev)}</div>`;
+        case 'lesson': return `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} added a lesson to the ${esc(ev.pack)} pack: ${esc(ev.text)}</span></div>`;
+        case 'lesson_proposed': return `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} proposed a lesson for your core profile (in Needs you)</span></div>`;
         case 'permission_answer': return permLine(ev);
         // Decision 62: the orchestrator's answer to a Conductor request; it went to the Conductor and you only.
-        case 'conductor_reply': return `<div class="notice cd-replied">${icon('orch')}${esc(ev.from)} replied to the Conductor (${esc(ev.request)}${ev.forMatt ? ', for you' : ''}): ${esc(String(ev.text || '').split('\n')[0].slice(0, 200))}</div>`;
+        case 'conductor_reply': return `<div class="notice cd-replied"><span>${icon('orch')}${NM.nameHtml(ev.from, p.name)} replied to the Conductor (${esc(ev.request)}${ev.forMatt ? ', for you' : ''}): ${esc(String(ev.text || '').split('\n')[0].slice(0, 200))}</span></div>`;
         case 'approval_escalated': return `<div class="notice">Permission request sent to you: ${esc(ev.reason)}</div>`;
         case 'handoff_qa': return '';
         case 'project_settings': return levelUndo(p, ev);
@@ -1045,16 +1049,19 @@ function headFor(t) {
     // message box writes to it. Without a Conductor (an older hub) the column has no box, as before.
     if (!c) return { title: 'All projects', sub: counts, retired: false, retire: false, finish: false, chips: [], activity: '', noBox: true, top: true, waiting: v.total };
     const a = CP.agentOf(c);
-    const sub = `<span class="chip ${esc(a.state)}">${c.name ? `${esc(c.name)} · ` : 'Conductor · '}${esc(a.state)}</span>${c.name ? modelChip(a, { button: true }) : ''}${c.contextPct != null ? `<span>${c.contextPct}% context</span>` : ''}`;   // the counts are on the Agents row now (decision 59 B)
+    // "Conductor v3" then its state (the chip's hover keeps the internal name)
+    const sub = `<span class="vname">${c.name ? NM.nameHtml(c.name) : 'Conductor'}</span><span class="chip ${esc(a.state)}">${esc(a.state)}</span>${c.name ? modelChip(a, { button: true }) : ''}${c.contextPct != null ? `<span>${c.contextPct}% context</span>` : ''}`;   // the counts are on the Agents row now (decision 59 B)
     // Decision 59 B: a chat, read from its latest message; while the waiting cards are open it reads from the top.
     const n = conductorWaiting(v, c);
     return { title: 'All projects', sub, retired: false, retire: !!c.name && !c.retiring, finish: false, chips: [], activity: c.activity || '', top: hubFoldOpen('waiting', n) || hubFoldOpen('agents', n), waiting: n, voice: voiceHead() };
   }
-  let title = 'Needs you', sub = '';
+  let title = 'Needs you', sub = '', titleHtml = null;
   if (p && t === 'orchestrator') {
     const o = orchestrator(p);
-    title = 'Orchestrator';
-    sub = o ? `<span class="chip ${esc(o.state)}">${esc(o.name)} · ${esc(o.state)}</span>${modelChip(o, { button: true })}${o.contextPct != null ? `<span>${o.contextPct}% context</span>` : ''}` : '<span>No one holds the role yet</span>';
+    // the orchestrator by its project, with its holder number as a small chip in the title (shown on a phone too)
+    title = p.name;
+    titleHtml = o ? NM.nameHtml(o.name, p.name) : null;
+    sub = o ? `<span class="chip ${esc(o.state)}">${esc(o.state)}</span>${modelChip(o, { button: true })}${o.contextPct != null ? `<span>${o.contextPct}% context</span>` : ''}` : '<span>No one holds the role yet</span>';
   } else if (p && t !== 'needs') {
     const a = p.agents.find(a => a.thread === t);
     title = t;
@@ -1067,7 +1074,7 @@ function headFor(t) {
   // A retired agent's thread, or one with no agent at all (never a usable box: nobody would read it).
   const retired = !!(a && a.state === 'retired' && t !== 'orchestrator') || !!(p && !a && t !== 'needs' && t !== 'orchestrator');
   return {
-    title, sub, retired,
+    title, titleHtml, sub, retired,
     retire: !!(p && (t === 'orchestrator' ? orchestrator(p) : a && a.state !== 'retired' && !a.retiring)),
     finish: !!(p && t !== 'orchestrator' && t !== 'needs' && a && a.role === 'worker' && a.state !== 'retired' && !a.retiring),
     // Quick replies only where a message goes to the orchestrator.
@@ -1099,10 +1106,10 @@ function renderBoard() {
     // A check on each active memo marks it done; a done one gets an undo icon (each asks first, see the click handler).
     const mark = canMarkDone(e) ? `<button class="bmark" data-entry-status="done" data-entry="${esc(e.entryId)}" title="Mark done" aria-label="Mark ${esc(e.entryId)} done">${icon('check')}</button>`
       : canUndoDone(e) ? `<button class="bmark" data-entry-status="active" data-entry="${esc(e.entryId)}" title="Undo: back to the active list" aria-label="Put ${esc(e.entryId)} back on the active list">${icon('undo')}</button>` : '';
-    const done = e.done ? ` · done by ${esc(e.done.from)}${e.done.note ? `: ${esc(e.done.note)}` : ''}` : e.status !== 'active' ? ` · ${esc(e.status)}` : '';
+    const done = e.done ? ` · done by ${NM.nameHtml(e.done.from, p.name)}${e.done.note ? `: ${esc(e.done.note)}` : ''}` : e.status !== 'active' ? ` · ${esc(e.status)}` : '';
     return `<div class="bitem entry ${open ? 'open' : ''} ${mark ? 'markable' : ''}"><button class="bhead" data-expand="${esc(k)}" aria-expanded="${open}">
         <span class="bid">${esc(e.entryId)}</span><span class="bt">${esc(e.title)}</span>
-        <span class="bs">${esc(e.summary || '')}<span class="faint"> · ${esc(e.from)}${done}</span></span></button>${mark}
+        <span class="bs">${esc(e.summary || '')}<span class="faint"> · ${NM.nameHtml(e.from, p.name)}${done}</span></span></button>${mark}
       ${open ? `<div class="bbody">${esc(e.body || '')}</div>` : ''}</div>`;
   };
   const html = view.map(s => `<section class="bsec ${s.isOpen ? 'open' : ''} ${s.hot ? 'hot' : ''}" data-sec="${s.key}">

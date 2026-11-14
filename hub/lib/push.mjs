@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { questionOpen, askedBefore } from '../public/questions.js';
 import { HUB_THREAD } from '../public/all-projects.js';
+import { nameText } from '../public/agent-name.js';   // orchestrators by their project and "vN" (crux v6)
 
 const pad = n => String(n).padStart(4, '0');
 export const QUESTION_GRACE_MS = 60 * 1000; // the orchestrator often answers a worker's question itself
@@ -34,7 +35,7 @@ export function cardsFor(ev, { decisionOpen = () => true } = {}) {
   const project = ev.project;
   // A request with the orchestrator (decision 21) buzzes your phone only once it comes to you: escalated or timed out.
   if ((ev.type === 'approval' && !ev.routedTo) || ev.type === 'approval_escalated') {
-    return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${ev.agent} is waiting for Allow`, body: `${project} · wants to use ${ev.tool}` }]; // kept minimal on purpose: it can show on a locked phone
+    return [{ kind: 'approval', card: `approval:${ev.approval}`, project, thread: ev.thread, title: `${nameText(ev.agent, project)} is waiting for Allow`, body: `${project} · wants to use ${ev.tool}` }]; // kept minimal on purpose: it can show on a locked phone
   }
   // A project raised to Trusted (decision 45): always told, so a raise nobody made on purpose is seen at once.
   // Decision 47: with an Undo on the notification where the phone shows actions, and in the thread everywhere.
@@ -49,7 +50,7 @@ export function cardsFor(ev, { decisionOpen = () => true } = {}) {
     out.push({ kind: 'decision', card: `decision:${id}`, project, thread: 'needs', title: `Decision D${pad(id)} is ready to pick`, body: project });
   }
   if (ev.questions?.length) {
-    out.push({ kind: 'question', card: `question:${ev.id}`, project, thread: ev.thread, title: `${ev.from} has a question`, body: project, delayMs: QUESTION_GRACE_MS, asker: ev.from, askedAt: ev.id });
+    out.push({ kind: 'question', card: `question:${ev.id}`, project, thread: ev.thread, title: `${nameText(ev.from, project)} has a question`, body: project, delayMs: QUESTION_GRACE_MS, asker: ev.from, askedAt: ev.id });
   }
   return out;
 }
@@ -64,7 +65,13 @@ export function groupCard(ev, cards) {
 }
 function groupTitle(from, cards) {
   const d = cards.filter(c => c.kind === 'decision').length, q = cards.some(c => c.kind === 'question');
-  return `${from} has ${d ? `${d} decision${d === 1 ? '' : 's'}` : ''}${d && q ? ' and ' : ''}${q ? 'a question' : ''} for you`;
+  return `${nameText(from, cards[0]?.project)} has ${d ? `${d} decision${d === 1 ? '' : 's'}` : ''}${d && q ? ' and ' : ''}${q ? 'a question' : ''} for you`;
+}
+// Who asked for a restart: an orchestrator's name already says its project ("Asked by crux v6"); anyone else keeps
+// "in <project>" ("Asked by builder in crux").
+function restartBy(agent, project) {
+  const orch = /^orchestrator-\d+$/.test(String(agent || ''));
+  return `Asked by ${nameText(agent, project)}${orch ? '' : ` in ${project}`}`;
 }
 // A card's key in the sent lists: its project and id ("decision:12" alone is in many projects).
 const keyOf = card => `${card.project}|${card.card}`;
@@ -294,7 +301,7 @@ export class Push {
   // Decision 64, part 4: a restart through restart_hub (guard.mjs), routed like any card: the PC while it is in use,
   // else the phone; none while you look at that project's orchestrator thread; no phone follow-up. Returns the send.
   restartNotice({ project, agent }, ctx = this.ctx) {
-    const card = { kind: 'restart', card: 'notice:restart', project, thread: 'orchestrator', title: 'The hub is restarting', body: `Asked by ${agent} in ${project}` };
+    const card = { kind: 'restart', card: 'notice:restart', project, thread: 'orchestrator', title: 'The hub is restarting', body: restartBy(agent, project) };
     return this.route(card, ctx) || Promise.resolve(0);
   }
 

@@ -121,6 +121,7 @@ export class MapModel {
     const needs = this.needsByThread().has('orchestrator');
     return {
       holder: h ? h.name : null,
+      project: this.project?.name || null,   // the readout names the holder by its project (agent-name.js)
       generation: this.generation,
       state: h ? (h.retiring === 'writing' ? 'writing' : h.state || 'asleep') : 'vacant',
       ctx: h?.contextPct ?? null,
