@@ -905,7 +905,7 @@ function headFor(t) {
     const sub = `<span class="chip ${esc(a.state)}">${c.name ? `${esc(c.name)} · ` : 'Conductor · '}${esc(a.state)}</span>${c.name ? modelChip(a, { button: true }) : ''}${c.contextPct != null ? `<span>${c.contextPct}% context</span>` : ''}`;   // the counts are on the Agents row now (decision 59 B)
     // Decision 59 B: a chat, read from its latest message; while the waiting cards are open it reads from the top.
     const n = conductorWaiting(v, c);
-    return { title: 'All projects', sub, retired: false, retire: !!c.name && !c.retiring, finish: false, chips: [], activity: c.activity || '', top: hubFoldOpen('waiting', n), waiting: n };
+    return { title: 'All projects', sub, retired: false, retire: !!c.name && !c.retiring, finish: false, chips: [], activity: c.activity || '', top: hubFoldOpen('waiting', n) || hubFoldOpen('agents', n), waiting: n };
   }
   let title = 'Needs you', sub = '';
   if (p && t === 'orchestrator') {
@@ -1222,12 +1222,13 @@ document.addEventListener('click', e => {
   const hf = e.target.closest('[data-hub-fold]');
   if (hf && !hf.disabled) {
     const k = hf.dataset.hubFold;
-    const opening = S.hubFold[k] = hf.getAttribute('aria-expanded') !== 'true';
-    const feed = hf.closest('.feed');   // taken before the redraw, which may swap the row itself
-    if (k === 'waiting') cols.markOpened(AP.HUB_THREAD);
-    render();
-    if (k === 'agents' && opening && feed) feed.scrollTop = 0;   // the agents list opens at the top, where its row is
-    return;
+    // While either list is open the column reads from the top (headFor), so it opens there and stays; folded, it
+    // goes back to the latest message. A plain scroll to the top here was undone at once by the column's own
+    // follow-the-latest put-back (a jump to the very top looks like the iPhone's reset), so the list opened out of
+    // sight above the chat (Matt, 0.19.4, on the iPhone).
+    S.hubFold[k] = hf.getAttribute('aria-expanded') !== 'true';
+    cols.markOpened(AP.HUB_THREAD);
+    return render();
   }
   const ex = e.target.closest('[data-expand]');
   if (ex && !e.target.closest('a, [data-approve], [data-deny]')) {

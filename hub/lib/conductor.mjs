@@ -85,7 +85,7 @@ export class Conductor {
   restorePending() {
     const evs = this.home.log.events;
     const from = evs.findLastIndex(e => e.type === 'wake' || e.type === 'wake_taken');
-    return evs.slice(from + 1).filter(e => e.type === 'wake_pending').map(e => ({ line: e.line }));
+    return evs.slice(from + 1).filter(e => e.type === 'wake_pending').map(e => ({ line: e.line, cause: e.cause || null }));
   }
 
   stop() { this.off?.(); clearTimeout(this.timer); clearInterval(this.reminderTimer); }
@@ -107,6 +107,7 @@ export class Conductor {
   fromYou(text, attachments = [], extra = {}) {
     this.home.log.append('message', { thread: CONDUCTOR_THREAD, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
     const a = this.ensure();
+    this.prune();   // settled cards do not ride along with your message either
     const lines = this.take('wake_taken');
     if (lines) a.noteForNextTurn(lines);
     a.send(text, attachments);
@@ -182,13 +183,40 @@ export class Conductor {
     }
     const line = this.wakeLine(ev);
     if (!line || !this.wakesOn()) return;
-    this.queue(line);
+    this.queue(line, ev.type === 'summary' ? { project: ev.project, summary: ev.id } : { project: ev.project, approval: ev.approval });
   }
 
-  queue(line) {
-    this.pending.push({ line });
-    this.home.log.append('wake_pending', { line });
+  // cause: the card behind the line ({ project, summary } or { project, approval }), checked again before the wake.
+  queue(line, cause = null) {
+    this.pending.push({ line, cause });
+    this.home.log.append('wake_pending', { line, cause });
     this.arm(this.wakeMs);
+  }
+
+  // Does the card behind this line still wait for you? A wake comes up to the batching window after the card, and you
+  // often settle it first (Matt, 0.19.4: replies like "nothing is waiting, it already left your list"). A summary
+  // still waits while one of its questions is open or one of its decisions is; a permission card while it waits.
+  stillWaiting(item) {
+    const c = item.cause;
+    if (item.reminder || !c) return true;
+    const p = this.hub.projects.get(c.project);
+    if (!p) return false;
+    if (c.approval) return this.hub.approvals.has(c.approval);
+    const ev = p.log.events.find(e => e.id === c.summary);
+    if (!ev) return false;
+    const status = id => p.board.decision(id)?.status;
+    return openAsked(p.log.events, { decisionStatus: status }).some(q => q.id === ev.id)
+      || (ev.decisions_needed || []).some(id => ['open', 'found'].includes(status(id)));
+  }
+
+  // Lines whose cards are settled leave the queue. When none is left, nothing wakes it: no turn, no reply. A marker
+  // in the log (no thread, so nothing shows) keeps a restart from bringing the settled lines back.
+  prune() {
+    const before = this.pending.length;
+    this.pending = this.pending.filter(x => this.stillWaiting(x));
+    const skipped = before - this.pending.length;
+    if (skipped && !this.pending.length) this.home.log.append('wake_taken', { skipped, why: 'settled before the wake' });
+    return skipped;
   }
 
   arm(ms) {
@@ -214,6 +242,7 @@ export class Conductor {
   // force: a due reminder, which is never held back. Otherwise at most maxAutoWakes automatic wakes an hour: past
   // that, the lines wait (and ride along with your next message) until the oldest wake leaves the hour.
   flush({ force = false, now = Date.now() } = {}) {
+    this.prune();
     if (!this.pending.length) return false;
     const cur = this.holder();
     if (cur && (['working', 'starting'].includes(cur.state) || cur.retiring || cur.capture)) return false;
