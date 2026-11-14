@@ -7,6 +7,7 @@ import { hudBoot, openPanel, closePanel } from './hud.js';
 import { isYesNo } from './questions.js';
 import * as AP from './all-projects.js';
 import * as CP from './conductor-view.js';
+import { hubProjects } from './map-hub.js';
 import { enterAction, insertLineBreak, replyHint, filterHint } from './composer-keys.js';
 import { Columns } from './columns.js';
 import { growBox } from './conversation.js';
@@ -66,7 +67,11 @@ const fineMq = matchMedia('(pointer: fine)');
 const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches && el && !el.disabled && !el.closest('[hidden]')) el.focus(); };
 // The seam between the list and the conversation widens the list on a desk with a mouse (side-width.js).
 new SideResizer({ app: $('#app'), grip: $('#side-grip'), canResize: matchMedia('(min-width: 721px) and (pointer: fine)'), onResize: () => placeModelMenu() });
-const map = new LiveMap($('#hud'), { open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t) });
+const map = new LiveMap($('#hud'), {
+  open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t),
+  // a project on the All projects map (decision 57 C): its thread, in that project
+  openIn: (name, t) => { const p = S.projects.find(x => x.name === name); if (p) openThreadIn(p, t); }
+});
 
 // Decision 36: plan meters in the strip (not on the core) and the usage panel behind them.
 const usageUI = new UsageUI($('#hud'), {
@@ -956,12 +961,25 @@ function render() {
   $('#open-board').classList.toggle('on', !$('#board').hidden);
   $('#board-filter').placeholder = filterHint({ narrow: phoneMq.matches });
   renderProjects(); cols.render(); renderThreads(); renderBoard(); renderModelMenu();
+  updateMap();
+  usageUI.draw();
+}
+
+// The live map, from the state and the column in focus. Also run when only the focus moves between columns, so the
+// map switches between a project's map and the All projects map at once (decision 57 C).
+function updateMap() {
   // Decision 42: the strip's Needs you counter counts every project and opens All projects (more than one project).
   // The You station's popover lists every project's permission requests then (each answered by its id).
   const v = hub();
   map.retireAt = proj()?.retireAt || S.retireAt;   // decision 44 B: each project's own handoff mark
-  map.update(proj(), pendingForYou(proj()), { total: v.total, projects: v.projects, approvals: v.groups.flatMap(g => g.waiting.approvals.map(ev => ({ ...ev, project: g.name }))) });
-  usageUI.draw();
+  // Decision 57 C: while All projects is the column in focus, the map shows the whole hub around the Conductor. The
+  // total counts what the Conductor waits on too, as the All projects row does.
+  const c = S.conductor, hubMap = S.projects.length > 1 && cols.kb === AP.HUB_THREAD;
+  map.update(proj(), pendingForYou(proj()), {
+    total: v.total + (c?.waiting || 0), projects: v.projects, approvals: v.groups.flatMap(g => g.waiting.approvals.map(ev => ({ ...ev, project: g.name }))),
+    mode: hubMap, conductor: c,
+    places: hubMap ? hubProjects(v.groups, { retireAt: S.retireAt || 60, waitingOf: (g, a) => AP.threadWaiting(g.p, a.thread, S.pending) }) : null
+  });
 }
 
 // ---------- actions ----------
@@ -1081,7 +1099,8 @@ const cols = new Columns({
     focusBox: focusIfDesk,
     scrolled: () => placeModelMenu(),
     // The keyboard moved to another column: the list's light follows, and the hub hears which thread you look at.
-    kbChanged: () => { renderThreads(); phone.viewChanged(); },
+    // The map follows the column in focus too: All projects in focus shows the hub map, any other its project's map.
+    kbChanged: () => { renderThreads(); updateMap(); phone.viewChanged(); },
     // Pins and columns changed: redraw; a rail click also puts the keyboard in the column it opened.
     changed: (fromRail = false) => { render(); phone.viewChanged(); if (fromRail) focusIfDesk(cols.kbConv()?.input); },
     action: (name, c) => columnAction(name, c),
