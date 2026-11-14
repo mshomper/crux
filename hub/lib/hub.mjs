@@ -537,10 +537,10 @@ export class Hub {
   // Decision 21 A: a worker's request goes to the orchestrator first, unless the hub's own matcher finds a hard stop
   // in the permission rules (or cannot read it), routing is off, there is no rules entry, or no orchestrator is
   // running. Then it is a card for you, as before. If the orchestrator escalates or does not answer in time, too.
-  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions } = {}) {
+  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID } = {}) {
     const auto = this.autoAnswer(p, agent, toolName, input);
     if (auto) return Promise.resolve(auto);
-    const route = this.routeFor(p, agent, toolName, input);
+    const route = this.routeFor(p, agent, toolName, input, toolUseID);
     if (route.logged) {
       const i = input || {};
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
@@ -564,7 +564,7 @@ export class Hub {
       if (route.to) {
         entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), this.settings.get('permissionTimeoutSec') * 1000);
         entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
-        try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure)); }
+        try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd)); }
         catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
       }
     });
@@ -574,11 +574,14 @@ export class Hub {
   // stops: [why it comes to you], rules: entry id | null }. Hard stops always come to you.
   // Auto mode (decision 34, R004): only requests the hub cannot classify go to the orchestrator.
   // Standard mode (decision 21): everything that is not a hard stop goes to the orchestrator.
-  routeFor(p, agent, toolName, input) {
+  // toolUseID: the SDK's id for this tool call, so the folder the agent's command really runs in (its worktree, from
+  // the hook in agent.mjs) is the one the checker starts from (decision 64 A); unknown: the project folder, as before.
+  routeFor(p, agent, toolName, input, toolUseID = null) {
     const rules = this.rulesFor(p);
     agent.tempDirs ||= new Set();
     const level = this.permissionMode(p);
-    const c = classify({ tool: toolName, input, projectDir: p.dir, agent: agent.name, madeTemp: agent.tempDirs, level });
+    const cwd = agent.cwdFor?.(toolUseID) || null;
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, level });
     const { route, tempMade } = c;
     const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
@@ -595,7 +598,7 @@ export class Hub {
     // jump to your phone just because it was asleep. It still comes to you on escalate or after the timeout.
     const orch = p.orchestrator();
     if (!orch || orch.retiring || ['error', 'retired'].includes(orch.state)) return { to: null, stops: [], rules: rules.entryId };
-    return { to: orch.name, stops: [], rules: rules.entryId, unsure };
+    return { to: orch.name, stops: [], rules: rules.entryId, unsure, cwd };
   }
 
   // Per project: "standard", "auto" or "trusted" (shown as Ask, Auto and Trusted; decisions 34 and 45). The level set
@@ -704,7 +707,7 @@ export class Hub {
 
   // What the orchestrator gets: the request id, the worker and its goal, the tool and its full input, and the rules.
   // The rules text is in its instructions; it is repeated here only when the board's rules changed since it started.
-  permissionMessage(p, orch, id, worker, toolName, input, rulesId, unsure = []) {
+  permissionMessage(p, orch, id, worker, toolName, input, rulesId, unsure = [], cwd = null) {
     const rules = this.rulesFor(p);
     const changed = rules && orch.rulesSeen !== `${rules.entryId}@${rules.ts}`;
     const shown = toolName === 'Bash' || toolName === 'PowerShell' ? `Command:\n${input.command}${input.description ? `\nIts description: ${input.description}` : ''}` : `Input:\n${JSON.stringify(input, null, 1)}`;
@@ -713,6 +716,7 @@ export class Hub {
       `Worker: ${worker.name}`,
       `Worker's goal: ${worker.goal || String(worker.task || '').split('\n')[0].slice(0, 200) || '(none given)'}`,
       `Tool: ${toolName}`,
+      ...(cwd ? [`Runs in: ${cwd}`] : []),
       shown,
       unsure?.length ? `The hub found no hard stop, but could not classify it: ${unsure.join('; ')}.` : 'The hub found no hard stop in it.',
       rules?.isDefault ? 'This project\'s board has no permission rules entry, so you are working from the hub\'s built-in defaults (in your instructions).' : '',

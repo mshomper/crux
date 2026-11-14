@@ -15,7 +15,12 @@ import { homedir } from 'node:os';
 //   conductorWakes: projects' summaries and cards wake the Conductor (decision 55). The off switch: false in
 //     settings.json (or hub.json) and it wakes only for your messages and its reminders.
 //   voice: the voice switch (decision 61 A). Off by default; while off the voice helper does not run.
-export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 120, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35, conductorWakes: true, voice: false };
+// permissionTimeoutSec: 5 minutes (decision 64 A), so an orchestrator busy with something else does not hand you a
+// card just for being slow. Still set from the hub page (10 seconds to an hour).
+export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 300, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35, conductorWakes: true, voice: false };
+// Decision 64 A raised the timeout to 5 minutes. A shorter one saved before it is raised once, and the file notes it
+// (timeoutRaised: 64), so a value you set after that stays as you set it.
+export const TIMEOUT_RAISED = 64;
 // Hub-wide numbers with no per-project value, and the range each accepts.
 export const HUB_NUMBERS = { workerHandoffFloorPct: { min: 0, max: 100 } };
 // The handoff numbers a project may set for itself, with the range each accepts.
@@ -36,6 +41,12 @@ export class HubSettings {
     // Per project, keyed by its folder: { permissionMode: 'standard' | 'auto' | 'trusted', connectors: bool,
     // idleHandoffMin, idleFloorPct, retireAt } (decisions 34, 44 and 45). A number left out uses the hub default.
     this.projects = saved.projects && typeof saved.projects === 'object' ? saved.projects : {};
+    // Decision 64 A: a timeout under 5 minutes saved before it is raised once (see TIMEOUT_RAISED).
+    const savedTimeout = pick(saved).permissionTimeoutSec;
+    if (this.file && saved.timeoutRaised !== TIMEOUT_RAISED && savedTimeout != null && savedTimeout < SETTING_DEFAULTS.permissionTimeoutSec) {
+      this.values.permissionTimeoutSec = SETTING_DEFAULTS.permissionTimeoutSec;
+      this.save({ permissionTimeoutSec: this.values.permissionTimeoutSec, timeoutRaised: TIMEOUT_RAISED });
+    }
   }
   get(k) { return this.values[k]; }
   all() { return { ...this.values }; }
@@ -71,12 +82,13 @@ export class HubSettings {
     this.save({ projects: this.projects });
     return this.projects[k];
   }
+  // Every file this version writes carries timeoutRaised, so only a timeout saved before decision 64 A is raised.
   save(c) {
     if (!this.file) return;
     mkdirSync(join(this.file, '..'), { recursive: true });
     let saved = {};
     try { saved = JSON.parse(readFileSync(this.file, 'utf8')); } catch { }
-    writeFileSync(this.file, JSON.stringify({ ...saved, ...c }, null, 2));
+    writeFileSync(this.file, JSON.stringify({ ...saved, ...c, timeoutRaised: TIMEOUT_RAISED }, null, 2));
   }
 }
 

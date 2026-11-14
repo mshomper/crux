@@ -152,7 +152,8 @@ test('stopping, restarting or changing the hub on 4747, or stopping processes, i
     'taskkill /PID 1234 /F', 'kill 1234', 'CRUX_HUB_PORT=4747 node x.mjs'
   ]) human(c);
   for (const c of ['curl localhost:4747/api/state', 'curl -s http://localhost:4748/api/state', 'curl -s -o hub/tmp/s.json localhost:4748/api/state']) orch(c);
-  orch('curl -X POST localhost:4748/api/send');   // a test hub: contained
+  orch('curl -X POST localhost:4750/api/send');   // a test hub: contained
+  human('curl -X POST localhost:4748/api/send');  // 4748 is the live hub's phone port (decision 64 A)
 });
 
 test('secrets, and unreadable shapes that name a hard-stop action, go to Matt', () => {
