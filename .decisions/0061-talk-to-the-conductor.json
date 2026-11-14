@@ -8,7 +8,7 @@
   "architecture",
   "research and product"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how voice works with the Conductor. I recommend A: tap the mic, talk, tap again; your words go in at once as your message, and Imogen reads the Conductor's short spoken summary back; everything runs on your PC in one small helper. Confidence: medium.",
  "for_you": [
   "Tap to talk on the phone or PC; your words appear as your message with a mic mark (fix it after if misheard); a tap anywhere stops the voice",
@@ -82,9 +82,9 @@
  "recommendation": "A keeps everything on your PC, gives you one place to talk and listen, and fits how the iPhone mic behaves today. Hands-free can come later as a switch once A feels right.",
  "confidence": "lean",
  "change_mind": "If the bake-off shows Parakeet mishears project names too often, use faster-whisper on the GPU with a name list; if taps feel clumsy in use, add B's hands-free switch.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [

@@ -1,7 +1,7 @@
 # 0061 How do you talk to the Conductor by voice?
 
-- Status: open
-- Date: 2026-11-14
+- Status: decided
+- Date: 2026-11-14, decided 2026-11-14
 - Lenses: architecture, research and product
 - Builds on: 0018, 0019, 0048, 0055, 0060
 - Settles: voice conversation with agents = tap to talk; local Python helper on 127.0.0.1 with Parakeet TDT 0.6B v3 (onnx-asr) for listening and Phonon 31M (voice Imogen) for speaking; transcript sent at once as the human's message; the agent writes a 1-3 sentence spoken summary; mic closed while the voice plays; audio never stored
@@ -18,13 +18,17 @@ For you:
 - Setup: One-time install of a small Python helper (speech recognition plus the Phonon voice, about 1 GB of models), one step for you; strangers get it as an optional download
 - Hard to undo: Adds a helper process next to the hub (a new dependency); switching voice off stops it, and removing it is deleting one folder
 
+## Decision
+
+**A: Tap to talk, all local.** Tap the mic, talk, tap again. The clip goes to the hub and on to a local Python helper (Parakeet speech recognition plus Phonon) on 127.0.0.1. Your words go into the Conductor chat at once as your message with a mic mark. The Conductor writes a 1-3 sentence spoken summary at the top of its reply while voice is on; Imogen reads it sentence by sentence. The mic is closed while she speaks; a tap stops her.
+
 ## Context
 
 Matt wants to talk to the Conductor, not just hear it. Speaking is picked: Phonon 31M, voice Imogen, local on the CPU, about 55-150 ms to first audio (memo M036). voice-research (memo M037, with sources) looked at the listening half. Best practical local speech recognition: Parakeet TDT 0.6B v3 through onnx-asr (about 6.2% word errors against 7.6-7.8% for Whisper turbo; about 36x real time on a desktop CPU, so it leaves the GPU free for CUDA work; MIT code, CC-BY-4.0 model needing a credit line; no hint list for project names, so the hub snaps near-misses to known names). faster-whisper turbo on the GPU is the alternative with a hint list, at the cost of about 1 GB of CUDA libraries. iPhone: the mic works over Tailscale https; the home-screen app asks for it each launch; an open WebKit bug (326286) makes playback crackle or drop to the earpiece while the mic is open, so the mic must close while the voice plays, which tap-to-talk does naturally. The browser's own speech recognition sends audio to Apple, Google or Microsoft and isn't available in the iPhone home-screen app. The hub has no WebSocket server; one upload per clip is enough. A 10-command bake-off on Matt's PC and iPhone (Parakeet against Whisper on project names and numbers, plus the mic closing and reopening on iOS) comes before the build.
 
 ## Options
 
-### A: Tap to talk, all local (recommended)
+### A: Tap to talk, all local (chosen) (recommended)
 
 Tap the mic, talk, tap again. The clip goes to the hub and on to a local Python helper (Parakeet speech recognition plus Phonon) on 127.0.0.1. Your words go into the Conductor chat at once as your message with a mic mark. The Conductor writes a 1-3 sentence spoken summary at the top of its reply while voice is on; Imogen reads it sentence by sentence. The mic is closed while she speaks; a tap stops her.
 - Pro: Private and free; works around the iPhone mic bug by design
