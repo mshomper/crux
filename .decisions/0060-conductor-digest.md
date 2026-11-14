@@ -1,7 +1,7 @@
 # 0060 How does the Conductor cut down what reaches you?
 
-- Status: open
-- Date: 2026-11-14
+- Status: decided
+- Date: 2026-11-14, decided 2026-11-14
 - Lenses: research and product, ui
 - Builds on: 0021, 0031, 0042, 0055, 0058, 0059
 - Settles: cross-project agent authority = a Conductor above the project orchestrators is the human's live single point of contact: it shows waiting cards with a recommendation so the human answers in place, and greets the human with one digest after time away; it answers nothing itself beyond routing; merges, pushes, installs, deletes and decisions always go to the human
@@ -17,13 +17,17 @@ For you:
 - B adds no authority the orchestrators lack: the Conductor would only clear items your earlier answers already settle, plus contained permission requests an orchestrator let time out
 - Hard to undo: Widens decision 55 (it can show and take your answers, not just point to projects); going back is a settings change
 
+## Decision
+
+**A: Live contact, digest when you've been away.** While you're active, the Conductor is a live chat: it answers at once, routes your orders, and shows any waiting card in its chat with its recommendation so you answer there. When you've been away, it holds what arrives and greets you with one digest (grouped by project, recommendation per item, the real cards inside, 'take all recommendations'). One phone notice per digest while away.
+
 ## Context
 
 Matt, after using the Conductor (decision 55 A): it 'is supposed to be the hive mind that supercharges my ability to manage projects at once, not just send me to individual repos... It needs to reduce what's coming into me, not increase it.' Then, on the first draft: a digest suits time away from the desk or phone, but otherwise the Conductor must stay a communicative single point of contact; and what would it answer that the orchestrators can't already? Honest answer: nothing beyond their authority. What reaches Matt today is (1) questions orchestrators chose to put to him (product calls and confirmations), (2) contained permission requests an orchestrator was unsure of or let time out, (3) decisions, (4) push, PR and merge OKs. (3) and (4) are his in every option. B's extra is narrow: (1) where his own earlier answer, in any project, or the board already settles it (cross-project memory the orchestrators don't have), and (2) within the same rules an orchestrator uses. Away is judged by the PC and phone activity the hub already tracks (decision 58). An answer counts as Matt's because it is his own tap or reply on the real card; a push, PR or merge OK in the Conductor's own words never counts. Mockups by conductor-mock, fake projects.
 
 ## Options
 
-### A: Live contact, digest when you've been away (recommended)
+### A: Live contact, digest when you've been away (chosen) (recommended)
 
 While you're active, the Conductor is a live chat: it answers at once, routes your orders, and shows any waiting card in its chat with its recommendation so you answer there. When you've been away, it holds what arrives and greets you with one digest (grouped by project, recommendation per item, the real cards inside, 'take all recommendations'). One phone notice per digest while away.
 

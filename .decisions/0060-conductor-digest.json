@@ -8,7 +8,7 @@
   "research and product",
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how the Conductor takes work off you. I recommend A: while you're around, it's a live single point of contact you can talk to and answer cards through; when you've been away, it greets you with one digest, a recommendation per item, answered with one tap. Confidence: medium.",
  "for_you": [
   "While you're active, the Conductor answers you right away; you can ask anything, give orders it routes, and answer any waiting card from its chat; your tap or reply counts as your own answer in that project",
@@ -79,9 +79,9 @@
  "recommendation": "A gives you what you described: one live point of contact while you work, and a short digest when you come back, with every card answerable in place. B's extra saving is small, since the Conductor can't do more than the orchestrators; add it later if repeat questions keep reaching you.",
  "confidence": "lean",
  "change_mind": "If the same questions keep reaching you from different projects, add B.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [
