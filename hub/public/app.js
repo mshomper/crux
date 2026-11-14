@@ -7,6 +7,7 @@ import { hudBoot, openPanel, closePanel } from './hud.js';
 import { isYesNo } from './questions.js';
 import * as AP from './all-projects.js';
 import * as CP from './conductor-view.js';
+import { hubProjects } from './map-hub.js';
 import { enterAction, insertLineBreak, replyHint, filterHint } from './composer-keys.js';
 import { Columns } from './columns.js';
 import { growBox } from './conversation.js';
@@ -66,7 +67,11 @@ const fineMq = matchMedia('(pointer: fine)');
 const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches && el && !el.disabled && !el.closest('[hidden]')) el.focus(); };
 // The seam between the list and the conversation widens the list on a desk with a mouse (side-width.js).
 new SideResizer({ app: $('#app'), grip: $('#side-grip'), canResize: matchMedia('(min-width: 721px) and (pointer: fine)'), onResize: () => placeModelMenu() });
-const map = new LiveMap($('#hud'), { open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t) });
+const map = new LiveMap($('#hud'), {
+  open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t),
+  // a project on the All projects map (decision 57 C): its thread, in that project
+  openIn: (name, t) => { const p = S.projects.find(x => x.name === name); if (p) openThreadIn(p, t); }
+});
 
 // Decision 36: plan meters in the strip (not on the core) and the usage panel behind them.
 const usageUI = new UsageUI($('#hud'), {
@@ -956,7 +961,14 @@ function render() {
   // The You station's popover lists every project's permission requests then (each answered by its id).
   const v = hub();
   map.retireAt = proj()?.retireAt || S.retireAt;   // decision 44 B: each project's own handoff mark
-  map.update(proj(), pendingForYou(proj()), { total: v.total, projects: v.projects, approvals: v.groups.flatMap(g => g.waiting.approvals.map(ev => ({ ...ev, project: g.name }))) });
+  // Decision 57 C: while All projects is the column in focus, the map shows the whole hub around the Conductor. The
+  // total counts what the Conductor waits on too, as the All projects row does.
+  const c = S.conductor, hubMap = S.projects.length > 1 && cols.kb === AP.HUB_THREAD;
+  map.update(proj(), pendingForYou(proj()), {
+    total: v.total + (c?.waiting || 0), projects: v.projects, approvals: v.groups.flatMap(g => g.waiting.approvals.map(ev => ({ ...ev, project: g.name }))),
+    mode: hubMap, conductor: c,
+    places: hubMap ? hubProjects(v.groups, { retireAt: S.retireAt || 60, waitingOf: (g, a) => AP.threadWaiting(g.p, a.thread, S.pending) }) : null
+  });
   usageUI.draw();
 }
 

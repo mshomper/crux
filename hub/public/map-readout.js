@@ -27,6 +27,27 @@ export function coreReadout(core, { busy = 0, resting = 0 } = {}) {
   return { title: core.holder || 'Orchestrator', sub: `Generation ${core.generation}`, state: STATE_WORDS[core.state] || core.state, hue: hueOf(core.model), effort: core.effort, rows };
 }
 
+// The Conductor's readout (decision 57 C): the core of the All projects map. core: conductorCore() (map-sectors.js);
+// projects and waiting: how many projects the hub runs and how many things wait on you across them.
+export function conductorReadout(core, { projects = 0, waiting = 0 } = {}) {
+  const across = { k: 'Projects', v: `${projects} project${projects === 1 ? '' : 's'}`, note: waiting ? `${waiting} waiting for you` : 'Nothing waiting', tone: waiting ? 'red' : '' };
+  if (!core || !core.holder) {
+    return { title: 'Conductor', sub: 'Every project', state: core?.state === 'vacant' ? 'Not running' : STATE_WORDS.asleep, hue: hueOf(core?.model), effort: null,
+      rows: [{ k: 'Role', v: 'Reads every project and talks to their orchestrators' }, across] };
+  }
+  const ctx = core.ctx, at = core.retireAt;
+  const level = ctx == null ? '' : ctx >= at ? 'gold' : ctx >= at * 0.8 ? 'amber' : '';
+  const rows = [
+    { k: 'Model', v: modelLabel(core.model) },
+    { k: 'Effort', v: core.effort ? EFFORT_WORDS[core.effort] : 'Default', pips: true },
+    { k: 'Context', v: ctx == null ? 'Not measured yet' : `${ctx}% used`, note: level === 'gold' ? `Handoff due (set at ${at}%)` : `Hands off at ${at}%`, tone: level }
+  ];
+  if (core.waiting) rows.push({ k: 'Needs you', v: `${core.waiting} waiting`, tone: 'red' });
+  rows.push(across);
+  if (core.activity) rows.push({ k: 'Doing', v: core.activity });
+  return { title: core.holder, sub: 'Conductor', state: STATE_WORDS[core.state] || core.state, hue: hueOf(core.model), effort: core.effort, rows };
+}
+
 export class CoreReadout {
   constructor({ open }) {
     this.el = document.createElement('div');

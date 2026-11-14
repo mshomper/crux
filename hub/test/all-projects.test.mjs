@@ -278,7 +278,8 @@ test('the page: the hub-wide row, the renamed roll-up link, the map counter', ()
   assert.match(row, /el\.hidden = n < 2/, 'only when the hub runs more than one project');
   assert.match(row, /id: AP\.HUB_THREAD, name: 'All projects'/);
   // the strip's counter: the hub total, opening All projects
-  assert.match(APP, /map\.update\(proj\(\), pendingForYou\(proj\(\)\), \{ total: v\.total, projects: v\.projects, approvals:/);
+  // (decision 57 C: the total also counts what the Conductor waits on, as the All projects row does)
+  assert.match(APP, /map\.update\(proj\(\), pendingForYou\(proj\(\)\), \{\s*total: v\.total \+ \(c\?\.waiting \|\| 0\), projects: v\.projects, approvals:/);
   assert.match(MAP, /if \(e\.target\.closest\('\[data-needs\]'\)\) return this\.go\(this\.multi \? 'all' : 'needs'\);/);
   assert.match(MAP, /const multi = this\.multi, count = multi \? this\.hub\.total : needs;/);
   // phone: still opens on the project's Needs you (decision 32)

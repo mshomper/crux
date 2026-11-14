@@ -6,6 +6,11 @@
 //   stations - workers, plus You and the Board; red when something needs you
 //   pulses   - messages, summaries, board posts, picks and approvals flying along the edges
 // Driven by the hub's SSE events. With prefers-reduced-motion it draws a still map.
+//
+// All projects (decision 57 C): while the All projects column is the one in focus, the map shows the whole hub
+// instead: the Conductor is the core, every project is a sector of one ring around it (map-hub.js, map-sectors.js),
+// and in the strip each project is a labelled bay. A project opens its orchestrator. In a project's own map an ALL
+// button at the strip's left end (the Conductor's halo and the hub's red total) goes back up.
 
 import { MapModel } from './map-model.js';
 import { stripLayout, stripLane, radialLayout, blendLayouts, easeInOut, clamp, lerp } from './map-layout.js';
@@ -14,9 +19,11 @@ import { ReservoirCore, stream } from './map-core.js';
 import { createRenderer } from './map-gl.js';
 import { HudPainter } from './map-hud.js';
 import { NeedsPopover } from './map-needs.js';
-import { CoreReadout, coreReadout } from './map-readout.js';
-import { hueOf, describe } from './models.js';
-import { robot, robotKey } from './robots.js';
+import { CoreReadout, coreReadout, conductorReadout } from './map-readout.js';
+import { hueOf, rgb01, describe } from './models.js';
+import { robot, robotKey, conductorBot } from './robots.js';
+import { hubLayout, hubBays, hubFeed } from './map-hub.js';
+import { SectorView, conductorCore } from './map-sectors.js';
 
 const ICON = {
   agent: '<rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 4v3M9.5 12h.01M14.5 12h.01"/>',
@@ -33,9 +40,12 @@ const DUR = 0.62;           // seconds for the zoom
 const GLYPHS = '█▓▒░<>/\\|=+*#01';
 
 export class LiveMap {
-  constructor(slot, { open } = {}) {
+  constructor(slot, { open, openIn } = {}) {
     this.slot = slot;
     this.openThread = open || (() => {});
+    this.openIn = openIn || (() => {});   // (project name, thread): a project on the All projects map
+    this.hubMode = false;
+    this.places = [];
     this.model = new MapModel();
     this.reducedMq = matchMedia('(prefers-reduced-motion: reduce)');
     this.phoneMq = matchMedia('(max-width: 720px)');
@@ -51,8 +61,9 @@ export class LiveMap {
     this.feedKey = '';
     this.last = performance.now();
     this.needsPop = new NeedsPopover({ open: t => this.go(t) });
-    this.readout = new CoreReadout({ open: () => this.go('orchestrator') });
+    this.readout = new CoreReadout({ open: () => this.go(this.coreThread) });
     this.build();
+    this.sectors = new SectorView(this.panel);
     this.hud = new HudPainter(this.lineCanvas);
     this.core = new ReservoirCore({ light: this.phone });   // a phone carries about a third of the particles
     this.fx = new Effects();
@@ -69,6 +80,8 @@ export class LiveMap {
   }
 
   get phone() { return this.phoneMq.matches; }
+  // Where the core opens: the orchestrator, or on the All projects map the column the Conductor's thread is pinned in.
+  get coreThread() { return this.hubMode ? 'all' : 'orchestrator'; }
   get multi() { return (this.hub?.projects || 0) > 1; }
   get reduced() { return this.reducedMq.matches || !this.renderer; }
 
@@ -105,6 +118,7 @@ export class LiveMap {
           <div class="tele-feed"><h3>Telemetry</h3><ol></ol></div>
         </aside>
         <button class="hud-btn hud-open" aria-label="Open the live map">${svg('expand')}</button>
+        <button class="hud-up" data-up hidden></button>
         <i class="hud-corner tl"></i><i class="hud-corner tr"></i><i class="hud-corner bl"></i><i class="hud-corner br"></i>
         <div class="hud-scan"></div>
       </section>`;
@@ -118,7 +132,14 @@ export class LiveMap {
     this.r = Object.fromEntries([...this.slot.querySelectorAll('[data-r]')].map(el => [el.dataset.r, el]));
     this.needsEls = [...this.slot.querySelectorAll('[data-needs]')];
 
+    this.upEl = q('.hud-up');
     this.panel.addEventListener('click', e => {
+      // decision 57 C: ALL goes up to every project; a project's bay, sector, label or telemetry line opens its
+      // orchestrator; "+N more" opens the All projects column
+      if (e.target.closest('[data-up]')) { this.needsPop.hide(); this.readout.hide(); return this.go('all'); }
+      const pj = e.target.closest('[data-pj]');
+      if (pj) { this.needsPop.hide(); this.readout.hide(); return this.goProject(pj.dataset.pj); }
+      if (e.target.closest('[data-open-all]')) return this.go('all');
       const st = e.target.closest('.hs');
       // You: the first tap shows what is waiting, right here; a second tap opens Needs you.
       if (st?.dataset.id === 'you' && this.needsPop.count && this.needsPop.el.hidden) return this.needsPop.show();
@@ -132,7 +153,7 @@ export class LiveMap {
       // readout first; a second tap (or its button) opens the chat.
       if (this.touch && !this.readout.open) return this.showReadout();
       this.readout.hide();
-      this.go('orchestrator');
+      this.go(this.coreThread);
     });
     this.panel.addEventListener('pointerdown', e => { this.touch = e.pointerType !== 'mouse'; });
     this.panel.addEventListener('pointermove', e => {
@@ -156,6 +177,7 @@ export class LiveMap {
   }
 
   readoutData() {
+    if (this.hubMode) return conductorReadout(this.coreInfo, { projects: this.places.length, waiting: this.hub?.total || 0 });
     const workers = this.workers.filter(w => w.kind === 'worker');
     const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;
     return coreReadout(this.coreInfo || this.model.core(), { busy, resting: workers.length - busy });
@@ -171,6 +193,13 @@ export class LiveMap {
   go(thread) {
     if (!thread) return;
     this.openThread(thread);
+    if (this.target === 1) this.collapse();
+  }
+
+  // A project on the All projects map: its orchestrator's chat, in that project (the strip then shows its own map).
+  goProject(name) {
+    if (!name) return;
+    this.openIn(name, 'orchestrator');
     if (this.target === 1) this.collapse();
   }
 
@@ -198,10 +227,16 @@ export class LiveMap {
   // hub: { total, projects, approvals } across the hub (decision 42): with more than one project the Needs you counter
   // and the You station (its count and its popover) show every project and open All projects; the core and the
   // telemetry stay this project's.
+  // With the All projects column in focus (decision 57 C), hub also carries mode: true, places (hubProjects) and
+  // conductor (/api/state's conductor, or null): the map then shows the whole hub around the Conductor.
   update(project, pending, hub = null) {
     this.hub = hub;
+    const hubMode = !!hub?.mode && (hub.places?.length || 0) > 1;
+    if (hubMode !== this.hubMode) { this.hubMode = hubMode; this.panel.classList.toggle('hubmode', hubMode); this.readout.hide(); this.feedKey = ''; }
+    this.places = hubMode ? hub.places : [];
     this.model.setProject(project, pending);
-    const { list, hidden } = this.model.workers(this.phone ? 8 : 12);
+    let { list, hidden } = this.model.workers(this.phone ? 8 : 12);
+    if (hubMode) { list = []; hidden = 0; }   // the hub map has no worker stations: workers are dots in their sector
     const now = performance.now();
     const ids = new Set(list.map(w => w.id));
     for (const w of this.workers) {
@@ -210,7 +245,7 @@ export class LiveMap {
     for (const w of list) if (!this.workers.some(x => x.id === w.id) && this.workers.length + this.info.size) this.entering.set(w.id, now);
     this.workers = list;
     this.hidden = hidden;
-    const core = this.model.core();
+    const core = hubMode ? conductorCore(hub.conductor) : this.model.core();
     this.coreInfo = core;
     this.core.setMood(core);   // state, context, model, effort, waiting on you, Auto or Ask (see coreLook)
     if (this.readout.open) this.readout.set(this.readoutData());
@@ -219,8 +254,11 @@ export class LiveMap {
     this.info = new Map(list.map(w => [w.id, w]));
     const you = this.multi ? this.hub.total : needs;
     this.info.set('you', { id: 'you', kind: 'you', name: 'You', thread: this.multi ? 'all' : 'needs', state: you ? 'needs' : 'idle', needs: you > 0, traffic: 0.5, sub: you ? `${you} waiting` : 'all clear' });
-    this.info.set('board', { id: 'board', kind: 'board', name: 'Board', thread: 'board', state: 'idle', needs: false, traffic: 0.35, sub: `${board.decisions} decision${board.decisions === 1 ? '' : 's'} · ${board.entries} entr${board.entries === 1 ? 'y' : 'ies'}` });
+    // the Board belongs to one project: the hub map leaves it out
+    if (!hubMode) this.info.set('board', { id: 'board', kind: 'board', name: 'Board', thread: 'board', state: 'idle', needs: false, traffic: 0.35, sub: `${board.decisions} decision${board.decisions === 1 ? '' : 's'} · ${board.entries} entr${board.entries === 1 ? 'y' : 'ies'}` });
     this.syncStations();
+    if (hubMode) this.sectors.set(this.places);
+    this.syncUp();
     this.needsPop.set(project, pending, needs, this.multi ? { approvals: this.hub.approvals || [], total: this.hub.total } : null);
     const youEl = this.stationEls.get('you');
     if (youEl) this.needsPop.attach(youEl);
@@ -229,7 +267,30 @@ export class LiveMap {
     if (this.reduced) this.drawStatic();
   }
 
+  // The ALL button (decision 57 C): in a project's own map while the hub runs more than one project. The Conductor's
+  // halo in its model's hue, the red total across the hub, and a click goes up to All projects.
+  syncUp() {
+    const show = !this.hubMode && this.multi;
+    if (this.upEl.hidden === !show && !show) return;
+    this.upEl.hidden = !show;
+    this.panel.classList.toggle('up', show);
+    if (!show) return;
+    const c = this.hub?.conductor, n = this.hub?.total || 0;
+    const agent = { model: c?.model || c?.modelSeen || null, effort: c?.effort || null, state: c?.name ? c.state : 'asleep', role: 'conductor' };
+    const html = `<span class="up-ring"${hueOf(agent.model) ? ` style="--mh:${hueOf(agent.model)}"` : ''}>${conductorBot(agent, { size: 24, cls: 'calm' })}${n ? `<b class="up-n">${n}</b>` : ''}</span><i>All</i>`;
+    if (this.upEl.dataset.html !== html) { this.upEl.dataset.html = html; this.upEl.innerHTML = html; }
+    const tip = `All projects and the Conductor${n ? `: ${n} waiting for your call` : ''}`;
+    if (this.upEl.title !== tip) { this.upEl.title = tip; this.upEl.setAttribute('aria-label', tip); }
+  }
+
   event(project, ev) {
+    if (this.hubMode) {
+      // the hub map: a project's logged event flashes its sector; its own map keeps its feed up to date for later
+      if (project && ev.logged) this.sectors.ping(project.name, performance.now());
+      if (project && project.name === this.model.project?.name) this.model.ingest(ev);
+      this.kick();
+      return;
+    }
     if (!project || project.name !== this.model.project?.name) return;
     const res = this.model.ingest(ev);
     if (this.reduced) return;
@@ -295,7 +356,7 @@ export class LiveMap {
   syncText(core, needs) {
     const st = core.state === 'writing' ? 'writing handoff' : core.state;
     // No generation, state or context numbers on screen (Matt, 2026-11-11): the sphere shows them and its readout spells them out.
-    this.r.proj.textContent = this.model.project ? `// ${this.model.project.name}` : '';
+    this.r.proj.textContent = this.hubMode ? '// all projects' : this.model.project ? `// ${this.model.project.name}` : '';
     // The counter: this project's count, or with several projects everything in the hub (decision 42).
     const multi = this.multi, count = multi ? this.hub.total : needs;
     const tip = multi
@@ -308,6 +369,7 @@ export class LiveMap {
       el.setAttribute('aria-label', tip);
       el.title = tip;
     }
+    if (this.hubMode) return this.syncHubText(core);
     const workers = this.workers.filter(w => w.kind === 'worker');
     const busy = workers.filter(a => ['working', 'starting'].includes(a.state)).length;
     const holder = `
@@ -321,7 +383,31 @@ export class LiveMap {
     if (this.r.ticker.dataset.text !== tick) this.decode(this.r.ticker, tick);
   }
 
+  // The hub map's telemetry: the Conductor's card, and the ticker on what it is doing (else the top project line).
+  syncHubText(core) {
+    const P = this.places, isBusy = s => s === 'working' || s === 'starting';
+    const working = P.filter(p => isBusy(p.state) || p.workers.some(w => isBusy(w.state))).length;
+    const waiting = this.hub?.total || 0;
+    const st = !core.holder ? (core.state === 'vacant' ? 'not running' : 'asleep') : core.state === 'writing' ? 'writing handoff' : core.state;
+    const holder = `
+      <div class="th-k">Conductor</div>
+      <div class="th-name"><span>${esc(core.holder || 'Conductor')}</span><span class="th-state ${esc(core.state)}">${esc(st)}</span></div>
+      <div class="th-act">${core.activity ? `<span class="caret">&gt;</span> ${esc(core.activity)}` : core.holder ? 'Point at or tap the core for details' : 'Wakes when you write to it in All projects'}</div>
+      <div class="th-stats"><span><b>${P.length}</b>projects</span><span><b>${working}</b>working</span><span class="${waiting ? 'hot' : ''}"><b>${waiting}</b>need you</span></div>`;
+    if (this.holderEl.dataset.html !== holder) { this.holderEl.dataset.html = holder; this.holderEl.innerHTML = holder; }
+    const top = hubFeed(P)[0];
+    const tick = core.activity ? `Conductor ▸ ${core.activity}` : top ? `${top.name} ▸ ${top.text}` : 'Waiting for activity';
+    if (this.r.ticker.dataset.text !== tick) this.decode(this.r.ticker, tick);
+  }
+
   syncFeed() {
+    if (this.hubMode) {
+      // one line per project, those waiting on you first; a click opens its orchestrator
+      const html = hubFeed(this.places).map(l => `<li class="tone-${esc(l.tone)}" data-pj="${esc(l.name)}" title="Open ${esc(l.name)}'s orchestrator"><time></time><b>${esc(l.name)}</b><span>${esc(l.text)}</span></li>`).join('')
+        || '<li class="empty"><span>No projects yet.</span></li>';
+      if (html !== this.feedKey) { this.feedKey = html; this.feedEl.innerHTML = html; }
+      return;
+    }
     const ago = ts => { const s = Math.max(0, (Date.now() - ts) / 1000); return s < 50 ? 'now' : s < 3600 ? `${Math.round(s / 60)}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`; };
     const threadOf = l => l.actor === 'You' ? (l.target === 'orchestrator' ? 'orchestrator' : l.target) : /^orchestrator-/.test(l.actor) ? 'orchestrator' : this.model.project?.agents.some(a => a.name === l.actor) ? l.actor : '';
     const html = this.model.feed.map(l => {
@@ -374,9 +460,26 @@ export class LiveMap {
     const dpr = Math.min(devicePixelRatio || 1, 2);
     this.hud.resize(w, h, dpr);
     this.renderer?.resize(w, h, Math.min(dpr, 1.5));
-    const A = stripLayout(slot, this.workers, this.phone);
-    const B = radialLayout(tgt, this.workers, this.phone);
-    const L = blendLayouts(A, B, E, { x: rect.left, y: rect.top });
+    const origin = { x: rect.left, y: rect.top };
+    let A, B, L;
+    if (this.hubMode) {
+      // decision 57 C: the Conductor and You in the strip, project bays either side; open, one sector per project
+      A = stripLayout(slot, [], this.phone);
+      const H = hubLayout(tgt, this.places, this.phone);
+      B = { core: H.core, at: new Map([['you', H.you]]), labels: true, compact: false, reserve: H.reserve };
+      L = blendLayouts(A, B, E, origin);
+      L.at.delete('board');
+      const board = A.at.get('board');   // the strip's right end: where the Board would sit, clear of the readout
+      this.H = { A, B: H, bays: hubBays(slot, this.places, this.phone, { core: A.core, you: A.at.get('you'), rightEnd: board.x + board.r }), o: origin, phone: this.phone };
+    } else {
+      // the ALL button takes the strip's left end; You and the workers move over for it
+      const lead = this.panel.classList.contains('up') ? (this.phone ? 30 : 52) : 0;
+      A = stripLayout(lead ? { ...slot, left: slot.left + lead, width: slot.width - lead } : slot, this.workers, this.phone);
+      B = radialLayout(tgt, this.workers, this.phone);
+      L = blendLayouts(A, B, E, origin);
+      this.H = null;
+      this.sectors.hide();
+    }
     L.bendMax = lerp(slot.height * 0.36, 420, E);
     this.panel.dataset.tele = B.reserve.tele;
     this.panel.classList.toggle('no-labels', !L.labels);
@@ -459,6 +562,7 @@ export class LiveMap {
     try { this.renderer.draw(this.buf, o, zooming ? 0.35 : lerp(0.72, 0.6, E)); }
     catch (err) { console.warn('Live map renderer stopped:', err); this.renderer = null; this.setMotion(); return; }
     this.hud.paint({ L, e: E, t: now / 1000, boot: this.boot, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: this.fx.pings, now });
+    if (this.H) this.sectors.draw(this.hud.c, { L, H: this.H, e: E, t: now / 1000, still: false, now, size: this.size });
     this.positionStations(L, info);
     if (now - (this.lastText || 0) > 1000) {
       this.lastText = now;
@@ -473,6 +577,19 @@ export class LiveMap {
     const hue = this.core.look?.hue;
     if (!hue) return o;
     let k = 0;
+    if (this.H) {
+      // the hub map: a short stream from the Conductor to every project that has work running (at most 8)
+      const isBusy = s => s === 'working' || s === 'starting';
+      for (const [, s] of this.sectors.anchors(L, this.H, easeInOut(this.e))) {
+        if (k >= 8 || !(isBusy(s.p.state) || s.p.workers.some(w => isBusy(w.state)))) continue;
+        const len = Math.hypot(s.x - L.core.x, s.y - L.core.y) || 1;
+        o = stream(this.buf, o, L.core, bend(L.core, s, 0.08, L.bendMax), s, this.core.t, rgb01(hueOf(s.p.model)) || hue, {
+          u0: Math.min(0.5, (L.core.r * 1.12) / len), u1: Math.max(0.55, 1 - 16 / len), n: L.core.r < 20 ? 4 : 5,
+          pace: 0.25 + 0.4 * this.core.look.energy, seed: k++ * 0.37
+        });
+      }
+      return o;
+    }
     for (const [id, s] of L.at) {
       const st = info.get(id);
       if (!st || st.kind !== 'worker' || !['working', 'starting'].includes(st.state) || k >= 12) continue;
@@ -493,6 +610,7 @@ export class LiveMap {
     this.renderer?.clear?.();
     this.core.settle();   // the still shows the sphere at its level, with no motion
     this.hud.paint({ L, e: this.e, t: 0, boot: 1, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: [], now: 0, staticCore: true });
+    if (this.H) this.sectors.draw(this.hud.c, { L, H: this.H, e: this.e, t: 0, still: true, now: 0, size: this.size });
     this.positionStations(L, info);
   }
 }
