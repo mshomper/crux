@@ -1,0 +1,97 @@
+{
+ "id": 56,
+ "slug": "conductor-icon",
+ "title": "What does the Conductor's icon look like?",
+ "date": "2026-11-13",
+ "mode": "quick",
+ "lenses": [
+  "ui"
+ ],
+ "status": "open",
+ "lead": "Pick the Conductor's mark on the robot icon. I recommend B, a halo of four nodes around its head: it still reads at the smallest size and matches the map, where the orchestrators circle the Conductor. Confidence: medium.",
+ "for_you": [
+  "The helmet keeps showing the model colour; the mark on top shows the role, as the orchestrator's crown does today",
+  {
+   "text": "An icon swap later is a small change",
+   "kind": "undo"
+  }
+ ],
+ "context": "Matt asked for the Conductor (decision 55) to have its own icon. The worker drew three marks on the existing robot (same 48-grid helmets, line weight and glow as robots.js), each shown at 26 px beside today's worker and crowned orchestrator, at 15 px, as a map station plain and red with a count, large, and on all four model helmets.",
+ "depends_on": [
+  20,
+  55
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Baton",
+   "summary": "A raised baton with a lit tip where the orchestrator wears its crown.",
+   "pros": [
+    "Says \"conductor\" at once"
+   ],
+   "cons": [
+    "A thin line that gets lost at 15 px"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Halo of nodes",
+   "summary": "A ring of four glowing nodes circling the robot's head.",
+   "pros": [
+    "Reads at 15 px; echoes the map's ring of orchestrators"
+   ],
+   "cons": [
+    "Less literal than the baton"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Stage arc",
+   "summary": "An arc of three nodes over the robot, standing on a rostrum line.",
+   "pros": [
+    "Distinct silhouette"
+   ],
+   "cons": [
+    "Busiest of the three at small sizes"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "B",
+ "recommendation": "B stays legible at the smallest size and ties the icon to the map's picture of the Conductor at the centre of its orchestrators.",
+ "confidence": "lean",
+ "change_mind": "If the halo reads as decoration rather than a role, take A.",
+ "chosen": null,
+ "reason": "",
+ "decided_on": null,
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [],
+ "images": [
+  {
+   "file": "images/0056-a-baton-at-every-size-and-on-every-model.png",
+   "caption": "A: baton, at every size and on every model helmet",
+   "option": "A",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0056-b-halo-of-nodes-at-every-size-and-on.png",
+   "caption": "B: halo of nodes, at every size and on every model helmet",
+   "option": "B",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0056-c-stage-arc-at-every-size-and-on-every.png",
+   "caption": "C: stage arc, at every size and on every model helmet",
+   "option": "C",
+   "kind": "mockup"
+  }
+ ]
+}
