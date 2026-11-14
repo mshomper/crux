@@ -3,10 +3,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTmp } from './helpers/tmp.mjs';
-import { Voice, decodeClip, MAX_CLIP_S, LISTEN_RATE } from '../lib/voice.mjs';
+import { Voice, decodeClip, MAX_CLIP_S, CLIP_LIMIT_S, LISTEN_RATE, START_TIMEOUT_MS } from '../lib/voice.mjs';
 import { SETTING_DEFAULTS, HubSettings } from '../lib/settings.mjs';
 import { downsample, toBase64, voiceLine, switchTip } from '../public/voice.js';
 
@@ -145,7 +145,7 @@ test('setup without uv says what to install, and does not start anything', async
   const v = new Voice({ dir, spawn: () => { const c = fakeChild(); setImmediate(() => c.emit('error', Object.assign(new Error('spawn uv ENOENT'), { code: 'ENOENT' }))); return c; } });
   v.setup();
   await new Promise(r => { const iv = setInterval(() => { if (v.setupRun?.error) { clearInterval(iv); r(); } }, 5); });
-  assert.match(v.setupRun.error, /needs uv/);
+  assert.match(v.setupRun.error, /^Voice setup failed: it needs uv/);
   assert.equal(v.installed(), 'none');
 });
 
@@ -157,12 +157,111 @@ test('asking a helper that is off or still starting fails plainly', async t => {
   v.apply(false);
 });
 
-test('clips: base64 of 16-bit samples, at most 60 seconds', () => {
+test('clips: base64 of 16-bit samples, 60 seconds, with 2 s of headroom so a clip at the cap is never lost', () => {
   assert.equal(decodeClip(Buffer.alloc(3200).toString('base64')).length, 3200);
   assert.throws(() => decodeClip(''), /No sound/);
   assert.throws(() => decodeClip('not base64!'), /No sound/);
-  assert.throws(() => decodeClip(Buffer.alloc(MAX_CLIP_S * LISTEN_RATE * 2 + 2).toString('base64')), /up to 60 seconds/);
+  assert.equal(decodeClip(Buffer.alloc(61 * LISTEN_RATE * 2).toString('base64')).length, 61 * LISTEN_RATE * 2, 'a little over 60 s still goes');
+  assert.throws(() => decodeClip(Buffer.alloc(CLIP_LIMIT_S * LISTEN_RATE * 2 + 2).toString('base64')), /up to 60 seconds/);
   assert.throws(() => decodeClip(Buffer.alloc(3).toString('base64')), /damaged/);
+  assert.equal(CLIP_LIMIT_S, MAX_CLIP_S + 2);
+  assert.match(src('../voice/helper.py'), /MAX_CLIP_S = 62/, 'the helper takes the same');
+  assert.match(src('../public/voice.js'), /STOP_AT_MS = 59500/);
+  assert.match(src('../public/voice.js'), /if \(performance\.now\(\) - this\.t0 >= STOP_AT_MS\) this\.stop\(\)/, 'at the cap it stops and sends');
+});
+
+test('switched off and on within the 4 s the old helper may take to leave: no crash, the new one starts once it has gone', async t => {
+  const { v, spawned } = voiceWith(t);
+  v.apply(true);
+  spawned[0].c.say({ ready: true, port: 1 });
+  v.apply(false);
+  v.apply(true);
+  assert.equal(spawned.length, 1, 'not yet: the old one is still leaving');
+  assert.equal(v.view().state, 'starting');
+  await new Promise(r => setImmediate(r));   // the old one exits
+  assert.equal(spawned.length, 2);
+  assert.deepEqual(v.crashes, [], 'not counted as a crash');
+  spawned[1].c.say({ ready: true, port: 2 });
+  assert.equal(v.view().state, 'ready');
+  v.apply(false);
+});
+
+test('a helper not ready within a minute gets the amber mark and is let go, not restarted', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { v, spawned } = voiceWith(t);
+  v.apply(true);
+  t.mock.timers.tick(START_TIMEOUT_MS);
+  assert.equal(v.view().state, 'problem');
+  assert.match(v.view().problem, /did not start within a minute/);
+  assert.equal(spawned[0].c.stdin.ended, true);
+  spawned[0].c.emit('exit', 0);
+  t.mock.timers.tick(10000);
+  assert.equal(spawned.length, 1);
+  v.apply(false);
+  assert.equal(v.view().state, 'off');
+  assert.equal(v.view().problem, '');
+});
+
+test('setup turns voice on only when it worked; a failure leaves it off with the reason; Not now clears it', async t => {
+  const failing = new Voice({ dir: makeTmp('crux-voice-', t), env: { PATH: 'x' }, spawn: () => { const c = fakeChild(); setImmediate(() => { c.stderr.emit('data', 'error: network unreachable\n'); c.emit('exit', 2); }); return c; } });
+  let turnedOn = 0;
+  failing.setup({ then: () => turnedOn++ });
+  await new Promise(r => { const iv = setInterval(() => { if (failing.setupRun?.error) { clearInterval(iv); r(); } }, 5); });
+  assert.equal(turnedOn, 0);
+  assert.equal(failing.wanted, false);
+  assert.match(failing.setupRun.error, /^Voice setup failed: Installing the voice packages failed: error: network unreachable/);
+  assert.match(voiceLine({ v: failing.view() }).text, /Tap the speaker icon to try again/);
+  failing.clearSetupError();
+  assert.equal(failing.view().setup, null, 'gone once you say Not now or switch off');
+  const s = src('../server.mjs');
+  assert.match(s, /'POST \/api\/voice\/setup'[\s\S]{0,200}return voice\.setup\(\{ then: \(\) => \{ hub\.settings\.set\(\{ voice: true \}\); voice\.start\(\); \} \}\);/);
+  assert.doesNotMatch(s.slice(s.indexOf("'POST /api/voice/setup'"), s.indexOf("'POST /api/voice/listen'")), /voice\.wanted = true/);
+  assert.match(s, /if \(on && voice\.installed\(\) !== 'ready'\) throw/);
+  assert.match(s, /if \(!on\) voice\.clearSetupError\(\)/);
+});
+
+test('two setups never run at once: a live holder of the lock turns the second away; a dead one is taken over', async t => {
+  const dir = makeTmp('crux-voice-', t);
+  writeFileSync(join(dir, 'setup.lock'), JSON.stringify({ pid: process.ppid }));   // the test runner: alive
+  const v = new Voice({ dir, spawn: () => { throw new Error('must not run'); } });
+  v.setup();
+  await new Promise(r => { const iv = setInterval(() => { if (v.setupRun?.error) { clearInterval(iv); r(); } }, 5); });
+  assert.match(v.setupRun.error, /another voice setup is running/);
+  writeFileSync(join(dir, 'setup.lock'), JSON.stringify({ pid: 999999 }));   // gone
+  const runs = [];
+  const w = new Voice({ dir, env: { PATH: 'x', ANTHROPIC_API_KEY: 'sk-ant-secret', UV_INDEX_URL: 'https://example.invalid/simple', CRUX_HUB_GUARD: 'off' }, spawn: (cmd, args, opts) => {
+    runs.push({ cmd, opts });
+    const c = fakeChild();
+    setImmediate(() => { if (cmd === 'uv') { mkdirSync(join(w.python, '..'), { recursive: true }); writeFileSync(w.python, ''); } c.emit('exit', 0); });
+    return c;
+  } });
+  w.setup();
+  await new Promise(r => { const iv = setInterval(() => { if (w.setupRun?.done || w.setupRun?.error) { clearInterval(iv); r(); } }, 5); });
+  assert.equal(w.setupRun.error, undefined);
+  assert.equal(existsSync(join(dir, 'setup.lock')), false, 'the lock goes when setup ends');
+  const uvEnv = runs[0].opts.env;
+  assert.equal(uvEnv.ANTHROPIC_API_KEY, undefined, 'uv gets no secrets');
+  assert.equal(uvEnv.CRUX_HUB_GUARD, undefined);
+  assert.equal(uvEnv.UV_INDEX_URL, 'https://example.invalid/simple', 'but its own UV_ settings');
+  assert.equal(uvEnv.PATH, 'x');
+});
+
+test('both model downloads are pinned to one commit, and a new pin asks for setup again', t => {
+  const py = src('../voice/helper.py');
+  assert.match(py, /ASR_REV = "[0-9a-f]{40}"/);
+  assert.match(py, /TTS_MODEL = "hf:\/\/gradium\/phonon-31m-en@[0-9a-f]{40}"/);
+  assert.match(py, /TTS_VOICES = "hf:\/\/gradium\/phonon-voices@[0-9a-f]{40}"/);
+  assert.match(py, /snapshot_download\(ASR_REPO, revision=ASR_REV/);
+  assert.match(py, /ptts\.TTS\(model=TTS_MODEL, [^)]*voice_catalog=TTS_VOICES\)/);
+  const a = makeTmp('crux-voice-pin-', t), b = makeTmp('crux-voice-pin-', t);
+  for (const [d, rev] of [[a, '1'.repeat(40)], [b, '2'.repeat(40)]]) {
+    writeFileSync(join(d, 'uv.lock'), 'version = 1\n');
+    writeFileSync(join(d, 'helper.py'), `ASR_REV = "${rev}"\n# other code\n`);
+  }
+  const id = d => new Voice({ dir: a, project: d }).lockId();
+  assert.notEqual(id(a), id(b));
+  writeFileSync(join(b, 'helper.py'), `ASR_REV = "${'1'.repeat(40)}"\n# other code, edited\n`);
+  assert.equal(id(a), id(b), 'an edit elsewhere in the helper does not');
 });
 
 test('the page turns 48 kHz mic blocks into 16 kHz 16-bit samples, and into base64', () => {
@@ -192,7 +291,8 @@ test('audio is never written to disk: the helper writes no files, and the hub wr
   assert.deepEqual([...py.matchAll(/wave\.open\((\w+)/g)].map(m => m[1]), ['buf'], 'the WAV is written into memory (io.BytesIO) only');
   assert.match(py, /buf = io\.BytesIO\(\)/);
   const js = src('../lib/voice.mjs');
-  assert.deepEqual([...js.matchAll(/writeFileSync\((.+?\)),/g)].map(m => m[1]), ["join(this.dir, 'ready.json')"]);
+  assert.deepEqual([...js.matchAll(/writeFileSync\(([^,(]+(?:\([^)]*\))?),/g)].map(m => m[1]), ['lock', "join(this.dir, 'ready.json')"], 'only the setup lock and ready.json');
+  assert.match(js, /const lock = join\(this\.dir, LOCK\)/);
   assert.doesNotMatch(js, /createWriteStream|appendFileSync/);
 });
 
@@ -201,7 +301,7 @@ test('the server: voice routes go through the usual checks, setup is PC only, an
   assert.match(s, /'POST \/api\/voice\/listen': async/);
   assert.match(s, /'POST \/api\/voice\/setup': \(_, \{ local \}\) => \{\s*if \(!local\) throw new GuardError/);
   assert.match(s, /\{ voice: true, \.\.\.\(snapped\.length \? \{ heard \} : \{\}\) \}/);
-  assert.match(s, /'\/api\/voice\/listen': Math\.ceil\(MAX_CLIP_S \* LISTEN_RATE \* 2 \* 4 \/ 3\)/);
+  assert.match(s, /'\/api\/voice\/listen': Math\.ceil\(CLIP_LIMIT_S \* LISTEN_RATE \* 2 \* 4 \/ 3\)/);
   assert.doesNotMatch(src('../lib/guard.mjs'), /voice/, 'no pairing exception: a remote device must be paired (decision 48)');
   assert.match(src('../lib/conductor.mjs'), /if \(extra\.voice\) \{\s*a\.noteForNextTurn\(VOICE_NOTE\);/);
 });

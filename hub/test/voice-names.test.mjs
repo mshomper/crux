@@ -50,6 +50,34 @@ test('two names that fit equally well leave the words alone', () => {
   assert.equal(snapNames('Open bright loa.', ['BrightLoad'], {}).text, 'Open BrightLoad.');
 });
 
+// Review (voice-review, step 1): words a name is part of, and numbers that count things, were snapped.
+test('a name plus a word ending is another word, never snapped', () => {
+  for (const [said, kept] of [
+    ['We researched it yesterday.', 'We researched it yesterday.'],
+    ['It researches itself.', 'It researches itself.'],
+    ['Keep researching that.', 'Keep researching that.'],
+    ['Ask the conductors.', 'Ask the conductors.'],
+    ["That is the Conductor's job.", "That is the Conductor's job."],
+    ['Two Harborstones were built.', 'Two Harborstones were built.']
+  ]) assert.equal(snap(said).text, kept, said);
+  assert.equal(snap('Ask the research worker.').text, 'Ask the research worker.');
+});
+
+test('a number joins a name only when the numbered name exists and the next word follows a name', () => {
+  // counting, not naming: the number stays
+  assert.equal(snap('Tell the orchestrator two things.').text, 'Tell the orchestrator two things.');
+  assert.equal(snap('Give orchestrator one step at a time.').text, 'Give orchestrator one step at a time.');
+  assert.equal(snap('Ask orchestrator 2 questions.').text, 'Ask orchestrator 2 questions.');
+  assert.equal(snap('The orchestrator six times asked.').text, 'The orchestrator six times asked.');
+  // naming: the number joins
+  assert.equal(snap('What did orchestrator six say?').text, 'What did orchestrator-6 say?');
+  assert.equal(snap('Tell orchestrator two to start.').text, 'Tell orchestrator-2 to start.');
+  assert.equal(snap('Ask orchestrator 2.').text, 'Ask orchestrator-2.');
+  assert.equal(snap('Has orchestrator six finished?').text, 'Has orchestrator-6 finished?');
+  // only numbered names that exist: there is no orchestrator-3
+  assert.equal(snap('What did orchestrator three say?').text, 'What did orchestrator three say?');
+});
+
 test('aliases from hub.json cover names no ear will get', () => {
   assert.equal(snap('Open the field lab.', { 'field lab': 'w1nd.lab' }).text, 'Open the w1nd.lab.');
 });

@@ -21,7 +21,7 @@ test('the Spoken line comes off the reply, in the ways it may be written', () =>
   assert.equal(liftSpoken('**Spoken:** All clear.\nNothing waits.').rest, 'Nothing waits.');
   assert.equal(liftSpoken('spoken - Done.').spoken, 'Done.');
   assert.deepEqual(liftSpoken('Nothing waits for you.'), { spoken: '', rest: 'Nothing waits for you.' });
-  assert.equal(liftSpoken('Spoken:   \nText').spoken, '', 'an empty Spoken line is no Spoken line');
+  assert.equal(liftSpoken('Spoken:   \n\nText').spoken, '', 'an empty Spoken line, then a blank line, is no Spoken line');
 });
 
 test('Markdown becomes plain words, and at most three sentences that fit', () => {
@@ -80,23 +80,56 @@ test('no Spoken line: at the end of the turn its last message has its first sent
   assert.equal(c.voiceTurn, null);
 });
 
-test('a turn already running when you spoke is not the answer; the next one is', () => {
+// Review (voice-review, step 2): Claude Code may take a message sent mid-turn into the running turn.
+test('the turn running when you spoke: its reply is read only if it carries a Spoken line', () => {
   const c = conductorStub();
   c.voiceTurn = { client: 'p', at: Date.now(), busy: true, last: null };
-  say(c, 'Spoken: from the earlier turn.\nEarlier reply.');
-  assert.equal(c.events.filter(e => e.type === 'voice_say').length, 0);
-  c.voiceTurnEnded();
-  assert.ok(c.voiceTurn && !c.voiceTurn.busy, 'still waiting for the answer');
-  say(c, 'Spoken: Your answer.\nText.');
-  assert.deepEqual(c.events.find(e => e.type === 'voice_say').sentences, ['Your answer.']);
+  const ev = say(c, 'Spoken: Got it, one card waits.\nOne card waits in Ebb.');
+  assert.equal(ev.text, 'One card waits in Ebb.', 'the line comes off a reply from the running turn too');
+  assert.deepEqual(c.events.find(e => e.type === 'voice_say').sentences, ['Got it, one card waits.']);
+  assert.equal(c.voiceTurn, null);
 });
 
-test('an answer that comes after 10 minutes is not read', () => {
+test('the running turn replied without a Spoken line: it took your message in, so nothing is read, not even later', () => {
+  const c = conductorStub();
+  c.voiceTurn = { client: 'p', at: Date.now(), busy: true, last: null };
+  say(c, 'Here is what I found for the earlier question. All quiet.');
+  c.voiceTurnEnded();
+  assert.equal(c.voiceTurn, null);
+  say(c, 'A later wake: something unrelated.');
+  c.voiceTurnEnded();
+  assert.equal(c.events.filter(e => e.type === 'voice_say').length, 0, 'never the first sentences of a turn that began before');
+});
+
+test('the running turn said nothing after your message: the next turn is the answer, with its fallback', () => {
+  const c = conductorStub();
+  c.voiceTurn = { client: 'p', at: Date.now(), busy: true, last: null };
+  c.voiceTurnEnded();
+  assert.ok(c.voiceTurn && !c.voiceTurn.busy, 'still waiting for the answer');
+  say(c, 'Two cards wait. Both are in Wardstone.');
+  c.voiceTurnEnded();
+  assert.deepEqual(c.events.find(e => e.type === 'voice_say').sentences, ['Two cards wait.', 'Both are in Wardstone.']);
+});
+
+test('an answer that comes after 10 minutes is not read, by its Spoken line or at the end of the turn', () => {
   const c = conductorStub();
   c.voiceTurn = { client: 'p', at: Date.now() - 11 * 60 * 1000, busy: false, last: null };
   const ev = say(c, 'Spoken: late.\nText');
   assert.match(ev.text, /^Spoken: late/);
   assert.equal(c.voiceTurn, null);
+  const d = conductorStub();
+  d.voiceTurn = { client: 'p', at: Date.now() - 11 * 60 * 1000, busy: false, last: { id: 'm1', text: 'An old reply.' } };
+  d.voiceTurnEnded();
+  assert.equal(d.voiceTurn, null);
+  assert.equal(d.events.length, 0);
+});
+
+test('the label in its other forms: bold before the colon, or alone on its line with the words under it', () => {
+  assert.deepEqual(liftSpoken('**Spoken**: Two cards wait.\nRest.'), { spoken: 'Two cards wait.', rest: 'Rest.' });
+  assert.deepEqual(liftSpoken('Spoken:\nTwo cards wait.\nBoth in Ebb.\n\nThe full reply.'), { spoken: 'Two cards wait. Both in Ebb.', rest: 'The full reply.' });
+  assert.deepEqual(liftSpoken('**Spoken:**\nAll clear.\n\nNothing waits.'), { spoken: 'All clear.', rest: 'Nothing waits.' });
+  assert.equal(liftSpoken('Spoken-word poetry is not a label.').spoken, '', 'a word starting with "Spoken-" is no label');
+  assert.equal(liftSpoken('Spoken:\n\nText after a blank line.').spoken, '', 'the label with nothing under it is no line');
 });
 
 test('the Conductor is asked for the Spoken line on a spoken message, in its note and its prompt', () => {
@@ -171,10 +204,38 @@ test('a stop ends her at once and nothing after it plays', async () => {
   assert.match(voiceLine({ speaking: true }).text, /tap anywhere to stop/);
 });
 
+test('sound that never starts gives up after 3 s, so the stop layer comes down', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const ctx = fakeCtx(); ctx.state = 'suspended'; ctx.resume = () => new Promise(() => { });
+  const errors = [], changes = [];
+  const p = new VoicePlayer({ ctx: () => ctx, fetchSentence: async () => Buffer.from('x'), onChange: s => changes.push(s), onError: m => errors.push(m) });
+  const done = p.play({ id: 'v1', sentences: ['a'] });
+  await Promise.resolve();
+  t.mock.timers.tick(3000);
+  await done;
+  assert.deepEqual(changes, [true, false]);
+  assert.match(errors[0], /could not start/);
+});
+
+test('the page: leaving All projects, Back or a hidden page drops a recording; the stop layer swallows the whole tap', () => {
+  const app = src('../public/app.js');
+  assert.match(app, /function voiceGone\(\) \{\s*if \(voiceRec\.state !== 'idle' && !cols\.all\(\)\.some\(c => c\.thread === AP\.HUB_THREAD && !c\.micBtn\.hidden\)\) voiceRec\.cancel\(\);/);
+  assert.match(app, /usageUI\.draw\(\);\s*voiceGone\(\);/, 'checked on every redraw');
+  assert.match(app, /if \(name === 'back'\) \{ voiceRec\.cancel\(\);/);
+  assert.match(app, /visibilitychange', \(\) => \{ if \(document\.hidden\) \{ voiceRec\.cancel\(\); voicePlayer\.stop\(\); \} \}/);
+  // the press stops her; the layer stays until the click has landed on it; one click on the mic opens it once
+  assert.match(app, /voiceStop\.addEventListener\('pointerdown', e => \{\s*swallow\(e\);/);
+  assert.match(app, /voiceStop\.addEventListener\('click', e => \{\s*swallow\(e\);[\s\S]*?hideStop\(\);\s*if \(onMic\) micTap\(\);/);
+  assert.match(app, /else if \(!stopPress\) voiceStop\.hidden = true/, 'her ending mid-tap does not drop the layer under the finger');
+  assert.doesNotMatch(app, /'touchstart', 'touchend'\]\) voiceStop\.addEventListener\(t, swallow/, 'touches are not cancelled, so the iPhone still sends the click');
+  const v = src('../public/voice.js');
+  assert.match(v, /cancel\(\) \{\s*if \(this\.state === 'opening'\)/, 'cancel also gives up a mic still opening');
+});
+
 test('the page: only the page that spoke plays, never with its mic open; a tap anywhere stops her', () => {
   const app = src('../public/app.js');
   assert.match(app, /ev\.type === 'voice_say' && ev\.logged && ev\.project === CP\.CONDUCTOR && ev\.client === VOICE_CLIENT && S\.voice\?\.on && voiceRec\.state === 'idle'\) voicePlayer\.play\(ev\)/);
-  assert.match(app, /\$\('#voice-stop'\)\.addEventListener\('pointerdown'/);
+  assert.match(app, /const voiceStop = \$\('#voice-stop'\)/);
   assert.match(app, /if \(!S\.voice\.on\) voicePlayer\.stop\(\)/);
   assert.match(src('../public/index.html'), /<div id="voice-stop" class="voice-stop" hidden/);
   assert.match(src('../public/style.css'), /\.voice-stop\{position:fixed;inset:0;z-index:9000/);

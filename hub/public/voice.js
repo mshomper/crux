@@ -5,6 +5,7 @@
 
 export const RATE = 16000;
 export const MAX_S = 60;
+export const STOP_AT_MS = 59500;   // recording stops and sends here, inside the hub's 60 s (it takes 2 s more, to be safe)
 // This open page, for the hub: only the page that spoke plays the answer back (another open page stays quiet).
 export const VOICE_CLIENT = (globalThis.crypto?.randomUUID?.() || String(Math.random()).slice(2)).replace(/-/g, '').slice(0, 32);
 
@@ -79,7 +80,7 @@ export class VoiceRecorder {
       this.t0 = performance.now();
       this.set('recording');
       this.tick = setInterval(() => {
-        if (this.seconds >= MAX_S) this.stop();
+        if (performance.now() - this.t0 >= STOP_AT_MS) this.stop();   // at the cap it is sent, never lost
         else this.onChange(this.state, this.seconds);
       }, 250);
     } catch (e) {
@@ -103,8 +104,13 @@ export class VoiceRecorder {
     finally { this.set('idle'); }
   }
 
-  // Drop what was said without sending it (the cancel mark while recording).
-  cancel() { if (this.state !== 'recording') return; this.close(); this.set('idle'); }
+  // Drop what was said without sending it (the cancel mark, leaving the column, the page hidden). While the mic is
+  // still opening, it gives that up. Sending already under way is left to finish.
+  cancel() {
+    if (this.state === 'opening') { this.opening = (this.opening || 0) + 1; this.close(); this.set('idle'); return; }
+    if (this.state !== 'recording') return;
+    this.close(); this.set('idle');
+  }
 
   close() {
     clearInterval(this.tick);
@@ -131,7 +137,8 @@ export class VoicePlayer {
     const run = this.playing = { id: ev.id, source: null, stopped: false };
     this.onChange(true);
     try {
-      if (ctx.state !== 'running') await ctx.resume();
+      // Sound that never starts (a browser holding it back) gives up after 3 s, so the stop layer never stays up.
+      if (ctx.state !== 'running') await Promise.race([ctx.resume(), new Promise((_, no) => setTimeout(() => no(new Error('The voice could not start on this device. Tap the mic once, then try again.')), 3000))]);
       let next = this.fetchSentence(ev.id, 0);
       for (let n = 0; n < ev.sentences.length; n++) {
         const bytes = await next;
@@ -176,7 +183,7 @@ export function voiceLine({ rec = 'idle', secs = 0, v = null, speaking = false }
   if (rec === 'sending') return { text: 'Hearing what you said…' };
   const s = v?.setup;
   if (s && !s.error && !s.done) return { text: s.step === 'packages' ? 'Setting up voice: installing the packages…' : `Setting up voice: downloading the speech models, ${s.pct || 0}%` };
-  if (s?.error) return { text: s.error, tone: 'warn' };
+  if (s?.error) return { text: `${s.error} Tap the speaker icon to try again.`, tone: 'warn' };
   if (v?.on && v.state === 'starting') return { text: 'Voice is starting…' };
   return { text: '' };
 }

@@ -7,12 +7,22 @@ const MAX_CHARS = 420;          // all sentences together
 const MAX_SENTENCE = 220;       // one sentence, cut at a word if longer
 
 // { spoken, rest }: the Spoken line's words (or '') and the reply without that line.
+// Written as "Spoken: ...", "**Spoken:** ...", "**Spoken**: ...", or with the label on its own line and the words on
+// the lines under it (up to a blank line).
 export function liftSpoken(text) {
   const src = String(text || '');
-  const m = /^[ \t>*_]*spoken[ \t]*[:\-][ \t]*(?:\*\*|__)?[ \t]*(.*?)[ \t]*(?:\*\*|__)?[ \t]*$/im.exec(src);
-  if (!m || !m[1].trim()) return { spoken: '', rest: src };
-  const rest = (src.slice(0, m.index) + src.slice(m.index + m[0].length)).replace(/^\s*\n/, '').replace(/\n{3,}/g, '\n\n').trim();
-  return { spoken: m[1].trim(), rest };
+  const m = /^[ \t>]*(?:\*\*|__|\*|_)?spoken(?:\*\*|__|\*|_)?[ \t]*(?::|-(?=[ \t]))(?:\*\*|__|\*|_)?[ \t]*(.*?)[ \t]*$/im.exec(src);
+  if (!m) return { spoken: '', rest: src };
+  let words = m[1].replace(/^(?:\*\*|__)|(?:\*\*|__)$/g, '').trim(), end = m.index + m[0].length;
+  if (!words) {   // the label alone: the words are the lines under it, up to a blank line
+    const after = /^\r?\n((?:[ \t>]*\S.*(?:\r?\n|$))+)/.exec(src.slice(end));
+    if (!after) return { spoken: '', rest: src };
+    words = after[1].split(/\r?\n/).map(l => l.replace(/^[ \t>]+/, '').trim()).filter(Boolean).join(' ');
+    end += after[0].length;
+  }
+  if (!words) return { spoken: '', rest: src };
+  const rest = (src.slice(0, m.index) + src.slice(end)).replace(/^\s*\n/, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { spoken: words, rest };
 }
 
 // Markdown to plain words: no code, links as their words, no headings, list marks, emphasis or tables.

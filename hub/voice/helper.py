@@ -23,10 +23,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ASR_MODEL = "nemo-parakeet-tdt-0.6b-v3"
 ASR_QUANT = "int8"
+# Every model download is pinned to one commit, so a setup today and one next year get the same files.
+ASR_REPO = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+ASR_REV = "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce"
+ASR_FILES = ["config.json", "vocab.txt", "encoder-model.int8.onnx", "decoder_joint-model.int8.onnx", "*.int8.onnx?data"]
+TTS_MODEL = "hf://gradium/phonon-31m-en@92741c5b07d085ff840e26fea8ce43110b87852f"
+TTS_VOICES = "hf://gradium/phonon-voices@da6c9ec0d47be8df5c87c730a3aa97187f3229c3"
 TTS_LANG = "en"
 TTS_VOICE = "Imogen"
 LISTEN_RATE = 16000          # the page sends 16 kHz, 16-bit, mono
-MAX_CLIP_S = 60
+MAX_CLIP_S = 62              # the page stops at 59.5 s; 2 s of headroom so a clip at the cap is never lost
 MAX_SAY_CHARS = 600
 THREADS = os.cpu_count() or 4
 
@@ -36,12 +42,19 @@ def say_line(obj):
     sys.stdout.flush()
 
 
-def load_asr():
+def asr_files(download=False):
+    """The pinned Parakeet snapshot's folder: fetched (or finished, if a setup was cut short) when download is True,
+    else only looked up in the local cache."""
+    from huggingface_hub import snapshot_download
+    return snapshot_download(ASR_REPO, revision=ASR_REV, allow_patterns=ASR_FILES, local_files_only=not download)
+
+
+def load_asr(download=False):
     import onnxruntime as rt
     import onnx_asr
     opts = rt.SessionOptions()
     opts.intra_op_num_threads = THREADS
-    return onnx_asr.load_model(ASR_MODEL, quantization=ASR_QUANT, sess_options=opts, providers=["CPUExecutionProvider"])
+    return onnx_asr.load_model(ASR_MODEL, asr_files(download), quantization=ASR_QUANT, sess_options=opts, providers=["CPUExecutionProvider"])
 
 
 def load_tts():
@@ -50,7 +63,7 @@ def load_tts():
         ptts.set_num_threads(THREADS)
     except Exception:
         pass   # the pool is built once; a second call is harmless to skip
-    return ptts.TTS(device="cpu", voice=TTS_VOICE, lang=TTS_LANG)
+    return ptts.TTS(model=TTS_MODEL, device="cpu", voice=TTS_VOICE, lang=TTS_LANG, voice_catalog=TTS_VOICES)
 
 
 def wav_bytes(samples, rate):
@@ -189,7 +202,7 @@ def watch_parent():
 
 def setup():
     say_line({"step": "asr"})
-    load_asr()
+    load_asr(download=True)
     say_line({"step": "tts"})
     tts = load_tts()
     tts.synth("Ready.")   # the voice itself comes from the catalog on first use

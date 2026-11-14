@@ -154,25 +154,36 @@ export class Conductor {
   expectVoice(client) { this.voiceClient = String(client || '').slice(0, 64); }
   // A message the Conductor wrote, before it is logged: during a voice turn its Spoken line comes off. Returns the
   // text to log and the spoken words, or null outside a voice turn.
+  // A Spoken line comes off any reply logged after the spoken message, even one from a turn that was already running:
+  // Claude Code may take a message sent mid-turn into that turn, and the note asking for the line rides with it.
   voiceSaid(text) {
     const t = this.voiceTurn;
     if (!t) return null;
     if (Date.now() - t.at > VOICE_TURN_MS) { this.voiceTurn = null; return null; }
-    if (t.busy) return null;   // still the turn that was running when the spoken message came
     return liftSpoken(text);
   }
-  // After it is logged (ev, or null when the message was only the Spoken line): the words go up to be read.
+  // After it is logged (ev, or null when the message was only the Spoken line): the words go up to be read. Without
+  // one, a reply from a turn that started after the spoken message is kept for the end-of-turn fallback; a reply from
+  // the turn already running is never read (it only shows that turn took the message in).
   voiceLogged(ev, { spoken }) {
     const t = this.voiceTurn;
     if (!t) return;
     if (spoken) { this.voiceTurn = null; this.say(ev?.id || null, sentences(spoken), t.client, 'spoken'); }
+    else if (t.busy) t.sawInBusy = true;
     else if (ev) t.last = { id: ev.id, text: ev.text };
   }
-  // The end of a turn: a voice turn with no Spoken line has its last message's first sentences read instead.
+  // The end of a turn. The turn that was running when you spoke: if it replied after your message, it took the message
+  // in and gave no Spoken line, so nothing is read; if it did not, the next turn is the answer. Any other turn with no
+  // Spoken line has its last reply's first sentences read. Past 10 minutes nothing is read.
   voiceTurnEnded() {
     const t = this.voiceTurn;
     if (!t) return;
-    if (t.busy) { t.busy = false; t.last = null; return; }   // that was the turn before; the answer comes next
+    if (Date.now() - t.at > VOICE_TURN_MS) { this.voiceTurn = null; return; }
+    if (t.busy) {
+      if (t.sawInBusy) this.voiceTurn = null;
+      else { t.busy = false; t.last = null; }
+      return;
+    }
     this.voiceTurn = null;
     const s = t.last ? sentences(t.last.text) : [];
     if (s.length) this.say(t.last.id, s, t.client, 'first sentences');

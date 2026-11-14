@@ -43,6 +43,15 @@ function keysFor(name) {
 }
 // A stretch of words as a letter key, with number words as digits.
 const stretchKey = words => words.map(w => NUMBERS[letters(w)] ?? letters(w)).join('');
+// Endings that make another word of a name ("researched", "Conductors", "Conductor's"): never snapped.
+const ENDINGS = ['s', 'es', 'ed', 'd', 'ing'];
+const ending = (key, nk) => key.length > nk.length && key.startsWith(nk) && ENDINGS.includes(key.slice(nk.length));
+// A number after a name word is part of the name ("orchestrator six said") only when what follows is the kind of word
+// that comes after a name, or nothing; "orchestrator two things" and "one step" keep their numbers as said.
+const FOLLOWERS = new Set(['say', 'says', 'said', 'saying', 'think', 'thinks', 'know', 'knows', 'is', 'was', 'has', 'had', 'have', 'will', 'would',
+  'can', 'could', 'should', 'did', 'does', 'do', 'to', 'and', 'or', 'about', 'for', 'on', 'in', 'at', 'with', 'if', 'what', 'that', 'please',
+  'now', 'today', 'first', 'again', 'so', 'but', 'when', 'how', 'why', 'from', 'up', 'there', 'here', 'yet', 'still', 'already', 'finished', 'done']);
+const isNumber = w => /^\d+$/.test(w) || letters(w) in NUMBERS;
 
 // text: the transcript. names: the names to snap to. aliases: { "heard words": "Name" } for names no ear will get.
 // Returns { text, snapped: [{ from, to }] }.
@@ -60,6 +69,10 @@ export function snapNames(text, names = [], aliases = {}) {
       const stretch = words.slice(i, i + n);
       const key = stretchKey(stretch.map(s => s.w));
       if (key.length < 2) continue;
+      if (n > 1 && isNumber(stretch[n - 1].w)) {   // a number at the end: only if a name-follower or nothing comes next
+        const next = words[i + n], gap = next ? src.slice(stretch[n - 1].end, next.at) : '';
+        if (next && !/[.,;:!?]/.test(gap) && !FOLLOWERS.has(letters(next.w))) continue;
+      }
       const a = alias.find(x => x.key === key);
       if (a) { best = { n, name: a.name, score: 2 }; break; }
       const hits = [];
@@ -68,6 +81,7 @@ export function snapNames(text, names = [], aliases = {}) {
         for (const nk of k.keys) {
           // A name ending in a number (orchestrator-6) needs that number heard: "the orchestrator" stays as said.
           if ((nk.match(/[0-9]+$/)?.[0] || '') !== (key.match(/[0-9]+$/)?.[0] || '')) continue;
+          if (ending(key, nk)) continue;   // "researched" is not "research"
           if (key === nk) score = Math.max(score, 1.5);
           // A near miss starts as the name starts, so a word in front ("did orchestrator six") is never swallowed.
           else if (!k.short && nk.length >= 4 && key[0] === nk[0]) {

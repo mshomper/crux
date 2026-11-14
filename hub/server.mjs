@@ -17,7 +17,7 @@ import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, t
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
-import { Voice, SpeechCache, decodeClip, MAX_CLIP_S, LISTEN_RATE } from './lib/voice.mjs';
+import { Voice, SpeechCache, decodeClip, MAX_CLIP_S, CLIP_LIMIT_S, LISTEN_RATE } from './lib/voice.mjs';
 import { snapNames } from './lib/voice-names.mjs';
 import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
@@ -127,7 +127,8 @@ const voice = new Voice({ onChange: v => { if (!v.on) speech.clear(); hub.emit({
 // The answer to a spoken message, read aloud: its sentences are made in memory as soon as it is logged.
 const speech = new SpeechCache(voice);
 hub.on(ev => { if (ev.logged && ev.type === 'voice_say' && ev.project === CONDUCTOR && voice.state === 'ready') speech.prepare(ev); });
-if (hub.settings.get('voice')) voice.start();
+// Left on, but the voice folder is gone (deleted to remove voice): back to off, with no amber mark.
+if (hub.settings.get('voice')) { if (voice.installed() === 'ready') voice.start(); else hub.settings.set({ voice: false }); }
 // The names a transcript's near-misses snap to: projects, their live agents, and the Conductor.
 const voiceNames = () => ['Conductor', ...[...hub.projects.values()].flatMap(p => [p.name, ...[...p.agents.values()].filter(a => a.state !== 'retired').map(a => a.name)]), hub.conductor?.holder?.()?.name].filter(Boolean);
 
@@ -189,7 +190,7 @@ function serveFile(res, file, extra = {}) {
   send(res, 200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream', extra);
 }
 // Uploads carry a file (or a voice clip) as base64 text (about 4/3 of its size); everything else stays small.
-const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_UPLOAD * 4 / 3) + 64 * 1024, '/api/voice/listen': Math.ceil(MAX_CLIP_S * LISTEN_RATE * 2 * 4 / 3) + 4096 };
+const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_UPLOAD * 4 / 3) + 64 * 1024, '/api/voice/listen': Math.ceil(CLIP_LIMIT_S * LISTEN_RATE * 2 * 4 / 3) + 4096 };
 const TOO_BIG = { '/api/attach': `Attachments must be ${MAX_UPLOAD / 1024 / 1024} MB or less (images 10 MB).`, '/api/voice/listen': `Clips can be up to ${MAX_CLIP_S} seconds.` };
 async function body(req, limit = 1e6, tooBig = 'Too large') {
   const parts = []; let n = 0;
@@ -303,14 +304,18 @@ const routes = {
 
   // ---------- voice (decision 61 A): the switch, setup on the PC, and a spoken message to the Conductor ----------
   // On or off, from the PC or a paired device. Off stops the helper; nothing of it runs.
-  'POST /api/voice/switch': ({ on }) => { hub.settings.set({ voice: !!on }); return voice.apply(!!on); },
+  // On needs voice set up; off also clears a failed setup's message.
+  'POST /api/voice/switch': ({ on }) => {
+    if (on && voice.installed() !== 'ready') throw new Error('Voice is not set up on the PC yet: tap the speaker icon on the PC to set it up.');
+    hub.settings.set({ voice: !!on });
+    if (!on) voice.clearSetupError();
+    return voice.apply(!!on);
+  },
   // Set up: a download and install, only when you press Set up on the PC (the page asks each time, with the size and
-  // a Not now). Voice turns on once it finishes.
+  // a Not now). Voice turns on only once it has worked; a failure leaves it off with the reason.
   'POST /api/voice/setup': (_, { local }) => {
     if (!local) throw new GuardError('Voice is set up on the PC the hub runs on.', 403);
-    hub.settings.set({ voice: true });
-    voice.wanted = true;
-    return voice.setup();
+    return voice.setup({ then: () => { hub.settings.set({ voice: true }); voice.start(); } });
   },
   // A clip (16 kHz 16-bit mono PCM, base64): heard by the helper in memory, near-miss names snapped, and sent at once
   // as your message to the Conductor, marked as spoken (R011). What was heard is kept when a name was snapped.

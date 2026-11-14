@@ -1096,7 +1096,14 @@ function render() {
   renderProjects(); cols.render(); renderThreads(); renderBoard(); renderModelMenu();
   updateMap();
   usageUI.draw();
+  voiceGone();
 }
+// Voice: a recording whose column has gone (All projects closed or swapped out) is dropped, not sent.
+function voiceGone() {
+  if (voiceRec.state !== 'idle' && !cols.all().some(c => c.thread === AP.HUB_THREAD && !c.micBtn.hidden)) voiceRec.cancel();
+}
+// The page hidden (another app, the phone locked): the recording is dropped and the voice stops.
+document.addEventListener('visibilitychange', () => { if (document.hidden) { voiceRec.cancel(); voicePlayer.stop(); } });
 
 // The live map, from the state and the column in focus. Also run when only the focus moves between columns, so the
 // map switches between a project's map and the All projects map at once (decision 57 C).
@@ -1249,20 +1256,35 @@ async function fetchSpeech(id, n) {
   if (!res.ok) { let msg = 'The voice could not play.'; try { msg = (await res.json()).error || msg; } catch { } throw new Error(msg); }
   return res.arrayBuffer();
 }
+// The layer swallows the whole tap: the press stops her, and the layer stays until the tap's click has landed on it,
+// so nothing underneath (Send, an Allow) is clicked through. If the tap was on the mic, that one click opens it.
+let stopPress = null;   // { x, y, timer } while a tap that stopped her is still going on
+const voiceStop = $('#voice-stop');
+const hideStop = () => { if (stopPress) { clearTimeout(stopPress.timer); stopPress = null; } voiceStop.hidden = true; };
 const voicePlayer = new VoicePlayer({
   ctx: () => voiceRec.ctx,
   fetchSentence: fetchSpeech,
-  onChange: speaking => { $('#voice-stop').hidden = !speaking; renderVoice(); },
+  onChange: speaking => { if (speaking) voiceStop.hidden = false; else if (!stopPress) voiceStop.hidden = true; renderVoice(); },
   onError: msg => toast(msg)
 });
-$('#voice-stop').addEventListener('pointerdown', e => {
-  e.preventDefault(); e.stopPropagation();
-  const layer = e.currentTarget;
-  layer.hidden = true;
-  const under = document.elementFromPoint(e.clientX, e.clientY);
+const swallow = e => { e.preventDefault(); e.stopPropagation(); };
+voiceStop.addEventListener('pointerdown', e => {
+  swallow(e);
+  stopPress = { x: e.clientX, y: e.clientY, timer: setTimeout(hideStop, 1200) };   // a tap with no click still lets go
   voicePlayer.stop();
-  if (under?.closest('.c-mic')) micTap();
 });
+voiceStop.addEventListener('click', e => {
+  swallow(e);
+  const at = stopPress || { x: e.clientX, y: e.clientY };
+  const onMic = document.elementsFromPoint(at.x, at.y).find(el => el !== voiceStop)?.closest('.c-mic');
+  hideStop();
+  if (onMic) micTap();
+});
+// The rest of the tap stays on the layer too. Touch events are only kept from spreading, not cancelled: cancelling them
+// would stop the iPhone sending the click that opens the mic.
+for (const t of ['pointerup', 'mousedown', 'mouseup', 'dblclick', 'contextmenu']) voiceStop.addEventListener(t, swallow);
+for (const t of ['touchstart', 'touchend']) voiceStop.addEventListener(t, e => e.stopPropagation(), { passive: true });
+voiceStop.addEventListener('pointercancel', () => hideStop());
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && voicePlayer.stop()) e.preventDefault(); }, true);
 // What the Conductor's column shows for voice: the switch, the mic, and the line above the box.
 function voiceHead() {
@@ -1287,7 +1309,7 @@ async function voiceSwitch() {
   const v = S.voice;
   if (!v) return;
   if (v.setup && !v.setup.error && !v.setup.done) return toast('Voice is being set up on the PC.', 'info');
-  if (v.on && v.installed === 'ready') { voiceRec.cancel(); return act(() => api('/api/voice/switch', { on: false })); }
+  if (v.on) { voiceRec.cancel(); voicePlayer.stop(); return act(() => api('/api/voice/switch', { on: false })); }
   if (v.installed !== 'ready') {
     if (!v.canSetup) return toast('Voice is set up once on the PC the hub runs on: tap the speaker icon in All projects there.');
     const ok = await hubConfirm({
@@ -1296,6 +1318,7 @@ async function voiceSwitch() {
       ok: 'Set up', no: 'Not now'
     });
     if (ok) act(() => api('/api/voice/setup', {}));
+    else if (v.setup?.error) act(() => api('/api/voice/switch', { on: false }));   // Not now after a failure: its message goes
     return;
   }
   act(() => api('/api/voice/switch', { on: true }));
@@ -1608,7 +1631,7 @@ $('#board-filter').addEventListener('keydown', e => { if (e.key === 'Escape' && 
 // act on that column's thread.
 async function columnAction(name, c) {
   const t = c.thread;
-  if (name === 'back') return $('#app').classList.add('show-side');
+  if (name === 'back') { voiceRec.cancel(); return $('#app').classList.add('show-side'); }   // a recording left behind is dropped
   if (name === 'voice') return voiceSwitch();
   if (name === 'retire-finished') {
     if (await hubConfirm({ k: 'Retire', title: `Retire ${t}?`, body: 'Use this when its job is done: it stops and moves to Retired, with no replacement.', ok: 'Retire' }))

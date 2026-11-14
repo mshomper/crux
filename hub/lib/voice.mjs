@@ -12,7 +12,7 @@
 // pass through memory only.
 import { spawn as nodeSpawn } from 'node:child_process';
 import { request } from 'node:http';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
@@ -25,12 +25,19 @@ export const voiceDir = (env = process.env) => env.CRUX_VOICE_DIR || join(dataDi
 export const DOWNLOAD_MB = 1000;
 const MODELS_BYTES = 838 * 1024 * 1024;
 export const LISTEN_RATE = 16000;
-export const MAX_CLIP_S = 60;
+export const MAX_CLIP_S = 60;          // the page stops recording at 59.5 s
+export const CLIP_LIMIT_S = MAX_CLIP_S + 2;   // what the hub and the helper take: 2 s of headroom, so no clip is lost at the cap
+export const START_TIMEOUT_MS = 60 * 1000;   // a helper not ready by then gets the amber mark
 export const CREDIT = 'Speech recognition: NVIDIA Parakeet TDT 0.6B v3 (CC BY 4.0), via onnx-asr (MIT). Voice: Phonon 31M by Gradium (Apache 2.0), voice Imogen.';
 // Crashes allowed before it stays down with an amber mark: 3 in 5 minutes.
 const CRASHES = 3, CRASH_WINDOW_MS = 5 * 60 * 1000;
-// The only variables the helper gets from the hub's environment: what Windows and Python need, nothing secret.
-const PASS_ENV = ['SystemRoot', 'SYSTEMROOT', 'windir', 'PATH', 'Path', 'TEMP', 'TMP', 'USERPROFILE', 'HOME', 'LOCALAPPDATA', 'APPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'COMSPEC', 'OS', 'LANG'];
+// The only variables the helper (and uv, at setup) get from the hub's environment: what Windows, Python and a download
+// need, nothing secret. uv also gets its own UV_ settings.
+const PASS_ENV = ['SystemRoot', 'SYSTEMROOT', 'windir', 'PATH', 'Path', 'TEMP', 'TMP', 'USERPROFILE', 'HOME', 'LOCALAPPDATA', 'APPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'COMSPEC', 'OS', 'LANG', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'SSL_CERT_FILE'];
+// Two setups never run at once, even from two processes (the hub and npm run voice-setup): a lock file in the voice
+// folder, taken over only when the process that holds it is gone.
+const LOCK = 'setup.lock';
+const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
 const lastLine = s => String(s || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
 
@@ -48,9 +55,14 @@ export class Voice {
   get python() { return join(this.dir, 'venv', process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python'); }
   get helper() { return join(this.project, 'helper.py'); }
   get models() { return join(this.dir, 'models'); }
-  // The lockfile's fingerprint, the same whichever line endings git checked it out with.
+  // What a setup installs, as one fingerprint: the lockfile and the helper's pinned model commits, the same whichever
+  // line endings git checked them out with. A new pin or package asks for setup again; other helper edits do not.
   lockId() {
-    try { return createHash('sha256').update(readFileSync(join(this.project, 'uv.lock'), 'utf8').replace(/\r\n/g, '\n')).digest('hex').slice(0, 16); } catch { return ''; }
+    try {
+      const lock = readFileSync(join(this.project, 'uv.lock'), 'utf8').replace(/\r\n/g, '\n');
+      const pins = readFileSync(this.helper, 'utf8').split(/\r?\n/).filter(l => /^(ASR|TTS)_(REPO|REV|MODEL|VOICES|FILES|QUANT|VOICE)\s*=/.test(l)).join('\n');
+      return createHash('sha256').update(lock).update('\0').update(pins).digest('hex').slice(0, 16);
+    } catch { return ''; }
   }
   // 'ready' (set up with this lockfile), 'stale' (set up with an older one: setup again), or 'none'.
   installed() {
@@ -80,11 +92,22 @@ export class Voice {
     this.wanted = true;
     if (this.child) return;
     if (this.installed() !== 'ready') { this.state = 'problem'; this.problem = 'Voice is not set up on the PC yet.'; return this.changed(); }
+    // Switched off and on again quickly: the old helper is still leaving. The new one starts once it has gone.
+    if (this.stopping) { this.state = 'starting'; this.problem = ''; return this.changed(); }
     this.key = randomBytes(24).toString('hex');
     this.port = null; this.state = 'starting'; this.problem = '';
     const child = this.child = this.spawn(this.python, ['-I', this.helper], {
       env: this.helperEnv({ HF_HUB_OFFLINE: '1', CRUX_VOICE_KEY: this.key }), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true
     });
+    // Not ready within a minute: amber, and that helper is let go (switch off and on to try again).
+    clearTimeout(this.startTimer);
+    this.startTimer = setTimeout(() => {
+      if (child !== this.child || this.state !== 'starting') return;
+      this.letGo(child);
+      this.state = 'problem'; this.problem = 'The voice helper did not start within a minute.';
+      this.changed();
+    }, START_TIMEOUT_MS);
+    this.startTimer.unref?.();
     let out = '', err = '';
     child.stdout.on('data', d => {
       out += d;
@@ -93,7 +116,7 @@ export class Voice {
         const line = out.slice(0, i); out = out.slice(i + 1);
         let m; try { m = JSON.parse(line); } catch { continue; }
         if (child !== this.child) return;
-        if (m.ready && m.port) { this.port = m.port; this.state = 'ready'; this.loadMs = m.loadMs; this.changed(); }
+        if (m.ready && m.port) { clearTimeout(this.startTimer); this.port = m.port; this.state = 'ready'; this.loadMs = m.loadMs; this.changed(); }
         else if (m.error) { this.problem = m.error; }
       }
     });
@@ -101,7 +124,13 @@ export class Voice {
     child.stdin.on('error', () => { });
     child.on('error', e => { this.problem = `The voice helper could not start: ${e.message}`; });
     child.on('exit', code => {
+      if (child === this.stopping) {   // one we let go: not a crash; start the next if voice is wanted again
+        this.stopping = null;
+        if (this.wanted && !this.child && this.state === 'starting') this.start();
+        return;
+      }
       if (child !== this.child) return;
+      clearTimeout(this.startTimer);
       this.child = null; this.port = null;
       if (!this.wanted) { this.state = 'off'; return this.changed(); }
       // Stopped while wanted: a crash. Back up after 2 s, up to 3 times in 5 minutes.
@@ -119,16 +148,20 @@ export class Voice {
 
   stop() {
     this.wanted = false;
-    clearTimeout(this.restartTimer);
+    clearTimeout(this.restartTimer); clearTimeout(this.startTimer);
     const child = this.child;
-    if (!child) { if (this.state !== 'off') { this.state = 'off'; this.problem = ''; this.changed(); } return; }
     this.state = 'off'; this.problem = '';
+    if (child) this.letGo(child);
+    this.changed();
+  }
+  // Close a helper's stdin so it leaves; if it has not in 4 s, the hub stops its own child. Its exit is no crash.
+  letGo(child) {
+    if (this.child === child) { this.child = null; this.port = null; }
+    this.stopping = child;
     try { child.stdin.end(); } catch { }
-    // It leaves when its stdin closes; if it has not in 4 s, the hub stops its own child.
     const t = setTimeout(() => { try { child.kill(); } catch { } }, 4000);
     t.unref?.();
     child.once('exit', () => clearTimeout(t));
-    this.changed();
   }
 
   // ---------- talking to the helper ----------
@@ -161,25 +194,40 @@ export class Voice {
 
   // ---------- setup: only when you press Set up, never unattended ----------
   // uv makes the environment from the lockfile (no cache left behind), then the helper downloads the models once.
-  // Progress: { step: 'packages' | 'models', pct, error }.
-  setup() {
+  // Progress: { step: 'packages' | 'models', pct, error }. then(): called only when it worked (the hub turns voice on
+  // there); a failed setup leaves voice off, with the reason on the page and Set up again as the retry. A setup cut
+  // short (the hub stopped) leaves no ready.json, so the next one runs again: uv repairs the environment and the
+  // download carries on from the files already there.
+  setup({ then = null } = {}) {
     if (this.setupRun && !this.setupRun.error && !this.setupRun.done) return this.view();
     this.setupRun = { step: 'packages', pct: 0 };
     this.changed();
     this.runSetup().then(() => {
       this.setupRun = { step: 'done', pct: 100, done: true };
       this.changed();
-      if (this.wanted && !this.child) this.start();
+      try { then?.(); } catch { }
     }, e => {
-      this.setupRun = { ...(this.setupRun || {}), error: e.message };
+      this.setupRun = { ...(this.setupRun || {}), error: `Voice setup failed: ${e.message.replace(/^Voice setup failed: /, '')}` };
       this.changed();
     });
     return this.view();
   }
+  // A failed setup's message goes once voice is set up, or when you switch voice off or start setup again.
+  clearSetupError() { if (this.setupRun?.error) { this.setupRun = null; this.changed(); } }
   async runSetup() {
     mkdirSync(this.dir, { recursive: true });
-    await this.run(this.uv, ['sync', '--frozen', '--no-cache', '--python', '3.12', '--project', this.project], { ...this.env, UV_PROJECT_ENVIRONMENT: join(this.dir, 'venv') }, 'Installing the voice packages',
-      e => e.code === 'ENOENT' ? 'Voice setup needs uv (Astral\'s Python installer) on this PC. Install it from https://docs.astral.sh/uv/ and press Set up again.' : null);
+    const lock = join(this.dir, LOCK);
+    let held = null; try { held = JSON.parse(readFileSync(lock, 'utf8')); } catch { }
+    if (held?.pid && held.pid !== process.pid && alive(held.pid)) throw new Error('another voice setup is running on this PC (npm run voice-setup or another hub). Let it finish, then try again.');
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+    try { await this.installAll(); } finally { try { rmSync(lock, { force: true }); } catch { } }
+  }
+  async installAll() {
+    const uvEnv = {};
+    for (const k of PASS_ENV) if (this.env[k] != null) uvEnv[k] = this.env[k];
+    for (const [k, v] of Object.entries(this.env)) if (k.startsWith('UV_')) uvEnv[k] = v;
+    await this.run(this.uv, ['sync', '--frozen', '--no-cache', '--python', '3.12', '--project', this.project], { ...uvEnv, UV_PROJECT_ENVIRONMENT: join(this.dir, 'venv') }, 'Installing the voice packages',
+      e => e.code === 'ENOENT' ? 'it needs uv (Astral\'s Python installer) on this PC. Install it from https://docs.astral.sh/uv/ and press Set up again.' : null);
     this.setupRun = { step: 'models', pct: 0 };
     this.changed();
     const tick = setInterval(() => {
@@ -253,7 +301,7 @@ export function decodeClip(audio) {
   const s = String(audio || '');
   if (!s || !/^[A-Za-z0-9+/]+=*$/.test(s)) throw new Error('No sound came through. Tap the mic and try again.');
   const buf = Buffer.from(s, 'base64');
-  if (buf.length > MAX_CLIP_S * LISTEN_RATE * 2) throw new Error(`Clips can be up to ${MAX_CLIP_S} seconds.`);
+  if (buf.length > CLIP_LIMIT_S * LISTEN_RATE * 2) throw new Error(`Clips can be up to ${MAX_CLIP_S} seconds.`);
   if (buf.length % 2) throw new Error('The clip came through damaged. Try again.');
   return buf;
 }
