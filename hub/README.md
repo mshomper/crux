@@ -158,7 +158,7 @@ When the hub runs more than one project, **All projects** sits above the project
 
 ## Talking to the Conductor (voice)
 
-Decision 61 A. In All projects, the speaker icon in the header is the voice switch (off by default) and the mic sits beside Send. Tap the mic, say it, tap again: your words go straight into the Conductor chat as your message, with a small mic mark (hover it to see what was heard when a project or agent name was snapped to a known one). Fix it with a follow-up if it was misheard. The mic is open only between your two taps.
+Decision 61 A. In All projects, the speaker icon in the header is the voice switch (off by default) and the mic sits beside Send. Tap the mic, say it, tap again: your words go straight into the Conductor chat as your message, with a small mic mark (hover it to see what was heard when a project or agent name was snapped to a known one, or spoken punctuation was turned into marks). Fix it with a follow-up if it was misheard. The mic is open only between your two taps. Spoken punctuation works as in voice texting: "comma", "period" or "full stop", "question mark", "exclamation point", "colon", "semicolon", "dash", "new line", "new paragraph", "open quote" and "close quote" become marks; the words used as words ("a comma separated list", "the trial period") stay.
 
 The Conductor starts its answer to a spoken message with a short spoken summary (one to three sentences), and Imogen reads it on the device you spoke from, sentence by sentence; the full reply shows as usual and the summary itself never shows as text. Tap anywhere to stop her (a tap on the mic stops her and starts listening). The mic stays closed while she speaks, which also keeps the iPhone's loudspeaker clear. Typed messages are never read aloud.
 
