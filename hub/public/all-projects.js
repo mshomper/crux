@@ -5,7 +5,7 @@
 // A project in the page's state: { name, agents, events, board: { decisions }, permissionMode }.
 // pending: the Set of permission request ids still waiting (from /api/state and the live stream).
 
-import { openQuestions as askedOpen, pageStatus } from './questions.js';
+import { openQuestions as askedOpen, pageAsk } from './questions.js';
 
 // The column's thread id. It is hub-wide: valid in every project, and pinned in one project means pinned in all.
 export const HUB_THREAD = 'all';
@@ -42,7 +42,7 @@ export const escalation = (p, id) => p.events.findLast(e => e.type === 'approval
 export const withOrchestrator = (p, pending) => waitingApprovals(p, pending).filter(e => e.routedTo && !escalation(p, e.approval));
 export const pendingApprovals = (p, pending) => waitingApprovals(p, pending).filter(e => !e.routedTo || escalation(p, e.approval));
 // Questions agents asked that still wait on you; the rule lives in questions.js, shared with the map and the server.
-export const openQuestions = p => askedOpen(p.events, { decisionStatus: pageStatus(p) });
+export const openQuestions = p => askedOpen(p.events, pageAsk(p));
 // Lessons about you that an agent wants added to the core profile, until you add or skip them (one card).
 export function pendingLessons(p) {
   const done = new Set(p.events.filter(e => e.type === 'lesson_result').map(e => e.lesson));

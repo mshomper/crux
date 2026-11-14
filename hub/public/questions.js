@@ -39,40 +39,53 @@ export function answeredByPicks(question, decisionStatus = () => undefined) {
 
 // The summaries still asking you something, one per thread. Each has `open`: [{ i, text }] for the questions
 // still waiting (i is the question's place in the summary), and `byPicks`: how many your picks answered.
-export function openQuestions(events, opts) { const r = readCards(events, opts); return withoutRepeatCards(r.cards, r.settled); }
+// opts: { decisionStatus(id), decisions: the project's decision records ({ id, title, status, options }),
+// decisionNotified(id): the server's notices say whether that decision's notice went (the page leaves it out: there the
+// decision card shows next to it) }.
+export function openQuestions(events, opts) { const r = readCards(events, opts); return withoutRepeatCards(r, opts); }
 
-// Every summary card still asking something, before repeats are set aside (cards), and every question you yourself
-// settled, in any summary (settled: { ts, thread, from, text }): answered, dismissed, or answered by your picks.
+// Every summary card still asking something, before repeats are set aside (cards), every summary that asked
+// (asked: { ev, at, pos }), and every question you yourself settled, in any summary (settled: { id, i, at, thread,
+// from, text, when }): answered, dismissed, or answered by your picks; `when` is the settling event's place in the log.
 function readCards(events, { decisionStatus = () => undefined } = {}) {
-  const dismissed = new Set(), retired = new Set();
-  const gone = new Map();   // summary id -> Set of question places answered or dismissed one by one (by you)
-  const mark = (id, i) => { if (!gone.has(id)) gone.set(id, new Set()); gone.get(id).add(Number(i)); };
-  const last = new Map();   // thread -> { ev, answered, byYou }
+  const dismissed = new Map(), retired = new Set();
+  const gone = new Map();   // summary id -> Map of question place -> where you answered or dismissed it one by one
+  const mark = (id, i, pos) => { if (!gone.has(id)) gone.set(id, new Map()); gone.get(id).set(Number(i), pos); };
+  const last = new Map();   // thread -> { ev, answered, byYou, when }
   const asked = [];         // every summary that asked something, with how it was closed
+  const picked = new Map(); // decision number -> its latest pick's place in the log
+  let pos = 0;
   for (const e of events || []) {
-    if (e.type === 'question_dismissed') { e.index == null ? dismissed.add(e.question) : mark(e.question, e.index); continue; }
+    pos++;
+    if (e.type === 'pick') picked.set(Number(e.decision), pos);
+    if (e.type === 'question_dismissed') { e.index == null ? dismissed.set(e.question, pos) : mark(e.question, e.index, pos); continue; }
     if (e.type === 'agent_retired') retired.add(e.agent);
     if (!e.thread) continue;
-    // at: its place in the log, so "earlier" never ties (two summaries can share a millisecond)
-    if (e.type === 'summary' && e.questions?.length) { const s = { ev: e, at: asked.length, answered: false, byYou: false }; last.set(e.thread, s); asked.push(s); }
+    // at: its place among the asking summaries, so "earlier" never ties (two summaries can share a millisecond);
+    // pos: its place in the whole log
+    if (e.type === 'summary' && e.questions?.length) { const s = { ev: e, at: asked.length, pos, answered: false, byYou: false }; last.set(e.thread, s); asked.push(s); }
     else if (e.type === 'message') {
-      if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index); continue; }
+      if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index, pos); continue; }
       // A Conductor brief (decision 55) logged in a project's thread is never an answer: only you (or the orchestrator
       // answering its worker) can settle a question that waits on you.
       if (e.conductor) continue;
       const q = last.get(e.thread);
-      if (q && e.from !== q.ev.from && !q.answered) { q.answered = true; q.byYou = e.from === 'you'; }
+      if (q && e.from !== q.ev.from && !q.answered) { q.answered = true; q.byYou = e.from === 'you'; q.when = pos; }
     }
   }
   const settled = [];
-  for (const { ev, at, byYou } of asked) {
-    const done = gone.get(ev.id) || new Set(), all = byYou || dismissed.has(ev.id);
-    ev.questions.forEach((text, i) => { if (all || done.has(i) || answeredByPicks(text, decisionStatus)) settled.push({ at, thread: ev.thread, from: ev.from, text }); });
+  for (const { ev, at, byYou, when } of asked) {
+    const done = gone.get(ev.id) || new Map();
+    ev.questions.forEach((text, i) => {
+      const byPick = answeredByPicks(text, decisionStatus) ? Math.max(0, ...decisionRefs(text).map(n => picked.get(n) || 0)) : null;
+      const at2 = byYou ? when : dismissed.has(ev.id) ? dismissed.get(ev.id) : done.has(i) ? done.get(i) : byPick;
+      if (at2 != null) settled.push({ id: ev.id, i, at, thread: ev.thread, from: ev.from, text, when: at2 });
+    });
   }
   const cards = [];
-  for (const { ev, at, answered } of last.values()) {
+  for (const { ev, at, pos, answered } of last.values()) {
     if (answered || dismissed.has(ev.id) || retired.has(ev.from)) continue;
-    const done = gone.get(ev.id) || new Set();
+    const done = gone.get(ev.id) || new Map();
     let byPicks = 0;
     const open = [];
     ev.questions.forEach((text, i) => {
@@ -80,27 +93,34 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
       if (answeredByPicks(text, decisionStatus)) { byPicks++; return; }
       open.push({ i, text });
     });
-    if (open.length) cards.push({ ...ev, open, byPicks, repeats: [], at });
+    if (open.length) cards.push({ ...ev, open, byPicks, repeats: [], at, pos });
   }
-  return { cards, settled };
+  return { cards, settled, asked };
 }
 
-// A question lives in one card (Matt, 2026-11-14). Where a later card in this project repeats a question an earlier
-// card from another thread still holds open (an orchestrator re-asking its worker's question), the repeat is hidden
-// here, where cards are drawn, and listed under the card's `repeats` ({ i, text, of: who holds it }). Nothing is
-// dropped from the log. Once you answer or dismiss the first one, its repeats count as answered too (answered: true);
-// if the first card closes without you (its agent retired or handed off, a newer summary, the orchestrator wrote into
-// that thread), the repeat shows again by itself.
-function withoutRepeatCards(cards, settled = []) {
+// A question lives in one card (Matt, 2026-11-14; decision 64, made strict after review). Where a later card in this
+// project repeats a question an earlier card from another thread still holds open (isRepeat: the same words, nothing
+// added), the repeat is hidden here, where cards are drawn, and listed under the card's `repeats` ({ i, text, of: who
+// holds it, holder: that card's summary id }). Nothing is dropped from the log. Only open cards hold repeats. Once you
+// answer or dismiss the holder while the repeat waits behind it, the repeat counts as answered too (answered: true);
+// a question you settled in an earlier round never hides a new one. If the holder closes without you (its agent
+// retired or handed off, a newer summary, the orchestrator wrote into that thread), the repeat shows again by itself.
+// A question that asks only what an open decision card asks (decisionCovers) is hidden behind it (decision: its
+// number), on the server only once that decision has been notified (opts.decisionNotified).
+function withoutRepeatCards({ cards, settled = [] }, { decisions = [], decisionNotified = () => true } = {}) {
   const shown = [];
+  const openDecisions = (Array.isArray(decisions) ? decisions : []).filter(d => ['open', 'found'].includes(d?.status) && decisionNotified(Number(d.id)));
   for (const c of [...cards].sort((a, b) => a.at - b.at)) {
     const earlier = shown.filter(d => d.thread !== c.thread);
     const open = [];
     for (const q of c.open) {
       const holder = earlier.find(d => d.open.some(w => isRepeat(q.text, w.text)));
-      const yours = !holder && settled.find(s => s.thread !== c.thread && s.at < c.at && isRepeat(q.text, s.text));
-      if (holder) c.repeats.push({ ...q, of: holder.from, thread: holder.thread });
+      // Settled after this question was asked (it waited behind that card then), never in an earlier round.
+      const yours = !holder && settled.find(s => s.thread !== c.thread && s.at < c.at && s.when > c.pos && isRepeat(q.text, s.text));
+      const decision = !holder && !yours && openDecisions.find(d => decisionCovers(q.text, d));
+      if (holder) c.repeats.push({ ...q, of: holder.from, thread: holder.thread, holder: holder.id });
       else if (yours) c.repeats.push({ ...q, of: yours.from, thread: yours.thread, answered: true });
+      else if (decision) c.repeats.push({ ...q, of: `D${String(decision.id).padStart(4, '0')}`, decision: Number(decision.id) });
       else open.push(q);
     }
     c.open = open;
@@ -111,26 +131,92 @@ function withoutRepeatCards(cards, settled = []) {
 
 // The repeats hidden from each summary's card, by summary id, for the small "also in w1's card" note in its thread.
 export function repeatsIn(events, opts) {
-  const { cards, settled } = readCards(events, opts), out = new Map();
-  withoutRepeatCards(cards, settled);
-  for (const c of cards) if (c.repeats.length) out.set(c.id, c.repeats);
+  const r = readCards(events, opts), out = new Map();
+  withoutRepeatCards(r, opts);
+  for (const c of r.cards) if (c.repeats.length) out.set(c.id, c.repeats);
   return out;
 }
 
 export function questionOpen(events, id, opts) { return openQuestions(events, opts).some(q => q.id === id); }
 
-// Is `asked` a repeat of `open`, already waiting? Equal once case, punctuation and spacing are set aside, or shorter
-// and found whole inside it; never a longer question (it asks more), and never a short one (under 24 characters
-// cleaned: "Ship it?" is too common to match).
+// Decision 64, for notices only: for each question still open in card `id`, the earlier summaries (other threads)
+// that asked the same question and that you have not answered or dismissed. A card closed without you (the
+// orchestrator wrote into the worker's thread) no longer holds a repeat, so the re-ask shows; but if the first card's
+// notice already went, the re-ask needs no second one. Null when the card is not open.
+export function askedBefore(events, id, opts) {
+  const r = readCards(events, opts);
+  const card = withoutRepeatCards(r, opts).find(c => c.id === id);
+  if (!card) return null;
+  const yours = new Set(r.settled.map(s => `${s.id}#${s.i}`));
+  return card.open.map(q => r.asked
+    .filter(s => s.ev.thread !== card.thread && s.at < card.at && s.ev.questions.some((t, i) => !yours.has(`${s.ev.id}#${i}`) && isRepeat(q.text, t)))
+    .map(s => s.ev.id));
+}
+
+// Is `asked` a repeat of `held`, a question already waiting? Equal once case, punctuation and spacing are set aside,
+// or shorter and found whole inside it (on word boundaries); never a longer question (it asks more), never a short one
+// (under 24 characters cleaned: "Ship it?" is too common to match). And every number, version, PR id, option letter
+// and name in it appears in the held one too, so "PR 6" never matches "PR 63", nor "option A" a held "option B".
 const plainWords = q => String(q || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-export function isRepeat(asked, open) {
-  const x = plainWords(asked), y = plainWords(open);
+export function isRepeat(asked, held) {
+  const x = plainWords(asked), y = plainWords(held);
   if (x.length < 24 || !y) return false;
-  return x === y || (x.length < y.length && y.includes(x));
+  if (!(x === y || (x.length < y.length && ` ${y} `.includes(` ${x} `)))) return false;
+  return factsIn(asked, held);
+}
+
+// The facts a question carries: numbers, versions and ids (any word with a digit), option letters (a capital on its
+// own), and names (a capitalised word inside a sentence, or a word with a hyphen or underscore).
+function facts(text) {
+  const s = String(text || '');
+  const ids = (s.match(/[\p{L}\p{N}._#-]*\d[\p{L}\p{N}._-]*/gu) || []).map(w => w.replace(/^#+/, '').replace(/[._-]+$/, '').toLowerCase());
+  const letters = (s.match(/\b[A-Z]\b/g) || []).filter(l => l !== 'I');
+  const names = [];
+  for (const sentence of s.split(/(?<=[.!?:;])\s+/)) {
+    const words = sentence.match(/[\p{L}\p{N}_-]+/gu) || [];
+    words.forEach((w, k) => { if (/[-_]/.test(w) || (k > 0 && /^\p{Lu}\p{L}/u.test(w))) names.push(w.toLowerCase()); });
+  }
+  return { ids, letters, names };
+}
+// Is every fact of `part` also in `whole`?
+function factsIn(part, whole) {
+  const p = facts(part), w = facts(whole);
+  const wordsOf = new Set((String(whole || '').toLowerCase().match(/[\p{L}\p{N}_-]+/gu) || []));
+  const ids = new Set(w.ids), letters = new Set(w.letters);
+  return p.ids.every(x => ids.has(x)) && p.letters.every(x => letters.has(x)) && p.names.every(x => wordsOf.has(x));
+}
+// Words that carry no meaning of their own here. "no" and "not" are kept: they turn a question round.
+const STOP = new Set(('a an the and or but if then so to of in on at by for with from into onto as is are was were be been being am do does did ' +
+  'have has had i me my we us our you your it its this that these those there here what which who whom whose when where why how can could may ' +
+  'might shall should will would must yes ok okay please just also too very now still yet any some all each both either than up out about again ' +
+  'once more most other such only own same let lets want like go ahead').split(' '));
+const stem = w => w.length > 4 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
+const meaningfulWords = q => new Set(plainWords(q).split(' ').filter(w => w.length > 1 && !STOP.has(w)).map(stem));
+// The share of `part`'s meaningful words that are also in `whole` (0 when part has none).
+function share(part, whole) {
+  if (!part.size) return 0;
+  let n = 0;
+  for (const w of part) if (whole.has(w)) n++;
+  return n / part.size;
+}
+
+// Decision 64: does decision card d already ask everything this question asks? Both ways: the question asks the
+// decision's choice (70% of the title's meaningful words, three or more, are in it, or it names two of the options),
+// and it adds nothing beyond the decision's title and options: every meaningful word, number, option letter and name
+// in it is there too. Naming a decision's number alone is never enough ("D59 is ready; bump the version?").
+export function decisionCovers(question, d) {
+  if (!d || plainWords(question).length < 24) return false;
+  const Q = meaningfulWords(question), T = meaningfulWords(d.title);
+  const asks = (T.size >= 3 && share(T, Q) >= 0.7)
+    || (d.options || []).filter(o => { const O = meaningfulWords(o?.name); return O.size >= 2 && share(O, Q) >= 0.7; }).length >= 2;
+  if (!asks) return false;
+  const text = [d.title, ...(d.options || []).flatMap(o => [o?.key, o?.name, o?.summary])].filter(Boolean).join('. ');
+  return share(Q, meaningfulWords(text)) === 1 && factsIn(question, text);
 }
 
 // The page's project state ({ events, board: { decisions } }) to the options above.
 export const pageStatus = p => id => (p?.board?.decisions || []).find(d => d.id === Number(id))?.status;
+export const pageAsk = p => ({ decisionStatus: pageStatus(p), decisions: p?.board?.decisions || [] });
 
 // A question that is plainly yes or no gets Yes and No buttons: it opens like "Should I ..." or ends "Go ahead?",
 // and offers no choice between things ("A or B?").
