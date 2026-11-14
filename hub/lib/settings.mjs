@@ -42,10 +42,15 @@ export class HubSettings {
     // idleHandoffMin, idleFloorPct, retireAt } (decisions 34, 44 and 45). A number left out uses the hub default.
     this.projects = saved.projects && typeof saved.projects === 'object' ? saved.projects : {};
     // Decision 64 A: a timeout under 5 minutes saved before it is raised once (see TIMEOUT_RAISED).
+    // timeoutRaisedFrom: the old value, so the hub can say so once in each orchestrator thread (hub.mjs). A failed
+    // write never stops the hub from starting: the raise then simply holds for this run.
     const savedTimeout = pick(saved).permissionTimeoutSec;
+    this.timeoutRaisedFrom = null;
     if (this.file && saved.timeoutRaised !== TIMEOUT_RAISED && savedTimeout != null && savedTimeout < SETTING_DEFAULTS.permissionTimeoutSec) {
       this.values.permissionTimeoutSec = SETTING_DEFAULTS.permissionTimeoutSec;
-      this.save({ permissionTimeoutSec: this.values.permissionTimeoutSec, timeoutRaised: TIMEOUT_RAISED });
+      this.timeoutRaisedFrom = savedTimeout;
+      try { this.save({ permissionTimeoutSec: this.values.permissionTimeoutSec, timeoutRaised: TIMEOUT_RAISED }); }
+      catch (e) { console.warn(`Hub settings: could not save the raised permission wait (${e.message}); it holds for this run.`); }
     }
   }
   get(k) { return this.values[k]; }

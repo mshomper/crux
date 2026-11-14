@@ -82,6 +82,12 @@ export class Hub {
     this.idleTimer = setInterval(() => this.idleCheck(), IDLE_CHECK_MS);
     this.idleTimer.unref?.();
     this.usage.restore();
+    // Decision 64 A raised a shorter saved permission wait to 5 minutes, once: said once in each orchestrator thread.
+    const from = this.settings?.timeoutRaisedFrom;
+    if (from != null) {
+      const label = s => (s % 60 ? `${s} seconds` : `${s / 60} minute${s === 60 ? '' : 's'}`);
+      for (const p of this.projects.values()) this.notice(p, 'orchestrator', `Permission wait raised from ${label(from)} to ${label(this.settings.get('permissionTimeoutSec'))} (decision 64): a request the orchestrator has not answered comes to you after that. Change it on the hub settings card.`);
+    }
     // After listeners are attached: wake the agents a restart interrupted (M014), every project, a few seconds apart.
     this.resumed = [];
     // A test hub has no real agents, so it writes no resume or hint notices into the logs.
@@ -510,12 +516,13 @@ export class Hub {
   // Settled without a card or the orchestrator (R003): reading, searching and read-only commands, for any path,
   // except secrets and your private notes; the orchestrator writing decision records and running the Crux build.
   // Refused without a card: the orchestrator editing anything else.
-  autoAnswer(p, agent, toolName, input) {
+  // cwd: the folder the tool call runs in (decision 64 A), so a glob is matched against what it would really read.
+  autoAnswer(p, agent, toolName, input, cwd = p.dir) {
     const norm = s => String(s || '').replace(/\\/g, '/').toLowerCase();
     const file = norm(input.file_path || input.path || input.notebook_path);
     const privateNotes = norm(join(this.memory.profileDir, 'private.md'));
     const readsPrivate = (file && file === privateNotes) || /private\.md/i.test(String(input.command || input.pattern || ''));
-    if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input)) return { behavior: 'allow', updatedInput: input };
+    if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input, cwd)) return { behavior: 'allow', updatedInput: input };
     // Decision 35: the orchestrator writes records in the decisions worktree, never in the main folder's .decisions.
     const records = p.desk.usable() ? p.desk.decisionsDir : join(p.dir, '.decisions');
     const decisions = norm(records) + '/';
@@ -530,7 +537,7 @@ export class Hub {
       return { behavior: 'allow', updatedInput: input };
     }
     // Commands that only read (listing, git status and diff, versions) run without a card.
-    if (/^(Bash|PowerShell)$/.test(toolName) && CommandPolicy.readOnly(toolName, cmd) && !readsPrivate && !touchesSecrets(toolName, input)) return { behavior: 'allow', updatedInput: input };
+    if (/^(Bash|PowerShell)$/.test(toolName) && CommandPolicy.readOnly(toolName, cmd) && !readsPrivate && !touchesSecrets(toolName, input, cwd)) return { behavior: 'allow', updatedInput: input };
     return null;
   }
 
@@ -538,7 +545,7 @@ export class Hub {
   // in the permission rules (or cannot read it), routing is off, there is no rules entry, or no orchestrator is
   // running. Then it is a card for you, as before. If the orchestrator escalates or does not answer in time, too.
   requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID } = {}) {
-    const auto = this.autoAnswer(p, agent, toolName, input);
+    const auto = this.autoAnswer(p, agent, toolName, input, agent.cwdFor?.(toolUseID) || p.dir);
     if (auto) return Promise.resolve(auto);
     const route = this.routeFor(p, agent, toolName, input, toolUseID);
     if (route.logged) {
@@ -581,10 +588,14 @@ export class Hub {
     agent.tempDirs ||= new Set();
     const level = this.permissionMode(p);
     const cwd = agent.cwdFor?.(toolUseID) || null;
-    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, level });
+    agent.downloads ||= new Set();
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: agent.downloads, level });
     const { route, tempMade } = c;
     const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
+    // Files it downloads: running one in a later request is a stop too (review of decision 64 A). The newest 200.
+    for (const d of c.downloaded || []) { agent.downloads.delete(d); agent.downloads.add(d); }
+    while (agent.downloads.size > 200) agent.downloads.delete(agent.downloads.values().next().value);
     if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
     if (route === 'allow' && this.autoLike(p)) return { allow: true };
     // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,

