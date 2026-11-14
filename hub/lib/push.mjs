@@ -181,9 +181,12 @@ export class Push {
   // come back (then routed as any card: the PC while in use, else the phone; none while a page shows All projects).
   // It opens the digest in All projects. info: { id (the digest event), count, projects }.
   digest(info, ctx = this.ctx) {
-    const n = info.count, m = info.projects;
+    const n = info.count, m = info.projects, r = info.replies || 0;
+    // Decision 62: replies from orchestrators that came while you were away join the digest and its one notice.
+    const cards = `${n} card${n === 1 ? '' : 's'}`, reps = `${r} repl${r === 1 ? 'y' : 'ies'} from orchestrators`;
+    const title = !r ? `${cards} need${n === 1 ? 's' : ''} you` : !n ? reps : `${cards} and ${reps}`;
     const card = { kind: 'digest', card: `digest:${info.id}`, project: '~conductor', thread: HUB_THREAD,
-      title: `${n} card${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} you`, body: `The Conductor's digest · ${m} project${m === 1 ? '' : 's'}` };
+      title, body: `The Conductor's digest · ${m} project${m === 1 ? '' : 's'}` };
     this.route(card, ctx);
   }
 

@@ -39,7 +39,9 @@ export function applyEvent(c, ev) {
 
 // What its thread shows, oldest first: messages, round summaries, notices, pictures, reminders and the update batches
 // that woke it. Usage and start-up events stay out.
-const SHOWS = new Set(['message', 'summary', 'notice', 'visual', 'lesson_proposed', 'wake', 'reminder', 'cards']);
+const SHOWS = new Set(['message', 'summary', 'notice', 'visual', 'lesson_proposed', 'wake', 'reminder', 'cards', 'reply']);
+// An orchestrator's reply to a Conductor request (decision 62), as its one-line head in the chat.
+export const replyHead = ev => `${ev.project} · ${ev.from} replied to ${ev.request}`;
 export const threadItems = c => (c?.events || []).filter(e => e.thread === CONDUCTOR_THREAD && SHOWS.has(e.type));
 
 // ---------- cards in its chat (decision 60 A) ----------
