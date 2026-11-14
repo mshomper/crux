@@ -111,6 +111,11 @@ export function cruxTools(hub, project, agent) {
         { reason: z.string().min(1).max(200).describe('One plain line, e.g. "merged #53 (decision 46)".') },
         async ({ reason }) => out(await restartHub(hub, project, agent, reason))),
 
+      // Decision 62: the return path for a Conductor request ([From the Conductor ... request req-007, reply expected]).
+      tool('reply_to_conductor', t('Answer a request the Conductor sent you, by its id (req-007). Plain and short: it goes to the Conductor and {{who}} only, never to another project. Details stay in your own thread.'),
+        { request_id: z.string().describe('The id from the brief, e.g. req-007.'), text: z.string().min(1).max(2000).describe('Your answer, plain and short.') },
+        async ({ request_id, text: msg }) => out(hub.conductor ? hub.conductor.replyFrom(project, agent, request_id, msg) : 'This hub has no Conductor.')),
+
       tool('message_agent','Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },
         async ({ to, text: msg }) => { hub.orchestratorToWorker(project, agent, to, msg); return out(`Sent to ${to}.`); }),
@@ -187,6 +192,6 @@ export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
   if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'handoff_worker', 'answer_permission', 'mark_entry_done');
-  if (agent.role === 'orchestrator') names.push('restart_hub');   // decision 47
+  if (agent.role === 'orchestrator') names.push('restart_hub', 'reply_to_conductor');   // decisions 47 and 62
   return names.map(n => `mcp__crux__${n}`);
 }

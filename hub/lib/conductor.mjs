@@ -36,7 +36,11 @@ const REMINDER_MAX_DAYS = 400;
 // Its board tools, by name. These and nothing else: the permission callback refuses every other tool.
 export const CONDUCTOR_TOOLS = ['hub_overview', 'needs_you', 'board_index', 'board_read', 'latest_handoff', 'list_agents',
   'message_agent', 'plan_usage', 'profile_read', 'post_summary', 'propose_lesson', 'post_visual',
-  'set_reminder', 'list_reminders', 'clear_reminder', 'write_handoff', 'stay_quiet', 'note_cards'];
+  'set_reminder', 'list_reminders', 'clear_reminder', 'write_handoff', 'stay_quiet', 'note_cards', 'round_summaries'];
+// Decision 62: what an orchestrator reads for a Conductor brief. It carries a request id and says a reply is expected.
+export const briefText = (from, msg, request) => request
+  ? `[From the Conductor, ${from}, on {{who}}'s side · request ${request}, reply expected]\n${msg}\n\n(Answer with reply_to_conductor, request_id "${request}": plain and short. Details stay in your own thread.)`
+  : `[From the Conductor, ${from}, on {{who}}'s side]\n${msg}`;
 // Tools that end its turn as soon as they succeed, with no text after them (Claude Code's CLAUDE_CODE_TERMINAL_MCP_TOOLS).
 // Without this, a turn that ends with no text gets Claude Code's own follow-up, "Your previous response had no visible
 // output. Please continue and produce a user-visible response", and the Conductor learned to write a needless line
@@ -72,6 +76,7 @@ export class ConductorHome {
 }
 
 const when = ts => new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+const isReply = x => !!x?.cause?.reply;   // a queued line for an orchestrator's reply (decision 62), not a card
 const text = s => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 
 export class Conductor {
@@ -88,6 +93,7 @@ export class Conductor {
     this.timer = null;
     this.digestTimer = null;   // set while you are away and cards are held for one digest (decision 60 A)
     this.owed = [];            // cards events posted while it worked: it adds its notes at the end of its turn
+    this.owedReplies = [];     // replies a digest took along while it worked (decision 62): told at the end of its turn
     this.activity = '';
     this.off = hub.on(ev => this.heard(ev));
     this.reminderTimer = setInterval(() => this.dueReminders(), REMINDER_CHECK_MS);
@@ -124,31 +130,135 @@ export class Conductor {
     this.prune();   // settled cards do not ride along with your message either
     const held = this.pending.filter(x => !x.reminder);
     let cards = null;
+    const replies = held.filter(isReply);
     if (held.length) {
       const digest = this.digestTimer || held.some(x => x.away) ? 'return' : null;
       this.unhold();
       this.pending = this.pending.filter(x => x.reminder);
-      cards = this.postCards(held, { digest });
+      cards = this.postCards(held.filter(x => !isReply(x)), { digest, replies: replies.map(x => x.cause.reply) });
     }
     this.home.log.append('message', { thread: CONDUCTOR_THREAD, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
     const a = this.ensure();
-    if (cards) a.noteForNextTurn(this.notesRequest(cards, 'message'));
+    const note = this.wakeText({ cards, replies, then: 'message' });
+    if (note) a.noteForNextTurn(note);
     a.send(text, attachments);
   }
 
   // message_agent: to a project's orchestrator only (never a worker). Logged in that project's orchestrator thread
   // (marked conductor, so it never counts as your answer to a question), and one line in the Conductor's own thread.
-  // It reaches the holder of the role, resting or not; it never starts one (decision 55 A: no starting orchestrators).
+  // It reaches the holder of the role, resting or not. Decision 63 A: with no holder, the hub starts one the normal way
+  // (as for your message: it reads the project's latest handoff and board index first, under that project's own
+  // rules), and the request is its first message. Only a live request does this; a restart never starts one for a brief.
+  // Decision 62: each brief is a request with an id, marked "reply expected"; the reply comes back to the Conductor.
+  // Decision 55's boundary, enforced: a brief that repeats a sentence of another project's reply is refused.
   toOrchestrator(projectName, from, msg) {
     const p = this.project(projectName);
     msg = String(msg || '').trim();
     if (!msg) return 'Write the message first.';
-    const orch = p.orchestrator();
-    if (!orch) return `${p.name} has no orchestrator running, and the Conductor cannot start one. Nothing was sent. Tell {{who}}: an orchestrator starts when {{who}} writes in ${p.name}'s orchestrator thread.`;
-    p.log.append('message', { thread: 'orchestrator', from, text: msg, conductor: true });
-    this.hub.notice(this.home, CONDUCTOR_THREAD, `${from} sent a brief to ${p.name}'s orchestrator.`);
-    orch.send(`[From the Conductor, ${from}, on {{who}}'s side]\n${msg}`);
-    return `Sent to ${p.name}'s orchestrator.`;
+    const leak = this.carriesReply(p.name, msg);
+    if (leak) return `Not sent: this brief repeats words from ${leak}'s reply. A brief carries only what ${p.name} needs; never pass one project's reply, or anything in it, to another project.`;
+    let orch = p.orchestrator(), started = false;
+    if (!orch) { orch = this.hub.ensureOrchestrator(p); started = true; }
+    const request = `req-${String(this.home.log.ofType('request').length + 1).padStart(3, '0')}`;
+    // round: what started this turn of the Conductor (your message or a wake), so replies to briefs sent together
+    // fold into one answer.
+    const round = this.home.log.events.findLast(e => (e.type === 'message' && e.from === 'you' && e.thread === CONDUCTOR_THREAD) || e.type === 'wake')?.id || null;
+    this.home.log.append('request', { request, project: p.name, from, text: msg, round });
+    if (started) this.hub.notice(p, 'orchestrator', `Started by a Conductor request (${request} from ${from}).`);
+    p.log.append('message', { thread: 'orchestrator', from, text: msg, conductor: true, request, replyExpected: true });
+    this.hub.notice(this.home, CONDUCTOR_THREAD, started
+      ? `${from} started ${p.name}'s orchestrator (${orch.name}) with request ${request}.`
+      : `${from} sent a brief to ${p.name}'s orchestrator (request ${request}).`);
+    orch.send(briefText(from, msg, request));
+    return `${started ? `${p.name} had no orchestrator running, so ${orch.name} was started; it reads the project's latest handoff first. ` : ''}Sent to ${p.name}'s orchestrator as request ${request}. Its reply will come back to you here.`;
+  }
+
+  // The project whose reply this brief repeats (a sentence of 30+ characters, word for word, spacing and case aside),
+  // or null. Only other projects' replies count; quoting a project's own reply back to it is fine.
+  carriesReply(projectName, msg) {
+    const flat = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const body = flat(msg);
+    for (const r of this.home.log.ofType('reply')) {
+      if (r.project === projectName) continue;
+      const parts = String(r.text || '').split(/(?<=[.!?;:])\s+|\n+/).map(flat).filter(s => s.length >= 30);
+      if (parts.some(s => body.includes(s))) return r.project;
+    }
+    return null;
+  }
+
+  // ---------- decision 62: replies from orchestrators ----------
+  // Requests sent to one project that have no reply yet.
+  openRequests(projectName) {
+    const replied = new Set(this.home.log.ofType('reply').map(r => r.request));
+    return this.home.log.ofType('request').filter(r => r.project === projectName && !replied.has(r.request));
+  }
+
+  // reply_to_conductor: an orchestrator answers a request sent to its own project. Logged in its orchestrator thread
+  // and in the Conductor's thread only (never in another project), then it wakes the Conductor with the text like a
+  // card does (batched, within the hourly cap; held for the digest while you are away).
+  replyFrom(p, agent, requestId, text) {
+    requestId = String(requestId || '').trim();
+    text = String(text || '').trim().slice(0, 2000);
+    const req = this.home.log.ofType('request').find(r => r.request === requestId);
+    if (!req) return `No Conductor request ${requestId}. The id is in the brief, like req-007.`;
+    if (req.project !== p.name) return `Request ${requestId} was not sent to ${p.name}; only its own project can answer it.`;
+    if (!text) return 'Write the reply first.';
+    p.log.append('conductor_reply', { thread: 'orchestrator', from: agent.name, request: requestId, text });
+    const ev = this.home.log.append('reply', { thread: CONDUCTOR_THREAD, request: requestId, project: p.name, from: agent.name, text, round: req.round || null });
+    if (this.wakesOn()) this.queue(`- ${p.name}: ${agent.name} replied to request ${requestId}`, { project: p.name, reply: ev.id });
+    return `Reply sent to the Conductor (request ${requestId}).`;
+  }
+
+  // At the end of an orchestrator's turn (Hub.onIdle): a request it has read and not answered gets ONE reminder, as a
+  // short follow-up turn. "Read": it wrote something after the brief arrived (lastSaidAt).
+  remindReplies(p, agent) {
+    if (agent.role !== 'orchestrator' || !agent.lastSaidAt) return false;
+    const reminded = new Set(p.log.ofType('conductor_reminded').map(e => e.request));
+    const open = new Set(this.openRequests(p.name).map(r => r.request));
+    const due = p.log.events.filter(e => e.type === 'message' && e.thread === 'orchestrator' && e.conductor && e.request
+      && open.has(e.request) && !reminded.has(e.request) && Date.parse(e.ts) < agent.lastSaidAt);
+    if (!due.length) return false;
+    const ids = due.map(e => e.request);
+    for (const id of ids) p.log.append('conductor_reminded', { request: id, agent: agent.name });
+    agent.send(`[From the hub] The Conductor's request${ids.length > 1 ? 's' : ''} ${ids.join(', ')} still ${ids.length > 1 ? 'wait' : 'waits'} for your reply. Answer with reply_to_conductor (request_id and text): plain and short, details stay in your own thread. If you cannot answer yet, reply saying when you will.`);
+    return true;
+  }
+
+  // round_summaries: a project's latest round summaries, newest first (read only).
+  roundSummaries(p, count = 3) {
+    const n = Math.max(1, Math.min(10, Math.floor(Number(count)) || 3));
+    return p.log.events.filter(e => e.type === 'summary').slice(-n).reverse().map(e => ({
+      when: when(e.ts), from: e.from, thread: e.thread, done: e.done || [], changed: e.changed || [], questions: e.questions || [],
+      decisions: (e.decisions_needed || []).map(id => { const d = p.board.decision(id); return d ? { id: `D${String(d.id).padStart(4, '0')}`, title: d.title, status: d.status, chosen: d.chosen || null } : { id: Number(id) }; }),
+      blocked_on: e.blocked_on || [], next_step: e.next_step || ''
+    }));
+  }
+
+  // What the Conductor is told about replies: grouped by the round of requests they answer, with who has not replied.
+  // then: 'quiet' (a turn for them alone), 'message' (your message follows), 'reminder' (a reminder follows).
+  repliesText(items, then = 'quiet') {
+    const evs = items.map(x => this.home.log.events.find(e => e.id === x.cause.reply)).filter(Boolean);
+    if (!evs.length) return '';
+    const requests = this.home.log.ofType('request'), replied = new Set(this.home.log.ofType('reply').map(r => r.request));
+    const rounds = new Map();
+    for (const r of evs) { const k = r.round || r.request; if (!rounds.has(k)) rounds.set(k, []); rounds.get(k).push(r); }
+    const blocks = [...rounds].map(([k, rs]) => {
+      const sent = requests.filter(q => (q.round || q.request) === k);
+      const waiting = sent.filter(q => !replied.has(q.request));
+      return [`Your requests of ${when(sent[0]?.ts || rs[0].ts)} (to ${[...new Set(sent.map(q => q.project))].join(', ') || rs[0].project}):`,
+        ...rs.map(r => `- ${r.project} (${r.request}, ${r.from}): ${r.text}`),
+        ...(waiting.length ? [`  Still waiting: ${waiting.map(q => `${q.project} (${q.request})`).join(', ')}`] : [])].join('\n');
+    });
+    const after = { quiet: 'Your answer to {{who}} is the whole turn.', message: '{{Who}}\'s message follows: answer it too.', reminder: 'Then deal with the reminder as usual.' }[then];
+    return `[Hub: replies from orchestrators]
+Give {{who}} these in your chat: one short answer per round of requests (fold several replies into one), plain words, saying
+which project said what. Never pass a reply, or anything in it, to another project. ${after}
+${blocks.join('\n')}`;
+  }
+
+  // One message for a wake: notes on cards, then replies.
+  wakeText({ cards = null, replies = [], then = 'quiet' } = {}) {
+    return [cards ? this.notesRequest(cards, replies.length ? 'replies' : then) : '', replies.length ? this.repliesText(replies, then) : ''].filter(Boolean).join('\n\n');
   }
 
   project(name) {
@@ -243,7 +353,7 @@ export class Conductor {
   // Does the card behind this line still wait for you? A wake comes up to the batching window after the card, and you
   // often settle it first (Matt, 0.19.4: replies like "nothing is waiting, it already left your list").
   stillWaiting(item) {
-    if (item.reminder || !item.cause) return true;
+    if (item.reminder || !item.cause || isReply(item)) return true;   // a reply is never settled: it is news
     return this.cardsOf(item).length > 0;
   }
 
@@ -292,16 +402,22 @@ export class Conductor {
   // permission cards, questions, decisions. The hub draws them answerable in place; the Conductor only adds its notes
   // (note_cards). digest: 'return' (you came back) or 'away' (30 minutes away: one phone notice for the lot).
   // Null when no card still waits (a marker then keeps a restart from bringing the lines back).
-  postCards(items, { digest = null } = {}) {
+  // replies: ids of orchestrators' reply events taken with these lines (decision 62). A digest carries them, so replies
+  // that came while you were away join the digest and its one notice; a digest of replies alone still goes up.
+  postCards(items, { digest = null, replies = [] } = {}) {
     // A card already put in its chat earlier (a decision named again by a later summary) is not put there twice.
     const seen = new Set(this.home.log.ofType('cards').flatMap(e => e.items.map(c => `${c.project}|${c.card}`))), list = [];
     for (const x of items) for (const c of this.cardsOf(x)) { const k = `${c.project}|${c.card}`; if (!seen.has(k)) { seen.add(k); list.push(c); } }
-    if (!list.length) { this.home.log.append('wake_taken', { skipped: items.length, why: 'settled before the cards went up' }); return null; }
+    if (!list.length && !(digest && replies.length)) {
+      if (items.length || replies.length) this.home.log.append('wake_taken', { skipped: items.length, replies: replies.length, why: items.length ? 'settled before the cards went up' : 'replies handed over' });
+      return null;
+    }
     const order = [...this.hub.projects.keys()], rank = c => ['approval', 'question', 'decision'].indexOf(c.card.slice(0, c.card.indexOf(':')));
     list.sort((a, b) => order.indexOf(a.project) - order.indexOf(b.project) || rank(a) - rank(b));
-    const ev = this.home.log.append('cards', { thread: CONDUCTOR_THREAD, items: list, ...(digest ? { digest } : {}) });
+    const ev = this.home.log.append('cards', { thread: CONDUCTOR_THREAD, items: list, ...(digest ? { digest } : {}), ...(digest && replies.length ? { replies } : {}) });
     // One notice per digest, away or back (push.mjs routes it: none while a page shows All projects).
-    if (digest) this.hub.digestNotice?.({ id: ev.id, count: list.length, projects: new Set(list.map(c => c.project)).size, digest });
+    const from = new Set([...list.map(c => c.project), ...replies.map(id => this.home.log.events.find(e => e.id === id)?.project).filter(Boolean)]);
+    if (digest) this.hub.digestNotice?.({ id: ev.id, count: list.length, replies: replies.length, projects: from.size, digest });
     return ev;
   }
 
@@ -334,7 +450,7 @@ export class Conductor {
     const lines = evs.flatMap(ev => ev.items.filter(it => this.cardWaiting(it)).map(it => `- ${it.project} · ${it.card} · ${this.cardDetail(it)}`));
     if (!lines.length) return '';
     const digest = evs.some(e => e.digest);
-    const after = { quiet: 'Then call stay_quiet and write nothing else.', message: '{{Who}}\'s message follows: after the notes, answer it as usual.', reminder: 'After the notes, deal with the reminder as usual.' }[then];
+    const after = { quiet: 'Then call stay_quiet and write nothing else.', message: '{{Who}}\'s message follows: after the notes, answer it as usual.', reminder: 'After the notes, deal with the reminder as usual.', replies: 'After the notes, give {{who}} the replies below.' }[then];
     return `[Hub: ${digest ? 'digest after time away' : 'new cards'} for {{who}}]
 These cards now show in your thread, answerable in place. {{Who}} answers them; you never do. Add your notes with one
 note_cards call: per card a one-line plain summary, your recommendation, and fill (what to pre-fill: a decision's
@@ -343,12 +459,20 @@ Use only each card's own project's details. ${after}
 ${lines.join('\n')}`;
   }
 
-  // Ask for notes in a turn of their own (an automatic wake, so within the hourly cap; past it the cards show without).
-  askNotes(evs, now = Date.now()) {
-    const msg = this.notesRequest(evs, 'quiet');
-    if (!msg || this.autoWakes(now).length >= this.maxAutoWakes) return false;
+  // A turn of its own for notes on cards and for replies (an automatic wake, so within the hourly cap). Past the cap the
+  // cards show without notes, and the replies go back in the queue (they ride along with your next message, or wake
+  // it once the oldest wake leaves the hour): a reply is never dropped.
+  askNotes(evs, now = Date.now(), replies = []) {
+    const msg = this.wakeText({ cards: [].concat(evs || []).filter(Boolean).length ? [].concat(evs).filter(Boolean) : null, replies, then: 'quiet' });
+    if (!msg) return false;
+    const recent = this.autoWakes(now);
+    if (recent.length >= this.maxAutoWakes) {
+      for (const r of replies) { this.pending.push(r); this.home.log.append('wake_pending', { line: r.line, cause: r.cause }); }
+      if (replies.length) this.arm(Date.parse(recent[0].ts) + HOUR_MS - now + 1000);
+      return false;
+    }
     const a = this.ensure();
-    this.home.log.append('wake', { agent: a.name, auto: true, noLines: true, cards: [].concat(evs).map(e => e.id) });
+    this.home.log.append('wake', { agent: a.name, auto: true, noLines: true, cards: [].concat(evs || []).filter(Boolean).map(e => e.id), replies: replies.map(r => r.cause.reply) });
     a.send(msg);
     return true;
   }
@@ -401,35 +525,40 @@ ${lines.join('\n')}`;
     this.prune();
     if (!this.pending.length) return false;
     const showCards = !!digest || this.present();
-    const cardLines = this.pending.filter(x => !x.reminder);
-    if (cardLines.length && !showCards) { for (const x of cardLines) x.away = true; this.hold(now); }
+    const held = this.pending.filter(x => !x.reminder);   // card lines and replies (decision 62)
+    if (held.length && !showCards) { for (const x of held) x.away = true; this.hold(now); }
+    const cur = this.holder();
+    const busy = !!cur && (['working', 'starting'].includes(cur.state) || !!cur.retiring || !!cur.capture);
+    // Replies wait for a free Conductor (they need its turn); a digest takes them along whatever, as the digest's part.
+    const replies = showCards && (!busy || digest) ? held.filter(isReply) : [];
     let cards = null;
-    if (cardLines.length && showCards) {
+    if (held.length && showCards) {
       this.unhold();
-      this.pending = this.pending.filter(x => x.reminder);
+      const take = new Set([...held.filter(x => !isReply(x)), ...replies]);
+      this.pending = this.pending.filter(x => !take.has(x));
       // Lines that came or were held while you were away go up as a return digest: its one notice stands in for the
       // card notices push held for them.
-      cards = this.postCards(cardLines, { digest: digest || (cardLines.some(x => x.away) ? 'return' : null) });
+      cards = this.postCards(held.filter(x => !isReply(x)), { digest: digest || (held.some(x => x.away) ? 'return' : null), replies: replies.map(x => x.cause.reply) });
     }
-    const cur = this.holder();
-    if (cur && (['working', 'starting'].includes(cur.state) || cur.retiring || cur.capture)) {
+    if (busy) {
       if (cards) this.owed.push(cards);
+      if (replies.length) this.owedReplies.push(...replies);
       return !!cards;
     }
     if (this.pending.some(x => x.reminder)) {
       const a = this.ensure();
       const msg = this.takeReminders({ agent: a.name });
-      a.send([cards ? this.notesRequest(cards, 'reminder') : '', msg].filter(Boolean).join('\n\n'));
+      a.send([this.wakeText({ cards, replies, then: 'reminder' }), msg].filter(Boolean).join('\n\n'));
       return true;
     }
-    if (cards) this.askNotes(cards, now);
-    return !!cards;
+    if (cards || replies.length) return this.askNotes(cards, now, replies) || !!cards;
+    return false;
   }
 
-  // The hub calls this when the Conductor goes idle (Hub.onIdle): notes owed on cards posted while it worked, a due
-  // reminder at once, card lines after the window.
+  // The hub calls this when the Conductor goes idle (Hub.onIdle): notes owed on cards posted while it worked (and
+  // replies a digest took along meanwhile), a due reminder at once, other lines after the window.
   afterTurn() {
-    if (this.owed.length) this.askNotes(this.owed.splice(0));
+    if (this.owed.length || this.owedReplies.length) this.askNotes(this.owed.splice(0), Date.now(), this.owedReplies.splice(0));
     if (!this.pending.length) return;
     if (this.pending.some(x => x.reminder)) { clearTimeout(this.timer); this.timer = null; this.flush(); }
     else if (!this.digestTimer) this.arm(this.wakeMs);
@@ -575,7 +704,10 @@ ${lines.join('\n')}`;
         safe(({ project: name }) => this.project(name).board.latestHandoff() || `${name} has no orchestrator handoff yet.`)),
       tool('list_agents', 'One project\'s active agents: the orchestrator and its workers, with state, goal, context % and model.', { project },
         safe(({ project: name }) => this.agents(this.project(name)))),
-      tool('message_agent', 'Send a brief to one project\'s ORCHESTRATOR (never a worker): a request from {{who}}, a usage warning, or a conflict to draft a decision card for. Carry only what that project needs, never details from another project.',
+      tool('round_summaries', 'A project\'s latest round summaries, newest first: who, when, what was done and changed, questions, decisions (with status), blockers and next step. Read only.',
+        { project, count: z.number().int().min(1).max(10).optional().default(3).describe('How many, 1 to 10 (3 if left out).') },
+        safe(({ project: name, count }) => this.roundSummaries(this.project(name), count))),
+      tool('message_agent', 'Send a brief to one project\'s ORCHESTRATOR (never a worker): a request from {{who}}, a usage warning, or a conflict to draft a decision card for. Each brief is a request with an id; the orchestrator\'s reply comes back to you. Carry only what that project needs, never details from another project, and never another project\'s reply.',
         { project, text: z.string().min(1) },
         safe(({ project: name, text: msg }) => this.toOrchestrator(name, agent.name, msg))),
       tool('plan_usage', 'The plan usage meters (5-hour, 7-day, per model), as the hub\'s strip shows them; null when not available.', {},

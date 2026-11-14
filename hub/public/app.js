@@ -662,8 +662,12 @@ function messageEl(p, ev, t) {
   // Images as thumbnails; PDFs and text files as file chips that download on click.
   const imgs = (ev.attachments || []).filter(a => IMG_TYPES[a.type]), docs = (ev.attachments || []).filter(a => !IMG_TYPES[a.type]);
   const shots = (imgs.length ? shotsEl(p, imgs) : '') + (docs.length ? `<div class="fchips sent">${docs.map(a => fileChip({ name: a.name, size: a.size, type: a.type, href: attSrc(p, a.id) })).join('')}</div>` : '');
+  // Decision 62: a Conductor brief is a request; its mark says whether the orchestrator has replied yet.
+  const req = ev.conductor && ev.request ? (p.events.some(e => e.type === 'conductor_reply' && e.request === ev.request)
+    ? `<span class="chip req done" title="The orchestrator answered this request; the reply went to the Conductor">Replied · ${esc(ev.request)}</span>`
+    : `<span class="chip req" title="The Conductor expects a reply (reply_to_conductor)">Reply expected · ${esc(ev.request)}</span>`) : '';
   return `<div class="msg ${you ? 'you' : ''} ${relay ? 'relay' : ''}">
-    <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}</span>
+    <span class="who">${you ? 'You' : esc(ev.from)}${relay ? ` → ${esc(ev.thread)}` : ''} · ${timeOf(ev.ts)}${runs ? ` · started as ${runs}` : ''}${req ? ` ${req}` : ''}</span>
     ${shots}${ev.text || !shots ? `<div class="bubble">${fold(ev.id, body, isTall(ev.text, relay ? 240 : 900))}</div>` : ''}</div>`;
 }
 
@@ -790,6 +794,8 @@ function conductorItem(ev) {
       case 'reminder': return `<div class="notice">${icon('clock')}Reminder set for ${esc(new Date(ev.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}: ${esc(ev.text)}</div>`;
       case 'wake': return `<div class="notice cd-wake" title="${esc(ev.text)}">${esc(CP.wakeLine(ev))} · ${timeOf(ev.ts)}</div>`;
       case 'cards': return cardsBlock(ev);
+      // Decision 62: the orchestrator's own words, folded to a line; the Conductor's answer to you follows.
+      case 'reply': return `<div class="cd-reply">${icon('orch')}<span class="cd-reply-k">${esc(CP.replyHead(ev))} · ${timeOf(ev.ts)}</span>${fold('reply:' + ev.id, `<p class="cd-reply-t">${esc(ev.text)}</p>`, isTall(ev.text, 160))}</div>`;
       default: return '';
   }
 }
@@ -842,6 +848,11 @@ function cardsBlock(ev) {
   const recs = CP.recommendedActions(ev, notes, it => rows.find(r => r.it === it)?.c || null);
   const label = r => `${esc(r.it.project)} · ${CP.KIND_LABEL[CP.cardKind(r.it.card)] || 'Card'}`;
   // Settled ones fold to one line each; a block with nothing left waiting folds to a single line.
+  // Decision 62: replies that came while you were away are part of the digest; the Conductor's answer to them follows.
+  const nr = (ev.replies || []).length;
+  const repliesLine = nr ? `${nr} repl${nr === 1 ? 'y' : 'ies'} from orchestrators came in too; the Conductor's answer follows.` : '';
+  const dhead = inner => `<div class="cd-digest" data-card="digest:${esc(ev.id)}"><div class="cd-dk">${icon('projects')}<b>Digest</b><span class="time">${timeOf(ev.ts)}</span></div>${inner}</div>`;
+  if (!ev.items.length && nr) return `<div class="cd-cards is-digest">${dhead(`<p class="cd-intro">${esc(repliesLine)}</p>`)}</div>`;
   if (!live.length) return `<div class="notice cd-cards-done">${icon('check')}${ev.digest ? 'Digest' : 'Cards'} from ${timeOf(ev.ts)}: all ${ev.items.length} answered</div>`;
   const item = r => {
     if (!r.c) return `<div class="cd-item done"><span class="cd-k">${label(r)}</span><span class="cd-done">${icon('check')}Answered</span></div>`;
@@ -857,9 +868,8 @@ function cardsBlock(ev) {
   const nProj = new Set(live.map(r => r.it.project)).size;
   const take = recs.length ? `<button class="btn primary" data-take-recs="${esc(ev.id)}" title="Answer each card below with the recommendation shown on it, as if you tapped each one">${icon('check')}Take ${recs.length === 1 ? 'the recommendation' : `all ${recs.length} recommendations`}</button>` : '';
   const head = ev.digest
-    ? `<div class="cd-digest" data-card="digest:${esc(ev.id)}"><div class="cd-dk">${icon('projects')}<b>Digest</b><span class="time">${timeOf(ev.ts)}</span></div>
-        <p class="cd-intro"><b>${esc(CP.digestLine(live.length, nProj))}</b>${notes.intro ? ` ${esc(notes.intro)}` : ''}</p>
-        ${take ? `<div class="row">${take}<span class="faint">or answer one by one below</span></div>` : ''}</div>`
+    ? dhead(`<p class="cd-intro"><b>${esc(CP.digestLine(live.length, nProj))}</b>${notes.intro ? ` ${esc(notes.intro)}` : ''}${repliesLine ? ` ${esc(repliesLine)}` : ''}</p>
+        ${take ? `<div class="row">${take}<span class="faint">or answer one by one below</span></div>` : ''}`)
     : `<div class="cd-cards-k asks">${icon('inbox')}<b>New for you</b><span class="faint">${live.length} card${live.length === 1 ? '' : 's'}</span><span class="time">${timeOf(ev.ts)}</span>${recs.length > 1 ? take : ''}</div>`;
   const foot = ev.digest ? `<p class="faint cd-foot">While you're away, new cards wait here for one digest, at most every ${S.conductor?.digestMinutes || 30} minutes, with one phone notice. Your answers here count as yours in each project.</p>` : '';
   return `<div class="cd-cards${ev.digest ? ' is-digest' : ''}">${head}${rows.map(item).join('')}${foot}</div>`;
@@ -955,6 +965,8 @@ function feedFor(t) {
         case 'lesson': return `<div class="notice">${esc(ev.from)} added a lesson to the ${esc(ev.pack)} pack: ${esc(ev.text)}</div>`;
         case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (in Needs you)</div>`;
         case 'permission_answer': return permLine(ev);
+        // Decision 62: the orchestrator's answer to a Conductor request; it went to the Conductor and you only.
+        case 'conductor_reply': return `<div class="notice cd-replied">${icon('orch')}${esc(ev.from)} replied to the Conductor (${esc(ev.request)}): ${esc(String(ev.text || '').split('\n')[0].slice(0, 200))}</div>`;
         case 'approval_escalated': return `<div class="notice">Permission request sent to you: ${esc(ev.reason)}</div>`;
         case 'handoff_qa': return '';
         case 'project_settings': return levelUndo(p, ev);

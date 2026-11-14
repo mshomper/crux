@@ -19,7 +19,7 @@ import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-t
 import { answerMessage, answerNote } from '../public/questions.js';
 import { Usage } from './usage.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
-import { Conductor, CONDUCTOR, CONDUCTOR_ROLE } from './conductor.mjs';
+import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
 
 export class Project {
   constructor(dir) {
@@ -141,7 +141,8 @@ export class Hub {
       messages.delete(a.thread);
     }
     // A message of yours to the orchestrator role with no holder yet: the next holder takes it.
-    // Never a Conductor brief: the Conductor cannot start an orchestrator (decision 55 A), so with no holder it waits.
+    // Never a Conductor brief: a restart does not start an orchestrator for one. Only a live Conductor request does
+    // (decision 63 A); here, with no holder, the brief waits.
     const orphan = (messages.get('orchestrator') || []).filter(m => !m.conductor).at(-1);
     if (orphan) plan.push({ agent: null, thread: 'orchestrator', why: 'message', message: orphan });
     return plan.sort((x, y) => (x.thread === 'orchestrator') - (y.thread === 'orchestrator'));
@@ -177,7 +178,7 @@ export class Hub {
         this.notice(p, m.thread, r.wasWorking
           ? `The hub restarted while ${r.agent} was working on ${whose} from ${when}, so it was sent again.`
           : `The hub restarted before ${whose} from ${when} reached its agent, so it was delivered again.`);
-        const text = m.from === 'you' ? m.text : m.conductor ? `[From the Conductor, ${m.from}, on {{who}}'s side]\n${m.text}` : `[From the orchestrator, ${m.from}]\n${m.text}`;
+        const text = m.from === 'you' ? m.text : m.conductor ? briefText(m.from, m.text, m.request) : `[From the orchestrator, ${m.from}]\n${m.text}`;
         if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(text, m.attachments);
         else p.agents.get(m.thread)?.send(text, m.attachments);
       } else {
@@ -809,6 +810,8 @@ export class Hub {
       return;
     }
     if (p.hubWide) this.conductor?.afterTurn();   // updates that came in while it worked: one more turn for them
+    // Decision 62: a Conductor request it read and did not answer gets one reminder, as a short follow-up turn.
+    else if (agent.role === 'orchestrator') this.conductor?.remindReplies(p, agent);
   }
 
   // reason: 'asked' (you, or the API), 'threshold' (decision 10), 'idle' (decision 37) or 'orchestrator' (a worker

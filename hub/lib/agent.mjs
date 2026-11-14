@@ -209,6 +209,7 @@ export class Agent {
         this.project.log.append('agent_session', { agent: this.name, sessionId: m.session_id, model: m.model, effort: this.effort, agentType: this.type });
       }
     } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
+      this.lastSaidAt = Date.now();   // decision 62: it has read what came before (a Conductor request it may owe a reply)
       const blocks = m.message?.content || [];
       const said = blocks.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
       if (said && !this.quietTurn) this.hub.agentSaid(this.project, this, said);
