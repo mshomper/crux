@@ -1,7 +1,7 @@
 # 0056 What does the Conductor's icon look like?
 
-- Status: open
-- Date: 2026-11-13
+- Status: decided
+- Date: 2026-11-13, decided 2026-11-14
 - Lenses: ui
 - Builds on: 0020, 0055
 
@@ -13,6 +13,10 @@ For you:
 
 - The helmet keeps showing the model colour; the mark on top shows the role, as the orchestrator's crown does today
 - Hard to undo: An icon swap later is a small change
+
+## Decision
+
+**B: Halo of nodes.** A ring of four glowing nodes circling the robot's head.
 
 ## Context
 
@@ -32,7 +36,7 @@ A raised baton with a lit tip where the orchestrator wears its crown.
 - Con: A thin line that gets lost at 15 px
 - Effort: Small
 
-### B: Halo of nodes (recommended)
+### B: Halo of nodes (chosen) (recommended)
 
 A ring of four glowing nodes circling the robot's head.
 

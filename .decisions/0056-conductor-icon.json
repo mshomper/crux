@@ -7,7 +7,7 @@
  "lenses": [
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick the Conductor's mark on the robot icon. I recommend B, a halo of four nodes around its head: it still reads at the smallest size and matches the map, where the orchestrators circle the Conductor. Confidence: medium.",
  "for_you": [
   "The helmet keeps showing the model colour; the mark on top shows the role, as the orchestrator's crown does today",
@@ -68,9 +68,9 @@
  "recommendation": "B stays legible at the smallest size and ties the icon to the map's picture of the Conductor at the centre of its orchestrators.",
  "confidence": "lean",
  "change_mind": "If the halo reads as decoration rather than a role, take A.",
- "chosen": null,
+ "chosen": "B",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [],
