@@ -58,16 +58,27 @@ html[data-hud] .hub-threads{border-bottom-color:var(--hud-line)}
 .ctx-ring .tick{stroke:#f5c96a;stroke-width:2;stroke-linecap:round}
 .ctx-ring text{font:600 9px var(--mono);fill:var(--hud-ice);text-anchor:middle;dominant-baseline:central}
 
-/* ---------- the Conductor's thread, pinned at the top of All projects (decision 55) ---------- */
-.hub-conductor{display:flex;flex-direction:column;gap:10px;padding:2px 12px 14px;margin-bottom:6px;border:1px solid var(--hud-line);border-radius:6px;
-  background:linear-gradient(180deg,rgba(111,227,255,.06),rgba(111,227,255,.015) 60%,transparent)}
-.cd-head .ava{position:relative;width:28px;height:28px;border-radius:4px;display:grid;place-items:center;background:var(--surface2)}
-.cd-head .ava.ring::after{content:"";position:absolute;inset:-2px;border-radius:6px;border:1.5px solid var(--mh);pointer-events:none;box-shadow:0 0 10px -2px var(--mh)}
-.cd-feed{display:flex;flex-direction:column;gap:10px;min-width:0}
-.cd-earlier{align-self:center}
+/* ---------- All projects with the Conductor (decision 59 B): the chat fills the column; two rows open in place ---------- */
+.hub-strip{position:sticky;top:-18px;z-index:4;display:flex;gap:8px;min-width:0;margin-top:-18px;padding:12px 0 10px;
+  background:linear-gradient(180deg,var(--bg,#0a0e14) 78%,transparent)}
+.hub-row{flex:1 1 0;min-width:0;display:flex;align-items:center;gap:8px;min-height:38px;padding:8px 10px;border:1px solid var(--hud-line);border-radius:6px;
+  background:rgba(111,227,255,.04);color:var(--muted);font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;cursor:pointer;text-align:left}
+.hub-row:hover:not(:disabled){border-color:var(--hud-edge2,var(--line2));background:rgba(111,227,255,.08)}
+.hub-row:focus-visible{outline:none;box-shadow:0 0 0 2px var(--hud-cyan)}
+.hub-row .icon{flex:none;width:14px;height:14px;color:var(--hud-cyan)}
+.hub-row .hr-k{color:var(--hud-ice);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.hub-row .hr-m{color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;letter-spacing:.06em;text-transform:none;font-weight:500}
+.hub-row .hr-sp{flex:1;min-width:0}
+.hub-row .icon:last-child{transform:rotate(-90deg);color:var(--hud-dim)}
+.hub-row.open .icon:last-child{transform:none}
+.hub-row .colbadge{flex:none;margin:0}
+.hub-row.asks{border-color:var(--hud-redline,rgba(242,114,122,.5));background:rgba(40,16,22,.6)}
+.hub-row.asks .icon:first-child{color:var(--hud-red)}
+.hub-row.clear{cursor:default;opacity:.85}
+.hub-row.clear .icon:first-child{color:var(--good)}
+.hub-drawer{display:flex;flex-direction:column;gap:10px;padding-bottom:12px;border-bottom:1px solid var(--hud-line)}
 .cd-wake{opacity:.75}
-.cd-empty p{margin:2px 0;color:var(--muted);font-size:13.5px;line-height:1.45}
-.hub-conductor .notice .icon{width:13px;height:13px;margin-right:6px;vertical-align:-2px}
+.notice .icon{width:13px;height:13px;margin-right:6px;vertical-align:-2px}
 
 /* ---------- phone: one line per agent, state as a dot, 44 px targets ---------- */
 @media (max-width:720px){
@@ -76,7 +87,7 @@ html[data-hud] .hub-threads{border-bottom-color:var(--hud-line)}
   .ha-l1 .dot{display:block}
   .ha-l1 .mchip :is(.mtype,.mver,.msep,.meff){display:none}
   .hub-meta{display:none}
-  .cd-head .hub-meta{display:block}
-  .hub-conductor{padding:2px 8px 12px}
+  .hub-row{min-height:44px}
+  .hub-row .hr-m{display:none}
   .hub-go{min-width:44px;min-height:44px}
 }

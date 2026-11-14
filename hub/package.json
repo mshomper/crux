@@ -1,6 +1,6 @@
 {
   "name": "crux-hub",
-  "version": "0.19.3",
+  "version": "0.19.4",
   "private": true,
   "type": "module",
   "description": "Crux hub: a messaging-style home for agents, backed by the Crux memory board",

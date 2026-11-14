@@ -4,7 +4,7 @@ import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
 import { hudBoot, openPanel, closePanel } from './hud.js';
-import { isYesNo } from './questions.js';
+import { isYesNo, repeatsIn, pageStatus } from './questions.js';
 import * as AP from './all-projects.js';
 import * as CP from './conductor-view.js';
 import { hubProjects } from './map-hub.js';
@@ -619,12 +619,16 @@ function permLine(ev) {
     <span class="time">${timeOf(ev.ts)}</span></button>`;
 }
 
-function summaryCard(p, ev) {
+// only: the decision ids to draw under this summary (AP.decisionCardsOnce: one card per decision in a thread).
+// reps: questions of this summary hidden as repeats of another card still open (questions.js repeatsIn); each gets a
+// small note saying where it waits, so it is asked in one card only.
+function summaryCard(p, ev, only = null, reps = null) {
   const sec = (label, xs) => xs?.length ? `<dt>${label}</dt><dd><ul>${xs.map(x => `<li>${esc(x)}</li>`).join('')}</ul></dd>` : '';
-  const decisions = (ev.decisions_needed || []).map(id => p.board.decisions.find(d => d.id === Number(id))).filter(Boolean);
+  const qs = ev.questions?.length ? `<dt>Questions</dt><dd><ul>${ev.questions.map((x, i) => { const r = reps?.find(z => z.i === i); return `<li>${esc(x)}${r ? ` <span class="faint q-also">· ${r.answered ? 'answered' : 'also'} in ${esc(r.of)}'s card</span>` : ''}</li>`; }).join('')}</ul></dd>` : '';
+  const decisions = (only || ev.decisions_needed || []).map(id => p.board.decisions.find(d => d.id === Number(id))).filter(Boolean);
   return `<article class="card summary">
     <div class="card-head">${icon('check')}<h3>${esc(ev.from)} finished a round</h3><span class="time">${timeOf(ev.ts)}</span></div>
-    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${sec('Questions', ev.questions)}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
+    ${fold(ev.id, `<dl>${sec('Done', ev.done)}${sec('Changed', ev.changed)}${qs}${sec('Blocked on', ev.blocked_on)}${ev.next_step ? `<dt>Next step</dt><dd>${esc(ev.next_step)}</dd>` : ''}</dl>`,
       isTall([ev.done, ev.changed, ev.questions, ev.blocked_on, ev.next_step].flat().filter(Boolean).join('\n'), 700))}
   </article>${decisions.map(d => decisionCard(p, d)).join('')}`;
 }
@@ -671,7 +675,7 @@ function modelChip(a, { button = false, mini = false } = {}) {
   const style = hue ? ` style="--mh:${hue}"` : '';
   const tip = `${describe(a)}${a.restartPending ? '. The change applies once it finishes what it is doing' : ''}`;
   return button
-    ? `<button class="${cls}"${style} data-mchip="${esc(a.name)}" aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}. Change model or effort">${inner}${icon('chevron')}</button>`
+    ? `<button class="${cls}"${style} data-mchip="${esc(a.name)}"${a.role === 'conductor' ? ` data-mplace="${CP.CONDUCTOR}"` : ''} aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}. Change model or effort">${inner}${icon('chevron')}</button>`
     : `<span class="${cls}"${style} title="${esc(tip)}">${inner}</span>`;
 }
 
@@ -699,18 +703,22 @@ function typeOptions(p, value) {
 const TYPE_TIP = 'Agent types are Claude Code agent files: ~/.claude/agents for every project, or this project’s .claude/agents';
 
 // The chip's menu: change model, effort or type in place. Every change applies at once; Escape or a click outside closes it.
+// The agent the open menu is for: the Conductor's holder (decision 55) or one of this project's agents.
+const menuAgent = () => S.mmenu && (S.mmenuPlace === CP.CONDUCTOR ? (S.conductor?.name ? CP.agentOf(S.conductor) : null) : proj()?.agents.find(x => x.name === S.mmenu && x.state !== 'retired'));
 function renderModelMenu() {
   const el = $('#mmenu'), p = proj();
-  const a = S.mmenu && p?.agents.find(x => x.name === S.mmenu && x.state !== 'retired');
+  const a = menuAgent();
   if (!a) { el.hidden = true; el.dataset.html = ''; S.mmenu = null; return; }
-  const hue = hueOf(modelOf(a));
+  const hue = hueOf(modelOf(a)), cd = a.role === 'conductor';
   const live = a.live || ['working', 'starting', 'idle'].includes(a.state);
-  const html = `<div class="mm-head"><b>${esc(a.role === 'orchestrator' ? 'Orchestrator' : a.name)}</b><span class="faint">${esc(describe(a))}</span>
+  // The Conductor has no type row: a type would bring tools it must not have (decision 55). Model and effort only.
+  const html = `<div class="mm-head"><b>${esc(a.role === 'orchestrator' ? 'Orchestrator' : cd ? 'Conductor' : a.name)}</b><span class="faint">${esc(describe(a))}</span>
       <button class="mm-x" data-mm-close aria-label="Close">${icon('x')}</button></div>
     <div class="mm-row"><span class="flabel">Model</span>${modelPicker('mm-model', a.model || '')}</div>
     <div class="mm-row"><span class="flabel">Effort</span>${effortPicker('mm-effort', a.effort || '', hue)}</div>
-    <label class="mm-row" title="${esc(TYPE_TIP)}"><span class="flabel">Type</span><select name="mm-type">${typeOptions(p, a.type)}</select></label>
-    <p class="mm-note faint">${live ? 'Model and effort switch right away. A new type restarts it when it is free; it keeps the conversation.' : 'Applies when it next starts.'}</p>`;
+    ${cd ? '' : `<label class="mm-row" title="${esc(TYPE_TIP)}"><span class="flabel">Type</span><select name="mm-type">${typeOptions(p, a.type)}</select></label>`}
+    <p class="mm-note faint">${cd ? `${live ? 'Model and effort switch right away.' : 'Applies when it next starts.'} The Conductor has no agent type: its tools stay fixed.`
+      : live ? 'Model and effort switch right away. A new type restarts it when it is free; it keeps the conversation.' : 'Applies when it next starts.'}</p>`;
   if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
   el.hidden = false;
   placeModelMenu();
@@ -752,51 +760,61 @@ function agentRow(p, a) {
     <span class="ha-l2">${esc(lastLine(p, a.thread) || goalOf(a))}</span>
     ${AP.contextRing(a, { hue, retireAt: p.retireAt || S.retireAt || 60 })}${n ? `<span class="colbadge" title="${n} waiting for your call">${n}</span>` : ''}</button>`;
 }
-// The Conductor's thread (decision 55), pinned at the top of All projects: its latest few items, the earlier ones
-// folded, and its lesson card. The message box at the column's foot writes to it.
-function conductorSection() {
-  const c = S.conductor, place = S.cplace;
-  if (!c) return '';
-  const a = CP.agentOf(c), hue = hueOf(modelOf(a));
-  // A phone shows the last two, so the waiting cards below are on the first screen (decision 32); a desk shows six.
-  const items = CP.threadItems(c), open = S.open.has('conductor-earlier'), n = phoneMq.matches ? CP.SHOWN_PHONE : CP.SHOWN;
-  const { shown, hidden } = CP.shownItems(items, open, n);
-  const item = ev => {
-    switch (ev.type) {
+// ---------- All projects with the Conductor (decisions 55 and 59 B) ----------
+// The Conductor's chat and the message box fill the column, like any thread. Two compact rows on top open in place:
+// what waits for you (red count, decision 31) and every project's agents. On a phone the waiting row opens by default
+// whenever something waits (decision 32); one tap folds it. Without a Conductor the column is drawn as before.
+S.hubFold = {};   // { waiting, agents }: what you opened or folded; waiting goes back to its default once nothing waits
+function hubFoldOpen(k, n) {
+  return k === 'waiting' ? CP.waitingOpen(S.hubFold, n, phoneMq.matches) : !!S.hubFold[k];
+}
+function conductorItem(ev) {
+  const place = S.cplace;
+  switch (ev.type) {
       case 'message': return messageEl(place, ev, CP.CONDUCTOR_THREAD);
       case 'summary': return summaryCard(place, ev);
       case 'notice': return `<div class="notice">${esc(ev.text)}</div>`;
       case 'visual': return `<div class="msg"><span class="who">${esc(ev.from)} · ${timeOf(ev.ts)}</span>${visualEl(place, ev)}</div>`;
-      case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (below)</div>`;
+      case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (under Waiting)</div>`;
       case 'reminder': return `<div class="notice">${icon('clock')}Reminder set for ${esc(new Date(ev.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}: ${esc(ev.text)}</div>`;
       case 'wake': return `<div class="notice cd-wake" title="${esc(ev.text)}">${esc(CP.wakeLine(ev))} · ${timeOf(ev.ts)}</div>`;
       default: return '';
-    }
-  };
-  // What waits on you from it comes whole from the hub (c.questions, c.lessons), not from the latest events only,
-  // so the red count and the cards always agree. Its questions are answered here like any other.
-  const lessons = c.lessons || [];
-  const asks = (c.questions || []).map(q => questionCard(q, place).replace(`data-thread="${CP.CONDUCTOR_THREAD}"`, `data-thread="${AP.HUB_THREAD}"`)).join('');
-  const state = c.name ? `${esc(c.state)}${c.contextPct != null ? ` · ${c.contextPct}%` : ''}` : 'asleep';
-  return `<section class="hub-conductor" data-pj="${CP.CONDUCTOR}">
-    <div class="hub-head cd-head"><span class="hub-k"><span class="ava${hue ? ' ring' : ''}"${hue ? ` style="--mh:${hue}"` : ''}>${robot(a, { size: 22, needs: c.waiting > 0 })}</span><b>Conductor</b></span>
-      <span class="hub-line"></span><span class="hub-meta">${state}</span>${c.waiting ? `<span class="colbadge" title="${c.waiting} waiting for your call from the Conductor">${c.waiting}</span>` : ''}</div>
-    ${hidden ? `<button class="more cd-earlier" data-expand="conductor-earlier">Show earlier (${hidden})</button>` : open && items.length > n ? `<button class="more cd-earlier" data-expand="conductor-earlier">Show fewer</button>` : ''}
-    <div class="cd-feed">${shown.map(item).join('') || `<div class="cd-empty"><p>Ask what waits for you across projects, or ask for something in another project: the Conductor passes it to that project's orchestrator.</p></div>`}</div>
-    ${asks}${lessons.length ? lessonsCard(lessons) : ''}
-  </section>`;
+  }
+}
+// Every project's waiting cards, grouped by project and answerable in place.
+const hubCards = ({ p, waiting: w }) => w.approvals.map(ev => approvalCard(ev, p)).join('') + w.questions.map(ev => questionCard(ev, p)).join('')
+  + (w.lessons.length ? lessonsCard(w.lessons) : '') + w.decisions.map(d => decisionCard(p, d)).join('');
+const hubRoster = v => v.groups.map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g, `${g.agents.length} agent${g.agents.length === 1 ? '' : 's'} · ${g.working} working`)}
+    <div class="hub-agents">${g.agents.map(a => agentRow(g.p, a)).join('') || '<p class="faint hub-none">No agents yet</p>'}</div></section>`).join('');
+const conductorWaiting = (v, c) => v.total + (c?.waiting || 0);
+function conductorFeed(v) {
+  const c = S.conductor, place = S.cplace;
+  const n = conductorWaiting(v, c), wOpen = hubFoldOpen('waiting', n), aOpen = hubFoldOpen('agents', n);
+  const chev = icon('chevron');
+  const strip = `<div class="hub-strip">
+    <button type="button" class="hub-row ${n ? 'asks' : 'clear'} ${wOpen ? 'open' : ''}" data-hub-fold="waiting" aria-expanded="${wOpen}" ${n ? '' : 'disabled'} title="${n ? `${wOpen ? 'Fold' : 'Show'} what waits for your call` : 'Nothing waits for your call in any project'}">
+      ${icon(n ? 'inbox' : 'check')}<span class="hr-k">${n ? 'Waiting' : 'Nothing waiting'}</span>${n ? `<span class="colbadge">${n}</span>` : ''}<span class="hr-sp"></span>${n ? chev : ''}</button>
+    <button type="button" class="hub-row ${aOpen ? 'open' : ''}" data-hub-fold="agents" aria-expanded="${aOpen}" title="${aOpen ? 'Fold' : 'Show'} every project's orchestrator and agents">
+      ${icon('orch')}<span class="hr-k">${v.agents} agent${v.agents === 1 ? '' : 's'}</span><span class="hr-m">${v.working} working</span><span class="hr-sp"></span>${chev}</button></div>`;
+  // What waits from the Conductor itself comes whole from the hub (c.questions, c.lessons), so the count matches.
+  const asks = (c.questions || []).map(q => questionCard(q, place).replace(`data-thread="${CP.CONDUCTOR_THREAD}"`, `data-thread="${AP.HUB_THREAD}"`)).join('')
+    + ((c.lessons || []).length ? lessonsCard(c.lessons) : '');
+  const waiting = wOpen ? `<div class="hub-drawer">${asks ? `<section class="hub-group" data-pj="${CP.CONDUCTOR}">${asks}</section>` : ''}${v.groups.filter(g => g.count).map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g)}${hubCards(g)}</section>`).join('')}</div>` : '';
+  const agents = aOpen ? `<div class="hub-drawer">${hubRoster(v)}</div>` : '';
+  const chat = CP.threadItems(c).map(conductorItem).join('')
+    || `<div class="empty"><h2>Talk to the Conductor</h2><p>Ask what waits for you across projects, or ask for something in any project: the Conductor passes it to that project's orchestrator.</p></div>`;
+  return strip + waiting + agents + chat;   // the chat's messages sit in the list like any thread's
 }
 
+// Without a Conductor (an older hub): every project's waiting cards, then every agent, read from the top.
 function hubFeed() {
   const v = hub();
-  const cards = ({ p, waiting: w }) => w.approvals.map(ev => approvalCard(ev, p)).join('') + w.questions.map(ev => questionCard(ev, p)).join('')
-    + (w.lessons.length ? lessonsCard(w.lessons) : '') + w.decisions.map(d => decisionCard(p, d)).join('');
-  let html = conductorSection() + countBar(v.total, v.kinds);
-  html += v.groups.filter(g => g.count).map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g)}${cards(g)}</section>`).join('');
+  if (S.conductor) return conductorFeed(v);
+  let html = countBar(v.total, v.kinds);
+  html += v.groups.filter(g => g.count).map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g)}${hubCards(g)}</section>`).join('');
   if (!v.total) html += `<div class="hub-clear">${icon('check')}<span>Nothing waiting in any project</span></div>`;
   html += `<div class="side-label hub-roster-k">Agents · every project</div>`;
-  html += v.groups.map(g => `<section class="hub-group" data-pj="${esc(g.name)}">${hubHead(g, `${g.agents.length} agent${g.agents.length === 1 ? '' : 's'} · ${g.working} working`)}
-    <div class="hub-agents">${g.agents.map(a => agentRow(g.p, a)).join('') || '<p class="faint hub-none">No agents yet</p>'}</div></section>`).join('');
+  html += hubRoster(v);
   return html;
 }
 
@@ -819,11 +837,12 @@ function feedFor(t) {
     if (routed.length) html += `<div class="side-label routed-label">With the orchestrator</div>` + routed.map(ev => approvalCard(ev, p)).join('');
     return html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
-    const evs = threadEvents(p, t);
+    const evs = threadEvents(p, t), once = AP.decisionCardsOnce(evs);   // one card per decision in a thread
+    const reps = repeatsIn(p.events, { decisionStatus: pageStatus(p) });   // repeats of a card still open elsewhere
     const html = evs.map(ev => {
       switch (ev.type) {
         case 'message': return messageEl(p, ev, t);
-        case 'summary': return summaryCard(p, ev);
+        case 'summary': return summaryCard(p, ev, once(ev), reps.get(ev.id));
         case 'notice': return `<div class="notice">${esc(ev.text)}</div>`;
         case 'pick': return `<div class="notice">You picked D${pad(ev.decision)} · ${esc(ev.label)}</div>`;
         case 'approval': return approvalCard(ev, p);
@@ -883,8 +902,10 @@ function headFor(t) {
     // message box writes to it. Without a Conductor (an older hub) the column has no box, as before.
     if (!c) return { title: 'All projects', sub: counts, retired: false, retire: false, finish: false, chips: [], activity: '', noBox: true, top: true, waiting: v.total };
     const a = CP.agentOf(c);
-    const sub = `<span class="chip ${esc(a.state)}">${c.name ? `${esc(c.name)} · ` : 'Conductor · '}${esc(a.state)}</span>${c.name ? modelChip(a) : ''}${c.contextPct != null ? `<span>${c.contextPct}% context</span>` : ''}${counts}`;
-    return { title: 'All projects', sub, retired: false, retire: !!c.name && !c.retiring, finish: false, chips: [], activity: c.activity || '', top: true, waiting: v.total + (c.waiting || 0) };
+    const sub = `<span class="chip ${esc(a.state)}">${c.name ? `${esc(c.name)} · ` : 'Conductor · '}${esc(a.state)}</span>${c.name ? modelChip(a, { button: true }) : ''}${c.contextPct != null ? `<span>${c.contextPct}% context</span>` : ''}`;   // the counts are on the Agents row now (decision 59 B)
+    // Decision 59 B: a chat, read from its latest message; while the waiting cards are open it reads from the top.
+    const n = conductorWaiting(v, c);
+    return { title: 'All projects', sub, retired: false, retire: !!c.name && !c.retiring, finish: false, chips: [], activity: c.activity || '', top: hubFoldOpen('waiting', n), waiting: n };
   }
   let title = 'Needs you', sub = '';
   if (p && t === 'orchestrator') {
@@ -984,6 +1005,14 @@ function updateMap() {
 
 // ---------- actions ----------
 async function act(fn) { try { await fn(); } catch (e) { toast(e.message); } }
+
+// Picks from a card or "Take all": shown at once in every column and view (the decision leaves Needs you, All
+// projects and the threads on this redraw), then sent; the reload after confirms it, or puts it back if it failed.
+function sendPicks(p, picks) {
+  if (!p || !picks.length) return;
+  if (picks.map(x => AP.applyPick(p, x.id, x.choice)).some(Boolean)) { S.hub = null; render(); }
+  return act(async () => { try { await api('/api/pick', { project: p.name, picks }); } finally { await load(); } });
+}
 
 // Hub-styled pop-ups (M008 3) instead of the browser's: a confirm with a way out, and a short message.
 function hubConfirm({ k = 'Confirm', title, body = '', ok = 'OK' }) {
@@ -1122,7 +1151,12 @@ const cols = new Columns({
       return api('/api/send', { project, thread: t === 'needs' ? 'orchestrator' : t, text, ...(attachments.length ? { attachments } : {}) });
     },
     // After a message from Needs you the orchestrator's chat opens, as before, unless Needs you is pinned (it stays).
-    sent: (c, r) => { if (r.picked) load(); else if (c.thread === 'needs' && !cols.isPinned('needs')) selectThread('orchestrator'); }
+    // From All projects (decision 59 B): Waiting folds and the chat follows to its latest message, so the
+    // Conductor's reply lands in view under yours (on the phone Waiting is open by default).
+    sent: (c, r) => {
+      if (c.thread === AP.HUB_THREAD) { CP.foldAfterSend(S.hubFold); c.justOpened = true; return render(); }
+      if (r.picked) load(); else if (c.thread === 'needs' && !cols.isPinned('needs')) selectThread('orchestrator');
+    }
   }
 });
 // Does the card a phone notification points at still wait for you, in any project? (Tags are card ids.)
@@ -1176,13 +1210,25 @@ phoneMq.addEventListener('change', () => { placeBell(); render(); });
 $('#mmenu').addEventListener('change', e => {
   const field = { 'mm-model': 'model', 'mm-effort': 'effort', 'mm-type': 'type' }[e.target.name];
   if (!field || !S.mmenu) return;
-  const agent = S.mmenu;
-  act(async () => { await api('/api/agent-settings', { project: proj().name, agent, [field]: e.target.value }); await load(); });
+  const agent = S.mmenu, project = S.mmenuPlace === CP.CONDUCTOR ? CP.CONDUCTOR : proj().name;   // by place, not name
+  act(async () => { await api('/api/agent-settings', { project, agent, [field]: e.target.value }); await load(); });
 });
 $('#hud').addEventListener('click', () => closeModelMenu(), true);   // the map opening over it
 $('#mmenu').addEventListener('click', e => { if (e.target.closest('[data-mm-close]')) closeModelMenu(); });
 
 document.addEventListener('click', e => {
+  // All projects' Waiting and Agents rows (decision 59 B) open and fold in place; the column goes to the top when
+  // the waiting cards open, and back to the latest message when they fold.
+  const hf = e.target.closest('[data-hub-fold]');
+  if (hf && !hf.disabled) {
+    const k = hf.dataset.hubFold;
+    const opening = S.hubFold[k] = hf.getAttribute('aria-expanded') !== 'true';
+    const feed = hf.closest('.feed');   // taken before the redraw, which may swap the row itself
+    if (k === 'waiting') cols.markOpened(AP.HUB_THREAD);
+    render();
+    if (k === 'agents' && opening && feed) feed.scrollTop = 0;   // the agents list opens at the top, where its row is
+    return;
+  }
   const ex = e.target.closest('[data-expand]');
   if (ex && !e.target.closest('a, [data-approve], [data-deny]')) {
     const id = ex.dataset.expand;
@@ -1190,7 +1236,7 @@ document.addEventListener('click', e => {
     return render();
   }
   const mc = e.target.closest('[data-mchip]');
-  if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; cols.render(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
+  if (mc) { S.mmenu = S.mmenu === mc.dataset.mchip ? null : mc.dataset.mchip; S.mmenuPlace = mc.dataset.mplace || null; cols.render(); renderModelMenu(); $('#mmenu input:checked')?.focus(); return; }
   // The pin on a thread row (decision 39): pin opens it as a column beside the current one; unpin closes its column.
   const rp = e.target.closest('[data-row-pin]');
   if (rp) { const id = rp.dataset.rowPin; cols.isPinned(id) ? cols.unpin(id) : cols.pin(id); render(); phone.viewChanged(); return document.querySelector(`[data-row-pin="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); }
@@ -1210,10 +1256,12 @@ document.addEventListener('click', e => {
   const pick = e.target.closest('[data-pick]');
   if (pick && !pick.disabled) closePanel();
   // Every answer goes to the card's own project (projectOf): from All projects too, without switching (decision 42).
-  if (pick && !pick.disabled) return act(() => api('/api/pick', { project: projectOf(pick).name, picks: [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }] }).then(load));
+  // The pick shows at once (AP.applyPick): every card for that decision, in every column, goes on this redraw; a
+  // failed pick is put back by the reload.
+  if (pick && !pick.disabled) return sendPicks(projectOf(pick), [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }]);
   if (e.target.closest('[data-take-all]')) {
     const picks = openDecisions(proj()).filter(d => d.status === 'open' && d.recommended).map(d => ({ id: d.id, choice: d.recommended }));
-    return act(() => api('/api/pick', { project: proj().name, picks }).then(load));
+    return sendPicks(proj(), picks);
   }
   const jump = e.target.closest('[data-jump]');
   if (jump) {

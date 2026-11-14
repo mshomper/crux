@@ -15,7 +15,7 @@ export const SHOWN_PHONE = 2;               // on a phone: so the waiting cards 
 export function agentOf(c) {
   if (!c) return null;
   return { name: c.name || 'Conductor', role: 'conductor', thread: CONDUCTOR_THREAD, state: c.state || 'asleep', contextPct: c.contextPct ?? null,
-    model: c.model || null, modelSeen: c.modelSeen || null, effort: c.effort || null, type: null, live: !!c.live, retiring: c.retiring || false };
+    model: c.model || null, modelSeen: c.modelSeen || null, effort: c.effort || null, type: null, live: !!c.live, retiring: c.retiring || false, restartPending: !!c.restartPending };
 }
 
 // Its place, shaped like a project where cards and messages are drawn (attachments come from /att/~conductor/...).
@@ -56,6 +56,16 @@ export function lastLine(c) {
   if (ev.type === 'summary') return `Summary: ${(ev.done || [])[0] || ev.next_step || 'posted'}`;
   return `${ev.from === 'you' ? 'You: ' : ''}${String(ev.text || '').replace(/^\[Hub: [^\]]*\]\s*/, '')}`;
 }
+
+// All projects' Waiting row (decision 59 B). fold: what you opened or folded ({ waiting }); n: how much waits.
+// On a phone it opens by default whenever something waits (decision 32); with nothing waiting it is closed and your
+// last choice is forgotten, so the next card opens it again.
+export function waitingOpen(fold, n, phone) {
+  if (!n) { delete fold.waiting; return false; }
+  return fold.waiting ?? !!phone;
+}
+// After you send from the All projects box: Waiting folds, so the Conductor's reply lands in view under your message.
+export function foldAfterSend(fold) { fold.waiting = false; return fold; }
 
 // "Updates from 3 projects woke it": the batch line, short, with the projects named.
 export function wakeLine(ev) {

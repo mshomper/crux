@@ -83,7 +83,9 @@ test('a card answered from All projects goes to its own project, never the one o
 });
 
 test('the page sends every answer to the card\'s project', () => {
-  assert.match(APP, /api\('\/api\/pick', \{ project: projectOf\(pick\)\.name/);
+  // A pick goes through sendPicks (shown at once in every view, then sent), to the card's own project.
+  assert.match(APP, /sendPicks\(projectOf\(pick\), \[/);
+  assert.match(APP, /function sendPicks\(p, picks\) \{[\s\S]*?api\('\/api\/pick', \{ project: p\.name/);
   assert.match(APP, /api\('\/api\/dismiss', \{ project: projectOf\(dq\)\.name/);
   assert.match(APP, /api\('\/api\/lessons', \{ project: projectOf\(ls\)\.name/);
   assert.match(APP, /sendAnswers\(sa\.dataset\.sendAnswers, projectOf\(sa\)\)/);
@@ -93,7 +95,8 @@ test('the page sends every answer to the card\'s project', () => {
   // permission answers go by request id, which is unique across the hub
   assert.match(APP, /api\('\/api\/approval', \{ id: ap\.dataset\.approve/);
   // cards are drawn with their own project's data, not the one on screen
-  const hub = /function hubFeed\(\)[\s\S]*?\n\}/.exec(APP)[0];
+  // (the cards are drawn by hubCards, shared by both layouts of the column: with and without the Conductor)
+  const hub = /const hubCards = [^\n]*\n[^\n]*/.exec(APP)[0] + /function hubFeed\(\)[\s\S]*?\n\}/.exec(APP)[0];
   assert.match(hub, /approvalCard\(ev, p\)/);
   assert.match(hub, /questionCard\(ev, p\)/);
   assert.match(hub, /decisionCard\(p, d\)/);

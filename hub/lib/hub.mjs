@@ -105,15 +105,22 @@ export class Hub {
       const names = thread === 'orchestrator' ? orchNames : new Set([agent.name]);
       // Messages into the thread: yours, or (in a worker's thread) the orchestrator's. A successor's question to
       // its predecessor is answered within the overlap, not resent.
-      const incoming = e => e.type === 'message' && e.thread === thread && !names.has(e.from) && (e.from === 'you' || (thread !== 'orchestrator' && orchNames.has(e.from)));
-      const i = evs.findLastIndex(incoming);
-      const m = evs[i];
-      if (!m || now - Date.parse(m.ts) > RESUME_WINDOW_MS) continue;
-      // Starting up (agent_created, agent_session, agent_busy) is not acting on it; a reply, summary, card or pick is.
-      const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
-      if (!actedOn) out.push(m);
+      const into = e => e.type === 'message' && e.thread === thread && !names.has(e.from);
+      // In the orchestrator thread your message and a Conductor brief (decision 55) are looked at apart, so a restart
+      // resends each one still unread: never one instead of the other.
+      const kinds = thread === 'orchestrator'
+        ? [e => into(e) && e.from === 'you', e => into(e) && !!e.conductor]
+        : [e => into(e) && (e.from === 'you' || orchNames.has(e.from))];
+      for (const kind of kinds) {
+        const i = evs.findLastIndex(kind);
+        const m = evs[i];
+        if (!m || now - Date.parse(m.ts) > RESUME_WINDOW_MS) continue;
+        // Starting up (agent_created, agent_session, agent_busy) is not acting on it; a reply, summary, card or pick is.
+        const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
+        if (!actedOn) out.push(m);
+      }
     }
-    return out;
+    return out.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
   }
 
   // Who wakes after a restart, and why: an agent whose last logged turn had not ended (it was working when the hub
@@ -123,17 +130,19 @@ export class Hub {
     const busy = new Map();
     for (const e of p.log.events) if (e.type === 'agent_busy') busy.set(e.agent, e);
     const plan = [];
-    const messages = new Map(this.undelivered(p, now).map(m => [m.thread, m]));
+    const messages = new Map();   // thread -> its unread messages, oldest first (yours and a Conductor brief can both be)
+    for (const m of this.undelivered(p, now)) messages.set(m.thread, [...(messages.get(m.thread) || []), m]);
     for (const a of p.agents.values()) {
       if (a.state === 'retired' || (a.role === 'orchestrator' && a !== p.orchestrator())) continue;
-      const m = messages.get(a.thread);
+      const ms = messages.get(a.thread) || [];
       const b = busy.get(a.name);
-      if (m) plan.push({ agent: a.name, thread: a.thread, why: 'message', message: m, wasWorking: !!b?.busy && Date.parse(b.ts) >= Date.parse(m.ts) });
-      else if (b?.busy && now - Date.parse(b.ts) <= RESUME_WINDOW_MS) plan.push({ agent: a.name, thread: a.thread, why: 'working' });
+      for (const m of ms) plan.push({ agent: a.name, thread: a.thread, why: 'message', message: m, wasWorking: !!b?.busy && Date.parse(b.ts) >= Date.parse(m.ts) });
+      if (!ms.length && b?.busy && now - Date.parse(b.ts) <= RESUME_WINDOW_MS) plan.push({ agent: a.name, thread: a.thread, why: 'working' });
       messages.delete(a.thread);
     }
     // A message of yours to the orchestrator role with no holder yet: the next holder takes it.
-    const orphan = messages.get('orchestrator');
+    // Never a Conductor brief: the Conductor cannot start an orchestrator (decision 55 A), so with no holder it waits.
+    const orphan = (messages.get('orchestrator') || []).filter(m => !m.conductor).at(-1);
     if (orphan) plan.push({ agent: null, thread: 'orchestrator', why: 'message', message: orphan });
     return plan.sort((x, y) => (x.thread === 'orchestrator') - (y.thread === 'orchestrator'));
   }
@@ -168,7 +177,7 @@ export class Hub {
         this.notice(p, m.thread, r.wasWorking
           ? `The hub restarted while ${r.agent} was working on ${whose} from ${when}, so it was sent again.`
           : `The hub restarted before ${whose} from ${when} reached its agent, so it was delivered again.`);
-        const text = m.from === 'you' ? m.text : `[From the orchestrator, ${m.from}]\n${m.text}`;
+        const text = m.from === 'you' ? m.text : m.conductor ? `[From the Conductor, ${m.from}, on {{who}}'s side]\n${m.text}` : `[From the orchestrator, ${m.from}]\n${m.text}`;
         if (m.thread === 'orchestrator') this.ensureOrchestrator(p).send(text, m.attachments);
         else p.agents.get(m.thread)?.send(text, m.attachments);
       } else {
@@ -284,6 +293,12 @@ export class Hub {
     const a = name === 'orchestrator' ? p.orchestrator() : p.agents.get(name);
     if (!a) throw new Error(`No agent called ${name}`);
     if (a.state === 'retired') throw new Error(`${name} has retired.`);
+    // The Conductor (decision 55) changes model and effort only: an agent type would bring its own tools and
+    // instructions, which it must never have. Its tools are fixed in lib/conductor.mjs whatever is recorded here.
+    if (a.role === CONDUCTOR_ROLE && 'type' in changes) {
+      if (changes.type) throw new Error('The Conductor has no agent type: its tools are fixed (decision 55). Change its model or effort instead.');
+      changes = { ...changes }; delete changes.type;
+    }
     const next = {};
     if ('type' in changes && (changes.type || null) !== a.type) {
       const t = changes.type ? this.agentTypes(p).get(changes.type) : null;
@@ -365,8 +380,13 @@ export class Hub {
     w.send(`[From the orchestrator, ${orch.name}]\n${text}`);
   }
 
+  // Every question is kept as asked: a repeat of a question already waiting in another card is hidden only where cards
+  // are drawn (public/questions.js openQuestions), so it comes back by itself if that card closes unanswered.
+  // The Conductor never lists decisions of its own: they are the projects' cards; it may only mention them.
   postSummary(p, agent, s) {
-    p.log.append('summary', { thread: agent.thread, from: agent.name, ...s });
+    const decisions = agent.role === CONDUCTOR_ROLE ? [] : s.decisions_needed || [];
+    p.log.append('summary', { thread: agent.thread, from: agent.name, ...s, decisions_needed: decisions });
+    s = { ...s, decisions_needed: decisions };
     if (agent.role !== 'worker') return;
     const orch = p.orchestrator();
     if (!orch && !s.questions.length && !s.decisions_needed.length) return; // nothing to route; you see it in the thread
