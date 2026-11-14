@@ -35,12 +35,22 @@ export function toBase64(bytes) {
   return btoa(s);
 }
 
+// The iPhone's audio mode, where Safari lets a page set it (navigator.audioSession, Safari 16.4+): 'play-and-record'
+// while the mic is open, 'playback' while Imogen speaks (the loudspeaker at full media volume, not the quieter
+// call-style level it keeps after the mic), 'auto' otherwise. Elsewhere this does nothing.
+export function audioMode(type, nav = globalThis.navigator) {
+  try { if (nav?.audioSession && nav.audioSession.type !== type) nav.audioSession.type = type; } catch { }
+}
+
 // One recorder for the page. state: idle | opening | recording | sending. onChange(state, seconds) redraws the mic.
+// The mic records through a sound context of its own, made for each recording and closed as soon as it ends, so
+// nothing of the mic stays attached once it is closed. Imogen plays through another one (playCtx) that never has the
+// mic in it; the same tap unlocks both, so her answer can play later without a tap of its own.
 export class VoiceRecorder {
   constructor({ post, onChange = () => { }, onError = () => { } }) {
     Object.assign(this, { post, onChange, onError });
     this.state = 'idle';
-    this.ctx = null; this.stream = null; this.node = null; this.blocks = []; this.t0 = 0; this.tick = 0;
+    this.ctx = null; this.playCtx = null; this.stream = null; this.node = null; this.blocks = []; this.t0 = 0; this.tick = 0;
   }
   get seconds() { return this.state === 'recording' ? Math.floor((performance.now() - this.t0) / 1000) : 0; }
   set(state) { this.state = state; this.onChange(state, this.seconds); }
@@ -61,15 +71,18 @@ export class VoiceRecorder {
       // resume() is asked for here, inside the tap, before anything is awaited; a browser that never lets sound
       // start must not leave the mic stuck opening, so it is given 4 s.
       const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
-      this.ctx ||= new AC();
-      const resumed = this.ctx.state === 'running' ? null : this.ctx.resume();
-      if (!this.ctx.audioWorklet) throw new Error('This browser cannot record for voice.');
+      this.playCtx ||= new AC();
+      if (this.playCtx.state !== 'running') this.playCtx.resume().catch(() => { });   // inside the tap: unlocked for later
+      const ctx = this.ctx = new AC();
+      const resumed = ctx.state === 'running' ? null : ctx.resume();
+      if (!ctx.audioWorklet) throw new Error('This browser cannot record for voice.');
+      audioMode('play-and-record');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (stale()) { for (const t of stream.getTracks()) t.stop(); return; }
       this.stream = stream;
       if (resumed) await Promise.race([resumed, new Promise((_, no) => setTimeout(() => no(new Error('Sound could not start in this browser. Tap the mic again.')), 4000))]);
-      if (!this.workletReady) { await this.ctx.audioWorklet.addModule('/voice-worklet.js'); this.workletReady = true; }
-      if (stale()) return this.close();
+      await ctx.audioWorklet.addModule('/voice-worklet.js');   // once per context (the browser keeps the file)
+      if (stale() || ctx !== this.ctx) return this.close();
       const src = this.ctx.createMediaStreamSource(this.stream);
       this.node = new AudioWorkletNode(this.ctx, 'crux-capture');
       this.blocks = [];
@@ -112,12 +125,18 @@ export class VoiceRecorder {
     this.close(); this.set('idle');
   }
 
+  // The mic off, completely: its tracks stopped, the capture graph taken apart, its sound context closed, and the
+  // iPhone told the mic is done, so Imogen plays at media volume on the loudspeaker.
   close() {
     clearInterval(this.tick);
     for (const t of this.stream?.getTracks() || []) t.stop();   // the mic's light goes out here
     for (const p of this.parts || []) { try { p.disconnect(); } catch { } }
     if (this.node) this.node.port.onmessage = null;
+    const ctx = this.ctx;
+    this.ctx = null;
+    if (ctx && ctx.state !== 'closed') ctx.close().catch(() => { });
     this.stream = null; this.node = null; this.parts = null; this.blocks = [];
+    audioMode('auto');
   }
 }
 
@@ -136,6 +155,7 @@ export class VoicePlayer {
     if (!ctx || !ev?.sentences?.length) return;
     const run = this.playing = { id: ev.id, source: null, stopped: false };
     this.onChange(true);
+    audioMode('playback');   // the iPhone: media volume on the loudspeaker while she speaks
     try {
       // Sound that never starts (a browser holding it back) gives up after 3 s, so the stop layer never stays up.
       if (ctx.state !== 'running') await Promise.race([ctx.resume(), new Promise((_, no) => setTimeout(() => no(new Error('The voice could not start on this device. Tap the mic once, then try again.')), 3000))]);
@@ -159,7 +179,7 @@ export class VoicePlayer {
     } catch (e) {
       if (!run.stopped) this.onError(e?.message || 'The voice could not play.');
     } finally {
-      if (this.playing === run) { this.playing = null; this.onChange(false); }
+      if (this.playing === run) { this.playing = null; audioMode('auto'); this.onChange(false); }
     }
   }
   stop() {
@@ -169,6 +189,7 @@ export class VoicePlayer {
     try { run.source?.stop(); } catch { }
     run.done?.();
     this.playing = null;
+    audioMode('auto');
     this.onChange(false);
     return true;
   }

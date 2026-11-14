@@ -93,6 +93,16 @@ export class Agent {
     this.setState('working');
   }
 
+  // Decision 64 A: the folder each tool call runs in, as Claude Code reports it to the PreToolUse hook (a cd in an
+  // earlier command carries over, so a worker in its worktree is in its worktree). The permission checker starts
+  // there instead of the project folder. Kept for the last 64 calls; looked up by the SDK's tool call id.
+  noteCwd(input) {
+    if (!input || typeof input.cwd !== 'string' || !input.cwd || typeof input.tool_use_id !== 'string') return;
+    (this.toolCwds ||= new Map()).set(input.tool_use_id, input.cwd);
+    if (this.toolCwds.size > 64) this.toolCwds.delete(this.toolCwds.keys().next().value);
+  }
+  cwdFor(toolUseID) { return (toolUseID && this.toolCwds?.get(toolUseID)) || null; }
+
   // Decision 62: a Conductor brief reached Claude Code as input for this agent. Logged with the agent's name, so a
   // successor is never reminded of a brief it never had.
   noteDelivered(meta) {
@@ -144,6 +154,8 @@ export class Agent {
       ...(connectors ? {} : { settings: { disableClaudeAiConnectors: true } }),
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
+      // Only notes where the call runs (noteCwd); it never allows, denies or changes anything.
+      hooks: { PreToolUse: [{ hooks: [async input => { this.noteCwd(input); return {}; }] }] },
       ...(builtIn?.length ? { tools: builtIn } : {}),
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),

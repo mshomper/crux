@@ -105,13 +105,13 @@ test('no answer within the timeout: the card comes to you', async (t) => {
   const { hub, p, orch, w } = setup();
   const pending = ask(hub, p, w, 'npm run build');
   const id = last(p, 'approval').approval;
-  t.mock.timers.tick(119_000);
+  t.mock.timers.tick(299_000);   // decision 64 A: 5 minutes, so a busy orchestrator does not hand you the card
   assert.equal(p.log.ofType('approval_escalated').length, 0);
   t.mock.timers.tick(1_000);
   const esc = last(p, 'approval_escalated');
   assert.equal(esc.approval, id);
   assert.equal(esc.by, 'hub');
-  assert.match(esc.reason, /2 minutes/);
+  assert.match(esc.reason, /5 minutes/);
   assert.equal(last(p, 'permission_answer').answer, 'timeout');
   assert.match(hub.answerPermission(p, orch, id, 'allow', 'late'), /already with/);
   hub.answerApproval(id, false, 'no');
@@ -147,7 +147,7 @@ test('the off switch: requests with the orchestrator come to you, and new ones s
 
 test('routing is on by default and can start off from hub.json', () => {
   assert.equal(new HubSettings({ file: null }).get('routePermissions'), true);
-  assert.equal(new HubSettings({ file: null }).get('permissionTimeoutSec'), 120);
+  assert.equal(new HubSettings({ file: null }).get('permissionTimeoutSec'), 300);
   const { hub, p, w } = setup({ settings: { routePermissions: false } });
   ask(hub, p, w, 'npm run build');
   assert.equal(last(p, 'approval').routedTo, null);
@@ -273,8 +273,8 @@ test('auto mode applies to the orchestrator too: its reads and contained work pa
     'grep -n "classify" hub/lib/permissions.mjs | head -30'
   ]) assert.equal((await go(c)).behavior, 'allow', c);
   assert.equal(p.log.ofType('permission_answer').length, before, 'clear reads are not logged');
-  // unclear, with no hard stop: allowed, and one line in its thread
-  assert.equal((await go('B=$(git branch --show-current); echo $B')).behavior, 'allow');
+  // unclear, with no hard stop: allowed, and one line in its thread ($(git branch --show-current) is readable now)
+  assert.equal((await go('B=$(date +%s); echo $B')).behavior, 'allow');
   const line = last(p, 'permission_answer');
   assert.equal(line.thread, 'orchestrator');
   assert.equal(line.by, 'hub');

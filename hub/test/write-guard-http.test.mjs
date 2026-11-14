@@ -176,11 +176,11 @@ test('this PC: no login for everyday changes; its first big change sets up Windo
   const enrolled = await call('POST', '/api/settings', { body: { project: 'proj', connectors: true, stepUp: { enroll: pcKey.register({ challenge: o.json.publicKey.challenge, origin: `http://${LOCAL()}`, rpId: 'localhost' }) } }, host: LOCAL() });
   assert.equal(enrolled.status, 200, enrolled.text); assert.equal(enrolled.json.connectors, true);
   // from now on: Windows Hello, no fallback
-  const hub = { permissionTimeoutSec: 300 };
+  const hub = { permissionTimeoutSec: 600 };   // a change from the 5-minute default (decision 64 A)
   const need = (await call('POST', '/api/settings', { body: hub, host: LOCAL() })).json.stepUp;
   assert.ok(need && !need.enroll, 'a normal confirmation now');
   assert.equal((await call('POST', '/api/settings', { body: { ...hub, stepUp: { fallback: true } }, host: LOCAL() })).status, 403, 'no fallback once the PC has its passkey');
-  assert.equal((await call('POST', '/api/settings', { body: { ...hub, stepUp: await confirmPC(need) }, host: LOCAL() })).json.settings.permissionTimeoutSec, 300);
+  assert.equal((await call('POST', '/api/settings', { body: { ...hub, stepUp: await confirmPC(need) }, host: LOCAL() })).json.settings.permissionTimeoutSec, 600);
   assert.equal((await call('POST', '/api/pc/enroll', { body: { purpose: 'push', scope: 'push' }, cookie: testCookie })).status, 403, 'a remote device cannot set up the PC passkey');
   // the phone's path, and anything that came through a proxy: refused without a cookie
   assert.equal((await call('POST', '/api/send', { body: msg })).status, 401, 'Host ts.net');
@@ -193,7 +193,7 @@ test('this PC: no login for everyday changes; its first big change sets up Windo
   assert.equal((await call('POST', '/api/send', { body: msg, host: LOCAL(), extra: { origin: 'http://localhost:3000' } })).status, 401, 'a page on another local port');
   assert.equal((await call('POST', '/api/send', { body: msg, host: LOCAL(), extra: { origin: 'https://evil.example' } })).status, 403, 'a foreign page is refused by the page checks');
   // back to where the tests below expect it
-  for (const b of [{ project: 'proj', permissionMode: 'standard', connectors: false, handoff: { retireAt: null } }, { permissionTimeoutSec: 120 }]) {
+  for (const b of [{ project: 'proj', permissionMode: 'standard', connectors: false, handoff: { retireAt: null } }, { permissionTimeoutSec: 300 }]) {
     let r = await call('POST', '/api/settings', { body: b, host: LOCAL() });
     if (r.status === 403) r = await call('POST', '/api/settings', { body: { ...b, stepUp: await confirmPC(r.json.stepUp) }, host: LOCAL() });
     assert.equal(r.status, 200, r.text);

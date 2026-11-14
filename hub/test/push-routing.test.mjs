@@ -57,12 +57,12 @@ test('the orchestrator escalates: one push', async () => {
   assert.deepEqual(pushed.map(x => x.card), [`approval:${id}`]);
 });
 
-test('no answer within two minutes: one push, at the timeout and not before', async (t) => {
+test('no answer within five minutes (decision 64 A): one push, at the timeout and not before', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { pushed, ask, last } = setup();
   ask('npm run build');
   const id = last('approval').approval;
-  t.mock.timers.tick(119_000);
+  t.mock.timers.tick(299_000);
   await settle();
   assert.equal(pushed.length, 0);
   t.mock.timers.tick(1_000);

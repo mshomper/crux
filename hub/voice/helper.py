@@ -66,6 +66,31 @@ def load_tts():
     return ptts.TTS(model=TTS_MODEL, device="cpu", voice=TTS_VOICE, lang=TTS_LANG, voice_catalog=TTS_VOICES)
 
 
+# Phonon's speech comes out at about -21.5 dBFS average (peaks about -3.8), measured 2026-11-14: some 5-6 dB under
+# what phone speakers expect. It is brought up to about -16 dBFS average (at most +9 dB), and a soft limiter bends the
+# few peaks that would pass -1 dBFS back under it instead of clipping them.
+TARGET_RMS_DB = -16.0
+MAX_GAIN_DB = 9.0
+CEILING = 0.891   # -1 dBFS
+
+
+def louder(samples):
+    import numpy as np
+    x = np.asarray(samples, dtype=np.float32)
+    if not x.size:
+        return x
+    rms = float(np.sqrt(np.mean(x.astype(np.float64) ** 2)))
+    if rms < 1e-6:
+        return x
+    gain = min(10 ** ((TARGET_RMS_DB - 20 * np.log10(rms)) / 20), 10 ** (MAX_GAIN_DB / 20))
+    y = x * np.float32(gain)
+    knee = np.float32(0.6 * CEILING)
+    a = np.abs(y)
+    over = a > knee
+    y[over] = np.sign(y[over]) * (knee + (CEILING - knee) * np.tanh((a[over] - knee) / (CEILING - knee)))
+    return y
+
+
 def wav_bytes(samples, rate):
     """Float samples (-1..1) as a mono 16-bit WAV, in memory."""
     import numpy as np
@@ -105,7 +130,7 @@ class Voice:
         with self.tts_lock:
             samples = self.tts.synth(text)
             rate = self.tts.sample_rate
-        return wav_bytes(samples, rate), len(samples) / rate
+        return wav_bytes(louder(samples), rate), len(samples) / rate
 
 
 def make_handler(voice, key):
