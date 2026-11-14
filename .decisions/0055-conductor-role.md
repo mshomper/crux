@@ -1,6 +1,6 @@
 # 0055 What may the Conductor, the agent above the project orchestrators, do?
 
-- Status: decided
+- Status: superseded (replaced by 0060)
 - Date: 2026-11-13, decided 2026-11-14
 - Lenses: architecture, research and product
 - Builds on: 0007, 0010, 0016, 0037, 0042
@@ -16,10 +16,6 @@ For you:
 - It never carries details from one project into another, so employer work stays out of personal projects and the public repo
 - Setup: Nothing to set up; it appears once the hub update is merged and the hub restarts
 - Hard to undo: Easy to widen later (to B) or switch off; it holds no data of its own beyond its handoffs
-
-## Decision
-
-**A: Read and route, woken on demand.** Reads every project; briefs you on what waits across projects; passes requests to the right orchestrator; flags projects that settle the same thing differently and drafts the decision card; warns orchestrators when plan usage runs short; keeps reminders across days. Never edits files, merges, pushes or answers permissions. Sleeps until you message it or a project posts a summary or a card. Same retire-and-handoff rules as orchestrators.
 
 ## Context
 

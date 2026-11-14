@@ -4,7 +4,7 @@
 - Date: 2026-11-14, decided 2026-11-14
 - Lenses: research and product, ui
 - Builds on: 0021, 0031, 0042, 0055, 0058, 0059
-- Settles: cross-project agent authority = a Conductor above the project orchestrators is the human's live single point of contact: it shows waiting cards with a recommendation so the human answers in place, and greets the human with one digest after time away; it answers nothing itself beyond routing; merges, pushes, installs, deletes and decisions always go to the human
+- Settles: cross-project agent authority = a Conductor above the project orchestrators is the human's live single point of contact: it shows waiting cards with a recommendation so the human answers in place, and greets the human with one digest after time away; it reads every project and routes requests to orchestrators, answers nothing itself, never edits, merges or pushes, and never carries details from one project into another; merges, pushes, installs, deletes and decisions always go to the human
 
 ## In short
 
