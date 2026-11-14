@@ -1,0 +1,110 @@
+{
+ "id": 57,
+ "slug": "all-projects-map",
+ "title": "What does the live map show when All projects is open?",
+ "date": "2026-11-13",
+ "mode": "quick",
+ "lenses": [
+  "ui"
+ ],
+ "status": "decided",
+ "lead": "Pick how the map shows every project at once, with the Conductor in the centre. I recommend C, one sector per project: each shows its name, how many things wait on you, its orchestrator, worker dots and context as plain text, and turns red when the project needs you. Confidence: medium.",
+ "for_you": [
+  "Opening All projects swaps the map to the Conductor in the centre with every project around it; clicking a project opens its orchestrator chat, and an ALL button in the strip goes back up",
+  "A project that needs you turns its whole sector red; today only the You station turns fully red, so this widens that rule for this map only",
+  {
+   "text": "Changes decision 42, where the map stayed on one project; going back is a page change only",
+   "kind": "undo"
+  }
+ ],
+ "context": "Decision 42 made All projects a list column and kept the live map strip (decision 17) on the last project opened, so Matt sees only one project's agents orbiting. He asked for the map in All projects to show the Conductor (decision 55) at the centre with each project's orchestrator attached, coloured when its project needs him. Mockups were made on the real hub page and live map, with fake projects (atlas with 2 waiting, harbor with 1, lumen, orchard) at 1920 and 390 wide. Conflict with decision 31 (red is your call): today only the You station turns fully red and agents get a red count badge; here a waiting project's whole station or sector turns red, on this map only.",
+ "depends_on": [
+  17,
+  31,
+  33,
+  42,
+  55,
+  56
+ ],
+ "conflicts": [
+  31
+ ],
+ "options": [
+  {
+   "key": "A",
+   "name": "One ring of orchestrators",
+   "summary": "The Conductor is the glass core; the orchestrators are stations on the existing ring with model colour, effort pips, a context ring with the 60% mark, and a red halo with a count when their project needs you. The board station is dropped; You stays.",
+   "pros": [
+    "Calmest; closest to today's map"
+   ],
+   "cons": [
+    "Project names and counts only on hover; workers not shown"
+   ],
+   "effort": "Medium",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Ring plus worker dots",
+   "summary": "As A, and each orchestrator has its workers as small dots on a short orbit: model colour, lit while working, red when waiting.",
+   "pros": [
+    "Shows who is busy everywhere at a glance"
+   ],
+   "cons": [
+    "Names still behind hover; busier at phone width"
+   ],
+   "effort": "Medium",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "HUD sectors",
+   "summary": "The ring splits into one sector per project, holding its orchestrator, worker dots and a context gauge with the 60% mark, with plain-text name, \"N waiting for you\", model and context. A waiting project's sector glows red. In the strip each project is a labelled bay with a small context bar.",
+   "pros": [
+    "Everything readable without hovering; boldest HUD look",
+    "Still fits four projects on a phone"
+   ],
+   "cons": [
+    "Most to draw; past about six projects the sectors get thin"
+   ],
+   "effort": "Medium to large",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "C",
+ "recommendation": "C takes the HUD look all the way while keeping every name, count and context level as plain text, so you never hover to find out which project needs you. B is the fallback if C feels too busy.",
+ "confidence": "lean",
+ "change_mind": "If C feels busy in use, or you run more than about six projects, go B.",
+ "chosen": "C",
+ "reason": "",
+ "decided_on": "2026-11-14",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [],
+ "images": [
+  {
+   "file": "images/0057-a-one-ring-strip-and-opened-map-at-1920.png",
+   "caption": "A: one ring, strip and opened map at 1920 and 390 wide",
+   "option": "A",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0057-b-ring-plus-worker-dots-at-1920-and-390.png",
+   "caption": "B: ring plus worker dots, at 1920 and 390 wide",
+   "option": "B",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0057-c-hud-sectors-at-1920-and-390-wide.png",
+   "caption": "C: HUD sectors, at 1920 and 390 wide",
+   "option": "C",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0057-after-clicking-a-project-its-own-map.png",
+   "caption": "After clicking a project: its own map, with an ALL button to go back up",
+   "kind": "mockup"
+  }
+ ]
+}

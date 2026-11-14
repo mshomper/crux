@@ -1,0 +1,116 @@
+{
+ "id": 51,
+ "slug": "backfill-briefs",
+ "title": "Should older decisions get a written brief too?",
+ "date": "2026-11-13",
+ "mode": "full",
+ "lenses": [
+  "data-model"
+ ],
+ "status": "decided",
+ "lead": "Pick whether an agent goes back and writes the short brief (answer first, what it means for you) into decisions made before the brief existed. I recommend B: only decisions still open or parked, since those are the ones you will read again. Confidence: lean.",
+ "for_you": [
+  "Older decisions you reopen will start with a plain answer instead of the background",
+  {
+   "text": "Nothing to set up: one records-only pull request, which I merge and report in one line",
+   "kind": "setup"
+  },
+  {
+   "text": "Easy to undo: briefs are two text fields; the original wording of every decision stays untouched",
+   "kind": "undo"
+  }
+ ],
+ "context": "Decision 50 B added two fields to every record, lead and for_you, and the hub's brief opens on them. Records 0001 to 0049 were written before that, so their brief is laid out from their other fields and opens on the recommendation with a note that no brief was written. The reviewer of PR #57 and the builder both listed a backfill as a possible follow-up. The Crux rule that nothing decided is ever rewritten still holds: a backfill only adds the two new fields and never changes the options, the pick or the reason. This record also serves as Matt's first live test of the brief on hub 0.17.1.",
+ "depends_on": [
+  50,
+  40,
+  41
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Leave them as they are",
+   "summary": "No backfill. Older decisions keep the fallback layout built from their fields. Every new decision gets a brief from now on.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='30' width='130' height='120' rx='3' fill='var(--muted)' fill-opacity='.15' stroke='currentColor'/><text x='85' y='60' font-size='12' text-anchor='middle' fill='currentColor'>0001 to 0049</text><text x='85' y='95' font-size='11' text-anchor='middle' fill='currentColor'>fallback layout</text><rect x='170' y='30' width='130' height='120' rx='3' fill='var(--accent)' fill-opacity='.12' stroke='var(--accent)'/><text x='235' y='60' font-size='12' text-anchor='middle' fill='currentColor'>0050 on</text><text x='235' y='95' font-size='11' text-anchor='middle' fill='currentColor'>written brief</text></svg>",
+   "pros": [
+    "No work, no records pull request",
+    "Most of the old decisions are settled and rarely reopened"
+   ],
+   "cons": [
+    "When an old decision comes back (a challenge or a superseding call), you read the agent-written background again"
+   ],
+   "effort": "None",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Only the ones still open or parked",
+   "summary": "An agent writes lead and for_you into every record whose status is open or parked, plus any decided record that a new decision is about to supersede. Settled ones keep the fallback.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='30' width='130' height='120' rx='3' fill='var(--muted)' fill-opacity='.15' stroke='currentColor'/><text x='85' y='60' font-size='12' text-anchor='middle' fill='currentColor'>settled</text><text x='85' y='95' font-size='11' text-anchor='middle' fill='currentColor'>fallback layout</text><rect x='170' y='30' width='130' height='120' rx='3' fill='var(--accent)' fill-opacity='.12' stroke='var(--accent)'/><text x='235' y='60' font-size='12' text-anchor='middle' fill='currentColor'>open, parked</text><text x='235' y='95' font-size='11' text-anchor='middle' fill='currentColor'>brief written</text><path d='M150 90h20' stroke='var(--accent)' stroke-width='2'/></svg>",
+   "pros": [
+    "Covers the decisions you are likely to read again",
+    "Small: a handful of records, one records-only pull request"
+   ],
+   "cons": [
+    "A settled decision that comes back later still needs its brief written then"
+   ],
+   "effort": "Small: one agent, under an hour, records only",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "All of them",
+   "summary": "An agent writes lead and for_you into every record from 0001 to 0049, settled ones included.",
+   "sketch": "<svg viewBox='0 0 320 180'><rect x='20' y='30' width='280' height='120' rx='3' fill='var(--accent)' fill-opacity='.12' stroke='var(--accent)'/><text x='160' y='75' font-size='12' text-anchor='middle' fill='currentColor'>0001 to 0049</text><text x='160' y='105' font-size='11' text-anchor='middle' fill='currentColor'>brief written into every record</text></svg>",
+   "pros": [
+    "Every card in the hub opens the same way",
+    "The whole decision history becomes readable on GitHub and the phone"
+   ],
+   "cons": [
+    "Most of the effort goes on decisions nobody will reopen",
+    "Writing a brief after the fact means guessing what mattered to you at the time"
+   ],
+   "effort": "Medium: about 49 records, one longer records-only pull request",
+   "source": "claude"
+  }
+ ],
+ "criteria": [
+  {
+   "name": "Readable where you will look again",
+   "scores": {
+    "A": 1,
+    "B": 3,
+    "C": 3
+   }
+  },
+  {
+   "name": "Little work",
+   "scores": {
+    "A": 3,
+    "B": 2,
+    "C": 1
+   }
+  },
+  {
+   "name": "Briefs that are true to the time of the call",
+   "scores": {
+    "A": 3,
+    "B": 3,
+    "C": 1
+   },
+   "note": "Open and parked calls are still live, so their brief can be written now"
+  }
+ ],
+ "recommended": "B",
+ "recommendation": "The brief pays off when you read a decision again, and that is almost always an open or parked one. B covers those for a small records-only change; C spends most of its effort on history.",
+ "confidence": "lean",
+ "change_mind": "If you often browse the settled history on your phone, C is worth it; if you hardly reopen anything, A.",
+ "chosen": "B",
+ "reason": "",
+ "decided_on": "2026-11-13",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [],
+ "images": []
+}
