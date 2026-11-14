@@ -25,6 +25,7 @@ export const CONDUCTOR = '~conductor';          // its place name in URLs and li
 export const CONDUCTOR_THREAD = 'conductor';
 export const CONDUCTOR_ROLE = 'conductor';
 export const WAKE_MS = 2 * 60 * 1000;           // updates within this long of the first one wake it once
+export const DIGEST_MS = 30 * 60 * 1000;         // decision 60 A: while you are away, one digest at most this often
 export const MAX_AUTO_WAKES = 6;                 // automatic wakes (projects' updates) an hour at most
 const HOUR_MS = 60 * 60 * 1000;
 export const BRIEF_ANSWER_MS = 30 * 60 * 1000;   // an orchestrator's first summary this soon after a brief answers it
@@ -36,12 +37,12 @@ const REMINDER_MAX_DAYS = 400;
 // Its board tools, by name. These and nothing else: the permission callback refuses every other tool.
 export const CONDUCTOR_TOOLS = ['hub_overview', 'needs_you', 'board_index', 'board_read', 'latest_handoff', 'list_agents',
   'message_agent', 'plan_usage', 'profile_read', 'post_summary', 'propose_lesson', 'post_visual',
-  'set_reminder', 'list_reminders', 'clear_reminder', 'write_handoff', 'stay_quiet'];
+  'set_reminder', 'list_reminders', 'clear_reminder', 'write_handoff', 'stay_quiet', 'note_cards'];
 // Tools that end its turn as soon as they succeed, with no text after them (Claude Code's CLAUDE_CODE_TERMINAL_MCP_TOOLS).
 // Without this, a turn that ends with no text gets Claude Code's own follow-up, "Your previous response had no visible
 // output. Please continue and produce a user-visible response", and the Conductor learned to write a needless line
 // every time (Matt, 0.19.5: "nothing is waiting in crux"). stay_quiet does nothing else: it adds no authority.
-export const CONDUCTOR_QUIET_TOOLS = ['post_summary', 'stay_quiet'].map(n => `mcp__crux__${n}`);
+export const CONDUCTOR_QUIET_TOOLS = ['post_summary', 'stay_quiet', 'note_cards'].map(n => `mcp__crux__${n}`);
 // Claude Code's follow-up after a turn with no text (seen as a synthetic user message in the SDK stream).
 export const isNoOutputNudge = m => m?.type === 'user' && !!m.isSynthetic
   && /^\[Your previous response had no visible output\b/.test([].concat(m.message?.content ?? []).map(b => typeof b === 'string' ? b : b?.text || '').join(''));
@@ -79,10 +80,14 @@ export class Conductor {
     this.home = new ConductorHome(dir);
     this.wakeMs = wakeMs;
     this.maxAutoWakes = MAX_AUTO_WAKES;
-    // Lines waiting for the next wake: { line, reminder? }. Update lines are logged as they come (wake_pending), so a
-    // restart keeps them; due reminders are found again from the log, since they are marked done only once delivered.
+    this.digestMs = DIGEST_MS;
+    // Lines waiting for the next wake: { line, cause, ts } or { line, reminder }. Update lines are logged as they come
+    // (wake_pending), so a restart keeps them; due reminders are found again from the log, since they are marked done
+    // only once delivered.
     this.pending = this.restorePending();
     this.timer = null;
+    this.digestTimer = null;   // set while you are away and cards are held for one digest (decision 60 A)
+    this.owed = [];            // cards events posted while it worked: it adds its notes at the end of its turn
     this.activity = '';
     this.off = hub.on(ev => this.heard(ev));
     this.reminderTimer = setInterval(() => this.dueReminders(), REMINDER_CHECK_MS);
@@ -90,13 +95,15 @@ export class Conductor {
     if (this.pending.length && this.wakesOn()) this.arm(this.wakeMs);
   }
 
+  // The card lines not yet handed over: those after the last event that took them (a wake that carried them, your
+  // message they rode along with, a cards post, or a skip). A reminder-only wake leaves held lines where they are.
   restorePending() {
     const evs = this.home.log.events;
-    const from = evs.findLastIndex(e => e.type === 'wake' || e.type === 'wake_taken');
-    return evs.slice(from + 1).filter(e => e.type === 'wake_pending').map(e => ({ line: e.line, cause: e.cause || null }));
+    const from = evs.findLastIndex(e => (e.type === 'wake' && !e.noLines) || e.type === 'wake_taken' || e.type === 'cards');
+    return evs.slice(from + 1).filter(e => e.type === 'wake_pending').map(e => ({ line: e.line, cause: e.cause || null, ts: Date.parse(e.ts) || Date.now() }));
   }
 
-  stop() { this.off?.(); clearTimeout(this.timer); clearInterval(this.reminderTimer); }
+  stop() { this.off?.(); clearTimeout(this.timer); clearTimeout(this.digestTimer); clearInterval(this.reminderTimer); }
   holder() { return this.home.holder(); }
 
   // The holder, started if none: a fresh one reads the latest Conductor handoff. Model and effort come from hub.json's
@@ -110,14 +117,22 @@ export class Conductor {
   }
 
   // ---------- messages ----------
-  // Yours, at once. Updates waiting for a batched wake ride along in front of it.
+  // Yours, at once. Cards waiting for a batched wake (or held while you were away) go up first, above your message,
+  // and its notes on them ride along in front of your message.
   // extra: more fields for the message event (answers: the Conductor's questions it answers, from its question card).
   fromYou(text, attachments = [], extra = {}) {
+    this.prune();   // settled cards do not ride along with your message either
+    const held = this.pending.filter(x => !x.reminder);
+    let cards = null;
+    if (held.length) {
+      const digest = this.digestTimer ? 'return' : null;
+      this.unhold();
+      this.pending = this.pending.filter(x => x.reminder);
+      cards = this.postCards(held, { digest });
+    }
     this.home.log.append('message', { thread: CONDUCTOR_THREAD, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
     const a = this.ensure();
-    this.prune();   // settled cards do not ride along with your message either
-    const lines = this.take('wake_taken');
-    if (lines) a.noteForNextTurn(lines);
+    if (cards) a.noteForNextTurn(this.notesRequest(cards));
     a.send(text, attachments);
   }
 
@@ -196,35 +211,160 @@ export class Conductor {
 
   // cause: the card behind the line ({ project, summary } or { project, approval }), checked again before the wake.
   queue(line, cause = null) {
-    this.pending.push({ line, cause });
+    this.pending.push({ line, cause, ts: Date.now() });
     this.home.log.append('wake_pending', { line, cause });
     this.arm(this.wakeMs);
   }
 
-  // Does the card behind this line still wait for you? A wake comes up to the batching window after the card, and you
-  // often settle it first (Matt, 0.19.4: replies like "nothing is waiting, it already left your list"). A summary
-  // still waits while one of its questions is open or one of its decisions is; a permission card while it waits.
-  stillWaiting(item) {
-    const c = item.cause;
-    if (item.reminder || !c) return true;
-    const p = this.hub.projects.get(c.project);
-    if (!p) return false;
-    if (c.approval) return this.hub.approvals.has(c.approval);
-    const ev = p.log.events.find(e => e.id === c.summary);
-    if (!ev) return false;
-    const status = id => p.board.decision(id)?.status;
-    return openAsked(p.log.events, { decisionStatus: status }).some(q => q.id === ev.id)
-      || (ev.decisions_needed || []).some(id => ['open', 'found'].includes(status(id)));
+  // ---------- the cards behind the lines ----------
+  // Does one card still wait for you? card: "approval:<id>", "question:<summary id>" or "decision:<n>". The same rules
+  // as Needs you: a permission card while it waits, a question while it is open, a decision while open or found.
+  cardWaiting({ project, card }) {
+    const p = this.hub.projects.get(project);
+    if (!p || typeof card !== 'string') return false;
+    const i = card.indexOf(':'), kind = card.slice(0, i), id = card.slice(i + 1);
+    const status = n => p.board.decision(n)?.status;
+    if (kind === 'approval') return this.hub.approvals.has(id);
+    if (kind === 'decision') return ['open', 'found'].includes(status(Number(id)));
+    if (kind === 'question') return openAsked(p.log.events, { decisionStatus: status }).some(q => q.id === id);
+    return false;
   }
 
-  // Lines whose cards are settled leave the queue. When none is left, nothing wakes it: no turn, no reply. A marker
-  // in the log (no thread, so nothing shows) keeps a restart from bringing the settled lines back.
+  // The cards a line stands for that still wait: a permission card, or a summary's question card and its decisions.
+  cardsOf(item) {
+    const c = item.cause;
+    const p = c && this.hub.projects.get(c.project);
+    if (!p) return [];
+    const cands = c.approval ? [`approval:${c.approval}`]
+      : [`question:${c.summary}`, ...new Set((p.log.events.find(e => e.id === c.summary)?.decisions_needed || []).map(n => `decision:${Number(n)}`))];
+    return cands.map(card => ({ project: p.name, card })).filter(x => this.cardWaiting(x));
+  }
+
+  // Does the card behind this line still wait for you? A wake comes up to the batching window after the card, and you
+  // often settle it first (Matt, 0.19.4: replies like "nothing is waiting, it already left your list").
+  stillWaiting(item) {
+    if (item.reminder || !item.cause) return true;
+    return this.cardsOf(item).length > 0;
+  }
+
+  // Lines whose cards are settled leave the queue. When no card line is left, nothing wakes it: no turn, no reply. A
+  // marker in the log (no thread, so nothing shows) keeps a restart from bringing the settled lines back.
   prune() {
     const before = this.pending.length;
     this.pending = this.pending.filter(x => this.stillWaiting(x));
     const skipped = before - this.pending.length;
-    if (skipped && !this.pending.length) this.home.log.append('wake_taken', { skipped, why: 'settled before the wake' });
+    if (skipped && !this.pending.some(x => !x.reminder)) this.home.log.append('wake_taken', { skipped, why: 'settled before the wake' });
     return skipped;
+  }
+
+  // ---------- decision 60 A: live while you are here, one digest when you have been away ----------
+  // Are you here? The hub's presence (server.mjs: push.present(), decision 58's rule: the PC in use, or an open hub page
+  // with recent input). With no presence wired in (tests, an older server) you count as here.
+  present() { const f = this.hub.presence; return typeof f === 'function' ? f() !== false : true; }
+
+  // You are away: the card lines wait for one digest, due 30 minutes after the oldest held line (and never sooner than
+  // 30 minutes after the last digest). Your return posts it at once (presenceReport, fromYou).
+  hold(now = Date.now()) {
+    if (this.digestTimer) return;
+    const held = this.pending.filter(x => !x.reminder);
+    if (!held.length) return;
+    const oldest = Math.min(...held.map(x => x.ts || now));
+    const last = this.home.log.ofType('cards').filter(e => e.digest).at(-1);
+    const due = Math.max(oldest, last ? Date.parse(last.ts) : 0) + this.digestMs;
+    this.digestTimer = setTimeout(() => { this.digestTimer = null; this.flush({ digest: this.present() ? 'return' : 'away' }); }, Math.max(0, due - now));
+    this.digestTimer.unref?.();
+  }
+  unhold() { clearTimeout(this.digestTimer); this.digestTimer = null; }
+  holding() { return !!this.digestTimer; }
+
+  // The hub calls this on every presence report (a hub page, the desktop app). Back while cards are held: the digest
+  // goes up now.
+  presenceReport() {
+    if (!this.digestTimer || !this.present()) return;
+    this.unhold();
+    clearTimeout(this.timer); this.timer = null;
+    this.flush({ digest: 'return' });
+  }
+
+  // The real cards go into its thread (one "cards" event), grouped by project in the hub's order and, within one,
+  // permission cards, questions, decisions. The hub draws them answerable in place; the Conductor only adds its notes
+  // (note_cards). digest: 'return' (you came back) or 'away' (30 minutes away: one phone notice for the lot).
+  // Null when no card still waits (a marker then keeps a restart from bringing the lines back).
+  postCards(items, { digest = null } = {}) {
+    const seen = new Set(), list = [];
+    for (const x of items) for (const c of this.cardsOf(x)) { const k = `${c.project}|${c.card}`; if (!seen.has(k)) { seen.add(k); list.push(c); } }
+    if (!list.length) { this.home.log.append('wake_taken', { skipped: items.length, why: 'settled before the cards went up' }); return null; }
+    const order = [...this.hub.projects.keys()], rank = c => ['approval', 'question', 'decision'].indexOf(c.card.slice(0, c.card.indexOf(':')));
+    list.sort((a, b) => order.indexOf(a.project) - order.indexOf(b.project) || rank(a) - rank(b));
+    const ev = this.home.log.append('cards', { thread: CONDUCTOR_THREAD, items: list, ...(digest ? { digest } : {}) });
+    if (digest === 'away') this.hub.digestNotice?.({ id: ev.id, count: list.length, projects: new Set(list.map(c => c.project)).size });
+    return ev;
+  }
+
+  // The words the Conductor reads about one card, to write its note: who asks what, or the decision and its options.
+  cardDetail({ project, card }) {
+    const p = this.hub.projects.get(project);
+    const i = card.indexOf(':'), kind = card.slice(0, i), id = card.slice(i + 1);
+    if (kind === 'approval') {
+      const ev = p.log.events.find(e => e.type === 'approval' && e.approval === id);
+      if (!ev) return 'a permission card';
+      const what = String(ev.input?.description || ev.summary?.plain || `use ${ev.tool}`).split('\n')[0].slice(0, 160);
+      const cmd = String(ev.input?.command || ev.input?.file_path || '').split('\n')[0].slice(0, 120);
+      return `permission: ${ev.agent} wants to ${what}${cmd ? ` (${ev.tool}: ${cmd})` : ''}${ev.stops?.length ? `; always ${'{{who}}'}'s: ${ev.stops.join('; ')}` : ''}`;
+    }
+    if (kind === 'question') {
+      const q = openAsked(p.log.events, { decisionStatus: n => p.board.decision(n)?.status }).find(x => x.id === id);
+      if (!q) return 'a question';
+      return `question from ${q.from}: ${q.open.map(x => q.open.length > 1 ? `(${x.i + 1}) ${x.text}` : x.text).join(' ')}`.slice(0, 900);
+    }
+    const d = p.board.decision(Number(id));
+    if (!d) return 'a decision';
+    return `decision D${String(d.id).padStart(4, '0')} "${d.title}": ${(d.options || []).map(o => `${o.key} ${o.name}`).join('; ')}${d.recommended ? `; the record recommends ${d.recommended}` : ''}${d.lead ? `. ${d.lead}` : ''}`.slice(0, 900);
+  }
+
+  // What the Conductor is asked to write about cards it has not noted yet (still waiting ones only), or ''.
+  notesRequest(evs) {
+    evs = [].concat(evs).filter(Boolean);
+    const lines = evs.flatMap(ev => ev.items.filter(it => this.cardWaiting(it)).map(it => `- ${it.project} · ${it.card} · ${this.cardDetail(it)}`));
+    if (!lines.length) return '';
+    const digest = evs.some(e => e.digest);
+    return `[Hub: ${digest ? 'digest after time away' : 'new cards'} for {{who}}]
+These cards now show in your thread, answerable in place. {{Who}} answers them; you never do. Add your notes with one
+note_cards call: per card a one-line plain summary, your recommendation, and fill (what to pre-fill: a decision's
+letter, "allow" or "deny" for a permission, or the reply text for a question).${digest ? ' Add intro: one or two lines on how the projects are moving.' : ''}
+Use only each card's own project's details. Then stop.
+${lines.join('\n')}`;
+  }
+
+  // Ask for notes in a turn of their own (an automatic wake, so within the hourly cap; past it the cards show without).
+  askNotes(evs, now = Date.now()) {
+    const msg = this.notesRequest(evs);
+    if (!msg || this.autoWakes(now).length >= this.maxAutoWakes) return false;
+    const a = this.ensure();
+    this.home.log.append('wake', { agent: a.name, auto: true, noLines: true, cards: [].concat(evs).map(e => e.id) });
+    a.send(msg);
+    return true;
+  }
+
+  // note_cards: its notes on cards in its thread, each attached to the latest cards event holding that card. Only cards
+  // that are there; nothing is answered.
+  noteCards(agent, { intro = '', items = [] } = {}) {
+    const all = this.home.log.ofType('cards');
+    const clip = (s, n) => String(s ?? '').trim().slice(0, n);
+    const byEv = new Map();
+    for (const it of items || []) {
+      const ev = all.findLast(e => e.items.some(c => c.project === it.project && c.card === it.card));
+      if (!ev) continue;
+      if (!byEv.has(ev.id)) byEv.set(ev.id, []);
+      byEv.get(ev.id).push({ project: it.project, card: it.card, summary: clip(it.summary, 240), recommend: clip(it.recommend, 160), fill: clip(it.fill, 400) });
+    }
+    const last = all.at(-1);
+    intro = clip(intro, 300);
+    if (intro && last && !byEv.has(last.id)) byEv.set(last.id, []);
+    if (!byEv.size) return 'None of those cards is in your thread, so nothing was noted.';
+    for (const [of, its] of byEv) this.home.log.append('cards_note', { of, from: agent.name, items: its, ...(intro && of === last?.id ? { intro } : {}) });
+    const n = [...byEv.values()].reduce((k, v) => k + v.length, 0);
+    return `Noted ${n} card${n === 1 ? '' : 's'}.`;
   }
 
   arm(ms) {
@@ -233,43 +373,57 @@ export class Conductor {
     this.timer.unref?.();
   }
 
-  // Everything waiting, as one message; due reminders delivered with it are marked done now (not when they fell due,
-  // so a restart before delivery finds them again). marker: the event that says the lines were handed over.
-  take(marker = 'wake', extra = {}) {
-    if (!this.pending.length) return '';
-    const items = this.pending;
-    this.pending = [];
-    const lines = [...new Set(items.map(x => x.line))];
-    const msg = `[Hub: updates since you last heard]\n${lines.join('\n')}`;
-    this.home.log.append(marker, { ...(marker === 'wake' ? { thread: CONDUCTOR_THREAD } : {}), text: msg, ...extra });
-    for (const r of items.filter(x => x.reminder)) this.home.log.append('reminder_done', { thread: CONDUCTOR_THREAD, reminder: r.reminder, why: 'due' });
+  // The due reminders waiting, as one message, marked done now (not when they fell due, so a restart before delivery
+  // finds them again). The wake event shows in its thread; noLines: it hands over no card lines.
+  takeReminders(extra = {}) {
+    const items = this.pending.filter(x => x.reminder);
+    if (!items.length) return '';
+    this.pending = this.pending.filter(x => !x.reminder);
+    const msg = `[Hub: updates since you last heard]\n${[...new Set(items.map(x => x.line))].join('\n')}`;
+    this.home.log.append('wake', { thread: CONDUCTOR_THREAD, text: msg, auto: false, noLines: true, ...extra });
+    for (const r of items) this.home.log.append('reminder_done', { thread: CONDUCTOR_THREAD, reminder: r.reminder, why: 'due' });
     return msg;
   }
 
-  // One turn for everything queued. A busy, retiring or answering holder takes it at the end of its turn (afterTurn).
-  // force: a due reminder, which is never held back. Otherwise at most maxAutoWakes automatic wakes an hour: past
-  // that, the lines wait (and ride along with your next message) until the oldest wake leaves the hour.
-  flush({ force = false, now = Date.now() } = {}) {
+  // Everything queued, once the batching window is over (decision 60 A):
+  // - You are here (or a digest is due): the cards go up in its thread at once, busy or not, and the Conductor is woken
+  //   to add its notes (at the end of its turn if it is working; within the hourly cap of automatic wakes).
+  // - You are away: the card lines wait for one digest (hold).
+  // Due reminders wake it whatever your presence (never capped); a working holder gets them at the end of its turn.
+  flush({ now = Date.now(), digest = null } = {}) {
     this.prune();
     if (!this.pending.length) return false;
-    const cur = this.holder();
-    if (cur && (['working', 'starting'].includes(cur.state) || cur.retiring || cur.capture)) return false;
-    const auto = !this.pending.some(x => x.reminder);
-    if (auto && !force) {
-      const recent = this.autoWakes(now);
-      if (recent.length >= this.maxAutoWakes) { this.arm(Date.parse(recent[0].ts) + HOUR_MS - now + 1000); return false; }
+    const showCards = !!digest || this.present();
+    const cardLines = this.pending.filter(x => !x.reminder);
+    if (cardLines.length && !showCards) this.hold(now);
+    let cards = null;
+    if (cardLines.length && showCards) {
+      this.unhold();
+      this.pending = this.pending.filter(x => x.reminder);
+      cards = this.postCards(cardLines, { digest });
     }
-    const a = this.ensure();
-    const msg = this.take('wake', { agent: a.name, auto });
-    a.send(msg);
-    return true;
+    const cur = this.holder();
+    if (cur && (['working', 'starting'].includes(cur.state) || cur.retiring || cur.capture)) {
+      if (cards) this.owed.push(cards);
+      return !!cards;
+    }
+    if (this.pending.some(x => x.reminder)) {
+      const a = this.ensure();
+      const msg = this.takeReminders({ agent: a.name });
+      a.send([msg, cards ? this.notesRequest(cards) : ''].filter(Boolean).join('\n\n'));
+      return true;
+    }
+    if (cards) this.askNotes(cards, now);
+    return !!cards;
   }
 
-  // The hub calls this when the Conductor goes idle (Hub.onIdle): a due reminder at once, updates after the window.
+  // The hub calls this when the Conductor goes idle (Hub.onIdle): notes owed on cards posted while it worked, a due
+  // reminder at once, card lines after the window.
   afterTurn() {
+    if (this.owed.length) this.askNotes(this.owed.splice(0));
     if (!this.pending.length) return;
-    if (this.pending.some(x => x.reminder)) { clearTimeout(this.timer); this.timer = null; this.flush({ force: true }); }
-    else this.arm(this.wakeMs);
+    if (this.pending.some(x => x.reminder)) { clearTimeout(this.timer); this.timer = null; this.flush(); }
+    else if (!this.digestTimer) this.arm(this.wakeMs);
   }
 
   // ---------- reminders across days ----------
@@ -302,7 +456,7 @@ export class Conductor {
     if (!due.length || this.hub.noAgents) return due.length;
     for (const r of due) this.pending.push({ line: `- Reminder ${r.id} is due (set for ${when(r.at)}): ${r.text}`, reminder: r.id });
     clearTimeout(this.timer); this.timer = null;
-    this.flush({ force: true, now });
+    this.flush({ now });
     return due.length;
   }
 
@@ -434,6 +588,17 @@ export class Conductor {
         })),
       tool('stay_quiet', hub.memory.personalize('End this turn without writing anything to {{who}}: for a wake or update that needs nothing from you. Nothing shows in your thread.'), {},
         safe(() => { home.log.append('quiet', { agent: agent.name }); return 'Turn ended quietly.'; })),
+      tool('note_cards', hub.memory.personalize('Your notes on the cards the hub put in your thread for {{who}} (decision 60): per card a one-line plain summary, your recommendation, and what to pre-fill. {{Who}} answers the card; this answers nothing. Ends your turn.'),
+        {
+          intro: z.string().max(300).optional().default('').describe('For a digest: one or two lines on how the projects are moving.'),
+          items: z.array(z.object({
+            project: z.string(), card: z.string().describe('As the hub listed it: "question:<id>", "decision:<n>" or "approval:<id>".'),
+            summary: z.string().max(240).describe('One plain line: what is being asked.'),
+            recommend: z.string().max(160).describe('Your recommendation in a few words, e.g. "A, Web Mercator" or "Yes, merge it".'),
+            fill: z.string().max(400).optional().default('').describe('What to pre-fill: a decision\'s letter, "allow" or "deny", or the reply text for a question.')
+          })).max(40)
+        },
+        safe(args => this.noteCards(agent, args))),
       tool('propose_lesson', hub.memory.personalize('Record a lasting lesson about how {{who}} wants work done across projects. It waits for {{who}}\'s OK before it joins the core profile.'),
         { lesson: z.string().max(400) }, safe(({ lesson }) => hub.proposeLesson(home, agent, 'core', lesson))),
       tool('post_visual', hub.memory.personalize('Show {{who}} a picture (png, jpg, gif, webp, svg) or a small self-contained HTML page from a file the hub can read. Returns an id for post_summary visuals.'),
@@ -518,6 +683,7 @@ export class Conductor {
       live: !!a?.live, retiring: a?.retiring || false, restartPending: !!a?.restartWhenIdle,
       retireAt: this.hub.retireAtFor(this.home), activity: this.activity, waiting,
       wakes: this.wakesOn(), pendingWake: this.pending.length, questions, lessons,
+      digestMinutes: Math.round(this.digestMs / 60000), held: this.holding() ? this.pending.filter(x => !x.reminder).length : 0,
       ...(events ? { events: evs.slice(-EVENTS_SHOWN), olderEvents: Math.max(0, evs.length - EVENTS_SHOWN) } : {})
     };
   }

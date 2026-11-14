@@ -70,7 +70,7 @@ export function stillOpen(card, { approvals, decisionOpen, decisionStatus, event
   if (card.kind === 'approval') return approvals.has(card.card.slice('approval:'.length));
   if (card.kind === 'decision') return decisionOpen(Number(card.card.slice('decision:'.length)));
   if (card.kind === 'question') return questionOpen(events, card.askedAt, { decisionStatus });
-  if (card.kind === 'level') return true;   // a notice, not a card that gets settled
+  if (card.kind === 'level' || card.kind === 'digest') return true;   // notices, not cards that get settled
   return false;
 }
 
@@ -155,9 +155,31 @@ export class Push {
 
   presence(client, info, now = Date.now()) {
     if (!client) return;
-    if (info.gone) return void this.presences.delete(client);
+    if (info.gone) { this.presences.delete(client); return; }
     this.presences.set(client, { project: info.project, thread: info.thread, visible: !!info.visible, focused: !!info.focused, idleMs: Number(info.idleMs) || 0, ts: now });
     for (const [k, p] of this.presences) if (now - p.ts > 10 * 60 * 1000) this.presences.delete(k);
+    this.onPresence?.();
+  }
+
+  // Decision 60 A: are you here at all? The PC in use (decision 58's rule), or a hub page open and showing, on any
+  // device, with input in the last 5 minutes. Otherwise you are away: idle 5+ minutes, locked or asleep, the app not
+  // connected, and no open page.
+  present(now = Date.now()) {
+    if (this.pcInUse(now)) return true;
+    for (const p of this.presences.values()) {
+      const age = now - p.ts;
+      if (age <= LOOK_FRESH_MS && p.visible && (p.idleMs || 0) + age < PC_IDLE_MS) return true;
+    }
+    return false;
+  }
+
+  // Decision 60 A: one notice for the Conductor's digest after 30 minutes away, in place of one per card. It opens the
+  // digest in All projects. info: { id (the digest event), count, projects }.
+  digest(info, ctx = this.ctx) {
+    const n = info.count, m = info.projects;
+    const card = { kind: 'digest', card: `digest:${info.id}`, project: '~conductor', thread: HUB_THREAD,
+      title: `${n} card${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} you`, body: `The Conductor's digest · ${m} project${m === 1 ? '' : 's'}` };
+    this.route(card, ctx);
   }
 
   // ---------- decision 58: the desktop app on this PC ----------
@@ -183,6 +205,7 @@ export class Push {
   desktopPresence(client, { idleMs = 0, locked = false, notices = true } = {}, now = Date.now()) {
     const d = this.desktops.get(client);
     if (d) Object.assign(d, { idleMs: Math.max(0, Number(idleMs) || 0), locked: !!locked, notices: notices !== false, ts: now });
+    if (d) this.onPresence?.();
     return !!d;
   }
   // The PC is in use and can show a notice: a desktop app reported recently, the PC is not locked, there was input
@@ -217,6 +240,7 @@ export class Push {
 
   // Does the card still wait for you (answered, picked, settled elsewhere)?
   open(card, ctx) {
+    if (card.kind === 'digest') return true;   // a notice of its own; its cards are checked when it is drawn
     return stillOpen(card, { approvals: ctx.approvals, decisionOpen: id => ctx.decisionOpen(card.project, id), decisionStatus: id => ctx.decisionStatus?.(card.project, id), events: ctx.events(card.project) });
   }
 
@@ -225,6 +249,9 @@ export class Push {
     if (this.sent.has(card.card) || this.sentDesk.has(card.card)) return;
     const id = `${card.card} (${card.project})`;
     if (!this.open(card, ctx)) return this.log(`${id}: settled before it went out`);
+    // Decision 60 A: while you are away and the Conductor is on, questions and decisions wait for its one digest
+    // notice. Permission requests (they may need you now) and raises to Trusted still go at once.
+    if ((card.kind === 'question' || card.kind === 'decision') && this.holdForDigest?.()) return this.log(`${id}: held for the Conductor's digest (you are away)`);
     const looking = isLooking(card, this.presences.values());
     // Decision 58 A: the PC while it is in use (or when no phone is set up).
     const desk = this.desktops.size > 0 && (this.pcInUse() || (!this.subs.length && this.desktopCanShow()));

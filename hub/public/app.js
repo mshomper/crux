@@ -544,8 +544,10 @@ function retiredSection(p, workers) {
 }
 
 // ---------- render: cards ----------
-function decisionCard(p, d) {
+// take: the letter the Take button offers, when the Conductor recommends another than the record (decision 60).
+function decisionCard(p, d, { take = null } = {}) {
   if (!d) return '';
+  const offer = take || d.recommended;
   const open = d.status === 'open', found = d.status === 'found';
   const opts = (d.options || []).map(o => `
     <button class="opt ${o.key === d.recommended ? 'rec' : ''} ${o.key === d.chosen ? 'chosen' : ''}" data-pick="${d.id}" data-choice="${o.key}" ${open ? '' : 'disabled'}>
@@ -554,7 +556,7 @@ function decisionCard(p, d) {
       <span class="osum">${esc(o.summary || '')}</span>
     </button>`).join('');
   const foot = open
-    ? `${d.recommended ? `<button class="btn primary" data-pick="${d.id}" data-choice="${d.recommended}">${icon('check')}Take ${esc(d.recommended)}</button>` : ''}<span class="faint">or reply "${d.id}${esc(d.recommended || 'A')}"</span>`
+    ? `${offer ? `<button class="btn primary" data-pick="${d.id}" data-choice="${esc(offer)}">${icon('check')}Take ${esc(offer)}</button>` : ''}<span class="faint">or reply "${d.id}${esc(offer || 'A')}"</span>`
     : found
       ? `<button class="btn good" data-pick="${d.id}" data-choice="confirm">${icon('check')}Confirm</button><button class="btn" data-pick="${d.id}" data-choice="reject">${icon('x')}Reject</button>`
       : `<span class="chip ${esc(d.status)}">${esc(d.status)}${d.chosen ? ' · ' + esc(d.chosen) : ''}</span>`;
@@ -778,8 +780,94 @@ function conductorItem(ev) {
       case 'lesson_proposed': return `<div class="notice">${esc(ev.from)} proposed a lesson for your core profile (under Waiting)</div>`;
       case 'reminder': return `<div class="notice">${icon('clock')}Reminder set for ${esc(new Date(ev.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}: ${esc(ev.text)}</div>`;
       case 'wake': return `<div class="notice cd-wake" title="${esc(ev.text)}">${esc(CP.wakeLine(ev))} · ${timeOf(ev.ts)}</div>`;
+      case 'cards': return cardsBlock(ev);
       default: return '';
   }
+}
+
+// ---------- cards in the Conductor's chat (decision 60 A) ----------
+// The real cards, drawn by the same code as Needs you, each inside its project's data-pj section, so a tap or reply
+// goes to that project through the same path as in Needs you and counts as yours there. Above each: the Conductor's
+// one-line summary and recommendation (its note), and the card comes pre-filled where it allows. A card answered
+// anywhere (here, Needs you, its thread) leaves both on the same redraw and shows here as one line.
+// look(): one card as the page sees it, or null once it no longer waits (CP.recommendedActions).
+function chatCard(it) {
+  const p = S.projects.find(x => x.name === it.project);
+  if (!p) return null;
+  const kind = CP.cardKind(it.card), id = CP.cardId(it.card);
+  if (kind === 'approval') {
+    const ev = p.events.find(e => e.type === 'approval' && e.approval === id);
+    return ev && S.pending.has(id) ? { kind, p, ev, stops: ev.stops || [] } : null;
+  }
+  if (kind === 'decision') {
+    const d = openDecisions(p).find(x => x.id === Number(id));
+    return d ? { kind, p, d, status: d.status, options: (d.options || []).map(o => o.key), recommended: d.recommended || null } : null;
+  }
+  if (kind === 'question') {
+    const q = openQuestions(p).find(x => x.id === id);
+    return q ? { kind, p, q, open: q.open } : null;
+  }
+  return null;
+}
+// Pre-fill a question's reply box once from the Conductor's note (never over what you typed or cleared).
+S.prefilled ||= new Set();
+function prefill(q, fill) {
+  if (!fill || q.open.length !== 1) return;
+  const k = draftKey(q.id, q.open[0].i);
+  if (S.prefilled.has(k)) return;
+  S.prefilled.add(k);
+  if (!S.drafts[k]) S.drafts[k] = fill;
+}
+function cardsBlock(ev) {
+  const notes = CP.cardNotes(S.conductor?.events, ev.id);
+  const rows = ev.items.map(it => ({ it, c: chatCard(it), note: notes.items.get(CP.itemKey(it)) }));
+  const live = rows.filter(r => r.c);
+  const recs = CP.recommendedActions(ev, notes, it => rows.find(r => r.it === it)?.c || null);
+  const label = r => `${esc(r.it.project)} · ${CP.KIND_LABEL[CP.cardKind(r.it.card)] || 'Card'}`;
+  // Settled ones fold to one line each; a block with nothing left waiting folds to a single line.
+  if (!live.length) return `<div class="notice cd-cards-done">${icon('check')}${ev.digest ? 'Digest' : 'Cards'} from ${timeOf(ev.ts)}: all ${ev.items.length} answered</div>`;
+  const item = r => {
+    if (!r.c) return `<div class="cd-item done"><span class="cd-k">${label(r)}</span><span class="cd-done">${icon('check')}Answered</span></div>`;
+    const fill = String(r.note?.fill || '').trim();
+    const sum = r.note ? `<p class="cd-sum">${esc(r.note.summary)}${r.note.recommend ? ` <b class="cd-rec">I recommend ${esc(r.note.recommend.replace(/\.$/, ''))}.</b>` : ''}</p>` : '';
+    let card = '', rec = '';
+    if (r.c.kind === 'question') { prefill(r.c.q, fill); card = questionCard(r.c.q, r.c.p); }
+    else if (r.c.kind === 'decision') { const l = fill.match(/^([A-Za-z])\b/)?.[1]?.toUpperCase(); card = decisionCard(r.c.p, r.c.d, { take: r.c.options.includes(l) ? l : null }); }
+    else { rec = /^allow\b/i.test(fill) ? ' rec-allow' : /^deny\b/i.test(fill) ? ' rec-deny' : ''; card = approvalCard(r.c.ev, r.c.p); }
+    return `<section class="cd-item hub-group${rec}" data-pj="${esc(r.it.project)}"><span class="cd-k">${label(r)}</span>${sum}${card}</section>`;
+  };
+  const nProj = new Set(live.map(r => r.it.project)).size;
+  const take = recs.length ? `<button class="btn primary" data-take-recs="${esc(ev.id)}" title="Answer each card below with the recommendation shown on it, as if you tapped each one">${icon('check')}Take ${recs.length === 1 ? 'the recommendation' : `all ${recs.length} recommendations`}</button>` : '';
+  const head = ev.digest
+    ? `<div class="cd-digest" data-card="digest:${esc(ev.id)}"><div class="cd-dk">${icon('projects')}<b>Digest</b><span class="time">${timeOf(ev.ts)}</span></div>
+        <p class="cd-intro"><b>${esc(CP.digestLine(live.length, nProj))}</b>${notes.intro ? ` ${esc(notes.intro)}` : ''}</p>
+        ${take ? `<div class="row">${take}<span class="faint">or answer one by one below</span></div>` : ''}</div>`
+    : `<div class="cd-cards-k asks">${icon('inbox')}<b>New for you</b><span class="faint">${live.length} card${live.length === 1 ? '' : 's'}</span><span class="time">${timeOf(ev.ts)}</span>${recs.length > 1 ? take : ''}</div>`;
+  const foot = ev.digest ? `<p class="faint cd-foot">While you're away, new cards wait here for one digest, at most every ${S.conductor?.digestMinutes || 30} minutes, with one phone notice. Your answers here count as yours in each project.</p>` : '';
+  return `<div class="cd-cards${ev.digest ? ' is-digest' : ''}">${head}${rows.map(item).join('')}${foot}</div>`;
+}
+// "Take all recommendations": each still-waiting card answered with its recommendation, through the same calls as
+// tapping it (picks, answers, Allow or Deny), so each counts as yours in its project.
+function takeRecommendations(id) {
+  const ev = S.conductor?.events.find(e => e.id === id && e.type === 'cards');
+  if (!ev || S.sending) return;
+  const notes = CP.cardNotes(S.conductor.events, id);
+  const recs = CP.recommendedActions(ev, notes, it => chatCard(it));
+  if (!recs.length) return;
+  S.sending = true;
+  act(async () => {
+    try {
+      for (const name of new Set(recs.filter(r => r.kind === 'decision').map(r => r.project))) {
+        await sendPicks(S.projects.find(p => p.name === name), recs.filter(r => r.kind === 'decision' && r.project === name).map(r => ({ id: r.id, choice: r.choice })));
+      }
+      for (const r of recs.filter(x => x.kind === 'question')) {
+        await api('/api/answer', { project: r.project, question: r.id, answers: [{ index: r.index, text: r.text }] });
+        delete S.drafts[draftKey(r.id, r.index)];
+      }
+      store.set('drafts', S.drafts);
+      for (const r of recs.filter(x => x.kind === 'approval')) await api('/api/approval', { id: r.id, allow: r.allow });
+    } finally { S.sending = false; }
+  });
 }
 // Every project's waiting cards, grouped by project and answerable in place.
 const hubCards = ({ p, waiting: w }) => w.approvals.map(ev => approvalCard(ev, p)).join('') + w.questions.map(ev => questionCard(ev, p)).join('')
@@ -1077,6 +1165,15 @@ function openCard(project, card, { undo = false } = {}) {
   switchProject(project);
   const [kind, id] = [card.slice(0, card.indexOf(':')), card.slice(card.indexOf(':') + 1)];
   if (kind === 'devices') return guardUI.openDevices();   // decision 47: a change to the devices or push devices
+  // Decision 60 A: the Conductor's digest notice opens All projects at the digest.
+  if (kind === 'digest') {
+    $('#app').classList.remove('show-side');
+    S.hubFold.waiting = false;   // the digest holds the cards: Waiting stays folded so it is in view
+    selectThread(AP.HUB_THREAD);
+    const el = document.querySelector(`[data-card="digest:${CSS.escape(id)}"]`);
+    if (el) { el.scrollIntoView({ block: 'start' }); lockOn(el); }
+    return;
+  }
   const p = proj();
   if (!p) return;
   // A level raised to Trusted or dropped at start, or the hub restarting (push.mjs, guard.mjs): the notice is in the
@@ -1260,6 +1357,8 @@ document.addEventListener('click', e => {
   // The pick shows at once (AP.applyPick): every card for that decision, in every column, goes on this redraw; a
   // failed pick is put back by the reload.
   if (pick && !pick.disabled) return sendPicks(projectOf(pick), [{ id: Number(pick.dataset.pick), choice: pick.dataset.choice }]);
+  const takeRecs = e.target.closest('[data-take-recs]');
+  if (takeRecs) return takeRecommendations(takeRecs.dataset.takeRecs);
   if (e.target.closest('[data-take-all]')) {
     const picks = openDecisions(proj()).filter(d => d.status === 'open' && d.recommended).map(d => ({ id: d.id, choice: d.recommended }));
     return sendPicks(proj(), picks);
