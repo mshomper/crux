@@ -7,7 +7,7 @@
  "lenses": [
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Pick how the map shows every project at once, with the Conductor in the centre. I recommend C, one sector per project: each shows its name, how many things wait on you, its orchestrator, worker dots and context as plain text, and turns red when the project needs you. Confidence: medium.",
  "for_you": [
   "Opening All projects swaps the map to the Conductor in the centre with every project around it; clicking a project opens its orchestrator chat, and an ALL button in the strip goes back up",
@@ -76,9 +76,9 @@
  "recommendation": "C takes the HUD look all the way while keeping every name, count and context level as plain text, so you never hover to find out which project needs you. B is the fallback if C feels too busy.",
  "confidence": "lean",
  "change_mind": "If C feels busy in use, or you run more than about six projects, go B.",
- "chosen": null,
+ "chosen": "C",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-14",
  "superseded_by": null,
  "challenge": null,
  "settles": [],

@@ -1,7 +1,7 @@
 # 0057 What does the live map show when All projects is open?
 
-- Status: open
-- Date: 2026-11-13
+- Status: decided
+- Date: 2026-11-13, decided 2026-11-14
 - Lenses: ui
 - Builds on: 0017, 0031, 0033, 0042, 0055, 0056
 
@@ -14,6 +14,10 @@ For you:
 - Opening All projects swaps the map to the Conductor in the centre with every project around it; clicking a project opens its orchestrator chat, and an ALL button in the strip goes back up
 - A project that needs you turns its whole sector red; today only the You station turns fully red, so this widens that rule for this map only
 - Hard to undo: Changes decision 42, where the map stayed on one project; going back is a page change only
+
+## Decision
+
+**C: HUD sectors.** The ring splits into one sector per project, holding its orchestrator, worker dots and a context gauge with the 60% mark, with plain-text name, "N waiting for you", model and context. A waiting project's sector glows red. In the strip each project is a labelled bay with a small context bar.
 
 ## Context
 
@@ -51,7 +55,7 @@ As A, and each orchestrator has its workers as small dots on a short orbit: mode
 - Con: Names still behind hover; busier at phone width
 - Effort: Medium
 
-### C: HUD sectors (recommended)
+### C: HUD sectors (chosen) (recommended)
 
 The ring splits into one sector per project, holding its orchestrator, worker dots and a context gauge with the 60% mark, with plain-text name, "N waiting for you", model and context. A waiting project's sector glows red. In the strip each project is a labelled bay with a small context bar.
 
