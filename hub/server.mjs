@@ -13,9 +13,10 @@ import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs'
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp } from './lib/relaunch.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp, dataDir } from './lib/relaunch.mjs';
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
+import { CONDUCTOR } from './lib/conductor.mjs';
 import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
 import { refreshPages } from '../crux/scripts/build.mjs';
@@ -70,7 +71,8 @@ let keySource = BUNDLED ? secrets.apply() : null;
 // Hub settings (decision 21: routePermissions, permissionTimeoutSec; decision 44 B: the handoff defaults) start from
 // hub.json and the --retire-at flag, and are saved in ~/.crux-hub; a change made in the page wins from then on.
 const settings = new HubSettings({ initial: { ...hubCfg, retireAt } });
-const hub = new Hub({ projects, defaults: hubCfg.defaults, settings, noAgents });
+// Decision 55: the Conductor keeps its log and handoffs in the hub's own state folder, next to settings.json.
+const hub = new Hub({ projects, defaults: hubCfg.defaults, settings, noAgents, conductorDir: join(dataDir(), 'conductor') });
 if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
 // Decision 54 B: the Claude Code the agents run. A clone's SDK finds its own; the desktop app's hub uses the copy the
 // setup screen downloaded, or one installed on the PC when that is missing.
@@ -103,7 +105,8 @@ hub.usage.start();   // decision 36: the plan meters, asked of any live agent ev
 const push = new Push();
 const decisionStatus = (project, id) => { try { return hub.project(project).board.decision(id)?.status; } catch { return undefined; } };
 const decisionOpen = (project, id) => ['open', 'found'].includes(decisionStatus(project, id));
-hub.on(ev => { if (ev.logged) push.handle(ev, { approvals: hub.approvals, decisionOpen, decisionStatus, events: name => hub.project(name).log.events }); });
+// The Conductor's own thread (decision 55) sends no phone notifications in this build; projects' cards still do.
+hub.on(ev => { if (ev.logged && ev.project !== CONDUCTOR) push.handle(ev, { approvals: hub.approvals, decisionOpen, decisionStatus, events: name => hub.project(name).log.events }); });
 const hosts = extraHosts();
 
 // The write guard (decision 47 B): paired devices, their passkeys, and alerts on any change to those or to the push
@@ -177,7 +180,8 @@ async function body(req, limit = 1e6) {
 }
 
 const routes = {
-  'GET /api/state': () => ({ projects: hub.state(), retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
+  // conductor (decision 55): the hub-wide agent's state and its thread's events (lib/conductor.mjs view()), or null.
+  'GET /api/state': () => ({ projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/brief': ({ project, id }) => {
     const b = hub.project(String(project || '')).board.brief(id);
@@ -247,16 +251,18 @@ const routes = {
   // { id, type, size, name? } (decision 23). The name is display text only, never part of the stored path.
   'POST /api/attach': ({ project, data, name }) => {
     const { buf } = decodeDataUrl(data);
-    return hub.project(project).attachments.save(buf, name == null ? undefined : String(name).slice(0, 1000));
+    return hub.place(project).attachments.save(buf, name == null ? undefined : String(name).slice(0, 1000));
   },
 
+  // project "~conductor" writes to the Conductor (decision 55): text and attachments only, no picks or sign-in notes.
   'POST /api/send': ({ project, thread, text, attachments }) => {
-    const p = hub.project(project);
+    const p = hub.place(project);
     text = String(text || '').trim();
     // Each attachment as an id, or { id, name } with the original file name for display.
     const ids = Array.isArray(attachments) ? attachments.map(a => a && typeof a === 'object' ? { id: String(a.id || ''), name: a.name == null ? undefined : String(a.name).slice(0, 1000) } : String(a)) : [];
     if (ids.length) { hub.fromYou(p, thread, text, ids); return { ok: true }; }   // attachments never count as decision picks
     if (!text) throw new Error('Empty message');
+    if (p.hubWide) { hub.fromYou(p, 'conductor', text); return { ok: true }; }
     if (/^\/(login|logout)\b/i.test(text)) {
       p.log.append('message', { thread, from: 'you', text });
       hub.notice(p, thread, 'Agents run headless, so signing in happens in a terminal, not here. Stop the hub, run "npm run login" in the hub folder, type /login there, then start the hub again.');
@@ -275,11 +281,12 @@ const routes = {
   'POST /api/pick': ({ project, picks }) => ({ picked: hub.pickMany(hub.project(project), picks).map(d => d.id) }),
   'POST /api/approval': ({ id, allow, note, always }) => { hub.answerApproval(id, !!allow, note, !!always); return { ok: true }; },
   'POST /api/retire-finished': ({ project, agent }) => ({ result: hub.retireFinished(hub.project(project), agent) }),
-  'POST /api/retire': ({ project, agent }) => { const p = hub.project(project); hub.retire(p, agent || p.orchestrator()); return { ok: true }; },
-  'POST /api/dismiss': ({ project, question, index }) => hub.dismissQuestion(hub.project(project), String(question || ''), 'you', index ?? null),
+  // The orchestrator's handoff, a worker's, or (project "~conductor") the Conductor's.
+  'POST /api/retire': ({ project, agent }) => { const p = hub.place(project); hub.retire(p, p.hubWide ? p.orchestrator() : agent || p.orchestrator()); return { ok: true }; },
+  'POST /api/dismiss': ({ project, question, index }) => hub.dismissQuestion(hub.place(project), String(question || ''), 'you', index ?? null),
   // Answers typed in Needs you: { question: summary event id, answers: [{ index, text }] }.
-  'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.project(project), String(question || ''), answers),
-  'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.project(project), ids || [], !!accept) }),
+  'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.place(project), String(question || ''), answers),
+  'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
   // Change an agent's model, effort or type. Only the keys sent change; an empty value means the default.
   'POST /api/agent-settings': ({ project, agent, ...changes }) => {
@@ -399,7 +406,7 @@ async function handle(req, res) {
     if (at) {
       const no = checkAttachmentRead(req.headers, { extra: hosts });
       if (no) return send(res, 403, { error: no });
-      const store = hub.project(decodeURIComponent(at[1])).attachments;
+      const store = hub.place(decodeURIComponent(at[1])).attachments;
       if (!store.has(at[2])) return send(res, 404, { error: 'Not found' });
       res.writeHead(200, servedHeaders(at[2]));
       return res.end(store.read(at[2]));
@@ -511,7 +518,7 @@ server.listen(port, '127.0.0.1');
 
 // The hub is going down: agents' turns are cut, not finished, so they stay marked busy and resume at the next
 // start (M014).
-function stopAgents() { hub.stopping = true; for (const p of hub.projects.values()) for (const a of p.agents.values()) a.close(); }
+function stopAgents() { hub.stopping = true; for (const p of [...hub.projects.values(), ...(hub.conductor ? [hub.conductor.home] : [])]) for (const a of p.agents.values()) a.close(); }
 
 // Stop taking requests, close the pages' live streams (they reconnect to the new hub) and the agents (they resume
 // on their own when the new hub starts, M014), start the new hub detached with no window, then leave.

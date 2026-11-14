@@ -18,6 +18,8 @@ export function enterAction(e) {
 export function composerHint({ thread, retired = false, narrow = false, fine = true, compact = false }) {
   if (retired) return narrow ? 'Retired' : 'This agent has retired.';
   if (narrow) return 'Message';
+  // All projects' box writes to the Conductor (decision 55).
+  if (thread === 'all') return compact ? 'Message the Conductor' : `Message the Conductor: what waits for you, or a request for any project.${fine ? ' Alt+Enter for a new line.' : ''}`;
   if (compact) return thread === 'needs' || thread === 'orchestrator' ? 'Message the orchestrator' : `Message ${thread}`;
   const keys = fine ? ' Alt+Enter for a new line.' : '';
   return thread === 'needs' || thread === 'orchestrator'

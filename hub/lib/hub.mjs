@@ -19,6 +19,7 @@ import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-t
 import { answerMessage, answerNote } from '../public/questions.js';
 import { Usage } from './usage.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
+import { Conductor, CONDUCTOR, CONDUCTOR_ROLE } from './conductor.mjs';
 
 export class Project {
   constructor(dir) {
@@ -57,7 +58,9 @@ export class Hub {
   // connectors and handoff numbers), from ~/.crux-hub/settings.json. The --retire-at start flag is only its
   // starting value for retireAt (server.mjs); a change in the page wins (decision 44 B).
   // noAgents: a test hub; messages are logged but no real agent starts (see relaunch.mjs, testHubWithoutAgents).
-  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false }) {
+  // conductorDir: where the Conductor (decision 55) keeps its log and handoffs, in the hub's own state folder
+  // (server.mjs: <data>/conductor). Null: no Conductor (tests that do not ask for one).
+  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null }) {
     this.noAgents = !!noAgents;
     this.memory = memory;
     this.settings = settings;
@@ -70,6 +73,12 @@ export class Hub {
     this.usage = new Usage(this);
     this.run = realRun;   // git and gh for the handoff facts; tests swap in a fake
     for (const dir of projects) this.addProject(dir);
+    this.conductor = conductorDir ? new Conductor(this, conductorDir) : null;
+    if (this.conductor) {
+      const home = this.conductor.home;
+      this.restore(home);
+      home.log.on(ev => this.emit({ ...ev, project: CONDUCTOR, logged: true }));
+    }
     this.idleTimer = setInterval(() => this.idleCheck(), IDLE_CHECK_MS);
     this.idleTimer.unref?.();
     this.usage.restore();
@@ -79,6 +88,7 @@ export class Hub {
     if (!this.noAgents) setTimeout(() => {
       for (const p of this.projects.values()) this.rulesHint(p);
       this.resumeAll();
+      try { this.conductor?.resume(); } catch (e) { console.warn('Conductor resume failed:', e.message); }
     }, 0);
   }
 
@@ -176,6 +186,7 @@ export class Hub {
 
   addProject(dir) {
     const p = new Project(dir);
+    if (p.name === CONDUCTOR) throw new Error(`"${CONDUCTOR}" is the Conductor's own name; rename that folder to add it as a project.`);
     if (this.projects.has(p.name)) return this.projects.get(p.name);
     this.projects.set(p.name, p);
     this.restore(p);
@@ -191,13 +202,16 @@ export class Hub {
     if (!p) throw new Error(`Unknown project ${name}`);
     return p;
   }
+  // A project, or the Conductor's own place (decision 55) for the few routes it shares with projects: messages,
+  // attachments, handoff, lessons. Everything else (workers, settings, picks) asks project() and so refuses it.
+  place(name) { return name === CONDUCTOR && this.conductor ? this.conductor.home : this.project(name); }
 
   // Rebuild agents from the log; none are running after a restart, they resume on their next message.
   restore(p) {
     for (const ev of p.log.events) {
       if (ev.type === 'agent_created') {
         p.agents.set(ev.agent, new Agent(this, p, { name: ev.agent, role: ev.role, task: ev.task, goal: ev.goal, generation: ev.generation, predecessor: ev.predecessor, handoffEntry: ev.handoffEntry, type: ev.agentType || null, model: ev.model || null, effort: ev.effort || null }));
-        if (ev.role === 'orchestrator') p.generation = Math.max(p.generation, ev.generation);
+        if (ev.role !== 'worker') p.generation = Math.max(p.generation, ev.generation);
       } else if (ev.type === 'agent_session' && p.agents.has(ev.agent)) {
         const a = p.agents.get(ev.agent);
         a.sessionId = ev.sessionId;
@@ -222,8 +236,9 @@ export class Hub {
   // ---------- agents ----------
   createAgent(p, { name, role, task = '', goal = '', predecessor = null, handoffEntry = null, settings = {} }) {
     const s = this.resolveSettings(p, role, settings);   // checked before anything is written
-    const generation = role === 'orchestrator' ? ++p.generation : 0;
-    if (role === 'orchestrator') name = `orchestrator-${generation}`;
+    // The orchestrator and the Conductor are roles: each holder is numbered (orchestrator-3, conductor-2).
+    const generation = role !== 'worker' ? ++p.generation : 0;
+    if (role !== 'worker') name = `${role}-${generation}`;
     let unique = name, n = 2;
     while (p.agents.has(unique)) unique = `${name}-${n++}`;
     const a = new Agent(this, p, { name: unique, role, task, goal, generation, predecessor, handoffEntry, ...s });
@@ -239,7 +254,8 @@ export class Hub {
   // anything left unset is Claude Code's own default. Throws on an unknown type or effort.
   // A type named only by hub.json, or inherited from a predecessor, is dropped quietly if its file is gone.
   resolveSettings(p, role, { type, model, effort, inherited = false } = {}) {
-    const dflt = this.defaults[role] || {};
+    // The Conductor without its own defaults runs as the orchestrator does (model and effort; never a type).
+    const dflt = this.defaults[role] || (role === CONDUCTOR_ROLE ? { ...this.defaults.orchestrator, type: undefined } : null) || {};
     const typeName = type === undefined ? dflt.type : type;
     const t = typeName ? this.agentTypes(p).get(typeName) : null;
     if (typeName && !t && type !== undefined && !inherited) {
@@ -330,6 +346,7 @@ export class Hub {
   fromYou(p, thread, text, ids = [], extra = {}) {
     if (ids.length > MAX_PER_MESSAGE) throw new Error(`Up to ${MAX_PER_MESSAGE} attachments per message.`);
     const attachments = ids.map(x => x && typeof x === 'object' ? p.attachments.ref(String(x.id || ''), x.name) : p.attachments.ref(String(x)));
+    if (p.hubWide) return this.conductor.fromYou(text, attachments, extra);   // the Conductor's thread (decision 55)
     const a = thread === 'orchestrator' ? null : p.agents.get(thread);
     if (thread !== 'orchestrator' && (!a || a.state === 'retired')) throw new Error(`No active agent ${thread}`);
     p.log.append('message', { thread, from: 'you', text, ...extra, ...(attachments.length ? { attachments } : {}) });
@@ -767,9 +784,11 @@ export class Hub {
       agent.close();
     }
     if (agent.contextPct != null && agent.contextPct >= this.retireAtFor(p)) {
-      this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role === 'orchestrator' ? 'the role' : 'its task'} on.`);
+      this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role !== 'worker' ? 'the role' : 'its task'} on.`);
       this.retire(p, agent, { reason: 'threshold' });
+      return;
     }
+    if (p.hubWide) this.conductor?.afterTurn();   // updates that came in while it worked: one more turn for them
   }
 
   // reason: 'asked' (you, or the API), 'threshold' (decision 10), 'idle' (decision 37) or 'orchestrator' (a worker
@@ -789,8 +808,8 @@ export class Hub {
       this.publishHandoff(p, agent, draft.handoff_notes, { draft });
       // Idle, or resting past the cache window: questions to it would cost a cold read, so it retires now and the
       // next message starts a fresh holder. A worker's task needs a successor to carry on, so it always gets one.
-      const idle = agent.role === 'orchestrator' && (reason === 'idle' || Date.now() - this.lastActive(p, agent) >= DRAFT_FRESH_MS);
-      this.notice(p, agent.thread, `${agent.name}'s handoff ${agent.leftHandoff} was written from its rolling draft (${when(draft.ts)}) plus fresh facts, without waking it.${idle ? ' The next orchestrator starts from it with your next message.' : ''}`);
+      const idle = agent.role !== 'worker' && (reason === 'idle' || Date.now() - this.lastActive(p, agent) >= DRAFT_FRESH_MS);
+      this.notice(p, agent.thread, `${agent.name}'s handoff ${agent.leftHandoff} was written from its rolling draft (${when(draft.ts)}) plus fresh facts, without waking it.${idle ? ` The next ${agent.role === CONDUCTOR_ROLE ? 'Conductor' : 'orchestrator'} starts from it with your next message.` : ''}`);
       if (idle) this.finishRetire(p, agent);
       else this.startSuccessor(p, agent);
       return 'draft';
@@ -822,7 +841,8 @@ export class Hub {
   // falling back to the hub defaults (decision 44 B).
   idleCheck(now = Date.now()) {
     const done = [];
-    for (const p of this.projects.values()) {
+    // The Conductor follows the same rule, with the hub's default numbers (its place has no settings of its own).
+    for (const p of [...this.projects.values(), ...(this.conductor ? [this.conductor.home] : [])]) {
       const n = this.handoffNumbers(p);
       const windowMin = Number(n.idleHandoffMin), floor = Number(n.idleFloorPct);
       if (!(windowMin > 0)) continue;
@@ -832,9 +852,9 @@ export class Hub {
       if ([...this.approvals.values()].some(a => a.routedTo === o.name && !a.escalated)) continue;
       const idleMin = Math.floor((now - this.lastActive(p, o, now)) / 60000);
       if (idleMin < windowMin) continue;
-      this.notice(p, 'orchestrator', `${o.name} has been idle for ${idleMin} minutes at ${o.contextPct}% of its context, so it hands the role on (decision 37).`);
+      this.notice(p, o.thread, `${o.name} has been idle for ${idleMin} minutes at ${o.contextPct}% of its context, so it hands the role on (decision 37).`);
       try { this.retire(p, o, { reason: 'idle' }); done.push(p.name); }
-      catch (e) { this.notice(p, 'orchestrator', `The idle handoff failed: ${e.message}`); }
+      catch (e) { this.notice(p, o.thread, `The idle handoff failed: ${e.message}`); }
     }
     return done;
   }
@@ -842,6 +862,7 @@ export class Hub {
   // The facts half: what the hub knows for certain. The same shape for orchestrators and workers (decision 16):
   // your approvals and instructions, the work and its last instructions, git, open questions, tidy-ups.
   handoffFacts(p, agent) {
+    if (agent.role === CONDUCTOR_ROLE) return this.conductor.facts(agent);   // its own facts: no repo, no workers
     const evs = p.log.events;
     const lines = [];
     const summaries = evs.filter(e => e.type === 'summary');
@@ -944,8 +965,8 @@ export class Hub {
     const entryId = old.leftHandoff;
     // The successor keeps its predecessor's type, model and effort.
     const settings = { type: old.type, model: old.model, effort: old.effort, inherited: true };
-    const succ = old.role === 'orchestrator'
-      ? this.createAgent(p, { role: 'orchestrator', predecessor: old.name, handoffEntry: entryId, settings })
+    const succ = old.role !== 'worker'
+      ? this.createAgent(p, { role: old.role, predecessor: old.name, handoffEntry: entryId, settings })
       : this.createAgent(p, { name: old.name.replace(/-\d+$/, ''), role: 'worker', task: old.task, goal: old.goal, predecessor: old.name, handoffEntry: entryId, settings });
     this.notice(p, old.thread, `${old.name} left handoff ${entryId}; ${succ.name} takes over${old.role === 'worker' ? ` in its own thread` : ''}.`);
     if (old.role === 'worker') this.notice(p, succ.thread, `${succ.name} continues the work of ${old.name}, from handoff ${entryId}.`);

@@ -51,6 +51,9 @@ export function openQuestions(events, { decisionStatus = () => undefined } = {})
     if (e.type === 'summary' && e.questions?.length) last.set(e.thread, { ev: e, answered: false });
     else if (e.type === 'message') {
       if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index); continue; }
+      // A Conductor brief (decision 55) logged in a project's thread is never an answer: only you (or the orchestrator
+      // answering its worker) can settle a question that waits on you.
+      if (e.conductor) continue;
       const q = last.get(e.thread);
       if (q && e.from !== q.ev.from) q.answered = true;
     }
