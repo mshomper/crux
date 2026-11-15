@@ -169,6 +169,19 @@ test('permission answers become sparks toward the worker that asked', () => {
   assert.equal(m.ingest({ type: 'message', from: 'you', thread: 'orchestrator', text: 'hi' }).spark, null);
 });
 
+test('a permission request still with the orchestrator is not counted as waiting for Matt until it escalates', () => {
+  const m = new MapModel();
+  const p = project();
+  p.events = [...p.events, { type: 'approval', approval: 'ap1', thread: 'builder', routedTo: 'orchestrator-3' }];
+  m.setProject(p, new Set(['ap1']));
+  const before = m.needsCount();
+  assert.equal(m.pendingApprovals().length, 0);
+  p.events = [...p.events, { type: 'approval_escalated', approval: 'ap1' }];
+  m.setProject(p, new Set(['ap1']));
+  assert.equal(m.pendingApprovals().length, 1);
+  assert.equal(m.needsCount(), before + 1);
+});
+
 test('the readout carries the numbers the sphere does not', () => {
   const m = new MapModel();
   m.setProject(project(), new Set());
