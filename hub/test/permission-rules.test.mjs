@@ -60,7 +60,7 @@ test('merge, history rewrites and branch deletes are hard stops', () => {
 });
 
 test('R004: local git steps that are fine on an unpushed branch go to the orchestrator; contained ones are allowed', () => {
-  for (const c of ['git rebase main', 'git rebase -i HEAD~3', 'git reset HEAD~1', 'git commit --amend -m x', 'git tag -d v1', 'git -c core.sshCommand=x status']) unsure(c);
+  for (const c of ['git rebase main', 'git rebase -i HEAD~3', 'git reset HEAD~1', 'git commit --amend -m x', 'git tag -d v1', 'git -c core.whitespace=cr-at-eol status']) unsure(c);   // core.sshCommand=x is now a stop (M039 1)
   for (const c of ['git clean -fd', 'git stash drop', 'git rm hub/a.mjs', 'git worktree add .claude/worktrees/w1 -b feat/w1', 'git worktree remove .claude/worktrees/w1',
     'gh pr list', 'gh pr view 3']) orch(c);
 });
