@@ -469,7 +469,7 @@ function needFor(route, body, hub) {
 function listsNeed(body = {}) {
   const site = body.kind === 'site', what = String(site ? body.host : body.name || '').trim().slice(0, 80);
   const scope = body.scope === 'project' ? 'project' : 'all';
-  return { purpose: 'lists', scope: `lists;${site ? 'site' : String(body.eco || '').slice(0, 20)};${what};${site ? `${body.access || 'pages'};${String(body.pin || '').slice(0, 80)};` : ''}${scope}`,
+  return { purpose: 'lists', scope: `lists;${site ? 'site' : String(body.eco || '').slice(0, 20)};${what};${site ? `${body.access || 'pages'};${String(body.pin || '').slice(0, 80)};` : body.eco === 'huggingface' ? `${String(body.revision || '').slice(0, 40)};` : ''}${scope}`,
     why: site ? `Add ${what} to your trusted sites${body.access === 'downloads' ? ' for downloads' : ''}` : `Add ${what} to your approved packages` };
 }
 

@@ -20,7 +20,8 @@ const tip = {
   downloads: 'Downloads: agents may also save files from this site into the quarantine folder in temp, never over an existing file and never into the project. Moving a file out of it, or running it, comes to you.',
   packages: 'Agents may install these by exact name from the main registry, with install scripts off. A release under 3 days old, or a new major version, still comes to you.',
   open: 'This site serves anyone\'s files, so downloads are limited to the one path shown.',
-  add: 'Only you can add to these lists. Adding asks you to confirm it is you.'
+  add: 'Only you can add to these lists. Adding asks you to confirm it is you.',
+  revision: 'A model is approved at one revision (a full 40-character commit). Agents may fetch weights and plain text files of exactly that revision; another revision, or a config file, comes to you.'
 };
 
 function siteRow(e, d) {
@@ -41,7 +42,7 @@ function siteRow(e, d) {
   </li>`;
 }
 function pkgRow(e) {
-  const base = e.baseMajor != null ? ` · from version ${e.baseMajor}.x` : '';
+  const base = e.revision ? ` · revision ${e.revision.slice(0, 12)}` : e.baseMajor != null ? ` · from version ${e.baseMajor}.${e.baseMajor === 0 && e.baseMinor != null ? `${e.baseMinor}.` : ''}x` : '';
   return `<li class="pl-row single" data-id="${esc(e.id)}">
     <span class="pl-ico">${ic('box')}</span>
     <span class="pl-main"><b class="pl-name">${esc(e.name)}</b><span class="pl-sub">${esc(ECO[e.eco] || e.eco)}${esc(base)}</span></span>
@@ -75,6 +76,7 @@ export function listsCard(view, d) {
         <div class="pl-form">
           <div class="pl-field"><span>From</span>${seg('pkg.eco', f.pkg.eco, [['npm', 'npm', 'JavaScript packages from the npm registry'], ['pip', 'pip', 'Python packages from PyPI, installed only in the project\'s .venv'], ['huggingface', 'Hugging Face', 'Models by name, with a pinned revision, safetensors files only']])}</div>
           <label class="pl-field"><span>Exact name</span><input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${f.pkg.eco === 'huggingface' ? 'organisation/model' : f.pkg.eco === 'pip' ? 'requests' : 'zod'}" data-pl-in="pkg.name" value="${esc(f.pkg.name)}"></label>
+          ${f.pkg.eco === 'huggingface' ? `<label class="pl-field"><span>Revision ${help(tip.revision)}</span><input type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="the full 40-character commit" data-pl-in="pkg.revision" value="${esc(f.pkg.revision)}"></label>` : ''}
           <div class="pl-field"><span>Where</span>${scopeSeg('pkg.scope', f.pkg.scope, view.project)}</div>
           <button type="button" class="btn primary pl-submit" data-pl-add="pkg" ${d.busy ? 'disabled' : ''}>${ic('plus')}Add package</button>
         </div></details></section>
@@ -98,15 +100,15 @@ export function listAddButtons(items, cls = 'always-btn list-add') {
 // The request the page sends for one such offer.
 export const listAddBody = (project, it) => it.kind === 'site'
   ? { project, kind: 'site', host: it.host, access: it.access, pin: it.pin || '', scope: 'all', subdomains: false }
-  : { project, kind: 'package', eco: it.eco, name: it.name, scope: 'project' };
+  : { project, kind: 'package', eco: it.eco, name: it.name, scope: 'project', ...(it.revision ? { revision: it.revision } : {}) };
 
 // What the add form sends for the project p. kind: 'site' | 'pkg'.
 export function addBody(kind, d, project) {
   const f = d.form[kind];
   if (kind === 'site') return { project, kind: 'site', host: String(f.host).trim(), access: f.access, pin: f.access === 'downloads' ? String(f.pin).trim() : '', scope: f.scope };
-  return { project, kind: 'package', eco: f.eco, name: String(f.name).trim(), scope: f.scope };
+  return { project, kind: 'package', eco: f.eco, name: String(f.name).trim(), scope: f.scope, ...(f.eco === 'huggingface' ? { revision: String(f.revision || '').trim() } : {}) };
 }
-export const freshDraft = () => ({ arm: null, error: '', busy: false, open: { site: false, pkg: false }, form: { site: { host: '', access: 'pages', pin: '', scope: 'all' }, pkg: { eco: 'npm', name: '', scope: 'all' } } });
+export const freshDraft = () => ({ arm: null, error: '', busy: false, open: { site: false, pkg: false }, form: { site: { host: '', access: 'pages', pin: '', scope: 'all' }, pkg: { eco: 'npm', name: '', revision: '', scope: 'all' } } });
 
 export class ListsCard {
   constructor(host) {

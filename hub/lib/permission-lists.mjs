@@ -18,13 +18,15 @@
 // Storage: hub settings (settings.json in the hub's data folder), never a repo file. Only Matt adds: the page's
 // add action (server.mjs) is the single way in; no agent tool reaches it.
 import { existsSync, lstatSync, realpathSync, readFileSync, readdirSync } from 'node:fs';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { join, dirname, basename, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { projectKey } from './settings.mjs';
 
 export const MIN_AGE_MS = 3 * 24 * 3600 * 1000;      // a release younger than this goes to Matt
+export const LOOKUP_TTL_MS = 6 * 3600 * 1000;        // how long a registry answer is kept (npm and pinned pip: the release dates never change)
+export const PIP_FRESH_MS = 2 * 60 * 1000;           // unpinned pip takes whatever is newest: its answer must be this fresh
 export const QUARANTINE_DIR = 'crux-quarantine';     // under the temp folder
 export const LISTS_VERSION = 1;
 
@@ -46,7 +48,8 @@ export const SEED_SITES = [
 export const OPEN_HOSTS = ['github.com', 'raw.githubusercontent.com', 'huggingface.co', 'pypi.org', 'npmjs.com', 'stackoverflow.com', 'crates.io',
   'gist.github.com', 'gitlab.com', 'bitbucket.org', 'codeberg.org', 'sourceforge.net', 'githubusercontent.com', 'github.io', 'pythonhosted.org',
   'unpkg.com', 'jsdelivr.net', 'amazonaws.com', 'googleapis.com', 'blob.core.windows.net', 'cloudfront.net', 'dropbox.com', 'drive.google.com',
-  'docs.google.com', 'onedrive.live.com', '1drv.ms', 'pastebin.com', 'discordapp.com', 'imgur.com', 'netlify.app', 'vercel.app', 'pages.dev', 'workers.dev'];
+  'docs.google.com', 'onedrive.live.com', '1drv.ms', 'pastebin.com', 'discordapp.com', 'imgur.com', 'netlify.app', 'vercel.app', 'pages.dev', 'workers.dev',
+  'registry.npmjs.org', 'hf.co', 'zenodo.org', 'figshare.com'];
 export const isOpenHost = h => OPEN_HOSTS.some(o => h === o || h.endsWith(`.${o}`));
 
 // ---------- addresses ----------
@@ -113,18 +116,27 @@ const cmpSv = (a, b) => { for (let i = 0; i < 3; i++) if (a.n[i] !== b.n[i]) ret
 
 // npm: '' | latest | X.Y.Z | ^X[.Y[.Z]] | ~X[.Y[.Z]]  (the forms npm install writes); pip: '' | ==X.Y.Z (any release spelling).
 export const NPM_SPEC = /^(?:latest|[~^]?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?)$/;
-export function resolveVersion(eco, spec, info) {
-  const known = Object.keys(info.versions || {});
+// before: npm install --before=DATE (ms): only releases published by then can be picked, as npm itself does; the
+// dist-tag `latest` wins when it is allowed and satisfies the spec (npm's own rule), else the highest release that does.
+export function resolveVersion(eco, spec, info, before = null) {
+  const ok = v => !before || (info.versions[v]?.at != null && info.versions[v].at <= before);
+  const known = Object.keys(info.versions || {}).filter(ok);
+  const latest = info.latest && ok(info.latest) ? info.latest : null;
   if (eco === 'pip' || eco === 'pypi') {
     if (!spec) return info.latest ? { version: info.latest } : { why: 'the registry names no latest release' };
     const m = /^==\s*([\w.!+-]+)$/.exec(spec);
     return m && info.versions[m[1]] ? { version: m[1] } : { why: `the registry has no release ${spec}` };
   }
-  if (!spec || spec === 'latest') return info.latest ? { version: info.latest } : { why: 'the registry names no latest release' };
+  const highest = pred => { let best = null; for (const v of known) { const p = sv(v); if (!p || p.pre || !pred(p)) continue; if (!best || cmpSv(p, best.p) > 0) best = { v, p }; } return best; };
+  if (!spec || spec === 'latest') {
+    if (latest) return { version: latest };
+    const h = before ? highest(() => true) : null;
+    return h ? { version: h.v } : { why: before ? 'the registry has no release from before that date' : 'the registry names no latest release' };
+  }
   const op = /^[~^]/.test(spec) ? spec[0] : '';
   const body = op ? spec.slice(1) : spec;
   const parts = body.split('-')[0].split('.').map(Number);
-  if (!op && SEMVER.test(body)) return info.versions[body] ? { version: body } : { why: `the registry has no release ${body}` };
+  if (!op && SEMVER.test(body)) return info.versions[body] && ok(body) ? { version: body } : { why: `the registry has no release ${body}${before ? ' from before that date' : ''}` };
   if (!op && parts.length === 3) return { why: `cannot resolve ${spec}` };
   const [a, b = null, c = null] = parts;
   const lo = [a, b ?? 0, c ?? 0];
@@ -133,14 +145,20 @@ export function resolveVersion(eco, spec, info) {
   else if (op === '~') hi = b == null ? [a + 1, 0, 0] : [a, b + 1, 0];
   else hi = a > 0 || b == null ? [a + 1, 0, 0] : (b > 0 || c == null ? [0, b + 1, 0] : [0, 0, c + 1]);   // caret
   if (op === '^' && a === 0 && b == null) hi = [1, 0, 0];
-  let best = null;
-  for (const v of known) {
-    const p = sv(v);
-    if (!p || p.pre) continue;
-    if (cmpSv(p, { n: lo }) < 0 || cmpSv(p, { n: hi }) >= 0) continue;
-    if (!best || cmpSv(p, best.p) > 0) best = { v, p };
-  }
-  return best ? { version: best.v } : { why: `no release matches ${spec}` };
+  const inRange = p => cmpSv(p, { n: lo }) >= 0 && cmpSv(p, { n: hi }) < 0;
+  const lp = latest && sv(latest);
+  if (lp && !lp.pre && inRange(lp)) return { version: latest };   // npm takes the latest tag when it satisfies the range
+  const best = highest(inRange);
+  return best ? { version: best.v } : { why: `no release matches ${spec}${before ? ' from before that date' : ''}` };
+}
+// A change that may break things: a new major, or (for 0.x) a new minor. base: { major, minor } of what the project has.
+export function isJump(version, base) {
+  const m = /^v?(\d+)\.?(\d*)/.exec(String(version ?? ''));
+  if (!m || !base || base.major == null) return true;
+  const major = Number(m[1]), minor = m[2] === '' ? 0 : Number(m[2]);
+  if (major !== base.major) return major > base.major;
+  if (major === 0) return base.minor == null ? true : minor > base.minor;
+  return false;
 }
 
 // What a registry says, reduced to { latest, versions: { v: { at: ms, yanked } } }; null when it is not that shape.
@@ -161,7 +179,7 @@ export function parseRegistry(eco, doc) {
       for (const [v, files] of Object.entries(doc.releases || {})) {
         if (!Array.isArray(files) || !files.length) continue;
         const times = files.map(f => Date.parse(f.upload_time_iso_8601 || f.upload_time)).filter(Number.isFinite);
-        versions[v] = { at: times.length ? Math.min(...times) : null, yanked: files.every(f => f.yanked) };
+        versions[v] = { at: times.length ? Math.max(...times) : null, yanked: files.every(f => f.yanked) };   // the newest file of the release counts
       }
       return latest && versions[latest] ? { latest, versions } : null;
     }
@@ -173,19 +191,8 @@ export function registryUrl(eco, name) {
   if (eco === 'pip') return `https://pypi.org/pypi/${encodeURIComponent(name)}/json`;
   return null;
 }
-const FETCH_SCRIPT = `fetch(process.argv[1],{headers:{accept:'application/json','user-agent':'crux-hub-permission-lists'},signal:AbortSignal.timeout(7000)}).then(async r=>{if(!r.ok){process.exitCode=2;return}process.stdout.write(await r.text())}).catch(()=>{process.exitCode=3})`;
-// The registry lookup the gates need, read at the moment of the decision. A failed lookup is null (it goes to Matt).
-// Synchronous on purpose (classification is): a short child process asks the registry, at most a few seconds, and only
-// for an install of a package Matt approved, after everything else about the command has already passed.
-export function registryLookupSync(eco, name) {
-  const url = registryUrl(eco, name);
-  if (!url) return null;
-  try {
-    const r = spawnSync(process.execPath, ['-e', FETCH_SCRIPT, url], { encoding: 'utf8', timeout: 9000, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-    if (r.status !== 0 || !r.stdout) return null;
-    return parseRegistry(eco, JSON.parse(r.stdout));
-  } catch { return null; }
-}
+// The registry, asked asynchronously (the hub is never blocked): classification reads the remembered answer, and a miss
+// starts a fetch for the next ask (PermissionLists.lookup). A failed lookup is null (it goes to Matt).
 export async function registryLookup(eco, name) {
   const url = registryUrl(eco, name);
   if (!url) return null;
@@ -214,26 +221,35 @@ const newId = p => `${p}${randomBytes(4).toString('hex')}`;
 export class ListsError extends Error { }
 
 export class PermissionLists {
-  // settings: the hub's HubSettings (lists live in its settings.json). lookup: (eco, name) -> registry info or null.
-  constructor({ settings, lookup = registryLookupSync, now = () => Date.now(), home = homedir() } = {}) {
+  // settings: the hub's HubSettings (lists live in its settings.json). fetcher: async (eco, name) -> registry info or null.
+  constructor({ settings, fetcher = registryLookup, now = () => Date.now(), home = homedir() } = {}) {
     this.settings = settings;
-    this.lookupFn = lookup;
+    this.fetcher = fetcher;
     this.now = now;
     this.home = home;
     this.cache = new Map();
+    this.inflight = new Map();
     if (!this.data) this.save({ v: LISTS_VERSION, seeded: new Date().toISOString(), sites: SEED_SITES.map(s => ({ id: newId('s'), ...s, at: new Date().toISOString() })), packages: [] });
   }
   get data() { const l = this.settings?.lists; return l && Array.isArray(l.sites) && Array.isArray(l.packages) ? l : null; }
   save(l) { this.settings.setLists(l); }
 
-  // The lookup, remembered for a minute so a burst of installs asks the registry once.
-  lookup = (eco, name) => {
-    const k = `${eco}:${name}`, hit = this.cache.get(k), t = this.now();
-    if (hit && t - hit.t < 60000) return hit.v;
-    const v = this.lookupFn(eco, name);
-    if (v) this.cache.set(k, { t, v }); else this.cache.delete(k);
-    return v;
+  // The registry answer, from memory only (classification never waits for the network). Older than maxAgeMs, or never
+  // asked: null, and a fetch starts so the next ask has it. Matt's own add pre-fills it (prime).
+  lookup = (eco, name, maxAgeMs = LOOKUP_TTL_MS) => {
+    const hit = this.cache.get(`${eco}:${name}`);
+    if (hit && this.now() - hit.t <= maxAgeMs) return hit.v;
+    this.prime(eco, name).catch(() => { });
+    return null;
   };
+  // Ask the registry now (once at a time) and remember the answer. Resolves to it, or null when the registry failed.
+  prime(eco, name) {
+    const k = `${eco}:${name}`;
+    if (this.inflight.has(k)) return this.inflight.get(k);
+    const p = Promise.resolve().then(() => this.fetcher(eco, name)).catch(() => null).then(v => { if (v) this.cache.set(k, { t: this.now(), v }); else this.cache.delete(k); return v || null; }).finally(() => this.inflight.delete(k));
+    this.inflight.set(k, p);
+    return p;
+  }
 
   // The snapshot classify() reads for one project.
   forProject(dir) {
@@ -264,18 +280,27 @@ export class PermissionLists {
     const sub = p ? false : subdomains === false ? false : !open;
     const sc = this.scopeOf(scope);
     const d = this.data;
-    if (d.sites.some(e => e.host === h && (e.pin || null) === p && e.scope === sc)) throw new ListsError(`${h}${p || ''} is already on the list.`);
+    const same = d.sites.find(e => e.host === h && (e.pin || null) === p && e.scope === sc);
+    if (same) {
+      // "Always allow downloads" on a site already listed for pages upgrades it (Matt's confirm is the add's step-up).
+      if (same.access === 'pages' && access === 'downloads') return this.setAccess(same.id, 'downloads');
+      throw new ListsError(`${h}${p || ''} is already on the list.`);
+    }
     const e = { id: newId('s'), host: h, subdomains: sub, access, pin: p, scope: sc, by: String(by).slice(0, 80), at: new Date(this.now()).toISOString() };
     this.save({ ...d, sites: [...d.sites, e] });
     return e;
   }
-  addPackage({ eco, name, scope = 'all', baseMajor = null, by = 'you' } = {}) {
+  // baseMajor / baseMinor: the version Matt saw when approving (the baseline for a fresh project). revision: a Hugging
+  // Face model is approved at one pinned revision (a full 40-character commit); another revision comes to Matt.
+  addPackage({ eco, name, scope = 'all', baseMajor = null, baseMinor = null, revision = null, by = 'you' } = {}) {
     if (!ECOSYSTEMS[eco]) throw new ListsError('npm, pip or Hugging Face.');
     const n = eco === 'pip' ? pipName(String(name ?? '').trim()) : String(name ?? '').trim();
     if (!validPackage(eco, n)) throw new ListsError(eco === 'huggingface' ? 'A Hugging Face model looks like organisation/name.' : 'That is not a plain package name (no versions, paths, addresses or spaces).');
+    const rev = eco === 'huggingface' ? String(revision ?? '').trim().toLowerCase() : null;
+    if (eco === 'huggingface' && !/^[0-9a-f]{40}$/.test(rev)) throw new ListsError('A model is approved at one revision: give the full 40-character commit.');
     const sc = this.scopeOf(scope), d = this.data;
     if (d.packages.some(e => e.eco === eco && sameName(eco, e.name, n) && e.scope === sc)) throw new ListsError(`${n} is already on the list.`);
-    const e = { id: newId('p'), eco, name: n, baseMajor: Number.isInteger(baseMajor) ? baseMajor : null, scope: sc, by: String(by).slice(0, 80), at: new Date(this.now()).toISOString() };
+    const e = { id: newId('p'), eco, name: n, baseMajor: Number.isInteger(baseMajor) ? baseMajor : null, baseMinor: Number.isInteger(baseMinor) ? baseMinor : null, ...(rev ? { revision: rev } : {}), scope: sc, by: String(by).slice(0, 80), at: new Date(this.now()).toISOString() };
     this.save({ ...d, packages: [...d.packages, e] });
     return e;
   }
@@ -368,27 +393,46 @@ export function absolutePath(word, tmp) {
   if (parts.some((x, i) => (x === '..' || x === '.') || (i > 0 && x === '') || /~\d/.test(x) || (i > 0 && /[. ]$/.test(x)) || (i > 0 && /[:<>"|?*]/.test(x)))) return null;
   return s.replace(/\/+$/, '');
 }
-function quarantineRoots(tmp) {
-  const roots = new Set([slash(join(tmp, QUARANTINE_DIR))]);
+// One quarantine folder per project: <temp>/crux-quarantine-<project folder name>.
+export const quarantineName = projectDir => `${QUARANTINE_DIR}-${basename(resolve(String(projectDir))).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'project'}`;
+function quarantineRoots(tmp, name) {
+  const roots = new Set([slash(join(tmp, name))]);
   const real = realOrNull(tmp);
-  if (real) roots.add(slash(join(real, QUARANTINE_DIR)));
+  if (real) roots.add(slash(join(real, name)));
   return [...roots];
 }
-// A place to save into: inside the quarantine folder, its parent a real folder inside it (no link out), and nothing
-// there yet. -> { path } or { why }.
-export function quarantineTarget(word, tmp, { dir = false } = {}) {
+// Every quarantine folder in temp, whichever project made it (crux-quarantine*): anything inside counts as downloaded,
+// so running it, or a copy of it, stays a stop. Lower-case, forward slashes, in both spellings of the temp folder.
+export function quarantineMarks(tmp) {
+  const out = new Set();
+  const real = realOrNull(tmp);
+  for (const base of new Set([tmp, real].filter(Boolean))) {
+    let names = [];
+    try { names = readdirSync(base); } catch { continue; }
+    for (const n of names) if (/^crux-quarantine/i.test(n)) out.add(low(join(base, n)));
+  }
+  return [...out];
+}
+// A place to save into: inside this project's quarantine folder (a real folder, not a link, and really inside temp),
+// its parent a real folder inside it, and nothing there yet. -> { path } or { why }.
+export function quarantineTarget(word, tmp, { dir = false, name = QUARANTINE_DIR } = {}) {
   const abs = absolutePath(word, tmp);
   if (!abs) return { why: 'The place to save it is not a plain full path' };
-  const roots = quarantineRoots(tmp);
+  const roots = quarantineRoots(tmp, name);
   const root = roots.find(r => low(abs).startsWith(`${r.toLowerCase()}/`));
-  if (!root) return { why: `Downloads may only be saved inside the quarantine folder (${slash(join(tmp, QUARANTINE_DIR))})` };
-  const name = basename(abs);
-  if (!/^[A-Za-z0-9][\w.@+-]{0,100}$/.test(name) || /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(name)) return { why: 'The file name is not a plain name' };
+  if (!root) return { why: `Downloads may only be saved inside this project's quarantine folder (${slash(join(tmp, name))})` };
+  // The folder itself must be a plain folder directly in temp: a junction or link there would lead anywhere.
+  let rootSt;
+  try { rootSt = lstatSync(root); } catch { return { why: `The quarantine folder does not exist yet: make ${slash(join(tmp, name))} first` }; }
+  const realTmp = realOrNull(tmp), realRootDir = realOrNull(root);
+  if (!rootSt.isDirectory() || rootSt.isSymbolicLink() || !realTmp || !realRootDir || low(realRootDir) !== low(join(realTmp, name))) return { why: 'The quarantine folder is a link, or does not sit directly in the temp folder' };
+  const file = basename(abs);
+  if (!/^[A-Za-z0-9][\w.@+-]{0,100}$/.test(file) || /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(file)) return { why: 'The file name is not a plain name' };
   const parent = dirname(abs);
   let st;
   try { st = lstatSync(parent); } catch { return { why: 'The folder to save into does not exist yet: make it inside the quarantine folder first' }; }
-  const realParent = realOrNull(parent), realRoot = realOrNull(root);
-  if (!st.isDirectory() || st.isSymbolicLink() || !realParent || !realRoot || !(low(realParent) === low(realRoot) || low(realParent).startsWith(`${low(realRoot)}/`))) return { why: 'The folder to save into is a link or sits outside the quarantine folder' };
+  const realParent = realOrNull(parent), realRoot = realRootDir;
+  if (!st.isDirectory() || st.isSymbolicLink() || !realParent || !(low(realParent) === low(realRoot) || low(realParent).startsWith(`${low(realRoot)}/`))) return { why: 'The folder to save into is a link or sits outside the quarantine folder' };
   let there = null;
   try { there = lstatSync(abs); } catch (e) { if (e?.code !== 'ENOENT') return { why: 'Cannot tell what is already there' }; }
   if (there) {
@@ -400,8 +444,70 @@ export function quarantineTarget(word, tmp, { dir = false } = {}) {
   }
   return { path: abs };
 }
-// Any mention of the quarantine folder by name, in any spelling (/tmp/..., $env:TEMP\..., a full path).
+// Any mention of a quarantine folder by name, in any spelling (/tmp/..., $env:TEMP\..., a full path).
 export const inQuarantine = text => /crux-quarantine/i.test(String(text));
+// The longest part of a path that exists, replaced by its real long name (links followed, 8.3 names opened), plus the
+// rest as written: where the path really leads. Lower-case, forward slashes.
+function realish(p) {
+  let d = resolve(String(p)), rest = [];
+  for (let i = 0; i < 60; i++) {
+    const r = realOrNull(d);
+    if (r) return low(join(r, ...rest.reverse()));
+    const up = dirname(d);
+    if (up === d) break;
+    rest.push(basename(d)); d = up;
+  }
+  return low(resolve(String(p)));
+}
+// A word as a path with no checks (it may hold glob characters): /tmp, /c/..., $env:TEMP, a drive path, else from cwd.
+function looseAbs(tok, cwd, tmp) {
+  let s = slash(String(tok).replace(TEMP_VAR, tmp)), m;
+  if (/^\/tmp(\/|$)/.test(s)) s = slash(join(tmp, s.slice(5)));
+  else if ((m = /^\/([a-z])\/(.*)$/i.exec(s))) s = `${m[1].toUpperCase()}:/${m[2]}`;
+  else if (!/^[a-z]:\//i.test(s) && !s.startsWith('/')) s = slash(join(cwd, s));
+  return s;
+}
+const HARMLESS = new Set(['ls', 'dir', 'cat', 'head', 'tail', 'wc', 'stat', 'file', 'du', 'pwd', 'echo', 'printf', 'cd', 'pushd', 'popd', 'sha256sum', 'md5sum', 'get-childitem', 'gci',
+  'get-item', 'gi', 'get-content', 'gc', 'get-filehash', 'test-path', 'set-location', 'sl', 'push-location', 'pop-location', 'mkdir', 'md', 'write-output', 'write-host', 'select-object',
+  'sort-object', 'measure-object', 'where-object', 'format-table', 'ft', 'select-string', 'sls', 'grep', 'rg', 'new-item', 'ni']);
+const JUNCTIONISH = /\b(junction|symboliclink|hardlink|mklink)\b|\bln\s+-\w*s|new-item[^;&|\n]*-itemtype\s+(?!directory)/i;
+// Does a command touch a quarantine folder, however it spells the path (a relative path from inside it, .., a glob, an
+// 8.3 name, a link) or run from inside one? And does it do more than look? -> true when it does both: that is a copy,
+// a move or a run of something downloaded, never an allow by itself.
+export function leavesQuarantine(text, cwd, tmp) {
+  const t = String(text);
+  const marks = quarantineMarks(tmp);
+  let touched = inQuarantine(t) || (marks.length > 0 && marks.some(m => under(realish(cwd), m)));
+  if (!touched && marks.length) {
+    for (const raw of t.split(/[\s;&|()<>]+/)) {
+      let tok = raw.replace(/^['"]+|['"]+$/g, '');
+      if (!tok) continue;
+      if (/^-+[\w-]*=/.test(tok)) tok = tok.slice(tok.indexOf('=') + 1);
+      else if (tok.startsWith('-')) continue;
+      if (/[$%]/.test(tok)) { touched = true; break; }   // a variable: where it leads is not known
+      const g = tok.search(/[*?[]/);
+      if (g >= 0) {
+        // A glob may stand for the quarantine folder itself (/tmp/crux-q*/...) or for a folder on the way to it: match the
+        // path up to the glob's own folder name against the folders, cut to the same depth. A glob inside a folder is
+        // judged by the folder before it, like any path.
+        const segEnd = tok.slice(g).search(/[\\/]/), pre = segEnd < 0 ? tok : tok.slice(0, g + segEnd);
+        const re = new RegExp(`^${low(looseAbs(pre, cwd, tmp)).replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\[!/g, '[^')}$`);
+        const depth = low(looseAbs(pre, cwd, tmp)).split('/').length;
+        try { if (marks.some(m => re.test(m.split('/').slice(0, depth).join('/')))) { touched = true; break; } } catch { touched = true; break; }
+        const h = tok.slice(0, g), cut = Math.max(h.lastIndexOf('/'), h.lastIndexOf('\\'));
+        tok = cut > 0 ? h.slice(0, cut) : cut === 0 ? h.slice(0, 1) : '.';
+      }
+      const abs = absolutePath(tok, tmp) || resolve(cwd, tok);
+      if (marks.some(m => under(realish(abs), m))) { touched = true; break; }
+    }
+  }
+  if (!touched) return false;
+  if (JUNCTIONISH.test(t) || />/.test(t)) return true;
+  return t.split(/;|&&|\|\||\||&|\r?\n/).some(s => {
+    const w = s.trim().replace(/^&\s*/, '').split(/\s+/)[0] || '';
+    return w && !HARMLESS.has(w.toLowerCase().replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/, ''));
+  });
+}
 
 // ---------- the shapes ----------
 // Each parser returns { ok: false } (not this shape at all), or { ok: true, ... } plus problems: [text] that stop it
@@ -431,11 +537,11 @@ function parseCurl(a) {
 // Invoke-WebRequest -Uri URL -OutFile FILE -MaximumRedirection 0 [-UseBasicParsing] [-TimeoutSec N] [-Method Get]
 function parseIwr(a) {
   const r = { ok: true, problems: [], url: null, out: null, hard: false };
-  let redirects = null;
+  let redirects = null, basic = false;
   const bad = t => { r.hard = true; r.problems.push(`Invoke-WebRequest parameter ${t} is not one the hub reads (no sends, headers, credentials, proxies or splatting)`); };
   for (let i = 0; i < a.length; i++) {
     const t = a[i], k = t.toLowerCase();
-    if (k === '-usebasicparsing') continue;
+    if (k === '-usebasicparsing') { basic = true; continue; }
     if (k === '-timeoutsec') { if (!num(a[++i])) bad(t); continue; }
     if (k === '-maximumredirection') { redirects = a[++i]; continue; }
     if (k === '-method') { if (!/^get$/i.test(a[++i] || '')) bad(t); continue; }
@@ -447,6 +553,7 @@ function parseIwr(a) {
     r.url = t;
   }
   if (redirects !== '0') r.problems.push('Invoke-WebRequest follows redirects unless -MaximumRedirection 0 is given');
+  if (!basic) r.problems.push('Invoke-WebRequest without -UseBasicParsing runs the page through the browser engine');
   if (r.url === null) r.problems.push('Invoke-WebRequest names no address');
   if (r.out === null) r.problems.push('Invoke-WebRequest does not save to a file (-OutFile)');
   return r;
@@ -454,10 +561,20 @@ function parseIwr(a) {
 
 // npm install [--save-dev] --ignore-scripts name[@spec]...   (npm ci is a lockfile build, below)
 const NPM_FLAGS = /^(--ignore-scripts|--save-dev|-D|--save|-S|--save-exact|-E|--no-audit|--no-fund|--silent|--no-progress)$/;
-function parseNpmInstall(a, problems) {
+// --before=YYYY-MM-DD, at least 3 days ago: npm then picks only releases published by that day, for the package and for
+// everything it pulls in, so no young release gets in whatever the registry says.
+function parseNpmInstall(a, problems, now = Date.now()) {
   const specs = [];
-  let scripts = false, hard = false;
+  let scripts = false, hard = false, before = null;
   for (const t of a) {
+    const bm = /^--before=(\d{4}-\d{2}-\d{2})$/.exec(t);
+    if (bm) {
+      const ms = Date.parse(`${bm[1]}T00:00:00Z`);
+      if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== bm[1]) problems.push(`--before ${bm[1]} is not a date`);
+      else if (now - ms < MIN_AGE_MS) problems.push(`--before=${bm[1]} is less than 3 days ago: npm would take releases younger than the 3-day wait`);
+      else before = ms;
+      continue;
+    }
     if (NPM_FLAGS.test(t)) { if (t === '--ignore-scripts') scripts = true; continue; }
     if (t.startsWith('-')) { problems.push(`npm option ${t} is not one the hub reads`); if (/^--?(g|global|registry|prefix|userconfig|globalconfig|location|workspace|w|workspaces|cache|proxy|https-proxy|ca|cafile|script-shell|install-links|C)/.test(t)) hard = true; continue; }
     const m = /^(@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)(?:@(.+))?$/.exec(t);
@@ -466,15 +583,18 @@ function parseNpmInstall(a, problems) {
   }
   if (!specs.length) problems.push('npm install names no package');
   if (!scripts) problems.push('npm install without --ignore-scripts would run the packages\' own install scripts');
-  return { specs, hard };
+  if (!before && !problems.some(p => /--before/.test(p))) problems.push('npm install without --before=<a date at least 3 days ago> could take a release younger than 3 days, or one pulled in by a dependency');
+  return { specs, hard, before };
 }
 // <project>\.venv\Scripts\python -m pip install --only-binary=:all: name[==X.Y.Z]...
 const PIP_FLAGS = /^(-q|--quiet|--disable-pip-version-check|--no-input|--upgrade|-U)$/;
+// --isolated: pip reads no environment settings and no user config (an index or proxy set there would reroute it).
 function parsePipInstall(a, problems) {
   const specs = [];
-  let binary = false, hard = false;
+  let binary = false, hard = false, isolated = false;
   for (let i = 0; i < a.length; i++) {
     const t = a[i];
+    if (t === '--isolated') { isolated = true; continue; }
     if (t === '--only-binary=:all:' || (t === '--only-binary' && a[i + 1] === ':all:')) { binary = true; if (t === '--only-binary') i++; continue; }
     if (PIP_FLAGS.test(t)) continue;
     if (t.startsWith('-')) { problems.push(`pip option ${t} is not one the hub reads`); if (/^(-i|--index-url|--extra-index-url|-r|--requirement|-e|--editable|--target|-t|--user|--prefix|--root|--find-links|-f|--proxy|--trusted-host|--cert|--no-index)/.test(t)) hard = true; continue; }
@@ -484,10 +604,13 @@ function parsePipInstall(a, problems) {
   }
   if (!specs.length) problems.push('pip install names no package');
   if (!binary) problems.push('pip install without --only-binary=:all: could run a package\'s build scripts');
+  if (!isolated) problems.push('pip install without --isolated would read index and proxy settings from the environment and config files');
   return { specs, hard };
 }
 // hf download org/name --revision <40 hex> --include '*.safetensors' --local-dir <quarantine>/dir
-const SAFE_FILE = /^[\w.*-]+(?:\/[\w.*-]+)*\.(?:safetensors|json|txt)$/i;
+// Weights and plain text only: a .json (config.json can name code to load, "auto_map") cannot be checked before it is
+// downloaded, so a command that asks for one goes to Matt.
+const SAFE_FILE = /^[\w.*-]+(?:\/[\w.*-]+)*\.(?:safetensors|txt)$/i;
 function parseHf(a, problems) {
   const r = { repo: null, revision: null, includes: [], localDir: null, files: [] };
   let hard = false;
@@ -505,7 +628,7 @@ function parseHf(a, problems) {
   if (!r.revision || !/^[0-9a-f]{40}$/.test(r.revision)) problems.push('The revision is not pinned to a full 40-character commit');
   if (!r.localDir) problems.push('Models are saved into the quarantine folder with --local-dir');
   if (!r.includes.length && !r.files.length) problems.push('Name the files (--include) so only safetensors and plain text files are fetched');
-  for (const f of [...r.includes, ...r.files]) if (!SAFE_FILE.test(f)) problems.push(`${f} is not a .safetensors, .json or .txt file (pickle formats can run code)`);
+  for (const f of [...r.includes, ...r.files]) if (!SAFE_FILE.test(f)) problems.push(`${f} is not a .safetensors or .txt file (pickle formats and config files can make a loader run code)`);
   return { r, hard };
 }
 // cargo build|fetch --locked ...   and   npm ci [--ignore-scripts ...]
@@ -530,7 +653,20 @@ const NPM_CI_FLAGS = /^(--ignore-scripts|--no-audit|--no-fund|--silent|--no-prog
 const gitOut = (cwd, args) => execFileSync('git', ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['ignore', 'pipe', 'ignore'] });
 const gitOk = (cwd, args) => { try { execFileSync('git', ['-c', 'core.fsmonitor=false', ...args], { cwd, timeout: 15000, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: 'ignore' }); return true; } catch { return false; } };
 const WATCHED = /(^|\/)(cargo\.toml|cargo\.lock|package\.json|package-lock\.json|npm-shrinkwrap\.json|\.npmrc|\.yarnrc(\.yml)?|rust-toolchain(\.toml)?|pnpm-workspace\.yaml|\.pnpmfile\.cjs)$|(^|\/)\.cargo\/config(\.toml)?$/i;
-const NPMRC_BAD = /^\s*(@[\w.-]+:)?registry\s*=|^\s*(https?-)?proxy\s*=|^\s*(script-shell|node-options|cafile|ca|prefix|globalconfig|userconfig)\s*=|^\s*ignore-scripts\s*=\s*false/im;
+// An .npmrc that reroutes npm: a registry (also per scope, also with the key in quotes), a proxy, a CA, a shell or node
+// option, another config file, switched-off TLS checks or switched-on install scripts.
+const NPMRC_KEYS = /^(@[\w.-]+:)?registry$|^(https-)?proxy$|^noproxy$|^script-shell$|^node-options$|^cafile$|^ca(\[\])?$|^prefix$|^globalconfig$|^userconfig$|^replace-registry-host$/;
+export function npmrcBad(text) {
+  for (const line of String(text).split(/\r?\n/)) {
+    if (/^\s*[;#]/.test(line)) continue;
+    const m = /^\s*["']?([^="'\s]+)["']?\s*=\s*["']?(.*?)["']?\s*$/.exec(line);
+    if (!m) continue;
+    const k = m[1].toLowerCase(), v = m[2].toLowerCase();
+    if (NPMRC_KEYS.test(k) || ((k === 'strict-ssl' || k === 'ignore-scripts') && v === 'false')) return true;
+  }
+  return false;
+}
+const NPMRC_BAD = { test: npmrcBad };
 const CARGO_CONFIG_BAD = /^\s*\[(source|registries|patch|net)\b|replace-with\s*=|^\s*\[http\]|proxy\s*=|^\s*\[env\]|^\s*\[build\]|^\s*\[target\.|^\s*\[alias\]/im;
 const readText = f => { try { return readFileSync(f, 'utf8'); } catch { return null; } };
 const NON_REGISTRY = /^(git(\+\w+)?|github|gitlab|bitbucket|https?|file|link|workspace|npm|portal|patch):|^[\w.-]+\/[\w.-]+(#.*)?$|\.(tgz|tar\.gz|zip)$/i;
@@ -552,19 +688,31 @@ function manifestFindings(rel, text) {
   return [];
 }
 // Lockfile, manifests and registry config unchanged from the merge-base with main? -> [] when so, else why not.
-export function lockfileProblems(cwd, home = homedir()) {
-  let top;
-  try { top = gitOut(cwd, ['rev-parse', '--show-toplevel']).trim(); } catch { return ['This folder is not in a git repository the hub can read']; }
-  if (!top) return ['This folder is not in a git repository the hub can read'];
+// The repository must be the project's own: the project folder is its top, and the folder the command runs in belongs
+// to the same repository (the project folder or one of its registered worktrees), so a repository made inside the
+// project cannot stand in for it. The base is the project's own origin/main only, never a local branch.
+export function lockfileProblems(cwd, { projectDir, home = homedir() } = {}) {
+  const none = 'This folder is not in the project\'s own git repository, which the hub can read';
+  let top, common, worktrees;
+  try {
+    const topCwd = gitOut(cwd, ['rev-parse', '--show-toplevel']).trim();
+    const topProj = gitOut(projectDir, ['rev-parse', '--show-toplevel']).trim();
+    const commonCwd = gitOut(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
+    common = gitOut(projectDir, ['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
+    if (!topCwd || !topProj || !commonCwd || !common) return [none];
+    if (low(topProj) !== low(resolve(projectDir))) return ['The project folder is not the top of its own git repository'];
+    if (low(commonCwd) !== low(common)) return ['This folder belongs to a different git repository than the project'];
+    worktrees = gitOut(projectDir, ['worktree', 'list', '--porcelain']).split(/\r?\n/).filter(l => l.startsWith('worktree ')).map(l => low(l.slice(9).trim()));
+    if (!worktrees.includes(low(topCwd))) return ['This folder is not the project or one of its registered worktrees'];
+    top = topCwd;
+  } catch { return [none]; }
   let base = null;
-  for (const ref of ['origin/main', 'main']) {
-    try { base = gitOut(cwd, ['merge-base', 'HEAD', ref]).trim(); if (base) break; } catch { base = null; }
-  }
-  if (!base) return ['The hub cannot find where this branch left main (no merge-base)'];
+  try { base = gitOut(top, ['merge-base', 'HEAD', 'origin/main']).trim(); } catch { base = null; }
+  if (!base) return ['The hub cannot find where this branch left the project\'s origin/main (no merge-base)'];
   let inBase, inTree;
   try {
-    inBase = gitOut(cwd, ['ls-tree', '-r', '--name-only', '-z', base]).split('\0').filter(Boolean);
-    inTree = gitOut(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']).split('\0').filter(Boolean);
+    inBase = gitOut(top, ['ls-tree', '-r', '--name-only', '--full-tree', '-z', base]).split('\0').filter(Boolean);
+    inTree = gitOut(top, ['ls-files', '-z', '--full-name', '--cached', '--others', '--exclude-standard']).split('\0').filter(Boolean);
   } catch { return ['The hub cannot list the repository\'s files']; }
   const probe = new Set();
   for (const f of [...inBase, ...inTree]) if (WATCHED.test(f)) probe.add(f);
@@ -599,17 +747,18 @@ export function lockfileProblems(cwd, home = homedir()) {
 // ---------- the install gates ----------
 const ago = ms => { const h = Math.max(0, Math.round(ms / 3600000)); return h < 48 ? `${h} hour${h === 1 ? '' : 's'}` : `${Math.round(h / 24)} days`; };
 // The major version a project already has: installed, else written in its manifest.
+// -> { major, minor } of a version or a declared range ("^3.1.0"), or null.
+const verBase = v => { const m = /^[~^=v\s>]*(\d+)(?:\.(\d+))?/.exec(String(v ?? '')); return m ? { major: Number(m[1]), minor: m[2] === undefined ? null : Number(m[2]) } : null; };
 function npmBaseline(cwd, name) {
   const inst = readText(join(cwd, 'node_modules', ...name.split('/'), 'package.json'));
-  if (inst) { try { const m = majorOf(JSON.parse(inst).version); if (m != null) return m; } catch { } }
+  if (inst) { try { const b = verBase(JSON.parse(inst).version); if (b) return b; } catch { } }
   const pj = readText(join(cwd, 'package.json'));
   if (pj) {
     try {
       const j = JSON.parse(pj);
       for (const k of ['dependencies', 'devDependencies', 'optionalDependencies']) {
-        const v = j[k]?.[name];
-        const m = typeof v === 'string' && /^[~^=v\s>]*(\d+)\./.exec(v) || (typeof v === 'string' && /^[~^=v\s>]*(\d+)$/.exec(v));
-        if (m) return Number(m[1]);
+        const b = typeof j[k]?.[name] === 'string' ? verBase(j[k][name]) : null;
+        if (b) return b;
       }
     } catch { }
   }
@@ -624,28 +773,33 @@ function pipBaseline(venv, name) {
     try { names = readdirSync(r); } catch { continue; }
     for (const n of names) {
       const m = /^(.+?)-(\d[^-]*)\.dist-info$/.exec(n);
-      if (m && pipName(m[1]) === want) { const mj = majorOf(m[2]); if (mj != null) return mj; }
+      if (m && pipName(m[1]) === want) { const b = verBase(m[2]); if (b) return b; }
     }
   }
   return null;
 }
 // -> [] when the release may be installed, else the reasons it goes to Matt.
-function gate(lists, eco, spec, entry, baseline) {
+// before: npm's --before date (ms). maxAgeMs: how old the remembered registry answer may be.
+function gate(lists, eco, spec, entry, baseline, { before = null, maxAgeMs } = {}) {
   const label = `${spec.name}${spec.spec ? ` (${spec.spec})` : ''}`;
   let info = null;
-  try { info = lists.lookup(eco, spec.name); } catch { info = null; }
-  if (!info) return [`The registry could not be asked when ${label} was released, so the 3-day check was not done`];
-  const r = resolveVersion(eco, spec.spec, info);
-  if (r.why) return [`${label}: ${r.why}`];
+  try { info = lists.lookup(eco, spec.name, maxAgeMs); } catch { info = null; }
+  if (!info) return [`The registry could not be asked when ${label} was released (it is being looked up now, so the next try can be settled), and the 3-day check was not done`];
+  const now = lists.now();
+  const r = resolveVersion(eco, spec.spec, info, before);
+  if (r.why) {
+    const r0 = before ? resolveVersion(eco, spec.spec, info) : null, at0 = r0?.version ? info.versions[r0.version]?.at : null;
+    if (at0 != null && now - at0 < MIN_AGE_MS) return [`${label} ${r0.version} was released ${ago(now - at0)} ago, under the 3-day wait`];
+    return [`${label}: ${r.why}`];
+  }
   const rel = info.versions[r.version];
   if (!rel || rel.at == null) return [`${label} ${r.version}: the registry gives no release date`];
   if (rel.yanked) return [`${label} ${r.version} was withdrawn by its author`];
-  const now = lists.now();
   if (now - rel.at < MIN_AGE_MS) return [`${label} ${r.version} was released ${ago(now - rel.at)} ago, under the 3-day wait`];
   if (isPre(eco, r.version)) return [`${label} ${r.version} is a pre-release`];
-  const major = majorOf(r.version), base = baseline ?? entry.baseMajor;
-  if (base == null) return [`${label} ${r.version}: no earlier version of it is in this project to compare the major version with`];
-  if (major == null || major > base) return [`${label} ${r.version} is a major version jump (the project has ${base}.x)`];
+  const base = baseline ?? (entry.baseMajor != null ? { major: entry.baseMajor, minor: entry.baseMinor ?? null } : null);
+  if (!base) return [`${label} ${r.version}: no earlier version of it is in this project to compare the major version with`];
+  if (isJump(r.version, base)) return [`${label} ${r.version} is a major version jump (the project has ${base.major}.${base.major === 0 && base.minor != null ? `${base.minor}.` : ''}x)`];
   return [];
 }
 
@@ -691,7 +845,7 @@ export function decide(ctx) {
       if (!site) { if (!problems.length) return null; problems.push(`${u.host} is not on your list for downloads`); }
     }
     let target = null;
-    if (r.out !== null) { target = quarantineTarget(r.out, tmp); if (target.why) problems.push(target.why); }
+    if (r.out !== null) { target = quarantineTarget(r.out, tmp, { name: quarantineName(ctx.projectDir) }); if (target.why) problems.push(target.why); }
     if (problems.length || !site || !target?.path) return { note: problems };
     return { allow: true, why: `${u.host} is on your trusted sites (downloads, into the quarantine folder)`, downloads: [{ path: target.path, url: `https://${u.host}${u.path}`, host: u.host }] };
   }
@@ -704,8 +858,11 @@ export function decide(ctx) {
     const entry = r.repo && findPackage(lists.packages, 'huggingface', r.repo, lists.key);
     if (!entry) return null;
     let target = null;
-    if (r.localDir) { target = quarantineTarget(r.localDir, tmp, { dir: true }); if (target.why) problems.push(target.why); }
+    if (r.localDir) { target = quarantineTarget(r.localDir, tmp, { dir: true, name: quarantineName(ctx.projectDir) }); if (target.why) problems.push(target.why); }
     if (problems.length || !target?.path) return { note: problems };
+    // Approved at one pinned revision: another one (or an entry with none) is Matt's to approve.
+    if (!entry.revision) return { gate: [`${r.repo} was approved without a pinned revision: approve it again with the revision you want`] };
+    if (entry.revision !== String(r.revision).toLowerCase()) return { gate: [`${r.repo} at revision ${String(r.revision).slice(0, 12)} is not the revision you approved (${entry.revision.slice(0, 12)})`] };
     return { allow: true, why: `${r.repo} is an approved Hugging Face model (pinned revision, safetensors only)`, downloads: [{ path: target.path, url: `huggingface.co/${r.repo}@${r.revision}`, host: 'huggingface.co' }] };
   }
 
@@ -716,13 +873,13 @@ export function decide(ctx) {
     if (!under(cwd, ctx.projectDir)) return null;
     if (sub === 'ci') return lockedBuild('npm ci', rest.slice(1), ctx, 'npm');
     const problems = [];
-    const { specs } = parseNpmInstall(rest.slice(1), problems);
+    const { specs, before } = parseNpmInstall(rest.slice(1), problems, lists.now());
     const entries = specs.map(s => findPackage(lists.packages, 'npm', s.name, lists.key));
     if (!specs.length || entries.some(e => !e)) return null;   // something in it is not approved: it stays as it was
     if (!existsSync(join(cwd, 'package.json'))) problems.push('There is no package.json in the folder it runs in');
     for (const f of [join(cwd, '.npmrc'), join(ctx.projectDir, '.npmrc'), join(home, '.npmrc')]) { const t = readText(f); if (t != null && NPMRC_BAD.test(t)) problems.push('An .npmrc sets a registry, proxy or script option'); }
     if (problems.length) return { note: problems };
-    const gates = specs.flatMap((s, i) => gate(lists, 'npm', s, entries[i], npmBaseline(cwd, s.name)));
+    const gates = specs.flatMap((s, i) => gate(lists, 'npm', s, entries[i], npmBaseline(cwd, s.name), { before }));
     if (gates.length) return { gate: gates };
     return { allow: true, why: `${specs.map(s => s.name).join(', ')} ${specs.length > 1 ? 'are' : 'is'} on your approved packages (npm, scripts off)` };
   }
@@ -740,8 +897,11 @@ export function decide(ctx) {
     const { specs } = parsePipInstall(rest.slice(3), problems);
     const entries = specs.map(s => findPackage(lists.packages, 'pip', s.name, lists.key));
     if (!specs.length || entries.some(e => !e)) return null;
+    const cfg = pipConfigFound(venv, home);
+    if (cfg) problems.push(cfg);
     if (problems.length) return { note: problems };
-    const gates = specs.flatMap((s, i) => gate(lists, 'pip', s, entries[i], pipBaseline(venv, s.name)));
+    // A pinned release never changes, so its answer may be old; an unpinned one takes whatever is newest, so it must be fresh.
+    const gates = specs.flatMap((s, i) => gate(lists, 'pip', s, entries[i], pipBaseline(venv, s.name), { maxAgeMs: s.spec ? LOOKUP_TTL_MS : PIP_FRESH_MS }));
     if (gates.length) return { gate: gates };
     return { allow: true, why: `${specs.map(s => s.name).join(', ')} ${specs.length > 1 ? 'are' : 'is'} on your approved packages (pip in the project's .venv, wheels only)` };
   }
@@ -753,6 +913,19 @@ export function decide(ctx) {
     const c = parseCargo(rest, problems);
     if (!c) return null;
     return lockedBuild(`cargo ${c.sub}`, null, ctx, 'cargo', problems);
+  }
+  return null;
+}
+// pip settings that could point it at another index or proxy: a pip.ini / pip.conf in the project's .venv, in the user's
+// or the machine's usual places, PIP_CONFIG_FILE, or any PIP_ setting in the hub's own environment. -> why, or null.
+function pipConfigFound(venv, home) {
+  const env = Object.keys(process.env).find(k => /^pip_/i.test(k) && process.env[k]);
+  if (env) return `${env} is set in the environment pip would run in`;
+  const files = [join(venv, 'pip.ini'), join(venv, 'pip.conf'), join(home, 'pip', 'pip.ini'), join(home, '.pip', 'pip.conf'), join(home, '.config', 'pip', 'pip.conf'), '/etc/pip.conf', '/etc/xdg/pip/pip.conf']
+    .concat([process.env.APPDATA, process.env.ProgramData, process.env.XDG_CONFIG_HOME].filter(Boolean).map(d => join(d, 'pip', d === process.env.XDG_CONFIG_HOME ? 'pip.conf' : 'pip.ini')));
+  for (const f of files) {
+    const t = readText(f);
+    if (t != null && (f.startsWith(venv) || /index|find-links|proxy|trusted-host|cert|no-index/i.test(t))) return `${f.replace(home, '~')} sets pip options`;
   }
   return null;
 }
@@ -768,10 +941,11 @@ function curlConfigFound(dirs) {
 function lockedBuild(what, npmArgs, ctx, kind, problems = []) {
   const cwd = ctx.cwd || ctx.projectDir;
   if (kind === 'npm') for (const t of npmArgs) if (!NPM_CI_FLAGS.test(t)) problems.push(`npm ci option ${t} is not one the hub reads`);
+  if (kind === 'npm' && !npmArgs.includes('--ignore-scripts')) problems.push('npm ci without --ignore-scripts would run the pinned packages\' install scripts');
   if (kind === 'npm' && !existsSync(join(cwd, 'package-lock.json'))) problems.push('There is no package-lock.json in the folder it runs in');
   if (kind === 'cargo') { let d = resolve(cwd), found = false; for (let i = 0; i < 12 && !found; i++) { found = existsSync(join(d, 'Cargo.lock')); const up = dirname(d); if (up === d) break; d = up; } if (!found) problems.push('There is no Cargo.lock to build from'); }
   if (problems.length) return { note: problems };
-  const changed = lockfileProblems(cwd, ctx.home || homedir());
+  const changed = lockfileProblems(cwd, { projectDir: ctx.projectDir, home: ctx.home || homedir() });
   if (changed.length) return { note: [`${what} is only settled here when the lockfile, manifests and registry config match main: ${changed.join('; ')}`] };
   return { allow: true, why: `${what} fetches only what the lockfile pins, and the lockfile, manifests and registry config match main` };
 }
@@ -800,14 +974,16 @@ export function settleLists(out, ctx) {
     const add = v.note.map(n => `Not settled by your lists: ${n}`);
     return out.route === 'human' ? { ...out, reasons: [...out.reasons, ...add] } : out.route === 'unsure' ? { ...out, unsure: [...out.unsure, ...add] } : out;
   }
-  // Moving or copying a file out of the quarantine folder is its own request, never an allow by itself.
-  if (out.route === 'allow' && /^(Bash|PowerShell)$/.test(ctx.tool) && inQuarantine(text) && (LEAVES.test(text) || /[>]/.test(text))) {
-    return { ...out, route: 'unsure', unsure: ['Takes a file out of the quarantine folder: only the check or the orchestrator can say yes to that'] };
+  // Moving, copying or running something in a quarantine folder is its own request, never an allow by itself: every path
+  // the command names is resolved (relative to where it runs, .., globs, 8.3 names, links) before it is judged.
+  if (out.route === 'allow' && /^(Bash|PowerShell)$/.test(ctx.tool)) {
+    let leaves = true;
+    try { leaves = leavesQuarantine(text, ctx.cwd || ctx.projectDir, tmp); } catch { leaves = true; }   // cannot tell: not an allow
+    if (leaves) return { ...out, route: 'unsure', unsure: ['Moves, copies or runs something in a quarantine folder: only the check or the orchestrator can say yes to that'] };
   }
   return out;
 }
 const SECRET_WORDS = /\.env\b|\.ssh\b|\.crux-hub\b|\bid_(rsa|ed25519)\b|\bcredentials?\b|\bpassword\b|\bsecret\b|api[_-]?key|\.npmrc|\.pypirc|\.netrc/i;
-const LEAVES = /(^|[\s;&|(])(mv|move|move-item|mi|cp|copy|copy-item|cpi|robocopy|xcopy|rsync|install|ln|mklink|rename-item|rni|ren|expand-archive|unzip|tar|7z|7za|bsdtar|out-file|tee|set-content|sc|add-content|ac|invoke-item|ii|start|start-process|saps|explorer)(?=[\s;&|)]|$)/i;
 
 // ---------- the "Always allow" offers on Matt's cards ----------
 // What a request could add to the lists: [{ kind: 'site', host, access, pin }, { kind: 'package', eco, name }]. Only
@@ -842,7 +1018,7 @@ export function suggest(tool, input) {
     if (!hard) for (const s of specs.slice(0, 3)) out.push({ kind: 'package', eco: 'pip', name: pipName(s.name) });
   } else if ((head === 'hf' || head === 'huggingface-cli') && rest[0] === 'download') {
     const { r, hard } = parseHf(rest.slice(1), problems);
-    if (!hard && r.repo) out.push({ kind: 'package', eco: 'huggingface', name: r.repo });
+    if (!hard && r.repo && /^[0-9a-f]{40}$/i.test(r.revision || '')) out.push({ kind: 'package', eco: 'huggingface', name: r.repo, revision: r.revision.toLowerCase() });
   }
   return out;
 }

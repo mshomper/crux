@@ -1,6 +1,6 @@
 // The hub: projects, their agents, and the routing between you, the orchestrator role and workers.
 import { basename, resolve, join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
@@ -12,7 +12,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool } from './permission-rules.mjs';
-import { PermissionLists, suggest as suggestList, downloadsFrom, registryLookup, majorOf, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
+import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
 import { HubSettings, HANDOFF_NUMBERS, projectKey } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
@@ -665,7 +665,9 @@ export class Hub {
     const cwd = agent.cwdFor?.(toolUseID) || null;
     agent.downloads ||= new Set();
     // A10: the project's record of downloaded files (its event log) counts for every agent, across restarts; Matt's lists.
-    const known = downloadsFrom(p.log.events);
+    // Everything inside a quarantine folder (any project's) counts as downloaded too: running it, or a copy of it, is a stop.
+    const marks = quarantineMarks(tmpdir());
+    const known = new Set([...downloadsFrom(p.log.events), ...marks]);
     const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], level, lists: this.lists?.forProject(p.dir) });
     for (const d of c.downloaded || []) if (!known.has(d)) p.log.append('download', { path: d, agent: agent.name, thread: agent.thread, ...(c.downloads?.find(x => x.path.toLowerCase().replace(/\\/g, '/') === d) || {}) });
     const { route, tempMade } = c;
@@ -809,8 +811,9 @@ export class Hub {
       // The version the project may move to on its own is the one it has now; for a fresh package, the latest at the time of approval.
       const eco = body.eco;
       const asked = eco === 'pip' ? pipName(String(body.name || '').trim()) : String(body.name || '').trim();
-      const info = !this.noAgents && validPackage(eco, asked) && (eco === 'npm' || eco === 'pip') ? await registryLookup(eco, asked) : null;   // a test hub never calls out
-      const e = this.lists.addPackage({ eco, name: body.name, scope, baseMajor: info ? majorOf(info.latest) : null, by });
+      const info = !this.noAgents && validPackage(eco, asked) && (eco === 'npm' || eco === 'pip') ? await this.lists.prime(eco, asked) : null;   // a test hub never calls out; this also fills the remembered answer
+      const v = /^(\d+)\.(\d+)/.exec(String(info?.latest ?? ''));
+      const e = this.lists.addPackage({ eco, name: body.name, scope, baseMajor: v ? Number(v[1]) : null, baseMinor: v ? Number(v[2]) : null, revision: body.revision, by });
       this.notice(p, 'orchestrator', `${who} added ${e.name} (${ECOSYSTEMS[e.eco] || e.eco}) to the approved packages for ${where}. Installs of it need no card, except a release under 3 days old or a new major version.`);
       return e;
     }
