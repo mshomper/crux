@@ -302,6 +302,15 @@ test('R2 HIGH 2: a pattern given in a joined or shortened option leaves the next
   allow("Select-String -Patt '.crux-hub' -Pa hub\\a.txt", ps);
 });
 
+test('R2 last HIGH: a PowerShell -Path:value word is a write or delete target', () => {
+  for (const c of ['Set-Content -Path:C:\\Windows\\x.txt -Value x', 'Add-Content -Path:C:\\Windows\\x.txt -Value x', 'Out-File -FilePath:C:\\Windows\\x.txt',
+    'New-Item -Path:C:\\Windows\\x.txt', 'Move-Item hub\\a.txt -Destination:C:\\Windows\\x.txt', 'Set-Content -Pa:C:\\Windows\\x.txt x',
+    'Set-Content -LiteralPath:C:\\Windows\\x.txt x', 'Remove-Item -Path:C:\\Windows\\x -Recurse', 'Remove-Item -Lit:C:\\Windows\\x',
+    "Set-Content -Path:'.claude\\settings.json' -Value x"]) matt(c, ps);
+  allow('Set-Content -Path:hub\\b.txt -Value x', ps);
+  allow('Copy-Item -Path:C:\\Windows\\win.ini -Destination:hub\\w.ini', ps);   // a copy's -Path: is its source, a read
+});
+
 test('R2 LOW: xcopy and robocopy switches are switches, not the C: drive', () => {
   notMatt(`xcopy hub\\lib ${tmp}\\x /E /I /C`, ps);
   notMatt(`robocopy hub ${tmp}\\x /E /R:1 /W:1`, ps);

@@ -1048,6 +1048,14 @@ class Check {
       return;
     }
     const positional = args.filter(a => !a.startsWith('-'));
+    // PowerShell -Path:x, -LiteralPath:x, -FilePath:x, -Destination:x (any start of the name, -LP, -PSPath): x is a
+    // target of a write or a delete like a positional word (review round 2).
+    const psTargets = !this.ps ? [] : args.flatMap(a => {
+      const m = /^-([a-z]+):(.+)$/i.exec(a);
+      if (!m || /^\$(true|false|null)$/i.test(m[2])) return [];
+      const n = m[1].toLowerCase();
+      return (n.length >= 2 && ['path', 'literalpath', 'filepath', 'pspath'].some(f => f.startsWith(n))) || n === 'lp' || 'destination'.startsWith(n) ? [m[2]] : [];
+    });
     const outsideHere = this.where(cwd, cwd) === 'outside';
     // A request to this machine: reading (GET) is fine anywhere, the hub on 4747 included. Sending data to the
     // hub on 4747 changes it: a hard stop. Sending data to a test hub is left to the orchestrator.
@@ -1119,8 +1127,9 @@ class Check {
     // A downloaded file moved or copied keeps counting as downloaded: curl -o a.sh URL; mv a.sh b.sh; bash b.sh.
     // M039 4: any copy of a download, of a folder holding one, or of a fresh clone (cp -r, Copy-Item -Recurse, tee, Out-File)
     // keeps counting: the destination, and the source's name inside it, are marked.
-    if (this.partTainted && (WRITE_ALL.has(head) || WRITE_LAST.has(head)) && positional.length) {
-      const items = this.items(positional), dst = items.at(-1);
+    const marked = WRITE_ALL.has(head) ? [...positional, ...psTargets] : positional;
+    if (this.partTainted && (WRITE_ALL.has(head) || WRITE_LAST.has(head)) && marked.length) {
+      const items = this.items(marked), dst = items.at(-1);
       for (const t of WRITE_ALL.has(head) && !/^(mv|move|move-item|mi|rename-item|rni|ren)$/.test(head) ? items : [dst]) this.markDown(t, cwd);
       for (const src of items.slice(0, -1)) this.markDown(join(dst, basename(src)), cwd);
       // Expand-Archive with no -DestinationPath makes a folder named after the archive where it runs.
@@ -1143,7 +1152,8 @@ class Check {
         : /^--target-directory=(.+)$/.exec(a)?.[1] ?? (!a.startsWith('--') ? /^-t(.+)$/.exec(a)?.[1] : null) ?? (this.ps ? /^-d(?:e(?:s(?:t(?:i(?:n(?:a(?:t(?:i(?:on?)?)?)?)?)?)?)?)?)?:(.+)$/i.exec(a)?.[1] : null);
       return v != null ? [v] : [];
     }) : [];
-    const writes = WRITE_ALL.has(head) ? positional : WRITE_LAST.has(head) ? [...positional.slice(-1), ...named] : null;
+    // (A copy's -Path: or -LiteralPath: is its source, a read; its -Destination: is in named above.)
+    const writes = WRITE_ALL.has(head) ? [...positional, ...psTargets] : WRITE_LAST.has(head) ? [...positional.slice(-1), ...named] : null;
     if (writes) {
       for (const t of this.items(writes)) {
         if (recursive && this.unresolved(t)) { this.stop(`Writes recursively through a path the hub cannot resolve (${head} ${t})`); continue; }
@@ -1179,7 +1189,7 @@ class Check {
     if (INDIRECT.has(head)) return this.unsure(`Runs commands the hub cannot read (${head})`);
     // R004: deleting inside the project folder or a temp folder is contained; anywhere else is a hard stop.
     if (DELETE.has(head)) {
-      const targets = this.items(args.filter(a => !a.startsWith('-')));
+      const targets = this.items([...args.filter(a => !a.startsWith('-')), ...psTargets]);
       // foreach ($d in $list) { Remove-Item -LiteralPath $d.FullName -Recurse }, where $list came from Get-ChildItem of
       // a folder under temp (tempListings): each item sits in temp, so the delete stays in temp. Not this agent's own
       // by name, so for the orchestrator (M038 c9), never a hard stop on its own.
