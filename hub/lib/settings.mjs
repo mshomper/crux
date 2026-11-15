@@ -17,12 +17,13 @@ import { homedir } from 'node:os';
 //   voice: the voice switch (decision 61 A). Off by default; while off the voice helper does not run.
 // permissionTimeoutSec: 5 minutes (decision 64 A), so an orchestrator busy with something else does not hand you a
 // card just for being slow. Still set from the hub page (10 seconds to an hour).
-export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 300, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35, conductorWakes: true, voice: false };
+export const SETTING_DEFAULTS = { routePermissions: true, permissionTimeoutSec: 300, idleHandoffMin: 60, idleFloorPct: 25, retireAt: 60, workerHandoffFloorPct: 35, workerRetireAt: 60, conductorWakes: true, voice: false };
 // Decision 64 A raised the timeout to 5 minutes. A shorter one saved before it is raised once, and the file notes it
 // (timeoutRaised: 64), so a value you set after that stays as you set it.
 export const TIMEOUT_RAISED = 64;
 // Hub-wide numbers with no per-project value, and the range each accepts.
-export const HUB_NUMBERS = { workerHandoffFloorPct: { min: 0, max: 100 } };
+// workerRetireAt: workers hand off by themselves at this percent (decision 46), apart from the orchestrator's mark.
+export const HUB_NUMBERS = { workerHandoffFloorPct: { min: 0, max: 100 }, workerRetireAt: { min: 1, max: 100 } };
 // The handoff numbers a project may set for itself, with the range each accepts.
 export const HANDOFF_NUMBERS = {
   idleHandoffMin: { min: 0, max: 24 * 60 },
