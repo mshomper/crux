@@ -90,6 +90,7 @@ export class Agent {
     }
     const message = this.userMessage(this.withNotes(textMsg), attachments);   // built first: a missing image fails before start-up
     if (!this.q) this.start();
+    this.lastMeta = meta;
     this.lastMessage = message;   // kept in case the run is refused at start-up and must go again (restartAfterRefusal)
     this.inbox.push(message, meta);
     this.setState('working');
@@ -180,6 +181,9 @@ export class Agent {
   noteLowered(asked, level, known) {
     this.effort = level;
     this.project.log.append('agent_settings', { agent: this.name, thread: this.thread, by: 'hub', effort: level });
+    // A lower forced by the hub counts in the usage panel like any other (routing guide 9.5).
+    const model = this.effortKey();
+    this.project.log.append('raise', { agent: this.name, thread: this.thread, by: 'hub', direction: 'lower', agentType: this.type, from: { model, effort: asked }, to: { model, effort: level }, reason: `${modelLabel(model)} does not accept effort ${asked}` });
     this.hub.notice(this.project, this.thread, `${modelLabel(this.effortKey())} does not accept effort ${asked}${known ? ' (the hub has seen it refused before)' : ''}, so ${this.name} runs at ${level || 'its default'} instead. The hub remembers this for that model.`);
   }
 
@@ -196,12 +200,12 @@ export class Agent {
 
   // Start the query again after a refusal, with the message the refused run had taken in.
   restartAfterRefusal() {
-    const again = this.lastMessage;
+    const again = this.lastMessage, meta = this.lastMeta;
     try { this.inbox?.close(); } catch { }
     try { this.q?.close(); } catch { }
     this.q = null;
     this.start();
-    if (again) this.inbox.push(again);
+    if (again) this.inbox.push(again, meta);   // with its meta, so a Conductor brief's delivery is still tracked
     this.setState('working');
   }
 

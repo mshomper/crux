@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTmp } from './helpers/tmp.mjs';
-import { Agent } from '../lib/agent.mjs';
+import { Agent, Inbox } from '../lib/agent.mjs';
 import { Hub, settingsDirection } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
 import { HubSettings } from '../lib/settings.mjs';
@@ -278,4 +278,73 @@ test('a red Fable meter counts as a warning too; a hub with no plan numbers does
   hub.usage.statuses = { seven_day_fable: 'rejected' };
   hub.usage.setPlan(fablePlan(50), p);
   assert.equal(o.notes.length, 1);
+});
+
+// ---------- review round 1 ----------
+test('the Fable spell ends only when a real Fable meter reads ok: no plan, or no Fable meter, changes nothing', () => {
+  const { hub, p } = setup();
+  const o = hub.ensureOrchestrator(p);
+  hub.usage.setPlan(fablePlan(85), p);
+  assert.equal(o.notes.length, 1);
+  hub.usage.fail(p, 'the call failed');                          // the plan is gone
+  hub.usage.rateLimit({ rateLimitType: 'five_hour', status: 'allowed' }, p);   // nothing to apply it to
+  assert.equal(hub.usage.fableTone(), null);
+  assert.equal(hub.usage.fableSpell, true, 'a missing plan is not "ok"');
+  hub.usage.setPlan(normalizePlan({ rate_limits_available: true, rate_limits: { seven_day: { utilization: 10 } } }), p);   // a plan with no Fable meter
+  assert.equal(hub.usage.fableSpell, true);
+  assert.equal(p.log.ofType('fable_clear').length, 0);
+  hub.usage.setPlan(fablePlan(85), p);
+  assert.equal(o.notes.length, 1, 'and the same spell does not warn again when the plan comes back');
+  hub.usage.setPlan(fablePlan(20), p);
+  assert.equal(hub.usage.fableSpell, false);
+  assert.equal(p.log.ofType('fable_clear').length, 1, 'a real ok logs the end of the spell');
+  hub.usage.setPlan(fablePlan(21), p);
+  assert.equal(p.log.ofType('fable_clear').length, 1, 'once');
+});
+
+test('after a restart a spell counts as warned only if the latest warning is newer than the latest clear', () => {
+  const { hub, p } = setup();
+  hub.ensureOrchestrator(p);
+  const reload = () => new Hub({ projects: [p.dir], memory: new Memory(join(p.dir, '..', 'crux')), agentHome: join(p.dir, '..', 'home'), settings: new HubSettings({ file: null }) });
+  hub.usage.setPlan(fablePlan(85), p);
+  assert.equal(reload().usage.fableSpell, true, 'warned, still amber: not warned again');
+  hub.usage.setPlan(fablePlan(30), p);                            // the spell ends and is logged
+  p.log.append('plan_usage', { plan: fablePlan(90) });            // the meter climbed while the hub was down
+  const again = reload();
+  assert.equal(again.usage.fableTone(), 'amber');
+  assert.equal(again.usage.fableSpell, false, 'the old warning belongs to a spell that was cleared: a new spell');
+  const o2 = again.project('proj').orchestrator() || again.ensureOrchestrator(again.project('proj'));
+  again.usage.checkFable();
+  assert.deepEqual(o2.notes, [FABLE_NOTE], 'so it warns');
+});
+
+test('a learned ceiling is forgotten after 7 days; a stored one older than that is not loaded', () => {
+  let now = Date.parse('2026-11-15T10:00:00Z');
+  const clock = () => now;
+  const saved = [];
+  const c = new EffortCeilings({}, m => saved.push(m), clock);
+  c.learn('m', 'xhigh', REFUSED);
+  now += 6 * 86400e3;
+  assert.equal(c.clamp('m', 'max'), 'high', 'still held on day 6');
+  now += 2 * 86400e3;                                             // day 8
+  assert.equal(c.clamp('m', 'max'), 'max', 'a wrongly learned ceiling heals itself');
+  assert.equal(c.list('m'), null);
+  assert.equal(new EffortCeilings(saved[0], null, clock).list('m'), null, 'and is not loaded back from settings');
+  c.learn('n', 'max', REFUSED);
+  assert.deepEqual(Object.keys(saved.at(-1)), ['n'], 'the next save holds no expired entry');
+});
+
+test('a retried message keeps its meta, and a hub-forced lower shows in the panel count', () => {
+  const { hub, p } = setup();
+  const w = hub.startWorker(p, 'w', 'task', 'you', '', { model: 'sonnet', effort: 'max' });
+  w.start = function () { this.inbox = new Inbox(); };
+  w.lastMessage = { msg: 'again' }; w.lastMeta = { request: 'req-7' };
+  w.restartAfterRefusal();
+  assert.deepEqual(w.inbox.items, [{ x: { msg: 'again' }, meta: { request: 'req-7' } }]);
+
+  assert.equal(w.lowerForRefusal('Invalid effort: max is not supported'), 'xhigh');
+  const r = p.log.ofType('raise').at(-1);
+  assert.deepEqual([r.by, r.direction, r.from.effort, r.to.effort], ['hub', 'lower', 'max', 'xhigh']);
+  const stats = routingStats(p.log.events.map(ev => ({ project: 'proj', ev })));
+  assert.equal(stats.lowers, 1);
 });

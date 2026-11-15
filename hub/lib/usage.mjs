@@ -66,8 +66,14 @@ export class Usage {
       if (e && (!last || e.ts > last.ts)) last = e;
     }
     if (last) { this.plan = { ...last.plan, asOf: last.plan.asOf || last.ts }; this.statuses = { ...(last.plan.statuses || {}) }; this.available = true; }
-    // A spell already warned about before a restart is not warned about again.
-    this.fableSpell = this.fableTone() !== 'ok' && [...this.hub.projects.values()].some(p => p.log.events.some(e => e.type === 'fable_warning'));
+    // A spell already warned about before a restart is not warned about again: the meter is still amber or red, and in
+    // some project the latest fable_warning is newer than its latest fable_clear (a cleared spell does not count).
+    const tone = this.fableTone();
+    this.fableSpell = !!tone && tone !== 'ok' && [...this.hub.projects.values()].some(p => {
+      const evs = p.log.events;
+      const w = evs.findLastIndex(e => e.type === 'fable_warning');
+      return w >= 0 && w > evs.findLastIndex(e => e.type === 'fable_clear');
+    });
   }
 
   start() {
@@ -135,14 +141,22 @@ export class Usage {
   // so it swaps advisor checkpoints to deep-reviewer. The warning rides in front of the orchestrator's next message
   // (it is not woken for it, which would cost plan usage) and is logged as a notice in its thread. The spell ends when
   // the meter is back to ok; a successor orchestrator that starts during the spell gets the note too (hub.createAgent).
+  // The Fable meter's tone, or null when there is no plan or the plan has no Fable meter: then nothing is known, and
+  // a spell neither starts nor ends (a failed poll or a rate_limit event that could not be applied is not "ok").
   fableTone() {
     const m = meterList(this.plan).find(x => x.key === 'fable');
-    return m ? m.tone : 'ok';
+    return m ? m.tone : null;
   }
-  get fableAmber() { return this.fableSpell; }
   checkFable() {
     const tone = this.fableTone();
-    if (tone === 'ok') { this.fableSpell = false; return false; }
+    if (!tone) return false;
+    if (tone === 'ok') {
+      if (this.fableSpell) {   // the spell ends: logged, so a restart does not take the old warning for the current spell
+        this.fableSpell = false;
+        for (const p of this.hub.projects.values()) if (!p.hubWide) p.log.append('fable_clear', {});
+      }
+      return false;
+    }
     if (this.fableSpell) return false;
     this.fableSpell = true;
     for (const p of this.hub.projects.values()) {

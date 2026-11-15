@@ -43,17 +43,30 @@ export function validCeiling(e) {
     && (e.level === null || EFFORTS.includes(e.level));
 }
 
+// A learned ceiling is trusted for a week, then forgotten: a wrongly learned one heals itself, and a model that later
+// accepts more is found out again by its next refusal (or lack of one).
+export const CEILING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export class EffortCeilings {
-  // saved: { [modelId]: entry } as kept by onChange(map); entries without the proof shape are dropped here.
-  constructor(saved = {}, onChange = null) {
-    this.entries = new Map(Object.entries(saved && typeof saved === 'object' ? saved : {}).filter(([, v]) => validCeiling(v)));
+  // saved: { [modelId]: entry } as kept by onChange(map); entries without the proof shape, or older than a week, are
+  // dropped here. now: the clock (tests).
+  constructor(saved = {}, onChange = null, now = () => Date.now()) {
+    this.now = now;
+    this.entries = new Map(Object.entries(saved && typeof saved === 'object' ? saved : {}).filter(([, v]) => validCeiling(v) && this.fresh(v)));
     this.onChange = onChange;
+  }
+  fresh(e) { return this.now() - Date.parse(e.learnedAt) <= CEILING_TTL_MS; }
+  // The live entry for a model; one that has expired is forgotten on the spot.
+  entry(model) {
+    const e = this.entries.get(model);
+    if (e && !this.fresh(e)) { this.entries.delete(model); return null; }
+    return e || null;
   }
   // Does this error text read as an effort refusal?
   static isRefusal(text) { return REFUSAL.test(String(text ?? '')); }
   // The highest level the model is known to accept that is at or below `effort`; the level itself when nothing is known.
   clamp(model, effort) {
-    const ok = this.entries.get(model)?.allowed;
+    const ok = this.entry(model)?.allowed;
     if (!model || !effort || !ok) return effort;
     const i = EFFORTS.indexOf(effort);
     for (let j = i; j >= 0; j--) if (ok.includes(EFFORTS[j])) return EFFORTS[j];
@@ -65,13 +78,13 @@ export class EffortCeilings {
     const i = EFFORTS.indexOf(effort);
     const text = String(error || '').trim();
     if (!model || i < 0 || !text) return null;   // no error text, no proof: nothing is learned
-    const known = this.entries.get(model)?.allowed || EFFORTS;
+    const known = this.entry(model)?.allowed || EFFORTS;
     const allowed = EFFORTS.slice(0, i).filter(l => known.includes(l));
-    this.entries.set(model, { level: allowed.at(-1) || null, allowed, learnedAt: new Date().toISOString(), from: CEILING_SOURCE, error: text.slice(0, 300) });
-    this.onChange?.(Object.fromEntries(this.entries));
+    this.entries.set(model, { level: allowed.at(-1) || null, allowed, learnedAt: new Date(this.now()).toISOString(), from: CEILING_SOURCE, error: text.slice(0, 300) });
+    this.onChange?.(Object.fromEntries([...this.entries].filter(([, v]) => this.fresh(v))));
     return allowed.at(-1) || null;
   }
-  list(model) { return this.entries.get(model)?.allowed || null; }
+  list(model) { return this.entry(model)?.allowed || null; }
 }
 
 // "claude-opus-5-5" -> "Opus 5.5"; ids it does not recognise are shown as they are.
