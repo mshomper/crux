@@ -408,7 +408,7 @@ test('hole 3: a file:// address given to a downloader stops; secrets behind file
     assert.equal(bash(level, 'curl -s file:///c/Users/mshom/.ssh/id_rsa -o k.txt'), 'human', level);
     assert.equal(bash(level, 'curl -s file:///c/Users/someone/Documents/notes.txt -o n.txt'), 'human', level);
   }
-  assert.equal(bash('auto', '"/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --screenshot="C:/Users/someone/AppData/Local/Temp/x/a.png" "file:///C:/Users/someone/AppData/Local/Temp/x/mock.html"'), 'allow', 'a browser showing a local mockup is fine');
+  assert.equal(bash('auto', '"/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --user-data-dir="C:/Users/someone/AppData/Local/Temp/x/prof" --screenshot="C:/Users/someone/AppData/Local/Temp/x/a.png" "file:///C:/Users/someone/AppData/Local/Temp/x/mock.html"'), 'allow', 'a browser showing a local mockup is fine (with a profile of its own in temp)');
   assert.equal(bash('auto', 'cat file:///c/Users/someone/.ssh/id_rsa'), 'human');
 });
 

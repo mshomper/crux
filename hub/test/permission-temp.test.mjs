@@ -86,8 +86,9 @@ test('a shortcut that is saved writes a file: outside the project it is a hard s
 
 test('easy cases the hub now classifies itself: cygpath, env prefixes, test-hub POSTs, headless screenshots into temp', () => {
   assert.equal(bash('cygpath -w /c/Users/mshom/AppData/Local/Temp/x'), 'allow');
-  assert.equal(bash('CRUX_HUB_DATA=/c/Users/mshom/AppData/Local/Temp/crux-x/data node server.mjs --port 4748 /c/Users/mshom/AppData/Local/Temp/crux-x/proj'), 'allow');
-  assert.equal(bash('cd hub && CRUX_HUB_DATA="$TEMP/crux-x" node server.mjs --port 4750 "$TEMP/crux-x/proj"'), 'allow');
+  assert.equal(bash('CRUX_HUB_DATA=/c/Users/mshom/AppData/Local/Temp/crux-x/data CRUX_HOME=/c/Users/mshom/AppData/Local/Temp/crux-x/home node server.mjs --port 4749 /c/Users/mshom/AppData/Local/Temp/crux-x/proj'), 'allow');
+  assert.equal(bash('CRUX_HUB_DATA=/c/Users/mshom/AppData/Local/Temp/crux-x/data CRUX_HOME=/c/Users/mshom/AppData/Local/Temp/crux-x/home node server.mjs --port 4748 /c/Users/mshom/AppData/Local/Temp/crux-x/proj'), 'human', 'A7: 4748 is the live hub\'s phone port');
+  assert.equal(bash('cd hub && CRUX_HUB_DATA="$TEMP/crux-x" CRUX_HOME="$TEMP/crux-h" node server.mjs --port 4750 "$TEMP/crux-x/proj"'), 'allow');
   assert.equal(bash('CRUX_HUB_DATA=/c/Users/mshom/AppData/Local/Temp/x node server.mjs'), 'human', 'no port: it would be 4747');
   assert.equal(bash('CRUX_HUB_PORT=4747 node server.mjs --port 4748'), 'human');
   assert.equal(bash('curl -s -X POST -H "content-type: application/json" -H "origin: http://localhost:4750" -d \'{"project":"proj","permissionMode":"auto"}\' localhost:4750/api/settings'), 'allow');
@@ -95,7 +96,8 @@ test('easy cases the hub now classifies itself: cygpath, env prefixes, test-hub 
   assert.equal(bash('curl -s -X POST -H "origin: http://localhost:4747" -d \'{}\' localhost:4747/api/settings'), 'human');
   assert.equal(bash('curl -s -X POST -d x localhost/api'), 'human', 'no port named');
   assert.equal(bash('"/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" --headless=new --disable-gpu --user-data-dir="C:/Users/mshom/AppData/Local/Temp/crux-x/edge" --window-size=1280,720 --screenshot="C:/Users/mshom/AppData/Local/Temp/crux-x/ask.png" "http://localhost:4748/"'), 'allow');
-  assert.equal(bash('"/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --screenshot="C:/Users/mshom/AppData/Local/Temp/crux-x/a.png" "file:///C:/Users/mshom/AppData/Local/Temp/crux-x/mock.html"'), 'allow');
+  assert.equal(bash('"/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --user-data-dir="C:/Users/mshom/AppData/Local/Temp/crux-x/prof" --screenshot="C:/Users/mshom/AppData/Local/Temp/crux-x/a.png" "file:///C:/Users/mshom/AppData/Local/Temp/crux-x/mock.html"'), 'allow');
+  assert.equal(bash('"/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --screenshot="C:/Users/mshom/AppData/Local/Temp/crux-x/a.png" "file:///C:/Users/mshom/AppData/Local/Temp/crux-x/mock.html"'), 'unsure', 'A7: a profile of its own in temp');
   assert.equal(bash('"/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" --headless=new --screenshot="C:/Users/mshom/Desktop/a.png" "http://localhost:4748/"'), 'human', 'a screenshot written outside');
 });
 

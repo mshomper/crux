@@ -658,8 +658,10 @@ export class Hub {
     const level = this.permissionMode(p);
     const cwd = agent.cwdFor?.(toolUseID) || null;
     agent.downloads ||= new Set();
-    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: agent.downloads, level });
+    agent.testHubs ||= new Set();   // plan A7: ports of the test hubs this agent started; it may stop only those
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: agent.downloads, hubs: agent.testHubs, level });
     const { route, tempMade } = c;
+    if (route !== 'human') for (const port of c.hubsStarted || []) agent.testHubs.add(port);
     const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
     // Files it downloads: running one in a later request is a stop too (review of decision 64 A). The newest 200.
