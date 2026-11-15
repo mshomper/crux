@@ -26,6 +26,67 @@ export function effortLevel(v) {
   const s = String(v ?? '').trim().toLowerCase();
   return EFFORTS.includes(s) ? s : null;
 }
+// ---------- effort ceilings (routing guide 9.1) ----------
+// Which effort levels a model accepts is not known up front (sources disagree on Sonnet and xhigh or max). The list
+// starts empty and fills from the first refusal: a model that refused a level accepts only the levels below it.
+// A refusal reaches the hub as an error from the SDK (thrown, or an error result) whose text names the effort level.
+const REFUSAL = /\beffort\b[\s\S]{0,160}\b(not (supported|available|allowed|valid|accepted)|unsupported|unavailable|invalid|unknown|isn'?t supported|does not support|doesn'?t support)\b|\b(not (supported|available|allowed)|unsupported|invalid|does not support|doesn'?t support)\b[\s\S]{0,160}\beffort\b/i;
+
+// A stored ceiling carries proof that it came from a real refusal: { level, allowed, learnedAt, from: "sdk-refusal",
+// error } (level: the highest level accepted, null when none; error: the SDK's text). Anything else in the saved map,
+// such as an older bare list, is ignored on load and is gone from the next save.
+export const CEILING_SOURCE = 'sdk-refusal';
+export function validCeiling(e) {
+  return !!e && typeof e === 'object' && !Array.isArray(e) && e.from === CEILING_SOURCE
+    && typeof e.error === 'string' && e.error.trim() !== '' && Number.isFinite(Date.parse(e.learnedAt))
+    && Array.isArray(e.allowed) && e.allowed.every(x => EFFORTS.includes(x))
+    && (e.level === null || EFFORTS.includes(e.level));
+}
+
+// A learned ceiling is trusted for a week, then forgotten: a wrongly learned one heals itself, and a model that later
+// accepts more is found out again by its next refusal (or lack of one).
+export const CEILING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export class EffortCeilings {
+  // saved: { [modelId]: entry } as kept by onChange(map); entries without the proof shape, or older than a week, are
+  // dropped here. now: the clock (tests).
+  constructor(saved = {}, onChange = null, now = () => Date.now()) {
+    this.now = now;
+    this.entries = new Map(Object.entries(saved && typeof saved === 'object' ? saved : {}).filter(([, v]) => validCeiling(v) && this.fresh(v)));
+    this.onChange = onChange;
+  }
+  fresh(e) { return this.now() - Date.parse(e.learnedAt) <= CEILING_TTL_MS; }
+  // The live entry for a model; one that has expired is forgotten on the spot.
+  entry(model) {
+    const e = this.entries.get(model);
+    if (e && !this.fresh(e)) { this.entries.delete(model); return null; }
+    return e || null;
+  }
+  // Does this error text read as an effort refusal?
+  static isRefusal(text) { return REFUSAL.test(String(text ?? '')); }
+  // The highest level the model is known to accept that is at or below `effort`; the level itself when nothing is known.
+  clamp(model, effort) {
+    const ok = this.entry(model)?.allowed;
+    if (!model || !effort || !ok) return effort;
+    const i = EFFORTS.indexOf(effort);
+    for (let j = i; j >= 0; j--) if (ok.includes(EFFORTS[j])) return EFFORTS[j];
+    return ok.at(-1) || effort;
+  }
+  // `effort` was refused for `model` with this error text: it and everything above are not accepted. Returns the level
+  // to use instead (the highest one still allowed), or null when nothing lower exists.
+  learn(model, effort, error = '') {
+    const i = EFFORTS.indexOf(effort);
+    const text = String(error || '').trim();
+    if (!model || i < 0 || !text) return null;   // no error text, no proof: nothing is learned
+    const known = this.entry(model)?.allowed || EFFORTS;
+    const allowed = EFFORTS.slice(0, i).filter(l => known.includes(l));
+    this.entries.set(model, { level: allowed.at(-1) || null, allowed, learnedAt: new Date(this.now()).toISOString(), from: CEILING_SOURCE, error: text.slice(0, 300) });
+    this.onChange?.(Object.fromEntries([...this.entries].filter(([, v]) => this.fresh(v))));
+    return allowed.at(-1) || null;
+  }
+  list(model) { return this.entry(model)?.allowed || null; }
+}
+
 // "claude-opus-5-5" -> "Opus 5.5"; ids it does not recognise are shown as they are.
 export function modelLabel(id) {
   if (!id) return 'Default model';

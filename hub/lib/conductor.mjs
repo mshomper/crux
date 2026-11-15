@@ -990,7 +990,7 @@ ${lines.join('\n')}`;
     const names = new Set([...this.home.agents.values()].map(a => a.name));
     const i = evs.findLastIndex(e => e.type === 'message' && e.thread === CONDUCTOR_THREAD && e.from === 'you');
     const m = evs[i];
-    if (m && now - Date.parse(m.ts) <= RESUME_WINDOW_MS && !evs.slice(i + 1).some(e => !['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage', 'plan_usage'].includes(e.type) && (names.has(e.from) || names.has(e.agent)))) {
+    if (m && now - Date.parse(m.ts) <= RESUME_WINDOW_MS && !evs.slice(i + 1).some(e => !['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage', 'plan_usage', 'raise'].includes(e.type) && (names.has(e.from) || names.has(e.agent)))) {
       this.hub.notice(this.home, CONDUCTOR_THREAD, 'The hub restarted before your last message reached the Conductor, so it was delivered again.');
       const a = this.ensure();
       a.send(m.text, m.attachments || []);

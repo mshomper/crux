@@ -42,6 +42,8 @@ export class HubSettings {
     // Per project, keyed by its folder: { permissionMode: 'standard' | 'auto' | 'trusted', connectors: bool,
     // idleHandoffMin, idleFloorPct, retireAt } (decisions 34, 44 and 45). A number left out uses the hub default.
     this.projects = saved.projects && typeof saved.projects === 'object' ? saved.projects : {};
+    // Routing guide 9.1: the effort levels each model was seen to accept, filled from the SDK's first refusal (lib/agent-types.mjs).
+    this.effortCeilings = saved.effortCeilings && typeof saved.effortCeilings === 'object' ? saved.effortCeilings : {};
     // Decision 64 A: a timeout under 5 minutes saved before it is raised once (see TIMEOUT_RAISED).
     // timeoutRaisedFrom: the old value, so the hub can say so once in each orchestrator thread (hub.mjs). A failed
     // write never stops the hub from starting: the raise then simply holds for this run.

@@ -6,6 +6,7 @@ import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
 import { rulesEntry, CONNECTOR_SERVERS } from './permission-rules.mjs';
 import { UsageLedger, baselineFor } from './usage.mjs';
+import { EFFORTS, EffortCeilings, modelLabel } from './agent-types.mjs';
 import { isNoOutputNudge } from './conductor.mjs';
 
 // meta: what the hub wants to know about a message once Claude Code takes it in (onYield): a Conductor brief's request
@@ -89,6 +90,8 @@ export class Agent {
     }
     const message = this.userMessage(this.withNotes(textMsg), attachments);   // built first: a missing image fails before start-up
     if (!this.q) this.start();
+    this.lastMeta = meta;
+    this.lastMessage = message;   // kept in case the run is refused at start-up and must go again (restartAfterRefusal)
     this.inbox.push(message, meta);
     this.setState('working');
   }
@@ -170,8 +173,47 @@ export class Agent {
     return options;
   }
 
+  // ---------- effort ceiling (routing guide 9.1) ----------
+  // The model a ceiling is kept for: the one picked, else the one Claude Code reported at start-up.
+  effortKey() { return this.model || this.modelSeen || null; }
+
+  // The agent now runs at a lower effort than asked: logged like any settings change, and one line in its thread.
+  noteLowered(asked, level, known) {
+    this.effort = level;
+    this.project.log.append('agent_settings', { agent: this.name, thread: this.thread, by: 'hub', effort: level });
+    // A lower forced by the hub counts in the usage panel like any other (routing guide 9.5).
+    const model = this.effortKey();
+    this.project.log.append('raise', { agent: this.name, thread: this.thread, by: 'hub', direction: 'lower', agentType: this.type, from: { model, effort: asked }, to: { model, effort: level }, reason: `${modelLabel(model)} does not accept effort ${asked}` });
+    this.hub.notice(this.project, this.thread, `${modelLabel(this.effortKey())} does not accept effort ${asked}${known ? ' (the hub has seen it refused before)' : ''}, so ${this.name} runs at ${level || 'its default'} instead. The hub remembers this for that model.`);
+  }
+
+  // The SDK refused this agent's effort (error text given): learn the model's ceiling and drop to the highest level it
+  // accepts. Returns the new level, or null when this was no effort refusal or nothing lower exists.
+  lowerForRefusal(text) {
+    const asked = this.effort, key = this.effortKey();
+    if (!asked || !key || !EffortCeilings.isRefusal(text)) return null;
+    const level = this.hub.effortCeilings?.learn(key, asked, text);
+    if (!level) return null;
+    this.noteLowered(asked, level, false);
+    return level;
+  }
+
+  // Start the query again after a refusal, with the message the refused run had taken in.
+  restartAfterRefusal() {
+    const again = this.lastMessage, meta = this.lastMeta;
+    try { this.inbox?.close(); } catch { }
+    try { this.q?.close(); } catch { }
+    this.q = null;
+    this.start();
+    if (again) this.inbox.push(again, meta);   // with its meta, so a Conductor brief's delivery is still tracked
+    this.setState('working');
+  }
+
   start() {
     const p = this.project;
+    // A ceiling the hub already knows for this model: start at the highest accepted level.
+    const known = this.effort ? this.hub.effortCeilings?.clamp(this.effortKey(), this.effort) : this.effort;
+    if (known !== this.effort) this.noteLowered(this.effort, known, true);
     this.inbox = new Inbox();
     this.inbox.onYield = meta => this.noteDelivered(meta);
     this.beginRun();
@@ -184,6 +226,8 @@ export class Agent {
     const q = this.q = query({ prompt: this.inbox, options });
     this.setState('starting');
     this.loop(q).catch(err => {
+      // A refused effort level may come as a thrown error: drop to what the model accepts and go again, once per refusal.
+      if (this.q === q && this.lowerForRefusal(err?.message)) return this.restartAfterRefusal();
       console.error(`[${p.name}/${this.name}]`, err);
       this.hub.notice(p, this.thread, `${this.name} stopped with an error: ${err.message}`);
       this.setState('error');
@@ -205,13 +249,30 @@ export class Agent {
     try {
       await Promise.race([(async () => {
         if (model !== undefined) await q.setModel(model || undefined);
-        if (effort !== undefined) await q.applyFlagSettings({ effortLevel: effort || null });
+        if (effort !== undefined) await this.applyEffortLive(q, effort);
       })(), late]);
       return true;
     } catch (e) {
       console.warn(`[${this.project.name}/${this.name}] live settings change failed:`, e.message);
       return false;
     } finally { clearTimeout(timer); }
+  }
+
+  // The live effort switch (routing guide 9.1): a level the model is known to refuse is lowered first; one the SDK
+  // refuses now is learned, lowered and tried again, down the ladder, until a level is taken.
+  async applyEffortLive(q, effort) {
+    const key = this.effortKey();
+    let level = effort ? this.hub.effortCeilings?.clamp(key, effort) ?? effort : effort;
+    const known = level !== effort;
+    for (let i = 0; i <= EFFORTS.length; i++) {
+      try { await q.applyFlagSettings({ effortLevel: level || null }); break; }
+      catch (e) {
+        const lower = level && key && EffortCeilings.isRefusal(e?.message) ? this.hub.effortCeilings?.learn(key, level, e.message) : null;
+        if (!lower) throw e;
+        level = lower;
+      }
+    }
+    if (level !== effort) this.noteLowered(effort, level, known);
   }
 
   async loop(q) {
@@ -248,6 +309,9 @@ export class Agent {
       this.lastTurn = { start: this.inTurn ? this.turnStartedAt : Date.now(), end: Date.now(), error: !!m.is_error && m.subtype !== 'success' };
       this.inTurn = false;
       this.logUsage(m);
+      // A refused effort level may come back as an error result instead: lower it and run the message again.
+      const errText = m.is_error ? [m.result, ...(m.errors || [])].filter(Boolean).join(' ') : '';
+      if (errText && this.q === q && this.lowerForRefusal(errText)) return this.restartAfterRefusal();
       try { this.contextPct = Math.round((await q.getContextUsage()).percentage); } catch { /* older CLI */ }
       if (/not logged in/i.test(m.result || '')) {
         this.hub.notice(this.project, this.thread, 'Claude Code is not signed in on this machine. Stop the hub, run "npm run login" in the hub folder, sign in with your Claude plan, then start the hub again.');
@@ -278,7 +342,7 @@ export class Agent {
     const r = this.ledger.record(usage, { baseline, fresh });
     if (!Object.keys(r.delta).length && !r.baseline) { this.hub.usage?.note(); return; }
     this.cost += r.costUSD;
-    p.log.append('usage', { agent: this.name, project: p.name, sessionId: this.sessionId, models: r.delta, costUSD: r.costUSD, totals: r.totals, ...(r.baseline ? { baseline: true } : {}), ...(r.reset ? { reset: true } : {}) });
+    p.log.append('usage', { agent: this.name, project: p.name, sessionId: this.sessionId, agentType: this.type, model: this.model || this.modelSeen || null, effort: this.effort, models: r.delta, costUSD: r.costUSD, totals: r.totals, ...(r.baseline ? { baseline: true } : {}), ...(r.reset ? { reset: true } : {}) });
     this.hub.usage?.note();
   }
 

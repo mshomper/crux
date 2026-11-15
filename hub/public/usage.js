@@ -66,6 +66,49 @@ export function aggregate(rows, { since = 0 } = {}) {
   };
 }
 
+// ---------- routing (guide sections 8 and 9) ----------
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// What kind of agent a usage event was: its type, else the role its name shows.
+export function usageKind(ev) {
+  if (ev.agentType) return ev.agentType;
+  const a = String(ev.agent || '');
+  return /^orchestrator/.test(a) ? 'orchestrator' : /^conductor/.test(a) ? 'conductor' : 'no type';
+}
+
+// Spend by agent type, the share of finished tasks that stayed at their starting setting, raises, and advisor calls.
+// rows: { project, ev } for usage, summary, agent_created and raise events (others are ignored).
+//   byType      - estimated cost per type from usage events at or after `since` (older events have no type: "no type")
+//   tasks       - workers whose summary said outcome "done" (at or after `since`); `unraised` of them were never raised
+//                 (no raise event for that worker), so share = unraised / tasks; null when there are no such tasks
+//   raises/lowers - raise events at or after `since`
+//   advisorWeek - advisor workers started in the last 7 days (always a week, whatever the period)
+export function routingStats(rows, { since = 0, now = Date.now() } = {}) {
+  const byType = {};
+  const raisedWorkers = new Set(), doneWorkers = new Set(), workers = new Set();
+  let raises = 0, lowers = 0, advisorWeek = 0;
+  for (const { project, ev } of rows) {
+    const t = Date.parse(ev.ts);
+    if (ev.type === 'raise') {
+      if (ev.direction === 'raise') raisedWorkers.add(`${project}\u0000${ev.agent}`);
+      if (t >= since) { if (ev.direction === 'raise') raises++; else if (ev.direction === 'lower') lowers++; }
+    } else if (ev.type === 'usage') {
+      if (t < since) continue;
+      const k = usageKind(ev);
+      byType[k] = (byType[k] || 0) + sumCost(ev.models);
+    } else if (ev.type === 'summary' && ev.outcome === 'done' && t >= since) {
+      doneWorkers.add(`${project}\u0000${ev.from}`);
+    } else if (ev.type === 'agent_created') {
+      if (ev.role === 'worker') workers.add(`${project}\u0000${ev.agent}`);
+      if (ev.agentType === 'advisor' && now - t <= WEEK_MS) advisorWeek++;
+    }
+  }
+  for (const w of [...doneWorkers]) if (!workers.has(w)) doneWorkers.delete(w);   // only workers' tasks count
+  const total = Object.values(byType).reduce((s, x) => s + x, 0);
+  const types = Object.entries(byType).map(([type, cost]) => ({ type, cost, share: total > 0 ? cost / total : 0 })).sort((x, y) => y.cost - x.cost);
+  const tasks = doneWorkers.size, unraised = [...doneWorkers].filter(w => !raisedWorkers.has(w)).length;
+  return { types, total, tasks, unraised, share: tasks ? unraised / tasks : null, raises, lowers, advisorWeek };
+}
+
 // ---------- plan windows ----------
 const round1 = x => Math.round(x * 10) / 10;
 const pct = u => (u == null || !Number.isFinite(Number(u)) ? null : Math.min(100, Math.max(0, round1(Number(u)))));

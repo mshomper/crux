@@ -8,6 +8,7 @@ import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
+import { HubSettings } from '../lib/settings.mjs';
 import { AgentTypes, parseAgentFile, parseFrontmatter, modelId, modelLabel } from '../lib/agent-types.mjs';
 import { cruxToolNames, settingsChanges } from '../lib/tools.mjs';
 
@@ -23,7 +24,7 @@ function setup({ homeTypes = {}, projectTypes = {}, defaults = {} } = {}) {
   mkdirSync(join(dir, '.crux'), { recursive: true });
   for (const [f, s] of Object.entries(homeTypes)) writeFileSync(join(home, '.claude', 'agents', f), s);
   for (const [f, s] of Object.entries(projectTypes)) writeFileSync(join(dir, '.claude', 'agents', f), s);
-  const make = () => new Hub({ projects: [dir], memory: new Memory(join(root, 'crux')), agentHome: home, defaults });
+  const make = () => new Hub({ projects: [dir], memory: new Memory(join(root, 'crux')), agentHome: home, defaults, settings: new HubSettings({ file: null }) });
   const hub = make();
   return { hub, p: hub.project('proj'), root, home, dir, make };
 }
@@ -186,7 +187,7 @@ test('set_agent_settings: the orchestrator makes the same change as the chip, lo
   const calls = [];
   w.q = { setModel: async m => calls.push(['model', m]), applyFlagSettings: async s => calls.push(['flags', s]) };
   w.state = 'working';
-  const r = await hub.setAgentSettings(p, 'w', settingsChanges({ model: 'sonnet', effort: 'high' }), o.name);
+  const r = await hub.setAgentSettings(p, 'w', settingsChanges({ model: 'sonnet', effort: 'high' }), o.name, 'tests failed twice');
   assert.equal(r.when, 'now');
   assert.deepEqual(calls, [['model', 'claude-sonnet-5-5'], ['flags', { effortLevel: 'high' }]], 'a live switch, as from the chip');
   const ev = p.log.ofType('agent_settings').at(-1);
@@ -200,7 +201,7 @@ test('set_agent_settings: the orchestrator makes the same change as the chip, lo
   assert.deepEqual([w.type, w.model, w.effort], [null, null, null], '"default" and "none" reset');
 
   // Changing itself by its thread name; your own chip changes are logged once, in the agent's thread.
-  await hub.setAgentSettings(p, 'orchestrator', { effort: 'max' }, o.name);
+  await hub.setAgentSettings(p, 'orchestrator', { effort: 'max' }, o.name, 'planning turn');
   assert.equal(o.effort, 'max');
   const before = p.log.ofType('notice').length;
   await hub.setAgentSettings(p, 'w', { effort: 'low' });

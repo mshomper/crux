@@ -5,7 +5,10 @@
 // experimental usage call, asked of any live agent every few minutes, and from the rate_limit events agents stream.
 // The latest plan snapshot stays in memory; it is logged (`plan_usage`) only when it changes meaningfully.
 // If the call throws or gives nothing, the meters hide and the thread gets one notice.
-import { totalsOf, diffTotals, sumCost, normalizePlan, readRateLimit, applyRateLimit, planChanged } from '../public/usage.js';
+import { totalsOf, diffTotals, sumCost, normalizePlan, readRateLimit, applyRateLimit, planChanged, meterList } from '../public/usage.js';
+
+// What an orchestrator is told when the Fable weekly meter turns amber (routing guide 9.7, section 6.2).
+export const FABLE_NOTE = '[From the hub] The Fable weekly plan meter is amber. Until it is back to normal, start deep-reviewer (Opus, high) instead of advisor at checkpoints, and say so in your thread.';
 
 export const POLL_MS = 5 * 60 * 1000;
 const CALL_TIMEOUT_MS = 15000;
@@ -50,6 +53,7 @@ export class Usage {
     this.statuses = {};        // allowed, allowed_warning or rejected, by window, from rate_limit events
     this.lastPoll = 0;
     this.noticed = false;
+    this.fableSpell = false;   // the Fable meter is amber or red and the orchestrators were told (checkFable)
     this.timer = null;
     this.polling = null;
   }
@@ -62,6 +66,14 @@ export class Usage {
       if (e && (!last || e.ts > last.ts)) last = e;
     }
     if (last) { this.plan = { ...last.plan, asOf: last.plan.asOf || last.ts }; this.statuses = { ...(last.plan.statuses || {}) }; this.available = true; }
+    // A spell already warned about before a restart is not warned about again: the meter is still amber or red, and in
+    // some project the latest fable_warning is newer than its latest fable_clear (a cleared spell does not count).
+    const tone = this.fableTone();
+    this.fableSpell = !!tone && tone !== 'ok' && [...this.hub.projects.values()].some(p => {
+      const evs = p.log.events;
+      const w = evs.findLastIndex(e => e.type === 'fable_warning');
+      return w >= 0 && w > evs.findLastIndex(e => e.type === 'fable_clear');
+    });
   }
 
   start() {
@@ -120,8 +132,41 @@ export class Usage {
     this.available = true;
     this.noticed = false;
     if (planChanged(before, plan) || !before) p.log.append('plan_usage', { plan });
+    this.checkFable();
     this.emit();
     return plan;
+  }
+
+  // Routing guide 9.7: the Fable weekly meter turned amber (or red). Each project's orchestrator is told once per spell,
+  // so it swaps advisor checkpoints to deep-reviewer. The warning rides in front of the orchestrator's next message
+  // (it is not woken for it, which would cost plan usage) and is logged as a notice in its thread. The spell ends when
+  // the meter is back to ok; a successor orchestrator that starts during the spell gets the note too (hub.createAgent).
+  // The Fable meter's tone, or null when there is no plan or the plan has no Fable meter: then nothing is known, and
+  // a spell neither starts nor ends (a failed poll or a rate_limit event that could not be applied is not "ok").
+  fableTone() {
+    const m = meterList(this.plan).find(x => x.key === 'fable');
+    return m ? m.tone : null;
+  }
+  checkFable() {
+    const tone = this.fableTone();
+    if (!tone) return false;
+    if (tone === 'ok') {
+      if (this.fableSpell) {   // the spell ends: logged, so a restart does not take the old warning for the current spell
+        this.fableSpell = false;
+        for (const p of this.hub.projects.values()) if (!p.hubWide) p.log.append('fable_clear', {});
+      }
+      return false;
+    }
+    if (this.fableSpell) return false;
+    this.fableSpell = true;
+    for (const p of this.hub.projects.values()) {
+      if (p.hubWide) continue;
+      const orch = p.orchestrator?.();
+      p.log.append('fable_warning', { tone });
+      this.hub.notice(p, 'orchestrator', `The Fable weekly meter is ${tone}. Advisor checkpoints switch to deep-reviewer until it is back to normal.`);
+      orch?.noteForNextTurn(FABLE_NOTE);
+    }
+    return true;
   }
 
   fail(p, why) {
@@ -144,6 +189,7 @@ export class Usage {
       this.plan = applyRateLimit(before, read, new Date(this.now()).toISOString());
       if (planChanged(before, this.plan) && p) p.log.append('plan_usage', { plan: this.plan });
     }
+    this.checkFable();
     this.emit();
   }
 

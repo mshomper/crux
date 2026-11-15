@@ -15,10 +15,11 @@ import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool } fro
 import { HubSettings, HANDOFF_NUMBERS } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
-import { AgentTypes, EFFORTS, modelId, effortLevel, modelLabel } from './agent-types.mjs';
+import { AgentTypes, EFFORTS, EffortCeilings, modelId, effortLevel, modelLabel } from './agent-types.mjs';
 import { answerMessage, answerNote } from '../public/questions.js';
+import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
-import { Usage } from './usage.mjs';
+import { Usage, FABLE_NOTE } from './usage.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
 
@@ -37,6 +38,19 @@ export class Project {
   workers() { return [...this.agents.values()].filter(a => a.role === 'worker' && a.state !== 'retired'); }
   // The holder of the role. One that is writing its handoff still holds it; one in the overlap has passed it on.
   orchestrator() { return [...this.agents.values()].find(a => a.role === 'orchestrator' && a.state !== 'retired' && a.retiring !== 'overlap') || null; }
+}
+
+// Routing guide 9.5: is a settings change a raise or a lower? A change of model decides (haiku < sonnet < opus < fable);
+// with the same model, the effort decides (no effort set counts as medium). Null when neither moved up or down.
+export const OUTCOMES = ['done', 'partial', 'blocked'];
+const MODEL_RANK ={ haiku: 0, sonnet: 1, opus: 2, fable: 3 };
+export function settingsDirection(from, to) {
+  const rank = m => MODEL_RANK[familyOf(m)];
+  const a = rank(from.model), b = rank(to.model);
+  if (a != null && b != null && a !== b) return b > a ? 'raise' : 'lower';
+  const e = x => (x ? EFFORTS.indexOf(x) : EFFORTS.indexOf('medium'));
+  if (e(from.effort) === e(to.effort)) return null;
+  return e(to.effort) > e(from.effort) ? 'raise' : 'lower';
 }
 
 const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 60 * 1000;
@@ -66,6 +80,8 @@ export class Hub {
     this.memory = memory;
     this.settings = settings;
     this.defaults = defaults || {};
+    // Routing guide 9.1: effort levels each model accepts, learned from refusals and kept in the hub settings.
+    this.effortCeilings = new EffortCeilings(settings?.effortCeilings, map => { try { settings?.save?.({ effortCeilings: map }); } catch { /* kept for this run */ } });
     this.agentHome = agentHome;
     this.listeners = new Set();
     this.approvals = new Map();
@@ -123,7 +139,7 @@ export class Hub {
         const m = evs[i];
         if (!m || now - Date.parse(m.ts) > RESUME_WINDOW_MS) continue;
         // Starting up (agent_created, agent_session, agent_busy) is not acting on it; a reply, summary, card or pick is.
-        const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
+        const actedOn = evs.slice(i + 1).some(e => (e.type === 'pick' && m.from === 'you') || (!['agent_created', 'agent_session', 'agent_busy', 'notice', 'usage', 'raise'].includes(e.type) && (names.has(e.from) || names.has(e.agent))));
         if (!actedOn) out.push({ m, i });
       }
     }
@@ -262,6 +278,7 @@ export class Hub {
     while (p.agents.has(unique)) unique = `${name}-${n++}`;
     const a = new Agent(this, p, { name: unique, role, task, goal, generation, predecessor, handoffEntry, ...s });
     p.agents.set(unique, a);
+    if (role === 'orchestrator' && this.usage?.fableSpell) a.noteForNextTurn(FABLE_NOTE);   // a successor during the spell
     p.log.append('agent_created', { agent: unique, role, task, goal, generation, predecessor, handoffEntry, thread: a.thread, agentType: s.type, model: s.model, effort: s.effort });
     return a;
   }
@@ -299,7 +316,11 @@ export class Hub {
   // Change a running or resting agent. The model switches at once when the agent is live; effort too, through
   // Claude Code's live settings. A type change (new tools and instructions) needs a fresh start: at once if the
   // agent is resting, else as soon as it goes idle. It resumes the same conversation on its next message.
-  async setAgentSettings(p, name, changes = {}, by = 'you') {
+  // Routing guide 9.5: a change that goes up or down in model or effort is logged as a `raise` event (direction
+  // 'raise' or 'lower') with the settings before and after and a one-line reason. The reason is required when an
+  // orchestrator raises (by is not 'you'); the chip on a thread (by 'you') may leave it out.
+  async setAgentSettings(p, name, changes = {}, by = 'you', reason = '') {
+    reason = String(reason || '').trim().slice(0, 200);
     const a = name === 'orchestrator' ? p.orchestrator() : p.agents.get(name);
     if (!a) throw new Error(`No agent called ${name}`);
     if (a.state === 'retired') throw new Error(`${name} has retired.`);
@@ -326,12 +347,18 @@ export class Hub {
     for (const k of Object.keys(next)) if (next[k] === a[k]) delete next[k];
     if (!Object.keys(next).length) return { changed: false, settings: this.describeSettings(a) };
 
+    const from = { model: a.model || a.modelSeen || null, effort: a.effort };
+    const to = { model: 'model' in next ? next.model : a.model, effort: 'effort' in next ? next.effort : a.effort };
+    const direction = settingsDirection(from, to);
+    if (direction === 'raise' && by !== 'you' && !reason) throw new Error('Raising a model or effort needs a one-line reason: add reason (for example "tests failed twice at medium").');
+
     Object.assign(a, next);
     const ev = { agent: a.name, thread: a.thread, by };
     if ('type' in next) ev.agentType = next.type;
     if ('model' in next) ev.model = next.model;
     if ('effort' in next) ev.effort = next.effort;
     p.log.append('agent_settings', ev);
+    if (direction) p.log.append('raise', { agent: a.name, thread: a.thread, by, direction, agentType: a.type, from, to: { model: to.model || from.model, effort: to.effort }, ...(reason ? { reason } : {}) });
 
     let when = 'from its next start';
     if (a.live) {
@@ -340,7 +367,7 @@ export class Hub {
       else if (a.state === 'idle' && !a.retiring && !a.capture) { a.close(); when = 'from its next message'; }
       else { a.restartWhenIdle = true; when = 'once it finishes what it is doing'; }
     }
-    const line = `${by === 'you' ? 'You' : by} set ${a.name} to ${this.describeSettings(a)}; it applies ${when}.`;
+    const line = `${by === 'you' ? 'You' : by} set ${a.name} to ${this.describeSettings(a)}; it applies ${when}.${direction ? ` (a ${direction})` : ''}${reason ? ` Reason: ${reason}` : ''}`;
     this.notice(p, a.thread, line);
     // The orchestrator's changes (set_agent_settings) are logged in its own thread too, for you to see in one place.
     if (by !== 'you' && a.thread !== 'orchestrator') this.notice(p, 'orchestrator', line);
@@ -360,6 +387,8 @@ export class Hub {
     const w = this.createAgent(p, { name, role: 'worker', task, goal, settings });
     // The brief carries what the worker was started as, so the thread shows it from the first message.
     p.log.append('message', { thread: w.thread, from: by, text: task, agentType: w.type, model: w.model, effort: w.effort });
+    // Routing guide 9.6: each advisor call is one line in the orchestrator's thread (counted in the usage panel).
+    if (w.type === 'advisor') this.notice(p, 'orchestrator', `Advisor called: ${w.name} (${goal}).`);
     w.send(task);
     return w;
   }
@@ -406,7 +435,9 @@ export class Hub {
     // A line that opens like a question or a request (Please, Pick, Should, Which...) stays a card even without one.
     const asks = q => q.includes('?') || /^(please|pick|choose|should|may|can|will|do|is|which|what)\b/i.test(q);
     const notes = asked.filter(q => !asks(q));
-    s = { ...s, questions: asked.filter(asks), decisions_needed: decisions, ...(notes.length ? { notes } : {}) };
+    // Routing guide 9.4: how the round went, optional; anything but done, partial or blocked is dropped.
+    const { outcome, ...rest } = s;
+    s = { ...rest, ...(OUTCOMES.includes(outcome) ? { outcome } : {}), questions: asked.filter(asks), decisions_needed: decisions, ...(notes.length ? { notes } : {}) };
     p.log.append('summary', { thread: agent.thread, from: agent.name, ...s });
     const result = { notes };
     if (agent.role !== 'worker') return result;
@@ -417,6 +448,7 @@ export class Hub {
     sec('Done', s.done); sec('Changed', s.changed); sec('Questions', s.questions); sec('Notes', s.notes); sec('Blocked on', s.blocked_on);
     if (s.decisions_needed.length) lines.push(`Decisions waiting on {{who}}: ${s.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
     if (s.next_step) lines.push(`Proposed next step: ${s.next_step}`);
+    if (s.outcome) lines.push(`Outcome: ${s.outcome}`);
     this.ensureOrchestrator(p).send(lines.join('\n'));
     return result;
   }
