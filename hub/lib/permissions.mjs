@@ -17,6 +17,15 @@ const PS_ALIASES = new Set(['gci', 'gc', 'sls', 'select', 'where', 'measure', 'g
 const QUIET = /\s+(2>&1|2>\s*\/dev\/null|2>\s*\$null|>\s*\/dev\/null|>\s*\$null|\|\s*Out-Null)\b/gi;
 const RISKY = /\b(rm|rmdir|del|erase|rd|Remove-Item|ri|mv|move|Move-Item|cp|copy|Copy-Item|git\s+(push|reset|clean|checkout|restore|rebase|merge|branch\s+-[dD]|tag\s+-d|stash\s+(drop|clear))|curl|wget|Invoke-WebRequest|iwr|Invoke-RestMethod|irm|npm\s+(publish|install|i|ci|update)|pip\s+install|winget|choco|scoop|format|shutdown|Stop-Process|kill|taskkill|Set-ExecutionPolicy|reg\s+(add|delete))\b/i;
 
+// Options of the reading git commands that run a program or write a file (follow-up to M039 1): git grep -O runs a
+// program on the matches (also clustered, -iOprog, or shortened, --open); --output writes a file anywhere (git takes
+// a long option by any unique start, so --outp= is --output=).
+export function gitReadRuns(sub, f) {
+  const name = String(f).split('=')[0];
+  if (sub === 'grep' && (/^-[a-zA-Z]*O/.test(f) || (name.length >= 4 && '--open-files-in-pager'.startsWith(name)))) return true;
+  return name.length >= 4 && '--output-directory'.startsWith(name);
+}
+
 export class CommandPolicy {
   // True when every part of the command only reads.
   static readOnly(tool, command) {
@@ -51,10 +60,12 @@ export class CommandPolicy {
     if (h === 'npm' && ['test', 't'].includes(rest[0])) return rest.slice(1).every((w, i, a) => /^--(prefix|silent|quiet)$|^-s$/.test(w) || a[i - 1] === '--prefix');
     if (h === 'npm') return ['--version', '-v', 'ls', 'list', 'config'].includes(rest[0]) && !(rest[0] === 'config' && rest[1] !== 'get' && rest[1] !== 'list');
     if (h === 'git') {
+      // git -c and --config-env set a setting for this one run, and many settings run a program (core.pager,
+      // core.fsmonitor, diff.external): never covered here (M039 1); the full check reads them.
       let args = rest;
-      while (args[0] === '-C' || args[0] === '--no-pager' || args[0] === '-c') args = args.slice(args[0] === '--no-pager' ? 1 : 2);
+      while (args[0] === '-C' || args[0] === '--no-pager') args = args.slice(args[0] === '--no-pager' ? 1 : 2);
       const [sub, ...flags] = args;
-      if (GIT_READ.has(sub)) return true;
+      if (GIT_READ.has(sub)) return !flags.some(f => gitReadRuns(sub, f)) && !(sub === 'reflog' && /^(expire|delete|drop)$/.test(flags[0] || ''));
       if (sub === 'branch') return flags.every(f => GIT_BRANCH_FLAGS.has(f));
       if (sub === 'remote') return flags.length === 0 || (flags.length === 1 && flags[0] === '-v') || flags[0] === 'show' || flags[0] === 'get-url';
       if (sub === 'stash') return flags[0] === 'list' || flags[0] === 'show';

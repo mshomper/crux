@@ -17,10 +17,36 @@
 // actions, and merges (see THE MERGE RULE below).
 import { resolve, isAbsolute, join, basename } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { gitReadRuns } from './permissions.mjs';
 
 const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+// ---------- Windows 8.3 short names (M039 2) ----------
+// CLAUDE~1, PACKAG~1.JSO, CRUX-H~1 open the real files (.claude, package.json, .crux-hub), so a full path with a part
+// like that is read as the long name it stands for. Each such part that exists is replaced by its own long name
+// (the real path's last part; links are not followed: a part that is a link is unreadable). A part that does not
+// exist names nothing yet and stays as written (git's HEAD~1 is untouched). null: the hub cannot tell.
+const SHORT_PART = /~\d/;
+export function longPath(p) {
+  const s = String(p);
+  if (process.platform !== 'win32' || !SHORT_PART.test(s)) return s;
+  const parts = s.split(/[\\/]+/);
+  if (!parts.some(x => SHORT_PART.test(x))) return s;
+  let out = /^[a-z]:$/i.test(parts[0]) ? `${parts[0]}\\` : parts[0] || '\\';
+  for (let i = 1; i < parts.length; i++) {
+    const seg = parts[i];
+    if (!seg) continue;
+    const here = join(out, seg);
+    if (!SHORT_PART.test(seg)) { out = here; continue; }
+    let st;
+    try { st = lstatSync(here); } catch (e) { return ['ENOENT', 'ENOTDIR'].includes(e.code) ? join(here, ...parts.slice(i + 1)) : null; }
+    if (st.isSymbolicLink()) return null;
+    try { out = join(out, basename(realpathSync.native(here))); } catch { return null; }
+  }
+  return out;
+}
 const under = (p, root) => { const a = norm(p), r = norm(root); return a === r || a.startsWith(r + '/'); };
 
 const SAFE = new Set(['ls', 'dir', 'pwd', 'cat', 'head', 'tail', 'wc', 'echo', 'printf', 'which', 'where', 'file', 'stat', 'tree',
@@ -167,7 +193,7 @@ const LOCAL_OK = {
 };
 // git config keys that make git run a program, or send fetches and pushes somewhere else (aliases with !, pagers,
 // editors, hooks, fsmonitor, diff and merge drivers, filters, credential helpers, URL rewrites, push defaults).
-const GIT_RUNS_CONFIG = /^(alias\..+|core\.(pager|fsmonitor|hookspath|sshcommand|editor|askpass|gitproxy|worktree|attributesfile|excludesfile)|sequence\.editor|diff\.(external|.+\.(textconv|command))|difftool\..+|mergetool\..+|merge\..+\.driver|filter\..+|credential(\..+)?\.helper|gpg(\..+)?\.program|pager\..+|include\.path|includeif\..+|url\..+\.(insteadof|pushinsteadof)|remote\..+\.(url|pushurl|receivepack|uploadpack|proxy|push|vcs)|push\.default|remote\.pushdefault|branch\..+\.(remote|pushremote|merge)|http(\..+)?\.proxy|.+\.(cmd|command|program|helper|driver))$/i;
+const GIT_RUNS_CONFIG = /^(alias\..+|core\.(pager|fsmonitor|hookspath|sshcommand|editor|askpass|gitproxy|worktree|attributesfile|excludesfile)|sequence\.editor|diff\.(external|.+\.(textconv|command))|difftool\..+|mergetool\..+|merge\..+\.driver|filter\..+|credential(\..+)?\.helper|gpg(\..+)?\.program|pager\..+|include\.path|includeif\..+|url\..+\.(insteadof|pushinsteadof)|remote\..+\.(url|pushurl|receivepack|uploadpack|proxy|push|vcs)|push\.default|remote\.pushdefault|branch\..+\.(remote|pushremote|merge)|http(\..+)?\.proxy|init\.templatedir|submodule\..+\.update|.+\.\w*(cmd|command|program|helper|driver|hook|filter))$/i;
 // Environment settings that make git run another program or point it at another repo.
 const GIT_RUNS_VARS = /^(git_(pager|editor|sequence_editor|external_diff|ssh|ssh_command|askpass|proxy_command|exec_path|dir|work_tree|config\w*|index_file|template_dir|alternate_object_directories|object_directory|namespace|common_dir)|pager|editor|visual|lessopen|lessclose|ssh_askpass)$/i;
 // The only environment settings allowed in front of a request to this machine (VAR=value, export, $env:).
@@ -192,6 +218,9 @@ const webFlags = head => head === 'curl' ? CURL_FLAGS : head === 'wget' ? WGET_F
 const INTERPRETERS = new Set(['node', 'nodejs', 'python', 'python3', 'py', 'sh', 'bash', 'zsh', 'dash', 'pwsh', 'powershell', 'iex', 'invoke-expression',
   'cmd', 'perl', 'ruby', 'deno', 'bun', 'source', '.']);
 const DOWNLOADERS = new Set([...['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod', 'start-bitstransfer']]);
+// Programs that run what a folder or file holds (M039 4): run inside a fresh clone or download, or handed one, a stop.
+const RUNNERS = new Set(['start', 'start-process', 'saps', 'invoke-item', 'ii', 'call', 'make', 'cmake', 'npm', 'pnpm', 'yarn', 'bun', 'deno',
+  'cargo', 'go', 'dotnet', 'java', 'php', 'uv', 'poetry', 'msbuild', 'gradle', 'gradlew', 'mvn', 'tsx', 'ts-node', 'pytest', 'rscript']);
 // A download written anywhere in a command's text, not only as its first word: the downloaders by name, and
 // PowerShell's download cradles (Net.WebClient, DownloadString / DownloadFile / DownloadData, HttpClient, WebRequest).
 const DOWNLOAD_TEXT = /(^|[^\w-])(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|start-bitstransfer)(?![\w-])|net\.webclient|\.download(string|file|data)(async|taskasync)?\s*\(|httpclient|\.getstring(async)?\s*\(|\[(system\.)?net\.(http)?webrequest\]/i;
@@ -299,6 +328,8 @@ const RISKY_PATTERNS = [
   /\brm\s+-\w*[rf]\w*\s+(\/(?!tmp\/(?![^\s;&|]*\.\.)[\w-])|~|\.\.|[a-z]:)/i, /\bremove-item\b[^;|\n]*(\.\.|~|[a-z]:\\)/i,
   /\.env\b|\.ssh\b|\.crux-hub\b|\bid_(rsa|ed25519)\b|\bcredentials?\b|\bpassword\b|\bsecret\b|api[_-]?key/i
 ];
+// PowerShell text with its quotes and commas opened ('push','origin' -> push origin), for the risky-word scan.
+const psOpen = t => String(t).replace(/'((?:''|[^'])*)'|"((?:""|`.|[^"`])*)"/g, (m, a, b) => ` ${a ?? b} `).replace(/[,()@]/g, ' ');
 // What $(git branch --show-current) and its like stand for until part() knows the folder (knownSubs).
 const CURRENT_BRANCH = 'CRUX-CURRENT-BRANCH';
 // Programs whose quoted arguments are only printed text (scanPiece, mayMoveBranch).
@@ -311,9 +342,11 @@ const RUNS_TEXT = /child_process|\bexec(Sync|File|FileSync)?\s*\(|\bspawn(Sync)?
 
 class Check {
   constructor(projectDir, tmp, home, cwd = null) {
-    Object.assign(this, { projectDir: resolve(projectDir), tmp, home, reasons: [], doubts: [], vars: new Map() });
+    // The roots in their long form (a temp folder given as C:\Users\FIRSTN~1\...), so paths compare alike (M039 2).
+    const lp = x => longPath(x) ?? x;
+    Object.assign(this, { projectDir: lp(resolve(projectDir)), tmp: lp(tmp), home: lp(home), reasons: [], doubts: [], vars: new Map() });
     // Where the command starts: the agent's own folder when the hub knows it (decision 64 A), else the project folder.
-    this.cwd0 = cwd ? resolve(String(cwd)) : this.projectDir;
+    this.cwd0 = cwd ? lp(resolve(String(cwd))) : this.projectDir;
     this.opaqueN = 0;            // how many opaque doubts so far, so command() can tell which parts the hub could not read
     this.scanBits = null;        // the text the risky-word scan reads (riskyText); null: the whole command
     this.scanAll = false;        // something runs text as commands (iex, sh -c, ...): scan the whole command, as before
@@ -337,7 +370,9 @@ class Check {
     const quoted = ps ? /'(?:''|[^'])*'|"(?:""|`.|[^"`])*"/g : /'[^']*'|"(?:\\.|[^"\\])*"/g;
     const bare = t.replace(quoted, ' ');
     if (EVALUATES.test(bare) || /\[scriptblock\]::create/i.test(t) || (ps && /(^|[\s;|({])[&.]\s*\$/.test(bare)) || (ps && /`/.test(bare))) { this.scanAll = true; return t; }
-    if (!this.onlyText(t, ps)) return t;
+    // PowerShell: also read with its quotes and commas opened, so Start-Process git -ArgumentList 'push','origin','main'
+    // and @('push','origin') arrays show their words (M039 6).
+    if (!this.onlyText(t, ps)) return ps ? `${t}\n${psOpen(t)}` : t;
     return t.replace(quoted, q => (RUNS_TEXT.test(q) || (!ps && /`/.test(q)) ? q : "''"));
   }
   // True when every quoted string in a part is only text (see scanPiece).
@@ -394,7 +429,12 @@ class Check {
     if (m) s = `${m[1]}:${m[2] || '/'}`;
     else if (/^[\\/](?![\\/])/.test(s) && process.platform === 'win32') return 'outside'; // /usr/bin on Windows: not a project path
     if (/^[\\/]{2}/.test(s)) return 'outside';         // network share
-    return isAbsolute(s) ? resolve(s) : resolve(cwd, s);
+    const full = isAbsolute(s) ? resolve(s) : resolve(cwd, s);
+    // A short name (CLAUDE~1) is read as its long name; one the hub cannot expand counts as outside (a stop for
+    // writes) and as a secret for reads (secretAt), M039 2.
+    const long = longPath(full);
+    if (long === null) { this.shortFail = true; return 'outside'; }
+    return long;
   }
   // A word that names a secret: as written; as the full path it stands for from the folder the step runs in (so
   // "cd ~/.crux-hub/voice && cat ../settings.json" is the hub's settings file); and, for a glob or a {a,b} list,
@@ -404,7 +444,9 @@ class Check {
     if (SECRET.test(norm(raw))) return true;
     for (const one of this.ps ? [raw] : braceWords(raw)) {
       if (one !== raw && SECRET.test(norm(one))) return true;
+      this.shortFail = false;
       const a = this.abs(one, cwd);
+      if (this.shortFail) return true;   // a short name the hub could not expand: it may be any file (M039 2)
       if (typeof a !== 'string' || ['null', 'outside'].includes(a)) continue;
       if (SECRET.test(norm(a))) return true;
       if (/[*?[]/.test(one) && (this.pathLike(one) || /^\.|^[\w.-]*[*?[]/.test(one))) {
@@ -421,7 +463,8 @@ class Check {
     if (w === 'tmp' && write) this.noteTemp(p, cwd);
     if (this.secretAt(p, cwd)) this.stop(`Touches secrets or credentials: ${p}`);
     if (write && w === 'inside') {
-      const rel = norm(resolve(cwd, String(p))).slice(norm(this.projectDir).length + 1);
+      // From the full path abs() reads (short names expanded: CLAUDE~1/SETTIN~1.JSO is .claude/settings.local.json).
+      const rel = norm(this.abs(p, cwd)).slice(norm(this.projectDir).length + 1);
       if (DEP_FILES.test(rel) && !this.trusted) this.stop(`Changes dependencies (${basename(rel)})`);   // Trusted: the project's own packages
       if (/^\.git(\/|$)/.test(rel)) this.stop('Writes inside .git (history)');
       if (/^\.crux(\/|$)/.test(rel)) this.stop("Writes the hub's own log (.crux)");
@@ -435,6 +478,13 @@ class Check {
     if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(tool)) {
       for (const k of ['file_path', 'path', 'notebook_path']) if (input[k]) this.path(input[k], cwd);
       if (input.pattern && /^([a-z]:|[\\/~])/i.test(input.pattern) && tool === 'Glob') this.path(input.pattern.replace(/[*?[{].*$/, '') || '/', cwd);
+      // Grep reads every file under its folder (hidden ones too): rooted at the home folder or above a secret folder it
+      // reads ~/.ssh and ~/.crux-hub (M039 5). A file filter that names a secret aims at one.
+      if (tool === 'Grep') {
+        const root = input.path ? this.abs(input.path, cwd) : cwd;
+        if (secretTree(root, this.home)) this.stop(`Searches every file under the home folder or a folder holding secrets (${input.path || cwd})`);
+        if (grepGlobSecret(input.glob)) this.stop(`Touches secrets or credentials: ${input.glob}`);
+      }
       return;
     }
     if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) {
@@ -520,11 +570,20 @@ class Check {
     if (ps && /\b(iex|invoke-expression)\s*\(|\[(system\.management\.automation\.)?scriptblock\]::create|\.(invokescript|newscriptblock)\s*\(/i.test(s)) {
       this.unsure('Runs text as a command (iex, Invoke-Expression or a script block made from text)');
       this.scanAll = true;
+      // A literal string handed over (iex("Set-Content C:\x\a.ps1 x"), [scriptblock]::Create('...')) is read as the
+      // PowerShell it is, so a write outside or a push inside it is caught like anywhere else (M039 6).
+      for (const m of s.matchAll(/(?:\b(?:iex|invoke-expression)|::create|\.(?:invokescript|newscriptblock))\s*\(\s*(?:'((?:''|[^'])*)'|"((?:""|`.|[^"`$])*)")\s*\)/gi)) {
+        if (this.depth > 6) break;
+        this.depth = (this.depth || 0) + 1;
+        this.command(m[1] != null ? m[1].replace(/''/g, "'") : m[2].replace(/""/g, '"'), true, start);
+        this.depth--;
+      }
     }
     let cwd = start;
     const parts = splitParts(s, ps, true);
     this.pipeRuns(parts, s, ps);
     const piped = this.pipedIn;   // a nested command (sh -c, powershell -Command) keeps the outer part's
+    let tainted = false;
     for (const part of parts) {
       const before = this.opaqueN;
       // PowerShell ( ... ) or @( ... ) given as an argument (git push origin @("main")): what runs inside it is read
@@ -532,10 +591,14 @@ class Check {
       if (part.groups?.length) {
         for (const g of part.groups) this.command(g, ps, cwd);
         this.unsure(`An argument in brackets the hub cannot read (${part.text.slice(0, 80)})`);
-        this.scanBits.push(part.text.replace(/'((?:''|[^'])*)'|"((?:""|`.|[^"`])*)"/g, (m, a, b) => ` ${a ?? b} `).replace(/,/g, ' '));
+        this.scanBits.push(psOpen(part.text));
       }
       this.pipedIn = part.op === '|';   // fed by a pipe (see DELETE)
+      // Fed by a pipe from a part that read a download (cat a.sh | tee b.sh): what it writes counts as downloaded.
+      this.taintIn = this.pipedIn && tainted;
+      this.partTainted = false;
       cwd = this.part(part.text, cwd, ps);
+      tainted = this.partTainted;
       if (this.opaqueN > before) {
         bit(part.text);   // a part the hub could not read in full: the scan reads it
         if (this.mayMoveBranch(part.text, ps)) this.branchUnknown = true;   // see branchIn
@@ -659,6 +722,19 @@ class Check {
     if (this.agent && basename(top).toLowerCase().includes(this.agent)) return true;
     const a = this.abs(p, cwd);
     return [...(this.madeTemp || []), ...(this.tempMade || []), ...(this.fresh || [])].some(m => under(a, m));
+  }
+
+  // M039 4: a file this agent downloaded, or anything inside a folder it downloaded (a fresh clone, an unpacked
+  // archive, a copy of either). holds: the path holds something downloaded (cp -r of a temp folder).
+  isDown(x, cwd, holds = false) {
+    if (!this.downloaded?.size) return false;
+    const a = this.abs(String(x).replace(/^\(+|\)+$/g, ''), cwd);
+    if (typeof a !== 'string' || ['null', 'outside'].includes(a)) return false;
+    return [...this.downloaded].some(d => under(a, d) || (holds && under(d, a)));
+  }
+  markDown(x, cwd) {
+    const a = this.abs(x, cwd);
+    if (typeof a === 'string' && !['null', 'outside'].includes(a)) this.downloaded?.add(norm(a));
   }
 
   // True when a word holds a variable whose value is only known at run time ($_, or one set to something not literal).
@@ -828,12 +904,19 @@ class Check {
     const head = (this.pathLike(first) ? basename(first.replace(/\\/g, '/')) : first).toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
     const args = words.slice(1).map(w => w.text);
     // Running a file this same command just downloaded (curl ... -o a.sh && sh a.sh; ; node a.js; ./a.sh): a stop.
+    // M039 4: anything inside a fresh clone or an unpacked download counts too (git clone URL t && bash t/install.sh),
+    // and so does running a project's own tools inside one (cd t && npm test, npm --prefix t test, make -C t).
+    this.partTainted = !!this.taintIn;
     if (this.downloaded?.size) {
-      const got = x => { const a = this.abs(x, cwd); return typeof a === 'string' && this.downloaded.has(norm(a)); };
-      if (got(first) || ((INTERPRETERS.has(head) || /^(start|start-process|saps|invoke-item|ii|call)$/.test(head)) && args.some(got))) {
+      const got = x => this.isDown(x, cwd);
+      const runner = INTERPRETERS.has(head) || RUNNERS.has(head);
+      if (got(first) || (runner && (args.some(got) || got(cwd)))) {
         this.stop(`Runs a file this agent downloaded (${words.map(w => w.text).join(' ').slice(0, 80)})`);
       }
+      // What it reads from a download, it may write: those files count as downloaded too (cat a.sh > b.sh).
+      if (words.slice(1).some(w => this.isDown(w.text, cwd, /^(cp|copy|copy-item|cpi|robocopy|xcopy)$/.test(head)))) this.partTainted = true;
     }
+    if (this.partTainted) for (const t of wrote) this.markDown(t, cwd);
     this.ps = ps;
     // Every word after the program: variables, addresses and secrets (paths are judged by what the program does).
     this.urlsHere = []; this.localUrls = []; this.fileUrls = [];
@@ -987,26 +1070,47 @@ class Check {
     if (this.trusted && WEB_READ.has(head)) return this.webRead(head, args, cwd);
     if (this.trusted && /^(ping|nslookup|test-netconnection|tnc)$/.test(head)) return;   // only looks an address up
     if (NETWORK.has(head)) return this.stop(`Reaches the network (${head})`);
+    const deep = this.recursiveSecret(head, args, cwd);
+    if (deep) return this.stop(`Reads or copies every file under the home folder or a folder holding secrets (${head} ${deep})`);
     // Programs on the read list that can also run commands or write files (awk system(), sed e / w, rg --pre, sort
     // --compress-program, find -delete, xxd and uniq output files, ...): judged here; true when that settled it.
     if (this.readerExec(head, args, cwd) !== false) return;
     // A downloaded file moved or copied keeps counting as downloaded: curl -o a.sh URL; mv a.sh b.sh; bash b.sh.
-    if (/^(mv|cp|move|copy|move-item|mi|copy-item|cpi|rename-item|rni|ren)$/.test(head) && this.downloaded?.size && positional.length >= 2) {
+    // M039 4: any copy of a download, of a folder holding one, or of a fresh clone (cp -r, Copy-Item -Recurse, tee, Out-File)
+    // keeps counting: the destination, and the source's name inside it, are marked.
+    if (this.partTainted && (WRITE_ALL.has(head) || WRITE_LAST.has(head)) && positional.length) {
       const items = this.items(positional), dst = items.at(-1);
-      const got = x => { const a = this.abs(x, cwd); return typeof a === 'string' && this.downloaded.has(norm(a)); };
-      for (const src of items.slice(0, -1).filter(got)) {
-        for (const p of [this.abs(dst, cwd), this.abs(join(dst, basename(src)), cwd)]) if (typeof p === 'string') this.downloaded.add(norm(p));
-      }
+      for (const t of WRITE_ALL.has(head) && !/^(mv|move|move-item|mi|rename-item|rni|ren)$/.test(head) ? items : [dst]) this.markDown(t, cwd);
+      for (const src of items.slice(0, -1)) this.markDown(join(dst, basename(src)), cwd);
+      // Expand-Archive with no -DestinationPath makes a folder named after the archive where it runs.
+      if (/^expand-archive$/.test(head) && !args.some(a => /^-d/i.test(a))) this.markDown(join(cwd, basename(String(items[0])).replace(/\.zip$/i, '')), cwd);
+    }
+    // tar, unzip and 7z unpacking a download: the folder it unpacks into counts as downloaded; with none named, the
+    // files land among the project's own under names the hub cannot see: a stop (M039 4).
+    if (/^(tar|bsdtar|unzip|7z|7za)$/.test(head) && this.partTainted) {
+      const dir = args.flatMap((a, i) => /^(-C|--directory|-d)$/.test(a) ? [args[i + 1]] : /^--directory=(.+)$/.exec(a)?.[1] ? [a.slice(12)] : head.startsWith('7z') && /^-o(.+)$/.exec(a) ? [a.slice(2)] : []).filter(Boolean);
+      if (!dir.length) return this.stop(`Unpacks a download where the hub cannot track its files (${head} with no folder named)`);
+      for (const d of dir) this.markDown(d, cwd);
     }
     // Programs that write: a target outside the project folder or a temp folder is a hard stop.
     // -r, -rf, --recursive, and PowerShell's -Recurse by any prefix (-Rec), also written -Recurse:$true.
     const recursive = args.some(a => /^(--recursive|-[rf]*r[rf]*|-re(c(u(r(se?)?)?)?)?)(:\$true)?$/i.test(a));
-    const writes = WRITE_ALL.has(head) ? positional : WRITE_LAST.has(head) ? positional.slice(-1) : null;
+    // A copy writes its last word, and also the folder named by cp -t / --target-directory or PowerShell's
+    // -Destination (any start of it), wherever it stands (cp -t C:/x a, Copy-Item -Destination C:/x -Path a).
+    const named = WRITE_LAST.has(head) ? args.flatMap((a, i) => {
+      const v = /^(-t|--target-directory)$/.test(a) || (this.ps && /^-d(e(s(t(i(n(a(t(i(on?)?)?)?)?)?)?)?)?)?$/i.test(a)) ? args[i + 1]
+        : /^--target-directory=(.+)$/.exec(a)?.[1] ?? (!a.startsWith('--') ? /^-t(.+)$/.exec(a)?.[1] : null) ?? (this.ps ? /^-d(?:e(?:s(?:t(?:i(?:n(?:a(?:t(?:i(?:on?)?)?)?)?)?)?)?)?)?:(.+)$/i.exec(a)?.[1] : null);
+      return v != null ? [v] : [];
+    }) : [];
+    const writes = WRITE_ALL.has(head) ? positional : WRITE_LAST.has(head) ? [...positional.slice(-1), ...named] : null;
     if (writes) {
       for (const t of this.items(writes)) {
         if (recursive && this.unresolved(t)) { this.stop(`Writes recursively through a path the hub cannot resolve (${head} ${t})`); continue; }
         if (this.outside(t, cwd) || (outsideHere && !this.pathLike(t))) this.stop(`Writes outside the project folder (${head} ${t})`);
         else if (this.where(t, cwd) === 'tmp') this.noteTemp(t, cwd, /^(mkdir|md|new-item|ni)$/.test(head));
+        // Inside, the same files as any write: .git, the hub's .crux log, Claude Code's settings, dependency files
+        // (follow-up to M039 2: cp, mv, tee and Set-Content were checked for outside only).
+        else if (this.where(t, cwd) === 'inside') this.path(t, cwd, { write: true });
       }
       return;
     }
@@ -1022,6 +1126,15 @@ class Check {
       if (i >= 0 && args[i + 1] != null) this.innerCommand(args[i + 1], cwd);
     }
     if (head === 'eval' && args.length) this.innerCommand(args.join(' '), cwd);
+    // iex 'text' / Invoke-Expression -Command "text": a literal is read as PowerShell (M039 6); still unsure below.
+    if (/^(iex|invoke-expression)$/.test(head) && this.ps) {
+      const lit = words.slice(1).filter(w => !/^-c(o(m(m(a(nd?)?)?)?)?)?$/i.test(w.text));
+      if (lit.length === 1 && lit[0].quoted && !lit[0].vars && (this.depth || 0) <= 6) {
+        this.depth = (this.depth || 0) + 1;
+        this.command(lit[0].text, true, cwd);
+        this.depth--;
+      }
+    }
     if (INDIRECT.has(head)) return this.unsure(`Runs commands the hub cannot read (${head})`);
     // R004: deleting inside the project folder or a temp folder is contained; anywhere else is a hard stop.
     if (DELETE.has(head)) {
@@ -1082,6 +1195,50 @@ class Check {
       return;
     }
     this.unsure(`Not sure what this does (${words[0].text})`);
+  }
+
+  // M039 5: a recursive read or copy rooted at the home folder, above it, or at a folder holding .ssh, .aws, .gnupg or
+  // .crux-hub reads every secret in it (grep -r ~, rg --hidden ~, Get-ChildItem ~ -Recurse | Select-String,
+  // cp -r ~ ./x, Copy-Item ~ -Recurse, find ~ -exec cat). The root it names, else null.
+  recursiveSecret(head, args, cwd) {
+    const pos = (valued, patternFirst) => {
+      const out = []; let pattern = patternFirst;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--') { out.push(...args.slice(i + 1)); break; }
+        if (valued.test(a)) { if (/^(-e|-f|--regexp|--file)$/.test(a)) pattern = false; i++; continue; }
+        if (/^(-e|-f)./.test(a) || /^--(regexp|file)=/.test(a)) { pattern = false; continue; }
+        if (a.startsWith('-')) continue;
+        out.push(a);
+      }
+      return pattern ? out.slice(1) : out;
+    };
+    const hit = roots => (roots.length ? roots : ['.']).find(r => secretTree(this.abs(r, cwd), this.home)) ?? null;
+    if (/^(grep|egrep|fgrep)$/.test(head)) {
+      const rec = args.some((a, i) => /^-[a-zA-Z]*[rR]/.test(a) && !a.startsWith('--') || /^--(recursive|dereference-recursive|directories=recurse)$/.test(a) || (a === '-d' && args[i + 1] === 'recurse'));
+      return rec ? hit(pos(/^(-e|-f|-m|-A|-B|-C|-d|-D|--regexp|--file|--max-count|--context|--after-context|--before-context|--include|--exclude|--exclude-dir|--label)$/, true)) : null;
+    }
+    if (head === 'rg') {
+      const us = args.filter(a => /^-[a-zA-Z]+$/.test(a)).join('').replace(/[^u]/g, '').length;
+      const hidden = us >= 2 || args.some(a => /^(--hidden|-\.|-[a-zA-Z]*\.[a-zA-Z]*)$/.test(a));
+      return hidden ? hit(pos(/^(-e|-f|-g|-t|-T|-m|-A|-B|-C|-j|-M|--regexp|--file|--glob|--iglob|--type|--type-not|--max-count|--context|--after-context|--before-context|--threads|--max-columns|--max-depth|--max-filesize|--sort|--sortr|--color|--colors|--encoding|--engine|--replace|-r|--pre|--pre-glob|--ignore-file|--path-separator|--type-add)$/, true)) : null;
+    }
+    if (/^(cp|copy)$/.test(head) && args.some(a => /^(-[a-zA-Z]*[rRa][a-zA-Z]*|--recursive|--archive)$/.test(a))) return hit(args.filter(a => !a.startsWith('-')));
+    const psRec = args.some(a => /^-(r(e(c(u(r(se?)?)?)?)?)?|depth)(:\$true)?$/i.test(a));
+    if (/^(copy-item|cpi)$/.test(head) && psRec) {
+      const r = readFlags(args, { ps: { Path: 'src', LiteralPath: 'src', Destination: 'dst', Recurse: 'ok', Force: 'ok', Container: 'ok', PassThru: 'ok', Filter: 'okv', Include: 'okv', Exclude: 'okv', ErrorAction: 'okv', Verbose: 'ok', WhatIf: 'ok', Confirm: 'ok' }, valued: ['src', 'dst', 'okv'] });
+      const srcs = [...r.flags.filter(f => f.name === 'src').map(f => f.value), ...r.positional.slice(0, r.flags.some(f => f.name === 'dst') ? undefined : 1)];
+      return hit(srcs.filter(s => typeof s === 'string').flatMap(s => s.split(',')).filter(Boolean));
+    }
+    if (/^(get-childitem|gci|dir|ls)$/.test(head) && this.ps && psRec && /\b(select-string|sls|get-content|gc|cat|type|copy-item|cpi|cp|copy|compress-archive|foreach-object|readall\w*)\b|\|\s*%/i.test(this.cmdText || '')) {
+      const r = readFlags(args, { ps: { Path: 'src', LiteralPath: 'src', Recurse: 'ok', Depth: 'okv', Force: 'ok', File: 'ok', Directory: 'ok', Hidden: 'ok', Name: 'ok', Filter: 'okv', Include: 'okv', Exclude: 'okv', Attributes: 'okv', ErrorAction: 'okv', FollowSymlink: 'ok' }, valued: ['src', 'okv'] });
+      return hit([...r.flags.filter(f => f.name === 'src').map(f => f.value), ...r.positional].filter(s => typeof s === 'string'));
+    }
+    if (head === 'find' && args.some(a => /^-(exec|execdir|ok|okdir)$/.test(a))) {
+      const starts = []; for (const a of args) { if (/^[-(!]/.test(a)) break; starts.push(a); }
+      return hit(starts);
+    }
+    return null;
   }
 
   // R004 and R005: deleting inside the project folder or a temp folder is contained; anywhere else is a hard stop.
@@ -1224,7 +1381,7 @@ class Check {
   }
 
   git(args, cwd) {
-    let a = args, otherRepo = false;
+    let a = args, otherRepo = false, cfgSeen = null;
     while (a.length) {
       if (a[0] === '-C') {   // its path was checked with the other words; /c/Users/... is Git Bash's C:/Users/...
         const to = this.abs(a[1] || '.', cwd);
@@ -1233,9 +1390,19 @@ class Check {
       if (a[0] === '--no-pager' || a[0] === '-P') { a = a.slice(1); continue; }
       // --git-dir / --work-tree: the repo is not the folder's own, so its checked-out branch is not known here.
       if (/^--(git-dir|work-tree)=/.test(a[0])) { otherRepo = true; a = a.slice(1); continue; }
+      // git -c KEY=VALUE / --config-env=KEY=VAR: a setting that runs a program (core.pager, core.fsmonitor,
+      // diff.external, ...) runs it at once: a stop (M039 1). Any other -c stays with the orchestrator, as before.
+      const cfg = a[0] === '-c' ? a[1] : /^--config-env(?:=(.*))?$/.exec(a[0]) ? (a[0].includes('=') ? a[0].slice(13) : a[1]) : null;
+      if (cfg != null || a[0] === '-c') {
+        const key = String(cfg ?? '').split('=')[0];
+        if (!key || GIT_RUNS_CONFIG.test(key)) return this.stop(`git with a setting that runs a program (-c ${key || '?'})`);
+        cfgSeen ||= `${a[0]} ${cfg}`;
+        a = a.slice(a[0] === '-c' || !a[0].includes('=') ? 2 : 1); continue;
+      }
       if (a[0].startsWith('-')) return this.unsure(`git with options the hub cannot check (${a[0]})`);
       break;
     }
+    if (cfgSeen) return this.unsure(`git with options the hub cannot check (${cfgSeen})`);
     const [sub, ...rest] = a;
     const flag = (...fs) => rest.some(x => fs.includes(x));
     if (!sub) return;
@@ -1244,9 +1411,12 @@ class Check {
     const genv = [...this.env()].find(([k, v]) => GIT_RUNS_VARS.test(k) && !(/^(git_)?pager$/i.test(k) && /^(cat|less|)$/.test(String(v ?? 'x'))));
     if (genv) return this.stop(`git with ${genv[0].toUpperCase()} set in front (it can make git run another program or use another repo)`);
     // git grep -O / --open-files-in-pager runs a program on the matches; --output writes a file anywhere.
-    if (sub === 'grep' && rest.some(x => /^(-O|--open-files-in-pager)/.test(x))) return this.stop('git grep runs another program (-O)');
+    // Clustered (-iOprog) and shortened (--open) spellings too (follow-up to M039 1).
+    if (sub === 'grep' && rest.some(x => gitReadRuns('grep', x) && !/^--ou/.test(x))) return this.stop('git grep runs another program (-O)');
     rest.forEach((x, i) => {
-      const v = /^(--output|--output-directory|-o)$/.test(x) && /^(diff|log|show|format-patch|range-diff|whatchanged)$/.test(sub) ? rest[i + 1] : /^--(output|output-directory)=(.+)$/.exec(x)?.[2];
+      // --output and --output-directory by any unique start (--outp=x), with = or a separate value.
+      const out = gitReadRuns('', x);
+      const v = (x === '-o' || (out && !x.includes('='))) && /^(diff|log|show|format-patch|range-diff|whatchanged)$/.test(sub) ? rest[i + 1] : out && x.includes('=') ? x.slice(x.indexOf('=') + 1) : null;
       if (v != null) this.path(v, cwd, { write: true });
     });
     // In a repo outside the project folder (git -C ../other, or after cd ..), only reading is fine: the read-only
@@ -1264,11 +1434,20 @@ class Check {
     if (sub === 'rebase') return otherRepo ? this.unsure('Rebases a repo named with --git-dir', true) : this.rebase(rest, cwd);
     if (GIT_HISTORY.has(sub)) return this.stop(`Rewrites history (git ${sub})`);
     if (GIT_FETCH.has(sub)) {
-      const pos = rest.filter(x => !x.startsWith('-'));
+      // The values of options that take one are not addresses or folders (git clone --depth 1 URL t).
+      const RUNS = sub === 'clone' ? /^(-u|--upload-pack|--template|--config|-c|--separate-git-dir)(=|$)/ : /^(--upload-pack|--receive-pack|--exec)(=|$)/;
+      const runs = rest.find(x => RUNS.test(x));
+      if (runs) return this.stop(`git ${sub} with an option that runs a program or sets git settings (${runs})`);
+      const VALUED = /^(--depth|-b|--branch|-o|--origin|--reference|--reference-if-able|--shallow-since|--shallow-exclude|-j|--jobs|--filter|--deepen|--negotiation-tip|--server-option|--bundle-uri|--recurse-submodules-default)$/;
+      const pos = rest.filter((x, i) => !x.startsWith('-') && !VALUED.test(rest[i - 1] || ''));
       // Trusted: downloading from any https address into the project is fine too (decision 45).
       const web = this.trusted && /^https:\/\/[\w.-]+\//i.test(pos[0] || '');
       if (pos[0] && !web && !/^[\w.-]+$/.test(pos[0]) && !/^(https:\/\/|git@)github\.com[/:]/i.test(pos[0])) return this.stop(`Fetches from an address the hub cannot check (${pos[0]})`);
       if (sub === 'clone' && pos[1] && this.outside(pos[1], cwd)) return this.stop(`Clones outside the project folder (${pos[1]})`);
+      // A clone from the web is a download: running anything from it later is a stop (M039 4).
+      if (sub === 'clone' && pos[0] && /:\/\/|^[\w.-]+@[\w.-]+:/.test(pos[0])) {   // dest: pos[1], else the repo's name
+        this.markDown(pos[1] || pos[0].replace(/[\\/]+$/, '').replace(/\.git$/i, '').split(/[\\/:]/).pop(), cwd);
+      }
       // git pull REMOTE BRANCH merges BRANCH into the checked-out branch: on main (or a shared branch, or one the hub
       // cannot tell) that is a merge into main, unless BRANCH is the checked-out branch itself (review of decision 64 A).
       if (sub === 'pull' && pos.length >= 2 && (otherRepo || gitTop(cwd))) {   // no repo at all: git pull only fails
@@ -1289,13 +1468,21 @@ class Check {
     if (sub === 'branch' && flag('-f', '--force', '-M', '-C')) this.stop('Moves or overwrites a branch (history)');
     if ((sub === 'checkout' && flag('-B')) || (sub === 'switch' && flag('-C', '--force-create'))) this.stop('Resets an existing branch (history)');
     if (sub === 'tag' && flag('-d', '--delete', '-f', '--force')) this.unsure('Deletes or moves a tag', true);
-    if (sub === 'reflog' && /^(expire|delete)$/.test(rest[0] || '')) this.stop('Rewrites history (reflog)');
+    if (sub === 'reflog' && /^(expire|delete|drop)$/.test(rest[0] || '')) this.stop('Rewrites history (reflog)');
     if (sub === 'remote' && rest.length && !(rest.length === 1 && rest[0] === '-v') && rest[0] !== 'get-url') this.stop(`Changes or contacts remotes (git remote ${rest[0]})`);
-    if (sub === 'config' && !flag('--get', '--list', '-l', '--get-all', '--show-origin', '--get-regexp')) {
+    // git 2.46+ subcommands (git config set / unset / get / list ...) come before the key (M039 3).
+    const cfgSub = sub === 'config' ? rest.find((x, i) => !x.startsWith('-') && !/^(-f|--file|--type|--default|--blob)$/.test(rest[i - 1] || '')) : null;
+    const cfgVerb = /^(set|unset|get|list|edit|rename-section|remove-section)$/.test(cfgSub || '') ? cfgSub : null;
+    if (sub === 'config' && !flag('--get', '--list', '-l', '--get-all', '--show-origin', '--get-regexp') && !/^(get|list)$/.test(cfgVerb || '')) {
       // Settings that make git run a program, or send pushes somewhere else, are hard stops whatever they are set to
       // (review of decision 64 A); so is writing the user's or the machine's git settings (outside the project).
-      const key = rest.find((x, i) => !x.startsWith('-') && !/^(-f|--file|--type|--default)$/.test(rest[i - 1] || ''));
+      const words = cfgVerb ? rest.slice(rest.indexOf(cfgVerb) + 1) : rest;
+      const key = words.find((x, i) => !x.startsWith('-') && !/^(-f|--file|--type|--default|--blob|--value|--comment)$/.test(words[i - 1] || ''));
+      // -f / --file FILE writes that file: outside the project it is a write outside.
+      rest.forEach((x, i) => { const f = /^(-f|--file)$/.test(x) ? rest[i + 1] : /^--file=(.+)$/.exec(x)?.[1]; if (f && this.where(f, cwd) === 'outside') this.stop(`Writes git settings outside the project folder (git config --file ${f})`); });
       if (flag('--global', '--system')) this.stop('Changes git settings outside the project (git config --global or --system)');
+      // rename-section can move a harmless setting into one that runs a program (foo.pager -> core.pager).
+      else if (cfgVerb === 'rename-section' || flag('--rename-section')) this.stop('Renames a git settings section (it can move settings into ones that run a program)');
       else if (key && GIT_RUNS_CONFIG.test(key)) this.stop(`Sets a git setting that runs a program or redirects pushes (git config ${key})`);
       else this.unsure('Changes git settings', true);
     }
@@ -2242,23 +2429,63 @@ export function gitTop(dir) {
 // files it would really read from cwd (the folder the agent runs in), and a glob or ../ after a cd goes to classify,
 // which follows the cd (review of decision 64 A).
 const SECRET_STRICT = /(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub)(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i;
+// ---------- recursive reads near secrets (M039 5) ----------
+// Folders whose every file is a secret. A recursive read or copy rooted at the home folder, above it, or at a folder
+// that holds one of these reads them all.
+const SECRET_DIRS = ['.ssh', '.aws', '.gnupg', '.crux-hub'];
+export function secretTree(dir, home = homedir()) {
+  if (typeof dir !== 'string' || ['null', 'outside', 'tmp'].includes(dir)) return false;
+  const d = norm(dir), h = norm(longPath(home) ?? home);
+  if (d === h || h.startsWith(`${d}/`)) return true;
+  return SECRET_DIRS.some(n => existsSync(join(dir, n)));
+}
+// Options that make a reader recurse (grep -r / -R / -d recurse, rg --hidden / -. / -uu, PowerShell -Recurse by
+// any start) or a copy recursive (cp -r, Copy-Item -Recurse).
+const RECURSIVE_FLAG = /(^|\s)(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive|--dereference-recursive|-d\s+recurse|--directories=recurse|--hidden|-\.|-[a-zA-Z]*u[a-zA-Z]*u[a-zA-Z]*|-re(c(u(r(se?)?)?)?)?)(:\$true)?(?=\s|$)/i;
+// A Grep file filter that names a secret once its wildcards are dropped: .env*, *.pem, **/.ssh/**, *token.json.
+// *.json and * name none (a filter only narrows what Grep reads under its folder).
+export function grepGlobSecret(glob) {
+  if (!glob) return false;
+  return braceWords(String(glob)).some(g => {
+    const bare = g.replace(/\[[^\]]*\]|[*?]/g, '');
+    return SECRET_STRICT.test(norm(bare)) || bare.split('/').some(seg => seg && SECRET_STRICT.test(norm(seg)));
+  });
+}
+
 export function touchesSecrets(tool, input = {}, cwd = null) {
+  const full = v => { const s = String(v).replace(/^~(?=[\\/]|$)/, homedir()); return isAbsolute(s) ? resolve(s) : resolve(cwd || '.', s); };
   const globHits = v => {
     if (!cwd || !/[*?[]/.test(v)) return false;
-    const found = globMatches(isAbsolute(v) ? resolve(v) : resolve(cwd, v.replace(/^~(?=[\\/]|$)/, homedir())));
+    const found = globMatches(full(v));
     return found === null || found.some(m => SECRET_STRICT.test(norm(m)));
   };
+  // A short name (CRUX-H~1, SSH~1) is checked as the long name it stands for; one the hub cannot expand is a
+  // secret (M039 2). Words that name no file (git's HEAD~1) stay as they are.
+  const shortSecret = v => {
+    if (!SHORT_PART.test(String(v))) return false;
+    const long = longPath(full(v));
+    return long === null || SECRET_STRICT.test(norm(long));
+  };
   if (!/^(Bash|PowerShell)$/.test(tool)) {
-    return [input.file_path, input.path, input.notebook_path, input.pattern].some(v => v && (SECRET_STRICT.test(norm(v)) || (v !== input.pattern && globHits(String(v)))));
+    if ([input.file_path, input.path, input.notebook_path, input.pattern].some(v => v && (SECRET_STRICT.test(norm(v)) || (v !== input.pattern && (globHits(String(v)) || shortSecret(v)))))) return true;
+    // Grep reads every file under its folder: rooted at the home folder or above it, that is ~/.ssh and ~/.crux-hub
+    // (M039 5); and a file filter that names a secret (.env*, *.pem, **/.ssh/**) aims at one (follow-up to M039).
+    if (tool === 'Grep') return secretTree(input.path ? (longPath(full(input.path)) ?? full(input.path)) : (cwd || '.')) || grepGlobSecret(input.glob);
+    return false;
   }
   const cmd = String(input.command || '');
   if (/\$env:(?!te?mp\b)/i.test(cmd) || /\b(printenv|get-credential|get-secret)\b/i.test(cmd) || /(^|[\s;&|])env(\s|$)/.test(cmd)) return true;
   const parts = splitParts(cmd, tool === 'PowerShell');
   const moves = parts.some(p => /^(cd|pushd|chdir|set-location|sl|push-location)(\s|$)/i.test(p.trim()));
+  const recursive = RECURSIVE_FLAG.test(cmd);
   for (const part of parts) {
     for (const w of tokens(part)) {
       const v = /^--?[\w-]+=(.+)$/.exec(w.text)?.[1] ?? w.text;
       if (SECRET_STRICT.test(norm(v)) || braceWords(v).some(x => SECRET_STRICT.test(norm(x)))) return true;
+      if (shortSecret(v)) return true;
+      // A recursive read (grep -r, rg --hidden, -Recurse, cp -r) naming the home folder or a folder above a secret
+      // one: the full check decides (M039 5).
+      if (recursive && !/^-/.test(v) && /^(~|[\\/]|[a-z]:|\.\.?$|\.\.[\\/])/i.test(v) && secretTree(longPath(full(v)) ?? full(v))) return true;
       if (/[*?[]/.test(v) && (moves || !cwd || globHits(v))) return true;
       if (moves && /(^|[\\/])\.\.([\\/]|$)/.test(v)) return true;
       if (w.vars && /\$(?!_|psitem|null|true|false|\?|lastexitcode|\(|env:te?mp\b)[\w{]/i.test(w.text.replace(TEMP_VARS, ''))) return true;
