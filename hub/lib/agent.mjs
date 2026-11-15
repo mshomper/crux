@@ -28,7 +28,7 @@ export class Inbox {
 // variables leak in and make agents expect the host to sign them in. Agents get their own clean environment
 // and use the machine's own Claude Code login (or CLAUDE_CODE_OAUTH_TOKEN if you set one).
 const KEEP = new Set(['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY']);
-function cleanEnv() {
+export function cleanEnv() {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) {
     if ((/^CLAUDE/.test(k) || /^ANTHROPIC_/.test(k)) && !KEEP.has(k)) continue;

@@ -1,18 +1,18 @@
 // The hub: projects, their agents, and the routing between you, the orchestrator role and workers.
 import { basename, resolve, join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
 import { DecisionsDesk } from './decisions-desk.mjs';
-import { Agent } from './agent.mjs';
+import { Agent, cleanEnv as checkEnv } from './agent.mjs';
 import { Memory, VISUAL_TYPES } from './memory.mjs';
 import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool } from './permission-rules.mjs';
-import { HubSettings, HANDOFF_NUMBERS } from './settings.mjs';
+import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, EffortCeilings, modelId, effortLevel, modelLabel } from './agent-types.mjs';
@@ -20,6 +20,8 @@ import { answerMessage, answerNote } from '../public/questions.js';
 import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage, FABLE_NOTE } from './usage.mjs';
+import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, sdkCall, apiCall } from './permission-check.mjs';
+import { totalsOf, sumCost } from '../public/usage.js';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
 
@@ -53,6 +55,13 @@ export function settingsDirection(from, to) {
   return e(to.effort) > e(from.effort) ? 'raise' : 'lower';
 }
 
+// Decision 66: what the pause says to a request's card, and to the agents (hub.setPaused).
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const PAUSE_STOP = 'Work in this project is paused: every new request waits for {{who}}.';
+const PAUSE_TO_WORKERS = '[From the hub] {{Who}} paused work in this project. Finish the step you are on, then stop: start nothing new and wait here until you are told to carry on. Any permission request you make now waits for {{who}}.';
+const RESUME_TO_WORKERS = '[From the hub] {{Who}} resumed work in this project. Carry on with your task.';
+const PAUSE_TO_ORCH = '[From the hub] {{Who}} paused work in this project. Workers were told to stop at their next turn and every new permission request waits for {{who}}. Do not start new work or answer requests as a way of pausing it; wait for {{who}} to resume.';
+const RESUME_TO_ORCH = '[From the hub] {{Who}} resumed work in this project. Workers were told to carry on.';
 const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 60 * 1000;
 // A rolling handoff draft (handoff_notes in post_summary) counts as fresh when it was written within this long of
 // the agent's last turn: then a handoff is published from it without waking the agent (a cold, cache-expired read).
@@ -76,8 +85,11 @@ export class Hub {
   // noAgents: a test hub; messages are logged but no real agent starts (see relaunch.mjs, testHubWithoutAgents).
   // conductorDir: where the Conductor (decision 55) keeps its log and handoffs, in the hub's own state folder
   // (server.mjs: <data>/conductor). Null: no Conductor (tests that do not ask for one).
-  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null }) {
+  // checker: the one-shot permission check (decision 66, lib/permission-check.mjs); tests pass one with a stubbed model.
+  // Left out, it is made on first use: the Agent SDK on this machine's sign-in, or the API when a key is set up.
+  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null }) {
     this.noAgents = !!noAgents;
+    this.checkerMade = checker;
     this.memory = memory;
     this.settings = settings;
     this.defaults = defaults || {};
@@ -97,7 +109,7 @@ export class Hub {
       this.restore(home);
       home.log.on(ev => this.emit({ ...ev, project: CONDUCTOR, logged: true }));
     }
-    this.idleTimer = setInterval(() => this.idleCheck(), IDLE_CHECK_MS);
+    this.idleTimer = setInterval(() => { this.idleCheck(); this.auditChecks(); }, IDLE_CHECK_MS);
     this.idleTimer.unref?.();
     this.usage.restore();
     // Decision 64 A raised a shorter saved permission wait to 5 minutes, once: said once in each orchestrator thread.
@@ -609,14 +621,18 @@ export class Hub {
   requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID } = {}) {
     const auto = this.autoAnswer(p, agent, toolName, input, agent.cwdFor?.(toolUseID) || p.dir);
     if (auto) return Promise.resolve(auto);
+    // Decision 66: while work in this project is paused, every new request that is not a plain read comes to you as a
+    // card, whatever the level or the check would have said (workers are told to stop; a request already waiting
+    // with the orchestrator or the check carries on).
+    const paused = this.isPaused(p);
     // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).
-    const pass = findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
+    const pass = paused ? null : findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
     if (pass) {
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(input?.command || '').slice(0, 400), answer: 'allow', reason: this.memory.personalize(`pre-approved by {{who}}'s answer on ${pass.card} (${pass.asker})`), by: 'hub', pass: pass.pass, passNumber: pass.number });
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
     // Decision 64 A: the checker starts in the folder this tool call runs in (toolUseID -> the hook's cwd).
-    const route = this.routeFor(p, agent, toolName, input, toolUseID);
+    const route = paused ? { to: null, stops: [this.memory.personalize(PAUSE_STOP)], rules: this.rulesFor(p)?.entryId || null } : this.routeFor(p, agent, toolName, input, toolUseID);
     if (route.logged) {
       const i = input || {};
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
@@ -633,17 +649,195 @@ export class Hub {
         p.log.append('approval_result', { thread: agent.thread, approval: id, how });
         resolvePromise(result);
       };
-      const entry = { p, agent, toolName, input, finish, always, routedTo: route.to, escalated: false };
+      const entry = { p, agent, toolName, input, finish, always, routedTo: route.to, escalated: false, route };
       this.approvals.set(id, entry);
       p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input), routedTo: route.to, stops: route.stops, rules: route.rules });
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
       if (route.to) {
         entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), this.settings.get('permissionTimeoutSec') * 1000);
         entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
-        try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd)); }
-        catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
+        if (route.check) this.runCheck(id, entry);   // the 5 minutes above run from this request, whatever the check says
+        else {
+          try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd)); }
+          catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
+          if (route.shadow) this.runShadow(id, entry);
+        }
       }
     });
+  }
+
+  // ---------- the one-shot permission check (decision 66, plan v3 Track B) ----------
+  // Per project: 'off' (default), 'shadow' or 'on'. Kept in hub settings only, never read from the repo; turning it
+  // on needs the step-up (lib/guard.mjs settingsNeed).
+  checkMode(p) { return this.settings.project?.(p.dir)?.permissionCheck || 'off'; }
+
+  setCheckMode(p, mode, by = 'you') {
+    if (!CHECK_MODES.includes(mode)) return this.checkMode(p);
+    const was = this.checkMode(p);
+    this.settings.setProject(p.dir, { permissionCheck: mode });
+    if (mode === was) return mode;
+    p.log.append('project_settings', { permissionCheck: mode, was, by, thread: 'orchestrator' });
+    const who = by === 'you' ? 'You' : by;
+    this.notice(p, 'orchestrator', {
+      off: `${who} turned the permission check off for ${p.name}: workers' unclear requests come to the orchestrator first, as before.`,
+      shadow: `${who} put the permission check in shadow mode for ${p.name}: it reads each request beside the orchestrator and only logs what it would have said. You still answer as before.`,
+      on: `${who} turned the permission check on for ${p.name}: a one-shot model check answers workers' unclear requests. You are asked only when it says "consult", and its denials and escalations are noted for you at your next turn. Hard stops still come to {{who}}.`
+    }[mode]);
+    // Requests the orchestrator or the check hold now are not taken back: they finish where they are.
+    return mode;
+  }
+
+  // The hub-level pause (decision 66, plan B6): every new permission request is held as a card for you, and workers are
+  // told to stop at their next turn. Kept in hub settings, so it survives a restart.
+  isPaused(p) { return !!this.settings.project?.(p.dir)?.paused; }
+
+  setPaused(p, on, by = 'you') {
+    on = !!on;
+    const was = this.isPaused(p);
+    this.settings.setProject(p.dir, { paused: on });
+    if (was === on) return on;
+    p.log.append('project_settings', { paused: on, by, thread: 'orchestrator' });
+    const who = by === 'you' ? 'You' : by;
+    this.notice(p, 'orchestrator', on
+      ? `${who} paused work in ${p.name}: every new permission request now comes to {{who}} as a card, and workers were told to stop at their next turn.`
+      : `${who} resumed work in ${p.name}: permission requests are answered as before, and workers were told to carry on.`);
+    const msg = on ? PAUSE_TO_WORKERS : RESUME_TO_WORKERS;
+    for (const w of p.workers()) {
+      if (!w.live && !this.noAgents) continue;   // asleep: it reads nothing until it is woken, and then by a real message
+      try { w.send(msg); } catch { /* retiring or retired */ }
+    }
+    const orch = p.orchestrator();
+    orch?.noteForNextTurn(on ? PAUSE_TO_ORCH : RESUME_TO_ORCH);
+    return on;
+  }
+
+  // What the check is sent for one waiting request (see permission-check.mjs buildPrefix / buildSuffix).
+  checkRequest(a) {
+    const { p, agent, toolName, input, route } = a;
+    const rules = this.rulesFor(p);
+    const cwd = route.cwd || p.dir;
+    const isShell = /^(Bash|PowerShell)$/.test(toolName);
+    return {
+      project: p.name, dir: p.dir, temp: tmpdir(), level: { standard: 'Ask', auto: 'Auto', trusted: 'Trusted' }[this.permissionMode(p)],
+      rulesId: rules?.entryId, rulesBody: rules?.body, worker: agent.name,
+      goal: agent.goal || String(agent.task || '').split('\n')[0].slice(0, 200),
+      tool: toolName, input, cwd, doubts: route.unsure || [],
+      scripts: isShell ? scriptsFor(String(input?.command || ''), { cwd, projectDir: p.dir }) : null
+    };
+  }
+
+  // The checker, made on first use. The API when a key is set up for the hub (CRUX_HUB_USE_API_KEY=1 with
+  // ANTHROPIC_API_KEY, the same switch the agents use); else the Agent SDK on this machine's sign-in.
+  get checker() {
+    if (this.checkerMade) return this.checkerMade;
+    const key = process.env.CRUX_HUB_USE_API_KEY === '1' ? process.env.ANTHROPIC_API_KEY : '';
+    const call = key ? apiCall({ apiKey: key }) : async arg => {
+      const { query } = await import('@anthropic-ai/claude-agent-sdk');
+      return sdkCall({ query, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir() })(arg);
+    };
+    return (this.checkerMade = new PermissionCheck({ call }));
+  }
+
+  // The check's usage: one `usage` event, filed under the type "check" in the usage panel (role check). `via` says
+  // whether it went through the SDK (plan usage) or the API (money); listUSD is the list-price estimate of either.
+  logCheckUsage(p, id, res, shadow) {
+    if (!res?.modelUsage || !Object.keys(res.modelUsage).length) return;
+    const models = totalsOf(res.modelUsage);
+    p.log.append('usage', { agent: CHECK_NAME, project: p.name, agentType: 'check', role: 'check', model: res.model || CHECK_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null, approval: id, ...(shadow ? { shadow: true } : {}) });
+  }
+
+  // The check answered (or failed) for a request it holds: apply it. A request you answered, or that timed out or was
+  // cancelled while the check ran, is left alone (the 5-minute timer runs from the original request).
+  async runCheck(id, a) {
+    let res;
+    try { res = await this.checker.run(this.checkRequest(a)); }
+    catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
+    this.logCheckUsage(a.p, id, res, false);
+    if (this.approvals.get(id) !== a || a.escalated || a.routedTo !== CHECK_NAME) return;
+    try { this.settleFromCheck(id, a, res); }
+    catch (e) { this.escalate(id, `The permission check's answer could not be applied: ${e?.message || e}`, 'hub'); }
+  }
+
+  settleFromCheck(id, a, res) {
+    const p = a.p, orch = this.liveOrchestrator(p);
+    const extra = { model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}) };
+    if (!res.valid) {
+      const why = `The permission check gave no valid answer (${res.error})`;
+      if (orch) return this.consultOrchestrator(id, a, orch, why, why, extra);
+      return this.escalate(id, `${why}, and no orchestrator is running`, CHECK_NAME);
+    }
+    const reason = res.reason;
+    if (res.answer === 'allow') {
+      this.logAnswer(a, id, 'allow', reason, CHECK_NAME, extra);
+      return a.finish({ behavior: 'allow', updatedInput: a.input }, `allowed by ${CHECK_NAME}`);
+    }
+    if (res.answer === 'deny') {
+      this.logAnswer(a, id, 'deny', reason, CHECK_NAME, extra);
+      this.noteCheck(p, 'denied', a, reason);
+      return a.finish({ behavior: 'deny', message: `The permission check declined: ${reason}` }, `denied by ${CHECK_NAME}`);
+    }
+    if (res.answer === 'escalate') {
+      this.noteCheck(p, 'sent to you', a, reason);
+      return this.escalate(id, reason, CHECK_NAME);
+    }
+    // consult
+    if (orch) return this.consultOrchestrator(id, a, orch, reason, null, extra);
+    this.escalate(id, `${reason} (no orchestrator is running to consult)`, CHECK_NAME);
+  }
+
+  // The request now waits with the orchestrator, with what the check said. Its timer is still the original one.
+  consultOrchestrator(id, a, orch, reason, fallbackWhy, extra) {
+    this.logAnswer(a, id, 'consult', reason, CHECK_NAME, extra);
+    a.routedTo = orch.name;
+    const said = fallbackWhy ? `${fallbackWhy}, so it comes to you.` : `The permission check could not settle it and asks you to decide: ${reason}`;
+    try { orch.send(this.permissionMessage(a.p, orch, id, a.agent, a.toolName, a.input, a.route.rules, a.route.unsure, a.route.cwd, said)); }
+    catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
+  }
+
+  // Shadow mode: the check reads the same request the orchestrator was sent and writes one `check_shadow` line. It has
+  // no answer tool and touches nothing; hub/tools/permission-study.mjs --check compares it with the real answer.
+  async runShadow(id, a) {
+    let res;
+    try { res = await this.checker.run(this.checkRequest(a)); }
+    catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
+    this.logCheckUsage(a.p, id, res, true);
+    const i = a.input || {};
+    // No thread: it is a log line for the study tool, not a message, so it never counts as unread in any thread.
+    a.p.log.append('check_shadow', {
+      approval: id, worker: a.agent.name, tool: a.toolName,
+      command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400),
+      valid: !!res.valid, answer: res.valid ? res.answer : null, reason: res.valid ? res.reason : res.error,
+      model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}), ms: res.ms ?? null
+    });
+  }
+
+  // The orchestrator hears of the check's denials and escalations at its next turn (it does not wake for them).
+  noteCheck(p, what, a, reason) {
+    const orch = p.orchestrator();
+    if (!orch || (orch.notes?.length || 0) >= 40) return;
+    const i = a.input || {};
+    const cmd = String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).replace(/\s+/g, ' ').slice(0, 160);
+    orch.noteForNextTurn(`[From the hub] The permission check ${what} ${a.agent.name}'s ${a.toolName} request: ${cmd} (${reason})`);
+  }
+
+  // Plan B5: once a week, 10 random allows the check gave go into one line list for you, so a mistake both the check
+  // and the orchestrator would make is looked at too. The week starts at the last list, else at the first allow.
+  // Returns the event, or null.
+  auditAllows(p, { now = Date.now(), rng = Math.random, count = 10 } = {}) {
+    const evs = p.log.events;
+    const last = evs.findLast(e => e.type === 'check_audit');
+    const allows = evs.filter(e => e.type === 'permission_answer' && e.by === CHECK_NAME && e.answer === 'allow');
+    const since = last ? Date.parse(last.ts) : (allows.length ? Date.parse(allows[0].ts) : now);
+    if (now - since < WEEK_MS) return null;
+    const fresh = allows.filter(e => Date.parse(e.ts) > since || !last);
+    if (!fresh.length) return null;
+    const pool = [...fresh];
+    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+    const items = pool.slice(0, count).map(e => ({ worker: e.worker, tool: e.tool, command: String(e.command || '').slice(0, 240), reason: String(e.reason || '').slice(0, 200), when: e.ts }));
+    return p.log.append('check_audit', { thread: 'orchestrator', total: fresh.length, items });
+  }
+  auditChecks(now = Date.now()) {
+    for (const p of this.projects.values()) { try { if (this.checkMode(p) !== 'off') this.auditAllows(p, { now }); } catch (e) { console.warn('Check audit failed:', e.message); } }
   }
 
   // Where a request goes: { allow } in auto mode for contained work; else { to: orchestrator name | null,
@@ -682,9 +876,20 @@ export class Hub {
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
     // A resting orchestrator (asleep since a restart, or between turns) is woken by the request, so the card does not
     // jump to your phone just because it was asleep. It still comes to you on escalate or after the timeout.
+    const orch = this.liveOrchestrator(p);
+    // Decision 66: with the permission check on for this project, it answers instead of the orchestrator, even when no
+    // orchestrator is running (a "consult" then comes to you). In shadow mode the orchestrator answers as before and the
+    // check runs beside it, only logging.
+    const mode = this.checkMode(p);
+    if (mode === 'on') return { to: CHECK_NAME, check: true, stops: [], rules: rules.entryId, unsure, cwd };
+    if (!orch) return { to: null, stops: [], rules: rules.entryId };
+    return { to: orch.name, stops: [], rules: rules.entryId, unsure, cwd, ...(mode === 'shadow' ? { shadow: true } : {}) };
+  }
+
+  // The orchestrator that can take a request: not retiring, not in error, not retired; null otherwise.
+  liveOrchestrator(p) {
     const orch = p.orchestrator();
-    if (!orch || orch.retiring || ['error', 'retired'].includes(orch.state)) return { to: null, stops: [], rules: rules.entryId };
-    return { to: orch.name, stops: [], rules: rules.entryId, unsure, cwd };
+    return orch && !orch.retiring && !['error', 'retired'].includes(orch.state) ? orch : null;
   }
 
   // Per project: "standard", "auto" or "trusted" (shown as Ask, Auto and Trusted; decisions 34 and 45). The level set
@@ -796,7 +1001,8 @@ export class Hub {
 
   // What the orchestrator gets: the request id, the worker and its goal, the tool and its full input, and the rules.
   // The rules text is in its instructions; it is repeated here only when the board's rules changed since it started.
-  permissionMessage(p, orch, id, worker, toolName, input, rulesId, unsure = [], cwd = null) {
+  // checkSaid (decision 66): what the permission check said when it passed the request on to the orchestrator.
+  permissionMessage(p, orch, id, worker, toolName, input, rulesId, unsure = [], cwd = null, checkSaid = '') {
     const rules = this.rulesFor(p);
     const changed = rules && orch.rulesSeen !== `${rules.entryId}@${rules.ts}`;
     const shown = toolName === 'Bash' || toolName === 'PowerShell' ? `Command:\n${input.command}${input.description ? `\nIts description: ${input.description}` : ''}` : `Input:\n${JSON.stringify(input, null, 1)}`;
@@ -808,6 +1014,7 @@ export class Hub {
       ...(cwd ? [`Runs in: ${cwd}`] : []),
       shown,
       unsure?.length ? `The hub found no hard stop, but could not classify it: ${unsure.join('; ')}.` : 'The hub found no hard stop in it.',
+      checkSaid,
       rules?.isDefault ? 'This project\'s board has no permission rules entry, so you are working from the hub\'s built-in defaults (in your instructions).' : '',
       `Decide under ${rulesId}: call answer_permission with request_id "${id}", answer allow, deny or escalate, and a one-line reason. Do it now, with no other text; after ${this.timeoutLabel()} it goes to {{who}}.`,
       changed ? `\nThe rules changed since you started. Current rules (${rules.entryId}):\n${rules.body}` : ''
@@ -832,9 +1039,10 @@ export class Hub {
     return answer === 'allow' ? 'Allowed.' : 'Denied; the worker sees your reason.';
   }
 
-  logAnswer(a, id, answer, reason, by) {
+  // extra: more fields for the line (the check adds its model, and downgraded when it was turned from allow to consult).
+  logAnswer(a, id, answer, reason, by, extra = {}) {
     const i = a.input || {};
-    a.p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: a.agent.name, workerThread: a.agent.thread, tool: a.toolName, command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400), answer, reason, by });
+    a.p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: a.agent.name, workerThread: a.agent.thread, tool: a.toolName, command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400), answer, reason, by, ...(by === CHECK_NAME ? { model: CHECK_MODEL } : {}), ...extra });
   }
 
   // The card comes to you: escalated by the orchestrator, timed out, or routing switched off. It buzzes your phone.
@@ -1223,6 +1431,8 @@ export class Hub {
       pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id),
       permissionRules: this.rulesFor(p)?.entryId || null,
       permissionMode: this.permissionMode(p),
+      permissionCheck: this.checkMode(p),   // decision 66: off, shadow or on
+      paused: this.isPaused(p),
       connectors: this.connectorsOn(p),
       // Decision 44 B: the handoff numbers in force here, and the project's own (null = the hub default).
       handoff: this.handoffNumbers(p),

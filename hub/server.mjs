@@ -265,7 +265,9 @@ const routes = {
   // { idleHandoffMin, idleFloorPct, retireAt } } where null means "use the hub default" (decisions 34, 44, 45).
   // Trusted is set only here, from the hub page (same-origin JSON, C001), never from a repo's .crux-hub.json.
   // workerHandoffFloorPct (decision 46 A) is hub-wide only.
-  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt }) => {
+  // Decision 66: { project, permissionCheck: 'off' | 'shadow' | 'on', paused: bool }. Turning the check on needs the
+  // step-up (lib/guard.mjs settingsNeed); it is kept in hub settings, never read from the repo.
+  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, permissionCheck, paused }) => {
     const p = project ? hub.project(project) : null;
     if (!p) {
       const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt }).filter(([, v]) => v != null));
@@ -273,10 +275,13 @@ const routes = {
     }
     if (p && permissionMode) hub.setPermissionMode(p, permissionMode);
     if (p && typeof connectors === 'boolean') hub.setConnectors(p, connectors);   // Matt's claude.ai connectors
+    if (p && permissionCheck) hub.setCheckMode(p, permissionCheck);
+    if (p && typeof paused === 'boolean') hub.setPaused(p, paused);
     if (p && handoff && typeof handoff === 'object') hub.setHandoffNumbers(p, handoff);
     return {
       settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(),
       permissionMode: p ? hub.permissionMode(p) : undefined, connectors: p ? hub.connectorsOn(p) : undefined,
+      permissionCheck: p ? hub.checkMode(p) : undefined, paused: p ? hub.isPaused(p) : undefined,
       handoff: p ? hub.handoffNumbers(p) : undefined, ownHandoff: p ? hub.ownHandoffNumbers(p) : undefined
     };
   },

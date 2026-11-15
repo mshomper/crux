@@ -633,10 +633,10 @@ function approvalCard(ev, p = proj()) {
 }
 
 // One audit line per answer to a worker's permission request (decision 21): worker, tool, command, answer, reason.
-const ANSWER = { allow: ['allowed', 'good'], deny: ['denied', 'bad'], escalate: ['sent to you', 'warn'], timeout: ['no answer, sent to you', 'warn'] };
+const ANSWER = { allow: ['allowed', 'good'], deny: ['denied', 'bad'], escalate: ['sent to you', 'warn'], timeout: ['no answer, sent to you', 'warn'], consult: ['asked the orchestrator', 'warn'] };
 function permLine(ev) {
   const [word, tone] = ANSWER[ev.answer] || [ev.answer, ''];
-  const who = ev.by === 'you' ? 'You' : '';
+  const who = ev.by === 'you' ? 'You' : ev.by === 'permission check' ? 'Check' : '';
   const open = S.open.has('perm:' + ev.id);
   return `<button class="perm-line ${tone} ${open ? 'open' : ''}" data-expand="perm:${esc(ev.id)}" title="${esc(`${ev.worker} · ${ev.tool}: ${ev.command}\n${ev.reason}`)}">
     ${icon('shield')}<span class="pl-who">${esc(ev.worker)}</span><span class="pl-tool">${esc(ev.tool)}</span>
@@ -1001,6 +1001,8 @@ function feedFor(t) {
         // Decision 62: the orchestrator's answer to a Conductor request; it went to the Conductor and you only.
         case 'conductor_reply': return `<div class="notice cd-replied"><span>${icon('orch')}${NM.nameHtml(ev.from, p.name)} replied to the Conductor (${esc(ev.request)}${ev.forMatt ? ', for you' : ''}): ${esc(String(ev.text || '').split('\n')[0].slice(0, 200))}</span></div>`;
         case 'approval_escalated': return `<div class="notice">Permission request sent to you: ${esc(ev.reason)}</div>`;
+        // Decision 66: the weekly list of agreed allows to look over (opens on request); check_shadow is log only.
+        case 'check_audit': return `<div class="notice"><details><summary>Permission check: ${ev.items.length} of its ${ev.total} allows this week, to look over</summary><ul>${ev.items.map(i => `<li><code>${esc(i.command)}</code> · ${esc(i.worker)} · ${esc(i.reason)}</li>`).join('')}</ul></details></div>`;
         case 'handoff_qa': return '';
         case 'project_settings': return levelUndo(p, ev);
         default: return '';
