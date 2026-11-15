@@ -32,34 +32,46 @@ export function effortLevel(v) {
 // A refusal reaches the hub as an error from the SDK (thrown, or an error result) whose text names the effort level.
 const REFUSAL = /\beffort\b[\s\S]{0,160}\b(not (supported|available|allowed|valid|accepted)|unsupported|unavailable|invalid|unknown|isn'?t supported|does not support|doesn'?t support)\b|\b(not (supported|available|allowed)|unsupported|invalid|does not support|doesn'?t support)\b[\s\S]{0,160}\beffort\b/i;
 
+// A stored ceiling carries proof that it came from a real refusal: { level, allowed, learnedAt, from: "sdk-refusal",
+// error } (level: the highest level accepted, null when none; error: the SDK's text). Anything else in the saved map,
+// such as an older bare list, is ignored on load and is gone from the next save.
+export const CEILING_SOURCE = 'sdk-refusal';
+export function validCeiling(e) {
+  return !!e && typeof e === 'object' && !Array.isArray(e) && e.from === CEILING_SOURCE
+    && typeof e.error === 'string' && e.error.trim() !== '' && Number.isFinite(Date.parse(e.learnedAt))
+    && Array.isArray(e.allowed) && e.allowed.every(x => EFFORTS.includes(x))
+    && (e.level === null || EFFORTS.includes(e.level));
+}
+
 export class EffortCeilings {
-  // saved: { [modelId]: ['low', ...] }; onChange(map) is called after each learned change, to keep it.
+  // saved: { [modelId]: entry } as kept by onChange(map); entries without the proof shape are dropped here.
   constructor(saved = {}, onChange = null) {
-    this.allowed = new Map(Object.entries(saved || {}).filter(([, v]) => Array.isArray(v)).map(([k, v]) => [k, v.filter(x => EFFORTS.includes(x))]));
+    this.entries = new Map(Object.entries(saved && typeof saved === 'object' ? saved : {}).filter(([, v]) => validCeiling(v)));
     this.onChange = onChange;
   }
-  // Does this error text read as an effort refusal? `effort` (the level asked for) must be named or the text must name effort at all.
+  // Does this error text read as an effort refusal?
   static isRefusal(text) { return REFUSAL.test(String(text ?? '')); }
   // The highest level the model is known to accept that is at or below `effort`; the level itself when nothing is known.
   clamp(model, effort) {
-    const ok = this.allowed.get(model);
+    const ok = this.entries.get(model)?.allowed;
     if (!model || !effort || !ok) return effort;
     const i = EFFORTS.indexOf(effort);
     for (let j = i; j >= 0; j--) if (ok.includes(EFFORTS[j])) return EFFORTS[j];
     return ok.at(-1) || effort;
   }
-  // `effort` was refused for `model`: it and everything above are not accepted. Returns the level to use instead
-  // (the highest one still allowed), or null when nothing lower exists.
-  learn(model, effort) {
+  // `effort` was refused for `model` with this error text: it and everything above are not accepted. Returns the level
+  // to use instead (the highest one still allowed), or null when nothing lower exists.
+  learn(model, effort, error = '') {
     const i = EFFORTS.indexOf(effort);
-    if (!model || i < 0) return null;
-    const known = this.allowed.get(model) || EFFORTS;
-    const next = EFFORTS.slice(0, i).filter(l => known.includes(l));
-    this.allowed.set(model, next);
-    this.onChange?.(Object.fromEntries(this.allowed));
-    return next.at(-1) || null;
+    const text = String(error || '').trim();
+    if (!model || i < 0 || !text) return null;   // no error text, no proof: nothing is learned
+    const known = this.entries.get(model)?.allowed || EFFORTS;
+    const allowed = EFFORTS.slice(0, i).filter(l => known.includes(l));
+    this.entries.set(model, { level: allowed.at(-1) || null, allowed, learnedAt: new Date().toISOString(), from: CEILING_SOURCE, error: text.slice(0, 300) });
+    this.onChange?.(Object.fromEntries(this.entries));
+    return allowed.at(-1) || null;
   }
-  list(model) { return this.allowed.get(model) || null; }
+  list(model) { return this.entries.get(model)?.allowed || null; }
 }
 
 // "claude-opus-5-5" -> "Opus 5.5"; ids it does not recognise are shown as they are.

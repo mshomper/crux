@@ -8,6 +8,7 @@ import { makeTmp } from './helpers/tmp.mjs';
 import { Agent } from '../lib/agent.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
+import { HubSettings } from '../lib/settings.mjs';
 import { AgentTypes, parseAgentFile, parseFrontmatter, modelId, modelLabel } from '../lib/agent-types.mjs';
 import { cruxToolNames, settingsChanges } from '../lib/tools.mjs';
 
@@ -23,7 +24,7 @@ function setup({ homeTypes = {}, projectTypes = {}, defaults = {} } = {}) {
   mkdirSync(join(dir, '.crux'), { recursive: true });
   for (const [f, s] of Object.entries(homeTypes)) writeFileSync(join(home, '.claude', 'agents', f), s);
   for (const [f, s] of Object.entries(projectTypes)) writeFileSync(join(dir, '.claude', 'agents', f), s);
-  const make = () => new Hub({ projects: [dir], memory: new Memory(join(root, 'crux')), agentHome: home, defaults });
+  const make = () => new Hub({ projects: [dir], memory: new Memory(join(root, 'crux')), agentHome: home, defaults, settings: new HubSettings({ file: null }) });
   const hub = make();
   return { hub, p: hub.project('proj'), root, home, dir, make };
 }

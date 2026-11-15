@@ -188,7 +188,7 @@ export class Agent {
   lowerForRefusal(text) {
     const asked = this.effort, key = this.effortKey();
     if (!asked || !key || !EffortCeilings.isRefusal(text)) return null;
-    const level = this.hub.effortCeilings?.learn(key, asked);
+    const level = this.hub.effortCeilings?.learn(key, asked, text);
     if (!level) return null;
     this.noteLowered(asked, level, false);
     return level;
@@ -263,7 +263,7 @@ export class Agent {
     for (let i = 0; i <= EFFORTS.length; i++) {
       try { await q.applyFlagSettings({ effortLevel: level || null }); break; }
       catch (e) {
-        const lower = level && key && EffortCeilings.isRefusal(e?.message) ? this.hub.effortCeilings?.learn(key, level) : null;
+        const lower = level && key && EffortCeilings.isRefusal(e?.message) ? this.hub.effortCeilings?.learn(key, level, e.message) : null;
         if (!lower) throw e;
         level = lower;
       }

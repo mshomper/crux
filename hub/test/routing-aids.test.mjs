@@ -17,6 +17,7 @@ import { panelHtml } from '../public/usage-ui.js';
 Agent.prototype.send = function (t) { this.state = 'working'; };
 Agent.prototype.close = function () { this.q = null; };
 
+const REFUSED = "Effort level 'xhigh' is not supported for this model";
 const ADVISOR = '---\nname: advisor\ndescription: one review\nmodel: fable\neffort: high\ntools: Read\n---\nBe brief.\n';
 
 function setup() {
@@ -42,15 +43,48 @@ test('a refusal teaches the ceiling: the model accepts only the levels below the
   const saved = [];
   const c = new EffortCeilings({}, m => saved.push(m));
   assert.equal(c.clamp('m', 'max'), 'max', 'nothing known yet: the level stands');
-  assert.equal(c.learn('m', 'xhigh'), 'high');
+  assert.equal(c.learn('m', 'xhigh', REFUSED), 'high');
   assert.deepEqual(c.list('m'), ['low', 'medium', 'high']);
   assert.equal(c.clamp('m', 'max'), 'high');
   assert.equal(c.clamp('m', 'medium'), 'medium');
   assert.equal(c.clamp('other', 'max'), 'max', 'kept per model');
-  assert.equal(c.learn('m', 'high'), 'medium', 'a later refusal lowers it again');
-  assert.equal(c.learn('m', 'low'), null, 'nothing below low');
+  assert.equal(c.learn('m', 'high', REFUSED), 'medium', 'a later refusal lowers it again');
+  assert.equal(c.learn('m', 'low', REFUSED), null, 'nothing below low');
+  assert.equal(c.learn('n', 'xhigh'), null, 'no error text, no proof: nothing learned');
+  assert.equal(c.list('n'), null);
   assert.equal(saved.length, 3, 'each lesson is handed on to be saved');
   assert.deepEqual(new EffortCeilings(saved[0]).list('m'), ['low', 'medium', 'high'], 'and reloads');
+  const e = saved[0].m;
+  assert.deepEqual([e.level, e.from, e.error], ['high', 'sdk-refusal', REFUSED], 'each entry carries its proof');
+  assert.ok(Number.isFinite(Date.parse(e.learnedAt)));
+});
+
+test('a stored ceiling without the proof shape is ignored, and the next save drops it', () => {
+  const real = { level: 'high', allowed: ['low', 'medium', 'high'], learnedAt: '2026-11-15T10:00:00Z', from: 'sdk-refusal', error: REFUSED };
+  const saved = [];
+  const c = new EffortCeilings({
+    old: ['low', 'medium', 'high'],                                                   // the first format: a bare list
+    noFrom: { level: 'high', allowed: ['low', 'medium', 'high'], learnedAt: real.learnedAt, error: REFUSED },
+    noError: { ...real, error: '' },
+    wrongSource: { ...real, from: 'guess' },
+    badTime: { ...real, learnedAt: 'yesterday' },
+    badLevels: { ...real, allowed: ['low', 'turbo'] },
+    good: real
+  }, m => saved.push(m));
+  for (const k of ['old', 'noFrom', 'noError', 'wrongSource', 'badTime', 'badLevels']) assert.equal(c.list(k), null, k);
+  assert.equal(c.clamp('old', 'max'), 'max', 'an ignored entry limits nothing');
+  assert.deepEqual(c.list('good'), ['low', 'medium', 'high']);
+  c.learn('other', 'max', REFUSED);
+  assert.deepEqual(Object.keys(saved[0]).sort(), ['good', 'other'], 'what is saved holds only entries with proof');
+});
+
+test('a hub whose saved settings hold an old-shape ceiling ignores it', () => {
+  const settings = new HubSettings({ file: null });
+  settings.effortCeilings = { 'claude-sonnet-5-5': ['low', 'medium', 'high'] };
+  const root = makeTmp('crux-hub-routing-old-');
+  mkdirSync(join(root, 'proj', '.crux'), { recursive: true });
+  const hub = new Hub({ projects: [join(root, 'proj')], memory: new Memory(join(root, 'crux')), agentHome: join(root, 'home'), settings });
+  assert.equal(hub.effortCeilings.clamp('claude-sonnet-5-5', 'max'), 'max');
 });
 
 test('live switch: a refused level drops to the highest accepted, is remembered, and says so once', async () => {
