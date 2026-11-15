@@ -21,12 +21,16 @@ import { existsSync, lstatSync, realpathSync, readFileSync, readdirSync } from '
 import { execFileSync } from 'node:child_process';
 import { join, dirname, basename, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { projectKey } from './settings.mjs';
 
 export const MIN_AGE_MS = 3 * 24 * 3600 * 1000;      // a release younger than this goes to Matt
-export const LOOKUP_TTL_MS = 6 * 3600 * 1000;        // how long a registry answer is kept (npm and pinned pip: the release dates never change)
-export const PIP_FRESH_MS = 2 * 60 * 1000;           // unpinned pip takes whatever is newest: its answer must be this fresh
+// How old a remembered registry answer may be when a request is judged. The newest-release tags and the "withdrawn"
+// marks can change at any time, so every answer (npm and pip, pinned or not) must be this fresh; a miss goes to Matt
+// once and starts a fetch, so the next try is settled.
+export const FRESH_MS = 2 * 60 * 1000;
+export const LOOKUP_TTL_MS = FRESH_MS;
+export const PIP_FRESH_MS = FRESH_MS;
 export const QUARANTINE_DIR = 'crux-quarantine';     // under the temp folder
 export const LISTS_VERSION = 1;
 
@@ -236,7 +240,7 @@ export class PermissionLists {
 
   // The registry answer, from memory only (classification never waits for the network). Older than maxAgeMs, or never
   // asked: null, and a fetch starts so the next ask has it. Matt's own add pre-fills it (prime).
-  lookup = (eco, name, maxAgeMs = LOOKUP_TTL_MS) => {
+  lookup = (eco, name, maxAgeMs = FRESH_MS) => {
     const hit = this.cache.get(`${eco}:${name}`);
     if (hit && this.now() - hit.t <= maxAgeMs) return hit.v;
     this.prime(eco, name).catch(() => { });
@@ -393,8 +397,13 @@ export function absolutePath(word, tmp) {
   if (parts.some((x, i) => (x === '..' || x === '.') || (i > 0 && x === '') || /~\d/.test(x) || (i > 0 && /[. ]$/.test(x)) || (i > 0 && /[:<>"|?*]/.test(x)))) return null;
   return s.replace(/\/+$/, '');
 }
-// One quarantine folder per project: <temp>/crux-quarantine-<project folder name>.
-export const quarantineName = projectDir => `${QUARANTINE_DIR}-${basename(resolve(String(projectDir))).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'project'}`;
+// One quarantine folder per project: <temp>/crux-quarantine-<project folder name>-<short hash of its full path>, so two
+// projects with the same folder name never share one.
+export const quarantineName = projectDir => {
+  const full = resolve(String(projectDir));
+  const name = basename(full).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'project';
+  return `${QUARANTINE_DIR}-${name}-${createHash('sha1').update(slash(full).toLowerCase()).digest('hex').slice(0, 6)}`;
+};
 function quarantineRoots(tmp, name) {
   const roots = new Set([slash(join(tmp, name))]);
   const real = realOrNull(tmp);
@@ -460,8 +469,9 @@ function realish(p) {
   return low(resolve(String(p)));
 }
 // A word as a path with no checks (it may hold glob characters): /tmp, /c/..., $env:TEMP, a drive path, else from cwd.
-function looseAbs(tok, cwd, tmp) {
+function looseAbs(tok, cwd, tmp, home = homedir()) {
   let s = slash(String(tok).replace(TEMP_VAR, tmp)), m;
+  if (/^~(?=[\\/]|$)/.test(s)) s = slash(home) + s.slice(1);
   if (/^\/tmp(\/|$)/.test(s)) s = slash(join(tmp, s.slice(5)));
   else if ((m = /^\/([a-z])\/(.*)$/i.exec(s))) s = `${m[1].toUpperCase()}:/${m[2]}`;
   else if (!/^[a-z]:\//i.test(s) && !s.startsWith('/')) s = slash(join(cwd, s));
@@ -474,31 +484,63 @@ const JUNCTIONISH = /\b(junction|symboliclink|hardlink|mklink)\b|\bln\s+-\w*s|ne
 // Does a command touch a quarantine folder, however it spells the path (a relative path from inside it, .., a glob, an
 // 8.3 name, a link) or run from inside one? And does it do more than look? -> true when it does both: that is a copy,
 // a move or a run of something downloaded, never an allow by itself.
-export function leavesQuarantine(text, cwd, tmp) {
+// {a,b} lists opened, as bash does: at most 64 words, three levels deep. null when there are more (too many to look at).
+function expandBraces(word, depth = 0) {
+  const m = /\{([^{}]*,[^{}]*)\}/.exec(word);
+  if (!m) return [word];
+  if (depth > 3) return null;
+  const out = [];
+  for (const x of m[1].split(',')) {
+    const sub = expandBraces(word.slice(0, m.index) + x + word.slice(m.index + m[0].length), depth + 1);
+    if (!sub) return null;
+    out.push(...sub);
+    if (out.length > 64) return null;
+  }
+  return out;
+}
+// The command as a shell or PowerShell may end up reading it: as written; with quote marks and backticks dropped
+// (crux-quar''antine, crux-quar`antine); with backslashes dropped too (Git Bash); each with its {a,b} lists opened
+// (crux-quar{antine,}-x). null when there are too many spellings to look at: that counts as touching it.
+function spellings(text) {
+  const out = new Set();
+  for (const b of [text, text.replace(/['"`]/g, ''), text.replace(/['"`\\]/g, '')]) {
+    const ex = expandBraces(b);
+    if (!ex) return null;
+    for (const x of ex) out.add(x);
+    if (out.size > 200) return null;
+  }
+  return [...out];
+}
+export function leavesQuarantine(text, cwd, tmp, home = homedir()) {
   const t = String(text);
   const marks = quarantineMarks(tmp);
-  let touched = inQuarantine(t) || (marks.length > 0 && marks.some(m => under(realish(cwd), m)));
+  const forms = spellings(t);
+  let touched = forms === null || forms.some(inQuarantine) || (marks.length > 0 && marks.some(m => under(realish(cwd), m)));
   if (!touched && marks.length) {
-    for (const raw of t.split(/[\s;&|()<>]+/)) {
-      let tok = raw.replace(/^['"]+|['"]+$/g, '');
-      if (!tok) continue;
+    const toks = new Set();
+    for (const f of forms) for (const raw of f.split(/[\s;&|()<>]+/)) { const x = raw.replace(/^['"]+|['"]+$/g, ''); if (x) toks.add(x); }
+    if (toks.size > 600) touched = true;
+    for (const raw of touched ? [] : toks) {
+      let tok = raw;
       if (/^-+[\w-]*=/.test(tok)) tok = tok.slice(tok.indexOf('=') + 1);
+      else if (/^-[A-Za-z]./.test(tok)) tok = tok.slice(2);   // -o/tmp/x: a short option with its value hard against it
       else if (tok.startsWith('-')) continue;
-      if (/[$%]/.test(tok)) { touched = true; break; }   // a variable: where it leads is not known
+      if (/\$|%[A-Za-z_]\w*%/.test(tok)) { touched = true; break; }   // a variable: where it leads is not known
       const g = tok.search(/[*?[]/);
       if (g >= 0) {
         // A glob may stand for the quarantine folder itself (/tmp/crux-q*/...) or for a folder on the way to it: match the
         // path up to the glob's own folder name against the folders, cut to the same depth. A glob inside a folder is
         // judged by the folder before it, like any path.
         const segEnd = tok.slice(g).search(/[\\/]/), pre = segEnd < 0 ? tok : tok.slice(0, g + segEnd);
-        const re = new RegExp(`^${low(looseAbs(pre, cwd, tmp)).replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\[!/g, '[^')}$`);
-        const depth = low(looseAbs(pre, cwd, tmp)).split('/').length;
+        const re = new RegExp(`^${low(looseAbs(pre, cwd, tmp, home)).replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\[!/g, '[^')}$`);
+        const depth = low(looseAbs(pre, cwd, tmp, home)).split('/').length;
         try { if (marks.some(m => re.test(m.split('/').slice(0, depth).join('/')))) { touched = true; break; } } catch { touched = true; break; }
         const h = tok.slice(0, g), cut = Math.max(h.lastIndexOf('/'), h.lastIndexOf('\\'));
         tok = cut > 0 ? h.slice(0, cut) : cut === 0 ? h.slice(0, 1) : '.';
       }
-      const abs = absolutePath(tok, tmp) || resolve(cwd, tok);
-      if (marks.some(m => under(realish(abs), m))) { touched = true; break; }
+      // Where it really leads: /tmp mapped to the temp folder first, then every part that exists opened to its real long
+      // name (so an 8.3 short name like CRUX-Q~2, a link or a .. cannot hide the folder).
+      if (marks.some(m => under(realish(looseAbs(tok, cwd, tmp, home)), m))) { touched = true; break; }
     }
   }
   if (!touched) return false;
@@ -690,8 +732,13 @@ function manifestFindings(rel, text) {
 // Lockfile, manifests and registry config unchanged from the merge-base with main? -> [] when so, else why not.
 // The repository must be the project's own: the project folder is its top, and the folder the command runs in belongs
 // to the same repository (the project folder or one of its registered worktrees), so a repository made inside the
-// project cannot stand in for it. The base is the project's own origin/main only, never a local branch.
-export function lockfileProblems(cwd, { projectDir, home = homedir() } = {}) {
+// project cannot stand in for it. The base is the project's own origin/main, and (when the project has one) its local
+// main as well: both must show no change, so moving one of them (git fetch . HEAD:refs/remotes/origin/main) buys nothing.
+// What is checked is the files at the folder the command runs in and above it up to the top of the repository, found by
+// path whether or not git lists them (an ignored folder's own lockfile counts), and each must be tracked by git.
+// installOnly (npm install): the lockfile and registry config must match main; manifests only need to name registry
+// packages (the install itself changes them).
+export function lockfileProblems(cwd, { projectDir, home = homedir(), installOnly = false } = {}) {
   const none = 'This folder is not in the project\'s own git repository, which the hub can read';
   let top, common, worktrees;
   try {
@@ -706,33 +753,63 @@ export function lockfileProblems(cwd, { projectDir, home = homedir() } = {}) {
     if (!worktrees.includes(low(topCwd))) return ['This folder is not the project or one of its registered worktrees'];
     top = topCwd;
   } catch { return [none]; }
-  let base = null;
-  try { base = gitOut(top, ['merge-base', 'HEAD', 'origin/main']).trim(); } catch { base = null; }
-  if (!base) return ['The hub cannot find where this branch left the project\'s origin/main (no merge-base)'];
-  let inBase, inTree;
+  // Every base to compare with: where the branch left origin/main (required) and, if there is one, the local main.
+  const bases = [];
+  try { bases.push({ ref: 'origin/main', sha: gitOut(top, ['merge-base', 'HEAD', 'origin/main']).trim() }); } catch { }
+  if (!bases[0]?.sha) return ['The hub cannot find where this branch left the project\'s origin/main (no merge-base)'];
+  if (gitOk(top, ['rev-parse', '--verify', '--quiet', 'refs/heads/main'])) {
+    let b = '';
+    try { b = gitOut(top, ['merge-base', 'HEAD', 'refs/heads/main']).trim(); } catch { }
+    if (!b) return ['The hub cannot find where this branch left the project\'s local main (no merge-base)'];
+    if (b !== bases[0].sha) bases.push({ ref: 'main', sha: b });
+  }
+  let tracked, inTree;
   try {
-    inBase = gitOut(top, ['ls-tree', '-r', '--name-only', '--full-tree', '-z', base]).split('\0').filter(Boolean);
+    for (const b of bases) {
+      b.files = new Map();
+      for (const rec of gitOut(top, ['ls-tree', '-r', '-z', '--full-tree', b.sha]).split('\0').filter(Boolean)) {
+        const m = /^(\d+) (\w+) ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(rec);
+        if (m) b.files.set(m[4], { mode: m[1], sha: m[3] });
+      }
+    }
+    tracked = new Set(gitOut(top, ['ls-files', '-z', '--full-name', '--cached']).split('\0').filter(Boolean));
     inTree = gitOut(top, ['ls-files', '-z', '--full-name', '--cached', '--others', '--exclude-standard']).split('\0').filter(Boolean);
   } catch { return ['The hub cannot list the repository\'s files']; }
+  const want = installOnly ? /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|package\.json|\.npmrc)$/i : WATCHED;
+  const manifestOnly = rel => installOnly && /(^|\/)package\.json$/i.test(rel);
   const probe = new Set();
-  for (const f of [...inBase, ...inTree]) if (WATCHED.test(f)) probe.add(f);
-  // Ignored files git does not list: the config the tools read from here upward.
+  for (const f of [...bases.flatMap(b => [...b.files.keys()]), ...inTree]) if (want.test(f)) probe.add(f);
+  // Files git does not list (ignored ones, or those in an ignored folder): found by path, from the folder the command
+  // runs in up to the top. These are what the tools read from here upward.
   const topS = slash(top), cwdS = slash(resolve(cwd));
   let dir = low(cwdS).startsWith(`${low(topS)}/`) ? cwdS.slice(topS.length).replace(/^\/+/, '') : '';
   for (let i = 0; i < 30; i++) {
-    for (const n of ['.npmrc', '.cargo/config.toml', '.cargo/config']) probe.add(dir ? `${dir}/${n}` : n);
+    for (const n of ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'Cargo.toml', 'Cargo.lock', '.npmrc', '.cargo/config.toml', '.cargo/config']) if (want.test(n)) probe.add(dir ? `${dir}/${n}` : n);
     if (!dir) break;
     dir = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '';
   }
   const why = [];
   for (const rel of probe) {
     const file = join(top, rel);
-    const inT = existsSync(file), inB = inBase.includes(rel);
-    if (!inT && !inB) continue;
-    if (inT !== inB) { why.push(`${rel} ${inT ? 'is new' : 'was removed'} since main`); continue; }
-    if (!gitOk(top, ['diff', '--quiet', '--no-ext-diff', '--no-textconv', base, '--', rel])) { why.push(`${rel} changed since main`); continue; }
-    const text = readText(file);
-    if (text == null) { why.push(`${rel} cannot be read`); continue; }
+    let st = null;
+    try { st = lstatSync(file); } catch { }
+    const there = bases.map(b => b.files.get(rel));
+    if (!st && !there.some(Boolean)) continue;
+    if (st && (st.isSymbolicLink() || !st.isFile())) { why.push(`${rel} is a link or not a plain file`); continue; }
+    if (!manifestOnly(rel)) {
+      if (!!st !== there.every(Boolean)) { why.push(!st ? `${rel} was removed since main` : there.some(Boolean) ? `${rel} is not the same on origin/main and on main` : `${rel} is new since main`); continue; }
+      if (st && !tracked.has(rel)) { why.push(`${rel} is not tracked by git (it is ignored, or new)`); continue; }
+    }
+    let text = null, buf = null;
+    if (st) {
+      try { buf = readFileSync(file); text = buf.toString('utf8'); } catch { why.push(`${rel} cannot be read`); continue; }
+      if (!manifestOnly(rel)) {
+        // The file's own bytes against main's copy (a CRLF checkout counts as the same text).
+        const same = [buf, Buffer.from(text.replace(/\r\n/g, '\n'), 'utf8')].map(b => createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex'));
+        if (there.some(e => e.mode === '120000' || !same.includes(e.sha))) { why.push(`${rel} changed since main`); continue; }
+      }
+    }
+    if (text == null) continue;
     if (/(^|\/)\.npmrc$/i.test(rel) && NPMRC_BAD.test(text)) why.push(`${rel} sets a registry, proxy or script option`);
     else if (/\.cargo\/config/i.test(rel) && CARGO_CONFIG_BAD.test(text)) why.push(`${rel} sets a registry, source, patch or build option`);
     why.push(...manifestFindings(rel, text));
@@ -878,6 +955,9 @@ export function decide(ctx) {
     if (!specs.length || entries.some(e => !e)) return null;   // something in it is not approved: it stays as it was
     if (!existsSync(join(cwd, 'package.json'))) problems.push('There is no package.json in the folder it runs in');
     for (const f of [join(cwd, '.npmrc'), join(ctx.projectDir, '.npmrc'), join(home, '.npmrc')]) { const t = readText(f); if (t != null && NPMRC_BAD.test(t)) problems.push('An .npmrc sets a registry, proxy or script option'); }
+    // What npm would resolve the rest of the tree from: the lockfile must match main, and the manifests may name no git,
+    // path or address source (a changed manifest alone is fine: this install is what changes it).
+    if (!problems.length) { const locked = lockfileProblems(cwd, { projectDir: ctx.projectDir, home, installOnly: true }); if (locked.length) problems.push(`npm install is only settled here when the lockfile and registry config match main and the manifests name only registry packages: ${locked.join('; ')}`); }
     if (problems.length) return { note: problems };
     const gates = specs.flatMap((s, i) => gate(lists, 'npm', s, entries[i], npmBaseline(cwd, s.name), { before }));
     if (gates.length) return { gate: gates };
@@ -900,8 +980,7 @@ export function decide(ctx) {
     const cfg = pipConfigFound(venv, home);
     if (cfg) problems.push(cfg);
     if (problems.length) return { note: problems };
-    // A pinned release never changes, so its answer may be old; an unpinned one takes whatever is newest, so it must be fresh.
-    const gates = specs.flatMap((s, i) => gate(lists, 'pip', s, entries[i], pipBaseline(venv, s.name), { maxAgeMs: s.spec ? LOOKUP_TTL_MS : PIP_FRESH_MS }));
+    const gates = specs.flatMap((s, i) => gate(lists, 'pip', s, entries[i], pipBaseline(venv, s.name), { maxAgeMs: FRESH_MS }));
     if (gates.length) return { gate: gates };
     return { allow: true, why: `${specs.map(s => s.name).join(', ')} ${specs.length > 1 ? 'are' : 'is'} on your approved packages (pip in the project's .venv, wheels only)` };
   }
@@ -978,7 +1057,7 @@ export function settleLists(out, ctx) {
   // the command names is resolved (relative to where it runs, .., globs, 8.3 names, links) before it is judged.
   if (out.route === 'allow' && /^(Bash|PowerShell)$/.test(ctx.tool)) {
     let leaves = true;
-    try { leaves = leavesQuarantine(text, ctx.cwd || ctx.projectDir, tmp); } catch { leaves = true; }   // cannot tell: not an allow
+    try { leaves = leavesQuarantine(text, ctx.cwd || ctx.projectDir, tmp, ctx.home || homedir()); } catch { leaves = true; }   // cannot tell: not an allow
     if (leaves) return { ...out, route: 'unsure', unsure: ['Moves, copies or runs something in a quarantine folder: only the check or the orchestrator can say yes to that'] };
   }
   return out;

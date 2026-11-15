@@ -13,13 +13,15 @@ import { Agent } from '../lib/agent.mjs';
 import { stepUpNeed } from '../lib/guard.mjs';
 import { listsCard, addBody, freshDraft, listAddButtons, listAddBody } from '../public/lists-card.js';
 import { projectCard } from '../public/project-settings.js';
+import { quarantineName } from '../lib/permission-lists.mjs';
 
 Agent.prototype.send = function () { this.state = 'working'; };
 Agent.prototype.close = function () {};
 
 const root = makeTmp('crux-lists-hub-');
 const fakeTemp = join(root, 'temp');
-mkdirSync(join(fakeTemp, 'crux-quarantine-fetcher'), { recursive: true });
+const QF = quarantineName(join(root, 'fetcher'));   // crux-quarantine-fetcher-<hash of the project path>
+mkdirSync(join(fakeTemp, QF), { recursive: true });
 // os.tmpdir() reads these each time, so the hub's own checker sees a throwaway temp folder.
 const saved = { TEMP: process.env.TEMP, TMP: process.env.TMP, TMPDIR: process.env.TMPDIR };
 Object.assign(process.env, { TEMP: fakeTemp, TMP: fakeTemp, TMPDIR: fakeTemp });
@@ -85,16 +87,16 @@ test('a site narrowed to one project is not trusted in another', async () => {
 test('downloads: the record is the project\'s log, so running the file stays a stop for every agent and after a restart', async () => {
   const { hub, p, w, dir, file } = setup('fetcher');
   await hub.addToLists(p, { kind: 'site', host: 'example-data.org', access: 'downloads', scope: 'all' });
-  const got = await settled(asks(hub, p, w, 'Bash', { command: 'curl -sS -o /tmp/crux-quarantine-fetcher/tool.sh https://example-data.org/tool.sh' }));
+  const got = await settled(asks(hub, p, w, 'Bash', { command: `curl -sS -o /tmp/${QF}/tool.sh https://example-data.org/tool.sh` }));
   assert.equal(got.behavior, 'allow');
   const rec = p.log.ofType('download');
   assert.equal(rec.length, 1);
-  assert.match(rec[0].path, /crux-quarantine-fetcher\/tool\.sh$/);
+  assert.ok(rec[0].path.endsWith(`/${QF}/tool.sh`), rec[0].path);
   assert.equal(rec[0].host, 'example-data.org');
   assert.equal(rec[0].agent, 'reader');
   // a second worker, and a fresh hub reading the same log, both find running it a stop
   const w2 = hub.startWorker(p, 'other', 'Another job', 'you', 'Another job');
-  assert.equal(await settled(asks(hub, p, w2, 'Bash', { command: 'bash /tmp/crux-quarantine-fetcher/tool.sh' })), 'waiting');
+  assert.equal(await settled(asks(hub, p, w2, 'Bash', { command: `bash /tmp/${QF}/tool.sh` })), 'waiting');
   const card = p.log.ofType('approval').at(-1);
   assert.equal(card.routedTo, null, 'a hard stop: it comes to Matt');
   assert.ok(card.stops.some(s => /downloaded/.test(s)), card.stops.join('; '));
@@ -103,7 +105,7 @@ test('downloads: the record is the project\'s log, so running the file stays a s
   const p2 = hub2.project('fetcher');
   hub2.setPermissionMode(p2, 'auto');
   const w3 = hub2.startWorker(p2, 'third', 'Third', 'you', 'Third');
-  assert.equal(await settled(hub2.requestApproval(p2, w3, 'Bash', { command: 'node /tmp/crux-quarantine-fetcher/tool.sh' })), 'waiting');
+  assert.equal(await settled(hub2.requestApproval(p2, w3, 'Bash', { command: `node /tmp/${QF}/tool.sh` })), 'waiting');
   assert.ok(p2.log.ofType('approval').at(-1).stops.some(s => /downloaded/.test(s)));
   for (const a of hub2.approvals.values()) a.finish({ behavior: 'deny', message: 'test' }, 'denied');
 });

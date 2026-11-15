@@ -10,18 +10,18 @@ import { execFileSync, execSync } from 'node:child_process';
 import { makeTmp } from './helpers/tmp.mjs';
 import { classify } from '../lib/permission-rules.mjs';
 import { HubSettings } from '../lib/settings.mjs';
-import { PermissionLists, SEED_SITES, parseHttpsUrl, resolveVersion, readWords, suggest, downloadsFrom, parseRegistry, isOpenHost, ListsError, quarantineName, quarantineMarks, leavesQuarantine, npmrcBad, isJump } from '../lib/permission-lists.mjs';
+import { PermissionLists, SEED_SITES, parseHttpsUrl, resolveVersion, readWords, suggest, downloadsFrom, parseRegistry, isOpenHost, ListsError, quarantineName, quarantineMarks, leavesQuarantine, npmrcBad, isJump, lockfileProblems } from '../lib/permission-lists.mjs';
 
 const root = makeTmp('crux-lists-');
 const projectDir = join(root, 'proj');
 const other = join(root, 'other');
 const tmp = join(root, 'tmp');
 const home = join(root, 'home');
-const QN = quarantineName(projectDir);      // one quarantine folder per project: crux-quarantine-proj
+const QN = quarantineName(projectDir);      // one quarantine folder per project: crux-quarantine-proj-<hash of the project path>
 const Q = join(tmp, QN);
 for (const d of [projectDir, other, home, Q]) mkdirSync(d, { recursive: true });
-assert.equal(QN, 'crux-quarantine-proj');
-assert.equal(quarantineName(other), 'crux-quarantine-other');
+assert.match(QN, /^crux-quarantine-proj-[0-9a-f]{6}$/);
+assert.match(quarantineName(other), /^crux-quarantine-other-[0-9a-f]{6}$/);
 writeFileSync(join(projectDir, 'package.json'), JSON.stringify({ dependencies: { zod: '^3.22.0', jumper: '^3.1.0', zero: '^0.4.2' } }));
 mkdirSync(join(projectDir, '.venv', 'Lib', 'site-packages', 'requests-2.31.0.dist-info'), { recursive: true });
 writeFileSync(join(projectDir, '.venv', 'pyvenv.cfg'), 'home = x');
@@ -55,7 +55,10 @@ await Promise.all(Object.keys(REG).map(k => lists.prime(...k.split(':'))));   //
 asked = [];
 
 // Like the hub's routeFor: every file inside a quarantine folder counts as downloaded.
-const at = (tool, input, o = {}) => classify({ tool, input, projectDir: o.projectDir || projectDir, cwd: o.cwd || null, tmp, home, level: 'auto', lists: o.lists === null ? null : (o.lists || lists.forProject(o.projectDir || projectDir)), downloaded: [...quarantineMarks(tmp), ...(o.downloaded || [])] });
+// (Commands below say crux-quarantine-proj / crux-quarantine-other: each is the folder name of that project, with its path hash.)
+const QO = quarantineName(other);
+const named = c => String(c).replace(/crux-quarantine-(proj|other)(?!-[0-9a-f]{6}(?![0-9a-z]))/g, (_, w) => w === 'proj' ? QN : QO);
+const at = (tool, input, o = {}) => classify({ tool, input: input?.command ? { ...input, command: named(input.command) } : input, projectDir: o.projectDir || projectDir, cwd: o.cwd || null, tmp, home, level: 'auto', lists: o.lists === null ? null : (o.lists || lists.forProject(o.projectDir || projectDir)), downloaded: [...quarantineMarks(tmp), ...(o.downloaded || [])] });
 // npm installs need --before; the checks below that are about something else keep it, so each one tests only its own fault.
 const wb = c => /--before/.test(c) ? c : c.replace(/^(npm(?:\.cmd)? (?:install|i|add)\b[^&;]*?--ignore-scripts)/, `$1 ${BEFORE}`);
 // pip needs --isolated and Invoke-WebRequest needs -UseBasicParsing; likewise added unless a test is about their absence.
@@ -131,7 +134,7 @@ test('downloads: a listed site, into the quarantine folder, a literal https addr
   const r = sh(dl('https://example-data.org/files/a.zip'));
   allows(r, 'curl into quarantine');
   assert.deepEqual(r.downloads.map(d => d.url), ['https://example-data.org/files/a.zip']);
-  assert.ok(r.downloaded.some(d => d.endsWith('/crux-quarantine-proj/a.zip')), 'recorded, so running it stays a stop');
+  assert.ok(r.downloaded.some(d => d.endsWith(`/${QN}/a.zip`)), 'recorded, so running it stays a stop');
   allows(sh(dl('https://data.example-data.org/x.csv', 'x.csv', '-sSf --max-time 30')), 'a subdomain');
   allows(sh(`curl -sS -o "${join(Q, 'b.zip').replace(/\\/g, '/')}" https://example-data.org/b.zip`), 'a full path');
   allows(ps(`Invoke-WebRequest -Uri https://example-data.org/c.zip -OutFile $env:TEMP\\crux-quarantine-proj\\c.zip -MaximumRedirection 0 -UseBasicParsing`), 'PowerShell, redirects off');
@@ -408,17 +411,22 @@ test('HIGH 3: pip settings that reroute it (--isolated missing, pip.ini, PIP_ va
   }
   allows(sh(py), 'and back to allowed');
 });
-test('LOW: the registry answer is async; an unpinned pip install needs a fresh one, a pinned one does not', async () => {
+test('MEDIUM (round 2): every registry answer (pip pinned or not, npm) must be about 2 minutes old at most; a miss goes to Matt and starts a fetch', async () => {
   const py = '.venv/Scripts/python -m pip install --only-binary=:all:';
   allows(sh(`${py} requests`), 'fresh');
-  clock = NOW + 3 * 60 * 1000;   // the remembered answer is 3 minutes old
+  allows(sh(`${py} requests==2.32.3`), 'fresh, pinned');
+  allows(sh('npm install zod --ignore-scripts'), 'fresh, npm');
+  clock = NOW + 3 * 60 * 1000;   // the remembered answers are 3 minutes old
   try {
-    const r = sh(`${py} requests`);
-    assert.equal(r.route, 'human');
-    assert.match(r.reasons.join(' '), /being looked up now/);
-    allows(sh(`${py} requests==2.32.3`), 'a pinned release never changes, so an old answer will do');
-    await new Promise(r => setTimeout(r, 5));   // the miss started a fetch: the next unpinned try has a fresh answer
+    for (const c of [`${py} requests`, `${py} requests==2.32.3`, 'npm install zod --ignore-scripts', 'npm install zod@3.23.8 --ignore-scripts']) {
+      const r = sh(c);
+      assert.equal(r.route, 'human', `an old answer is no answer: ${c}`);
+      assert.match(r.reasons.join(' '), /being looked up now/);
+    }
+    await new Promise(r => setTimeout(r, 5));   // the misses started fetches: the next try has a fresh answer
     allows(sh(`${py} requests`), 'refreshed');
+    allows(sh(`${py} requests==2.32.3`), 'refreshed, pinned');
+    allows(sh('npm install zod --ignore-scripts'), 'refreshed, npm');
   } finally { clock = NOW; }
 });
 test('Hugging Face: a model by name, the approved revision, weights and plain text only, into the quarantine folder', () => {
@@ -498,6 +506,11 @@ function repo(files, { ignore = '' } = {}) {
   return dir;
 }
 const GOOD = { 'package.json': JSON.stringify({ name: 'a', dependencies: { zod: '^3.22.0' } }), 'package-lock.json': '{"lockfileVersion":3}', 'Cargo.toml': '[package]\nname="a"\n[dependencies]\nserde="1"\n', 'Cargo.lock': '# lock\n' };
+// The test project is a repository too (npm install is settled only against main's lockfile): committed, with origin/main
+// where it is, on a feature branch. Its venv stays untracked.
+writeFileSync(join(projectDir, '.gitignore'), '.venv/\n');
+git(projectDir, 'init', '-q', '-b', 'main'); git(projectDir, 'add', '-A'); git(projectDir, 'commit', '-q', '-m', 'base');
+git(projectDir, 'update-ref', 'refs/remotes/origin/main', 'HEAD'); git(projectDir, 'switch', '-q', '-c', 'feat/x');
 const buildRaw = (dir, c, o = {}) => at('Bash', { command: c }, { projectDir: dir, lists: lists.forProject(dir), ...o });
 const build = (dir, c, o) => buildRaw(dir, /^npm ci( |$)/.test(c) && !/--ignore-scripts/.test(c) ? c.replace(/^npm ci/, 'npm ci --ignore-scripts') : c, o);   // npm ci needs --ignore-scripts too
 test('lockfile builds: allowed only when lockfile, manifests and registry config match main', () => {
@@ -688,11 +701,125 @@ test('HIGH 6: anything that copies, moves or runs something in a quarantine fold
   assert.equal(sh('bash src/a.zip', { downloaded: cp.downloaded }).route, 'human');
 });
 const slashed = p => String(p).replace(/\\/g, '/');
+test('round 2 HIGH 1: spellings that hide the quarantine folder\'s name (quotes, braces, backslashes, backticks, 8.3 names) never leave it', () => {
+  writeFileSync(join(Q, 'x.js'), 'x');
+  const half = 'crux-quar', tail = QN.slice('crux-quarantine'.length);   // crux-quar + antine + -proj-<hash>
+  const spell = {
+    'single quotes': `/tmp/${half}''antine${tail}`, 'double quotes': `/tmp/${half}""antine${tail}`, 'a brace list with an empty part': `/tmp/${half}{antine,}${tail}`,
+    'a brace list of two': `/tmp/${half}{antine,antine}${tail}`, 'quotes around one part': `/tmp/${half}'antine'${tail}`, 'a backslash': `/tmp/${half}\\antine${tail}`, 'a backtick': `/tmp/${half}\`antine${tail}`,
+    'quotes around the whole name': `/tmp/'${QN}'`, 'a variable': `/tmp/${half}$X${tail}`
+  };
+  for (const [what, dir] of Object.entries(spell)) {
+    for (const c of [`cp ${dir}/x.js hub/test/x.test.mjs`, `mv ${dir}/x.js src/x.js`, `node ${dir}/x.js`, `bash ${dir}/x.js`]) {
+      assert.equal(leavesQuarantine(c, projectDir, tmp), true, `${what}: ${c}`);
+      not(sh(c), `${what}: ${c}`);
+    }
+    assert.equal(leavesQuarantine(`ls ${dir}`, projectDir, tmp), false, `looking is still fine (${what})`);
+  }
+  not(psRaw(`Copy-Item $env:TEMP\\${half}'antine'${tail}\\x.js hub\\test\\x.test.mjs`), 'PowerShell quotes');
+  not(psRaw(`Copy-Item $env:TEMP\\${half}\`antine${tail}\\x.js hub\\test\\x.test.mjs`), 'PowerShell backtick');
+  assert.equal(leavesQuarantine('cp -a/tmp/x/y z', projectDir, tmp), false, 'a short option stuck to a path that is not it');
+  assert.equal(leavesQuarantine(`cp -t${slashed(Q)}/x.js src/`, projectDir, tmp), true, 'a short option stuck to the path');
+  assert.equal(leavesQuarantine(`cp ${slashed(tmp)}/${'{a,'.repeat(5)}b${'}'.repeat(5)}/x src/`, projectDir, tmp), true, 'too many spellings to look at: counts as touching it');
+  assert.equal(leavesQuarantine('git log --format=%H -n 3', projectDir, tmp), false, 'a %H format is not a variable');
+  // 8.3 short names open the same folder (cp and node both), also with /tmp spelled the Git Bash way
+  if (process.platform === 'win32') {
+    let short = null;
+    try { short = execSync(`for %I in ("${Q}") do @echo %~sI`, { shell: 'cmd.exe', encoding: 'utf8' }).trim(); } catch { }
+    if (short && /~\d/.test(short)) {
+      const sn = short.split('\\').pop();
+      for (const c of [`cp /tmp/${sn}/x.js hub/test/x.test.mjs`, `cp /tmp/${sn.toUpperCase()}/x.js hub/test/x.test.mjs`, `node /tmp/${sn}/x.js`, `cp ${slashed(tmp)}/${sn}/x.js hub/test/x.test.mjs`]) {
+        assert.equal(leavesQuarantine(c, projectDir, tmp), true, c);
+        not(sh(c), c);
+      }
+    }
+  }
+});
+test('round 2 HIGH 2: a lockfile or manifest in a folder git ignores is compared too, and every file must be tracked and equal to main\'s', () => {
+  const files = { ...GOOD, 'app/package.json': '{"name":"app"}', 'app/package-lock.json': '{"lockfileVersion":3}' };
+  const edit = (dir, f, text) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), text); };
+  // npm ci inside an ignored folder with its own (evil) manifest and lockfile
+  let d = repo(files, { ignore: 'node_modules/\ntarget/\n' });
+  const foo = join(d, 'app', 'node_modules', 'foo');
+  edit(d, 'app/node_modules/foo/package.json', '{"name":"foo","dependencies":{"evil":"1.0.0"}}'); edit(d, 'app/node_modules/foo/package-lock.json', '{"lockfileVersion":3}');
+  not(build(d, 'npm ci', { cwd: foo }), 'an ignored folder with its own lockfile');
+  git(d, 'add', '-f', 'app/node_modules/foo/package.json', 'app/node_modules/foo/package-lock.json');
+  not(build(d, 'npm ci', { cwd: foo }), 'after git add -f (staged)');
+  git(d, 'commit', '-q', '-m', 'sneak');
+  not(build(d, 'npm ci', { cwd: foo }), 'after git add -f and a commit: new since main');
+  // a Cargo project inside an ignored folder
+  d = repo(files, { ignore: 'target/\n' });
+  edit(d, 'target/x/Cargo.toml', '[package]\nname="x"\n[dependencies]\nserde="1"\n'); edit(d, 'target/x/Cargo.lock', '# lock\n');
+  not(build(d, 'cargo fetch --locked', { cwd: join(d, 'target', 'x') }), 'a Cargo project in an ignored folder');
+  // git rm --cached leaves the file on disk but takes it out of what git tracks: its content is no longer what main has
+  d = repo(files);
+  git(d, 'rm', '-q', '--cached', 'app/package-lock.json');
+  edit(d, 'app/package-lock.json', '{"lockfileVersion":3,"evil":true}');
+  not(build(d, 'npm ci', { cwd: join(d, 'app') }), 'git rm --cached, then a changed lockfile');
+  d = repo(files);
+  git(d, 'rm', '-q', '--cached', 'app/package-lock.json');
+  not(build(d, 'npm ci', { cwd: join(d, 'app') }), 'git rm --cached with the same content: still not what git tracks');
+  // git mv: the lockfile moved in, the one at the top is gone
+  d = repo(files);
+  git(d, 'mv', 'package-lock.json', 'old-lock.json');
+  not(build(d, 'npm ci'), 'git mv of the lockfile');
+  // plain files that match main in a subfolder stay fine
+  d = repo(files, { ignore: 'node_modules/\n' });
+  allows(build(d, 'npm ci', { cwd: join(d, 'app') }), 'an unchanged tracked lockfile in a subfolder');
+  // a link standing for a lockfile
+  d = repo(files);
+  rmSync(join(d, 'app', 'package-lock.json'));
+  try { symlinkSync(join(d, 'package-lock.json'), join(d, 'app', 'package-lock.json'), 'file'); not(build(d, 'npm ci', { cwd: join(d, 'app') }), 'a lockfile that is a link'); } catch { /* no right to make links here */ }
+});
+test('round 2 HIGH 3: origin/main moved by a fetch is not enough: the local main must show no change either', () => {
+  const edit = (dir, f, text) => writeFileSync(join(dir, f), text);
+  let d = repo(GOOD);
+  edit(d, 'package-lock.json', '{"lockfileVersion":3,"evil":true}'); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'evil lock');
+  not(build(d, 'npm ci'), 'before the move: the lockfile differs from origin/main');
+  git(d, 'update-ref', 'refs/remotes/origin/main', 'HEAD');   // what `git fetch . HEAD:refs/remotes/origin/main` does
+  not(build(d, 'npm ci'), 'after the move: origin/main agrees, the local main still shows the change');
+  const why = lockfileProblems(d, { projectDir: d, home });
+  assert.match(why.join(' '), /package-lock\.json changed since main/);
+  // no local main at all: origin/main alone is the base
+  d = repo(GOOD);
+  git(d, 'branch', '-q', '-D', 'main');
+  allows(build(d, 'npm ci'), 'no local main: origin/main is the base');
+  // a local main that moved on from origin/main: the branch is compared with both
+  d = repo(GOOD);
+  git(d, 'switch', '-q', 'main'); edit(d, 'package-lock.json', '{"lockfileVersion":3,"later":true}'); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'later'); git(d, 'switch', '-q', '-c', 'feat/y', 'main');
+  not(build(d, 'npm ci'), 'a branch cut from a local main that has a different lockfile than origin/main');
+});
+test('round 2 MEDIUM 4: npm install checks the lockfile against main and the manifests for git, path and address sources', () => {
+  const edit = (dir, f, text) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), text); };
+  const inst = (d, o) => buildRaw(d, `npm install zod --ignore-scripts ${BEFORE}`, o);
+  let d = repo(GOOD);
+  allows(inst(d), 'nothing changed');
+  edit(d, 'package.json', JSON.stringify({ name: 'a', dependencies: { zod: '^3.22.0', other: '^1.0.0' } }));
+  allows(inst(d), 'a manifest that only names registry packages may differ: the install is what changes it');
+  d = repo(GOOD);
+  edit(d, 'package-lock.json', '{"lockfileVersion":3,"x":1}'); not(inst(d), 'lockfile changed, not committed');
+  git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'lock'); not(inst(d), 'lockfile changed and COMMITTED on the branch');
+  assert.match(inst(d).reasons.concat(inst(d).unsure).join(' '), /lockfile and registry config match main/);
+  d = repo({ ...GOOD, 'package.json': JSON.stringify({ name: 'a', dependencies: { zod: '^3.22.0', x: 'github:a/b' } }) });
+  not(inst(d), 'a git source in package.json');
+  d = repo({ ...GOOD, 'package.json': JSON.stringify({ name: 'a', dependencies: { zod: '^3.22.0', x: 'file:../x' } }) });
+  not(inst(d), 'a path source in package.json');
+  d = repo({ ...GOOD, 'package.json': JSON.stringify({ name: 'a', dependencies: { zod: '^3.22.0' }, overrides: { y: 'https://evil.example/y.tgz' } }) });
+  not(inst(d), 'an address source in the overrides');
+  d = repo(GOOD, { ignore: 'node_modules/\n' });
+  edit(d, 'node_modules/foo/package.json', '{"name":"foo"}'); edit(d, 'node_modules/foo/package-lock.json', '{}');
+  not(inst(d, { cwd: join(d, 'node_modules', 'foo') }), 'npm install inside an ignored folder');
+  const plain = join(root, 'not-a-repo-2'); mkdirSync(plain); writeFileSync(join(plain, 'package.json'), '{}');
+  not(buildRaw(plain, `npm install zod --ignore-scripts ${BEFORE}`), 'not a repository');
+});
 test('MEDIUM: one quarantine folder per project, and anything under any crux-quarantine folder counts as downloaded', () => {
-  mkdirSync(join(tmp, 'crux-quarantine-other'), { recursive: true });
+  mkdirSync(join(tmp, QO), { recursive: true });
   mkdirSync(join(tmp, 'crux-quarantine-zz'), { recursive: true });
   const marks = quarantineMarks(tmp);
-  for (const n of [QN, 'crux-quarantine-other', 'crux-quarantine-zz']) assert.ok(marks.some(m => m.endsWith(`/${n}`)), n);
+  for (const n of [QN, QO, 'crux-quarantine-zz']) assert.ok(marks.some(m => m.endsWith(`/${n}`)), n);
+  // two projects with the same folder name in different places never share a quarantine folder
+  assert.notEqual(quarantineName(join(root, 'a', 'same')), quarantineName(join(root, 'b', 'same')));
+  assert.match(quarantineName(join(root, 'a', 'same')), /^crux-quarantine-same-[0-9a-f]{6}$/);
   const url = 'https://example-data.org/a.zip';
   allows(sh(`curl -sS -o /tmp/crux-quarantine-other/x1.zip ${url}`, { projectDir: other, lists: lists.forProject(other) }), 'the other project in its own folder');
   not(sh(`curl -sS -o /tmp/crux-quarantine-other/x2.zip ${url}`), 'this project in another project\'s folder');
