@@ -15,11 +15,11 @@
 // The fixed stops are the same at every level: force push, rewriting pushed history, deleting branches, pushing to
 // main, writes outside the project or temp folder, secrets, the live hub, system-wide installers, outward connector
 // actions, and merges (see THE MERGE RULE below).
-import { resolve, isAbsolute, join, basename } from 'node:path';
+import { resolve, isAbsolute, join, basename, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { readFileSync, existsSync, statSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { gitReadRuns } from './permissions.mjs';
+import { gitReadRuns, gitNoIndex, GIT_SAFE_CONFIG } from './permissions.mjs';
 
 const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
@@ -29,6 +29,19 @@ const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(
 // (the real path's last part; links are not followed: a part that is a link is unreadable). A part that does not
 // exist names nothing yet and stays as written (git's HEAD~1 is untouched). null: the hub cannot tell.
 const SHORT_PART = /~\d/;
+// ~user (Git Bash: that user's home, a sibling of this one) and Windows device forms (\\?\C:\x, \\.\C:\x, //?/C:/x)
+// read as the plain path they open (review round 1). \\?\UNC\server\x stays a network path.
+export function homeAndDevice(s, home = homedir()) {
+  s = String(s);
+  const dev = /^[\\/]{2}[?.][\\/](.*)$/s.exec(s);
+  if (dev) s = /^unc[\\/]/i.test(dev[1]) ? `//${dev[1].slice(4)}` : dev[1];
+  const user = /^~([\w.-]+)(?=[\\/]|$)/.exec(s);
+  if (user) s = join(dirname(home), user[1]) + s.slice(user[0].length);
+  return s;
+}
+// Trailing dots and spaces dropped from each part of a full path, as Windows does when it opens it.
+const trimPath = p => (process.platform !== 'win32' ? String(p)
+  : String(p).split(/([\\/])/).map(x => (/^[\\/]$/.test(x) || x === '.' || x === '..' || /^[a-z]:$/i.test(x) ? x : x.replace(/[. ]+$/, '') || x)).join(''));
 export function longPath(p) {
   const s = String(p);
   if (process.platform !== 'win32' || !SHORT_PART.test(s)) return s;
@@ -245,7 +258,11 @@ const GIT_FETCH = new Set(['pull', 'fetch', 'clone', 'ls-remote']);
 const DEP_FILES = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements[\w.-]*\.txt|pyproject\.toml|pipfile(\.lock)?|cargo\.(toml|lock)|go\.(mod|sum)|gemfile(\.lock)?)$/i;
 // ~/.crux-hub holds the hub's keys, guard and settings: secret, except its voice helper folder (decision 64 A), whose
 // programs and models are read like any other files (named files in it, like a .key or token.json, stay secret).
-const SECRET = /(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub(?!\/voice(?:\/(?!\.\.?(?:\/|$))[^/]+)*\/?$))(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i;
+// Review round 1: Claude Code's own login file is ~/.claude/.credentials.json (\.?credentials), and Windows drops
+// trailing dots and spaces from a name (Get-Content .env. reads .env), so every path part is trimmed before the test.
+const trimParts = s => String(s).split('/').map(x => (x === '.' || x === '..' ? x : x.replace(/[. ]+$/, ''))).join('/');
+const trimmed = re => ({ test: s => re.test(trimParts(s)) || re.test(s), source: re.source });
+const SECRET = trimmed(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub(?!\/voice(?:\/(?!\.\.?(?:\/|$))[^/]+)*\/?$))(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i);
 const KNOWN_TOOLS = new Set(['Task', 'Agent', 'TodoWrite', 'TaskStop', 'KillShell', 'KillBash', 'BashOutput', 'ToolSearch', 'Skill',
   'EnterPlanMode', 'ExitPlanMode', 'WebSearch', 'LS']);
 // Path and system variables are not secrets: reading them is fine. Names that look secret are hard stops.
@@ -419,6 +436,7 @@ class Check {
     s = s.replace(/\$\{?(?:env:)?(appdata|localappdata|userprofile|home)\}?(?![\w:])|%(appdata|localappdata|userprofile|home)%/gi,
       (m, a, b) => join(this.home, ...VAR_PATHS[(a || b).toLowerCase()]).replace(/\\/g, '/'));
     if (/^~(?=[\\/]|$)/.test(s)) s = this.home + s.slice(1);
+    s = homeAndDevice(s, this.home);   // ~user, \\?\C:\..., //?/C:/... (review round 1)
     s = s.replace(/\$\{?PWD\}?(?!\w)/g, String(cwd).replace(/\\/g, '/'));   // the folder the step runs in
     if (/^\/dev\/null$|^nul$|^\$null$/i.test(s)) return 'null';
     // A system folder named through its variable ($PROGRAMFILES\x, $env:windir, %ProgramData%) is not a folder
@@ -434,7 +452,7 @@ class Check {
     // writes) and as a secret for reads (secretAt), M039 2.
     const long = longPath(full);
     if (long === null) { this.shortFail = true; return 'outside'; }
-    return long;
+    return trimPath(long);   // Windows drops trailing dots and spaces: .claude/settings.json. is settings.json
   }
   // A word that names a secret: as written; as the full path it stands for from the folder the step runs in (so
   // "cd ~/.crux-hub/voice && cat ../settings.json" is the hub's settings file); and, for a glob or a {a,b} list,
@@ -462,6 +480,9 @@ class Check {
     if (w === 'outside' && write) this.stop(`Writes outside the project folder: ${p}`);
     if (w === 'tmp' && write) this.noteTemp(p, cwd);
     if (this.secretAt(p, cwd)) this.stop(`Touches secrets or credentials: ${p}`);
+    // Any repo's settings or hooks, nested or in temp (git init sub && ... > sub/.git/config): git runs what they
+    // name (core.fsmonitor, hooks), so a later read-only git there would run it (review round 1).
+    if (write && w !== 'null' && /(^|\/)\.git\/(config|hooks)(\/|$)/.test(norm(this.abs(p, cwd)))) this.stop(`Writes a git repo's settings or hooks (${p})`);
     if (write && w === 'inside') {
       // From the full path abs() reads (short names expanded: CLAUDE~1/SETTIN~1.JSO is .claude/settings.local.json).
       const rel = norm(this.abs(p, cwd)).slice(norm(this.projectDir).length + 1);
@@ -906,7 +927,8 @@ class Check {
     // Running a file this same command just downloaded (curl ... -o a.sh && sh a.sh; ; node a.js; ./a.sh): a stop.
     // M039 4: anything inside a fresh clone or an unpacked download counts too (git clone URL t && bash t/install.sh),
     // and so does running a project's own tools inside one (cd t && npm test, npm --prefix t test, make -C t).
-    this.partTainted = !!this.taintIn;
+    // A downloader's own output is a download (curl URL | tar -xz: the unpacked files count; review round 1).
+    this.partTainted = !!this.taintIn || DOWNLOADERS.has(head);
     if (this.downloaded?.size) {
       const got = x => this.isDown(x, cwd);
       const runner = INTERPRETERS.has(head) || RUNNERS.has(head);
@@ -922,7 +944,9 @@ class Check {
     this.urlsHere = []; this.localUrls = []; this.fileUrls = [];
     // The script after powershell -Command is read as PowerShell on its own (see run), so its words are not checked here.
     const psAt = /^(powershell|pwsh)$/.test(head) ? args.findIndex(a => /^-(c|command)$/i.test(a)) : -1;
-    for (const w of (psAt >= 0 ? words.slice(1, psAt + 2 - 1) : words.slice(1))) this.word(w, cwd);
+    // A search pattern (grep -n "homedir\|\.crux-hub" x) is text, not a path or an address: only its variables count.
+    const pat = patternWords(words.map(w => w.text));
+    (psAt >= 0 ? words.slice(1, psAt + 2 - 1) : words.slice(1)).forEach((w, i) => this.word(w, cwd, pat.has(i + 1)));
     if (SECRET.test(norm(first))) this.stop(`Touches secrets or credentials: ${first}`);
     // An address is a network call, except a PR's own text, GitHub for git, and this machine (localhost).
     const github = this.urlsHere.every(u => /^(https:\/\/|git@)github\.com[/:]/i.test(u));
@@ -1173,7 +1197,7 @@ class Check {
     }
     if (SAFE.has(head) || head === 'strings' || head === 'cygpath' || /^get-[a-z]+$/.test(head) || /^(format|select|sort|measure|where|group|convertto|convertfrom|out-string)-?/.test(head) && !/^out-file$/.test(head)) return;   // reads, wherever it reads from
     if (head === 'git') return this.git(args, cwd);
-    if (head === 'gh') return this.gh(args);
+    if (head === 'gh') return this.gh(args, cwd);
     // Browsers in headless mode, for screenshots: the files they write must stay contained.
     if (/^(msedge|chrome|chromium)$/.test(head)) {
       for (const a of args) { const m = /^--(screenshot|print-to-pdf|user-data-dir)=(.+)$/.exec(a); if (m) this.path(m[2], cwd, { write: true }); }
@@ -1201,28 +1225,28 @@ class Check {
   // .crux-hub reads every secret in it (grep -r ~, rg --hidden ~, Get-ChildItem ~ -Recurse | Select-String,
   // cp -r ~ ./x, Copy-Item ~ -Recurse, find ~ -exec cat). The root it names, else null.
   recursiveSecret(head, args, cwd) {
-    const pos = (valued, patternFirst) => {
-      const out = []; let pattern = patternFirst;
-      for (let i = 0; i < args.length; i++) {
-        const a = args[i];
-        if (a === '--') { out.push(...args.slice(i + 1)); break; }
-        if (valued.test(a)) { if (/^(-e|-f|--regexp|--file)$/.test(a)) pattern = false; i++; continue; }
-        if (/^(-e|-f)./.test(a) || /^--(regexp|file)=/.test(a)) { pattern = false; continue; }
-        if (a.startsWith('-')) continue;
-        out.push(a);
-      }
-      return pattern ? out.slice(1) : out;
-    };
     const hit = roots => (roots.length ? roots : ['.']).find(r => secretTree(this.abs(r, cwd), this.home)) ?? null;
+    // The words that are not the pattern or an option's value: where it reads from.
+    const roots = valued => { const pat = patternWords([head, ...args]); return args.filter((a, i) => !a.startsWith('-') && !pat.has(i + 1) && !valued.test(args[i - 1] || '')); };
+    // GNU grep takes a long option by any unique start (--rec, --dir=recurse, --directories recurse), and a value by
+    // any unique start too (rec); a cluster may hold digits (-1r). Review round 1.
+    const long = (a, full) => { const n = a.split('=')[0]; return n.length >= 4 && full.startsWith(n); };
     if (/^(grep|egrep|fgrep)$/.test(head)) {
-      const rec = args.some((a, i) => /^-[a-zA-Z]*[rR]/.test(a) && !a.startsWith('--') || /^--(recursive|dereference-recursive|directories=recurse)$/.test(a) || (a === '-d' && args[i + 1] === 'recurse'));
-      return rec ? hit(pos(/^(-e|-f|-m|-A|-B|-C|-d|-D|--regexp|--file|--max-count|--context|--after-context|--before-context|--include|--exclude|--exclude-dir|--label)$/, true)) : null;
+      const rec = args.some((a, i) => (/^-[a-zA-Z0-9]*[rR]/.test(a) && !a.startsWith('--')) || long(a, '--recursive') || long(a, '--dereference-recursive')
+        || (a === '-d' && /^rec/.test(args[i + 1] || '')) || /^-d\s*rec/.test(a)
+        || (long(a, '--directories') && /^rec/.test((a.includes('=') ? a.slice(a.indexOf('=') + 1) : args[i + 1]) || '')));
+      return rec ? hit(roots(SEARCH_VALUED.grep)) : null;
     }
     if (head === 'rg') {
-      const us = args.filter(a => /^-[a-zA-Z]+$/.test(a)).join('').replace(/[^u]/g, '').length;
-      const hidden = us >= 2 || args.some(a => /^(--hidden|-\.|-[a-zA-Z]*\.[a-zA-Z]*)$/.test(a));
-      return hidden ? hit(pos(/^(-e|-f|-g|-t|-T|-m|-A|-B|-C|-j|-M|--regexp|--file|--glob|--iglob|--type|--type-not|--max-count|--context|--after-context|--before-context|--threads|--max-columns|--max-depth|--max-filesize|--sort|--sortr|--color|--colors|--encoding|--engine|--replace|-r|--pre|--pre-glob|--ignore-file|--path-separator|--type-add)$/, true)) : null;
+      const us = args.filter(a => /^-[a-zA-Z0-9]+$/.test(a)).join('').replace(/[^u]/g, '').length;
+      const hidden = us >= 2 || args.some(a => /^(-\.|-[a-zA-Z0-9]*\.[a-zA-Z0-9]*)$/.test(a) || long(a, '--hidden') || long(a, '--unrestricted'));
+      return hidden ? hit(roots(SEARCH_VALUED.rg)) : null;
     }
+    // Archives and folder copies of a whole tree: tar -czf x.tgz ~, zip -r x.zip ~, 7z a x.7z ~, robocopy ~ h /E.
+    if (/^(tar|bsdtar)$/.test(head) && args.some((a, i) => (i === 0 && /^-?[a-zA-Z]*c/.test(a) && !a.startsWith('--')) || /^-[a-zA-Z]*c/.test(a) && !a.startsWith('--') || long(a, '--create') || a === '-c')) {
+      return hit([...args.filter(a => !a.startsWith('-')), ...args.flatMap((a, i) => (a === '-C' || a === '--directory' ? [args[i + 1]] : []))].filter(Boolean));
+    }
+    if (/^(zip|7z|7za|robocopy|xcopy)$/.test(head)) return hit(args.filter(a => !/^[-/]/.test(a) || /^\/[a-z](\/|$)/i.test(a)));
     if (/^(cp|copy)$/.test(head) && args.some(a => /^(-[a-zA-Z]*[rRa][a-zA-Z]*|--recursive|--archive)$/.test(a))) return hit(args.filter(a => !a.startsWith('-')));
     const psRec = args.some(a => /^-(r(e(c(u(r(se?)?)?)?)?)?|depth)(:\$true)?$/i.test(a));
     if (/^(copy-item|cpi)$/.test(head) && psRec) {
@@ -1230,7 +1254,8 @@ class Check {
       const srcs = [...r.flags.filter(f => f.name === 'src').map(f => f.value), ...r.positional.slice(0, r.flags.some(f => f.name === 'dst') ? undefined : 1)];
       return hit(srcs.filter(s => typeof s === 'string').flatMap(s => s.split(',')).filter(Boolean));
     }
-    if (/^(get-childitem|gci|dir|ls)$/.test(head) && this.ps && psRec && /\b(select-string|sls|get-content|gc|cat|type|copy-item|cpi|cp|copy|compress-archive|foreach-object|readall\w*)\b|\|\s*%/i.test(this.cmdText || '')) {
+    // -s is Get-ChildItem's own alias for -Recurse (review round 1).
+    if (/^(get-childitem|gci|dir|ls)$/.test(head) && this.ps && (psRec || args.some(a => /^-s(:\$true)?$/i.test(a))) &&/\b(select-string|sls|get-content|gc|cat|type|copy-item|cpi|cp|copy|compress-archive|foreach-object|readall\w*)\b|\|\s*%/i.test(this.cmdText || '')) {
       const r = readFlags(args, { ps: { Path: 'src', LiteralPath: 'src', Recurse: 'ok', Depth: 'okv', Force: 'ok', File: 'ok', Directory: 'ok', Hidden: 'ok', Name: 'ok', Filter: 'okv', Include: 'okv', Exclude: 'okv', Attributes: 'okv', ErrorAction: 'okv', FollowSymlink: 'ok' }, valued: ['src', 'okv'] });
       return hit([...r.flags.filter(f => f.name === 'src').map(f => f.value), ...r.positional].filter(s => typeof s === 'string'));
     }
@@ -1341,7 +1366,7 @@ class Check {
   // shell variable they never read (J='...js...' handed to a script) is not passed to them (decision 64 A).
   envNames(head) { return [...new Set([...this.env().keys(), ...(/^(curl|wget)$/.test(head) ? [...(this.assigned || [])].filter(k => DOWNLOADER_READS.test(k)) : [])])]; }
 
-  word(w, cwd) {
+  word(w, cwd, pattern = false) {
     // A PowerShell hashtable (one word, as written): every word inside it is checked like any other.
     if (w.hashtable) { for (const x of tokens(w.text.replace(/^@\{|\}$/g, ' ').replace(/[;=]/g, ' '))) this.word(x, cwd); return; }
     const t = w.text;
@@ -1359,6 +1384,7 @@ class Check {
       }
       if (/\$\?/.test(t)) { /* exit status: fine */ }
     }
+    if (pattern) return;   // a search pattern: text, not a path or an address
     // Addresses: this machine (localhost in any spelling, localAddress) and local files are not the network. A file://
     // address is checked for secrets like any path, and remembered: a downloader given one is a stop (run()).
     const url = /(?:^|=)((?:https?|ftp|wss?|file):\/\/\S+)/i.exec(t)?.[1];
@@ -1396,7 +1422,7 @@ class Check {
       if (cfg != null || a[0] === '-c') {
         const key = String(cfg ?? '').split('=')[0];
         if (!key || GIT_RUNS_CONFIG.test(key)) return this.stop(`git with a setting that runs a program (-c ${key || '?'})`);
-        cfgSeen ||= `${a[0]} ${cfg}`;
+        if (!GIT_SAFE_CONFIG.test(key)) cfgSeen ||= `${a[0]} ${cfg}`;   // display-only keys (color.ui) are fine
         a = a.slice(a[0] === '-c' || !a[0].includes('=') ? 2 : 1); continue;
       }
       if (a[0].startsWith('-')) return this.unsure(`git with options the hub cannot check (${a[0]})`);
@@ -1413,6 +1439,12 @@ class Check {
     // git grep -O / --open-files-in-pager runs a program on the matches; --output writes a file anywhere.
     // Clustered (-iOprog) and shortened (--open) spellings too (follow-up to M039 1).
     if (sub === 'grep' && rest.some(x => gitReadRuns('grep', x) && !/^--ou/.test(x))) return this.stop('git grep runs another program (-O)');
+    // git grep --no-index searches the whole folder tree, dot folders included (review round 1): rooted at home or
+    // a folder holding secrets, a stop.
+    if (sub === 'grep' && rest.some(gitNoIndex)) {
+      const roots = [cwd, ...rest.filter(x => !x.startsWith('-') && this.pathLike(x)).map(x => this.abs(x, cwd))];
+      if (roots.some(r => secretTree(r, this.home))) return this.stop(`Searches every file under the home folder or a folder holding secrets (git grep --no-index)`);
+    }
     rest.forEach((x, i) => {
       // --output and --output-directory by any unique start (--outp=x), with = or a separate value.
       const out = gitReadRuns('', x);
@@ -1619,8 +1651,14 @@ class Check {
     }
   }
 
-  gh(args) {
+  gh(args, cwd = this.cwd0) {
     const [a, b] = args;
+    // gh repo clone OWNER/REPO [DIR]: a download, like git clone from the web (review round 1). Still unsure below.
+    if (a === 'repo' && b === 'clone' && args[2] && !args[2].startsWith('-')) {
+      const dir = args[3] && !args[3].startsWith('-') ? args[3] : args[2].replace(/[\\/]+$/, '').replace(/\.git$/i, '').split(/[\\/:]/).pop();
+      if (this.outside(dir, cwd)) return this.stop(`Clones outside the project folder (${dir})`);
+      this.markDown(dir, cwd);
+    }
     if (a === 'pr' && /^(create|list|view|status|diff|checks)$/.test(b || '')) return;
     if (a === 'release' && /^(list|view)$/.test(b || '')) return;   // reads the repo's releases on GitHub (R005)
     if (a === 'pr' && b === 'merge') return this.merge('Merges a pull request (gh pr merge)');
@@ -2428,20 +2466,71 @@ export function gitTop(dir) {
 // ~/.crux-hub counts (the voice folder too, which classify reads on its resolved path), a glob is matched against the
 // files it would really read from cwd (the folder the agent runs in), and a glob or ../ after a cd goes to classify,
 // which follows the cd (review of decision 64 A).
-const SECRET_STRICT = /(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub)(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i;
+const SECRET_STRICT = trimmed(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub)(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i);
 // ---------- recursive reads near secrets (M039 5) ----------
 // Folders whose every file is a secret. A recursive read or copy rooted at the home folder, above it, or at a folder
 // that holds one of these reads them all.
-const SECRET_DIRS = ['.ssh', '.aws', '.gnupg', '.crux-hub'];
+const SECRET_DIRS = ['.ssh', '.aws', '.gnupg', '.crux-hub', '.credentials.json'];   // and ~/.claude's login file (review round 1)
 export function secretTree(dir, home = homedir()) {
   if (typeof dir !== 'string' || ['null', 'outside', 'tmp'].includes(dir)) return false;
   const d = norm(dir), h = norm(longPath(home) ?? home);
   if (d === h || h.startsWith(`${d}/`)) return true;
   return SECRET_DIRS.some(n => existsSync(join(dir, n)));
 }
-// Options that make a reader recurse (grep -r / -R / -d recurse, rg --hidden / -. / -uu, PowerShell -Recurse by
-// any start) or a copy recursive (cp -r, Copy-Item -Recurse).
-const RECURSIVE_FLAG = /(^|\s)(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive|--dereference-recursive|-d\s+recurse|--directories=recurse|--hidden|-\.|-[a-zA-Z]*u[a-zA-Z]*u[a-zA-Z]*|-re(c(u(r(se?)?)?)?)?)(:\$true)?(?=\s|$)/i;
+// Programs that can read or copy a whole folder tree, whatever their options are called (the shortcut gate sends
+// them to the full check when they name the home folder or above; review round 1).
+const DEEP_PROGRAMS = /(^|[\s;&|({])(grep|egrep|fgrep|rg|git|find|tar|bsdtar|zip|7z|7za|robocopy|xcopy|cp|copy|copy-item|cpi|get-childitem|gci|dir|select-string|sls|compress-archive|findstr)(\.exe)?(?=[\s;&|)}]|$)/i;
+
+// The words of a search command that are its search pattern, not a path: searching for ".crux-hub" is not reading
+// it (orchestrator-7, 2026-11-15: four cards for grep -n "homedir\|\.crux-hub" test/x.mjs). grep, egrep, fgrep,
+// rg, git grep, findstr, Select-String. Indexes into w (words, head first, VAR=value words allowed in front).
+const SEARCH_VALUED = {
+  grep: /^(-f|-m|-A|-B|-C|-d|-D|--file|--max-count|--context|--after-context|--before-context|--directories|--devices|--include|--exclude|--exclude-dir|--label|--color|--colour|--binary-files)$/,
+  rg: /^(-f|-m|-A|-B|-C|-g|-t|-T|-j|-M|-r|-E|--file|--max-count|--context|--after-context|--before-context|--glob|--iglob|--type|--type-not|--threads|--max-columns|--max-depth|--max-filesize|--sort|--sortr|--color|--colors|--encoding|--engine|--replace|--pre|--pre-glob|--ignore-file|--path-separator|--type-add|--context-separator|--field-match-separator)$/
+};
+export function patternWords(w) {
+  const out = new Set();
+  let k = 0; while (k < w.length - 1 && /^\w+=/.test(w[k])) k++;
+  let head = basename(String(w[k] || '').replace(/\\/g, '/')).toLowerCase().replace(/\.exe$/, '');
+  let i = k + 1;
+  if (head === 'git') {
+    while (i < w.length && /^-/.test(w[i])) i += /^(-C|-c)$/.test(w[i]) ? 2 : 1;
+    if (w[i] !== 'grep') return out;
+    head = 'git-grep'; i++;
+  }
+  if (/^(grep|egrep|fgrep|rg|git-grep)$/.test(head)) {
+    const valued = head === 'rg' ? SEARCH_VALUED.rg : SEARCH_VALUED.grep;
+    let explicit = false, first = -1;
+    for (let j = i; j < w.length; j++) {
+      const a = String(w[j]);
+      if (a === '--') { if (first < 0 && !explicit) first = j + 1; break; }
+      if (/^(-e|--regexp)$/.test(a)) { out.add(j + 1); explicit = true; j++; continue; }
+      if (/^--regexp=|^-e./.test(a)) { out.add(j); explicit = true; continue; }
+      if (/^(-f|--file)/.test(a)) explicit = true;   // patterns read from a file: that file is a path
+      if (head === 'rg' && /^--(files|type-list)$/.test(a)) explicit = true;   // no pattern at all: every word is a path
+      if (valued.test(a)) { j++; continue; }
+      if (a.startsWith('-')) continue;
+      if (first < 0) first = j;
+    }
+    if (!explicit && first >= 0) out.add(first);
+  } else if (head === 'findstr') {
+    const c = w.findIndex((a, j) => j > k && /^\/c:/i.test(a));
+    if (c >= 0) out.add(c);
+    else { const j = w.findIndex((a, j2) => j2 > k && !String(a).startsWith('/')); if (j >= 0) out.add(j); }
+  } else if (/^(select-string|sls)$/.test(head)) {
+    let named = false, first = -1;
+    for (let j = i; j < w.length; j++) {
+      const a = String(w[j]);
+      if (/^-pat(t(e(rn?)?)?)?$/i.test(a)) { out.add(j + 1); named = true; j++; continue; }
+      if (/^-pat(t(e(rn?)?)?)?:/i.test(a)) { out.add(j); named = true; continue; }
+      if (/^-(path|literalpath|lp|pspath|include|exclude|encoding|context|culture|inputobject)$/i.test(a)) { j++; continue; }
+      if (a.startsWith('-')) continue;
+      if (first < 0) first = j;
+    }
+    if (!named && first >= 0) out.add(first);
+  }
+  return out;
+}
 // A Grep file filter that names a secret once its wildcards are dropped: .env*, *.pem, **/.ssh/**, *token.json.
 // *.json and * name none (a filter only narrows what Grep reads under its folder).
 export function grepGlobSecret(glob) {
@@ -2453,7 +2542,13 @@ export function grepGlobSecret(glob) {
 }
 
 export function touchesSecrets(tool, input = {}, cwd = null) {
-  const full = v => { const s = String(v).replace(/^~(?=[\\/]|$)/, homedir()); return isAbsolute(s) ? resolve(s) : resolve(cwd || '.', s); };
+  // ~, ~user, Git Bash's /c/..., and \\?\ or //?/ device forms, read as the plain path (review round 1).
+  const full = v => {
+    let s = homeAndDevice(String(v).replace(/^~(?=[\\/]|$)/, homedir()));
+    const m = /^\/([a-z])(\/.*)?$/i.exec(s);
+    if (m && process.platform === 'win32') s = `${m[1]}:${m[2] || '/'}`;
+    return isAbsolute(s) ? resolve(s) : resolve(cwd || '.', s);
+  };
   const globHits = v => {
     if (!cwd || !/[*?[]/.test(v)) return false;
     const found = globMatches(full(v));
@@ -2466,8 +2561,12 @@ export function touchesSecrets(tool, input = {}, cwd = null) {
     const long = longPath(full(v));
     return long === null || SECRET_STRICT.test(norm(long));
   };
+  // Paths are also tested in their plain form (device prefix dropped, /c/ mapped), short names expanded.
+  const named = v => SECRET_STRICT.test(norm(v)) || SECRET_STRICT.test(norm(full(v))) || shortSecret(v);
   if (!/^(Bash|PowerShell)$/.test(tool)) {
-    if ([input.file_path, input.path, input.notebook_path, input.pattern].some(v => v && (SECRET_STRICT.test(norm(v)) || (v !== input.pattern && (globHits(String(v)) || shortSecret(v)))))) return true;
+    // Grep's pattern is the text it searches for, not a path: searching for ".crux-hub" is not reading it.
+    const paths = [input.file_path, input.path, input.notebook_path, tool === 'Grep' ? null : input.pattern];
+    if (paths.some(v => v && (named(v) || (v !== input.pattern && globHits(String(v)))))) return true;
     // Grep reads every file under its folder: rooted at the home folder or above it, that is ~/.ssh and ~/.crux-hub
     // (M039 5); and a file filter that names a secret (.env*, *.pem, **/.ssh/**) aims at one (follow-up to M039).
     if (tool === 'Grep') return secretTree(input.path ? (longPath(full(input.path)) ?? full(input.path)) : (cwd || '.')) || grepGlobSecret(input.glob);
@@ -2477,15 +2576,17 @@ export function touchesSecrets(tool, input = {}, cwd = null) {
   if (/\$env:(?!te?mp\b)/i.test(cmd) || /\b(printenv|get-credential|get-secret)\b/i.test(cmd) || /(^|[\s;&|])env(\s|$)/.test(cmd)) return true;
   const parts = splitParts(cmd, tool === 'PowerShell');
   const moves = parts.some(p => /^(cd|pushd|chdir|set-location|sl|push-location)(\s|$)/i.test(p.trim()));
-  const recursive = RECURSIVE_FLAG.test(cmd);
+  // A program that can read or copy a whole tree (any spelling of its recursive option: grep --rec, --dir=recurse,
+  // gci -s), naming the home folder or a folder above a secret one: the full check decides (M039 5, review round 1).
+  const deep = DEEP_PROGRAMS.test(cmd);
   for (const part of parts) {
-    for (const w of tokens(part)) {
+    const ws = tokens(part);
+    const pat = patternWords(ws.map(x => x.text));
+    for (const [i, w] of ws.entries()) {
+      if (pat.has(i)) { if (w.vars && /\$(?!_|psitem|null|true|false|\?|lastexitcode|\(|env:te?mp\b)[\w{]/i.test(w.text.replace(TEMP_VARS, ''))) return true; continue; }
       const v = /^--?[\w-]+=(.+)$/.exec(w.text)?.[1] ?? w.text;
-      if (SECRET_STRICT.test(norm(v)) || braceWords(v).some(x => SECRET_STRICT.test(norm(x)))) return true;
-      if (shortSecret(v)) return true;
-      // A recursive read (grep -r, rg --hidden, -Recurse, cp -r) naming the home folder or a folder above a secret
-      // one: the full check decides (M039 5).
-      if (recursive && !/^-/.test(v) && /^(~|[\\/]|[a-z]:|\.\.?$|\.\.[\\/])/i.test(v) && secretTree(longPath(full(v)) ?? full(v))) return true;
+      if (named(v) || braceWords(v).some(x => SECRET_STRICT.test(norm(x)))) return true;
+      if (deep && !/^-/.test(v) && /^(~|[\\/]|[a-z]:|\.\.?$|\.\.[\\/])/i.test(v) && secretTree(longPath(full(v)) ?? full(v))) return true;
       if (/[*?[]/.test(v) && (moves || !cwd || globHits(v))) return true;
       if (moves && /(^|[\\/])\.\.([\\/]|$)/.test(v)) return true;
       if (w.vars && /\$(?!_|psitem|null|true|false|\?|lastexitcode|\(|env:te?mp\b)[\w{]/i.test(w.text.replace(TEMP_VARS, ''))) return true;

@@ -174,6 +174,20 @@ test('no orchestrator, no rules on the board, or a request from the orchestrator
   assert.equal(last(p, 'approval').routedTo, null);
 });
 
+test('Auto: the orchestrator\'s own request that runs text the hub cannot read comes to you (M039 review round 1)', () => {
+  const { hub, p, orch } = setup();
+  hub.setPermissionMode(p, 'auto');
+  for (const command of ["iex ('git pu' + 'sh origin main')", "& ([scriptblock]::Create('git pu' + 'sh origin main'))", "$c='pu'+'sh'; Start-Process git -ArgumentList $c,'origin','main'"]) {
+    const r = hub.routeFor(p, orch, 'PowerShell', { command });
+    assert.ok(!r.allow, command);
+    assert.equal(r.to, null, command);
+  }
+  // an unclear request with nothing run from text is still allowed and logged, as before
+  const plain = hub.routeFor(p, orch, 'Bash', { command: 'some-tool --check' });
+  assert.equal(plain.allow, true);
+  assert.ok(plain.logged?.length);
+});
+
 test('an orchestrator retiring with a request open passes it to you', () => {
   const { hub, p, orch, w } = setup();
   ask(hub, p, w, 'npm run build');

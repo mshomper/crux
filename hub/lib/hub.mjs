@@ -636,7 +636,10 @@ export class Hub {
     // they are allowed and logged in its thread for Matt to audit.
     // Never a connector or any other MCP server's tool (plugin servers can reach mail and calendar too): the
     // orchestrator's own requests for those come to Matt as a card.
-    if (route === 'unsure' && agent.role === 'orchestrator' && this.autoLike(p) && !connectorTool(toolName) && !/^mcp__(?!crux__)/.test(toolName)) return { allow: true, logged: unsure };
+    // Nor one that runs text the hub cannot read as a command (iex ('git pu' + 'sh'), sh -c "$x", Start-Process with
+    // built-up arguments): it could hide any hard stop, so it comes to you (review of M039, round 1).
+    const opaqueRun = c.unsure.some(u => /^Runs (text as a command|commands the hub cannot read)/.test(u));
+    if (route === 'unsure' && agent.role === 'orchestrator' && this.autoLike(p) && !opaqueRun && !connectorTool(toolName) && !/^mcp__(?!crux__)/.test(toolName)) return { allow: true, logged: unsure };
     if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
     // A resting orchestrator (asleep since a restart, or between turns) is woken by the request, so the card does not
