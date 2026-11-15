@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTmp } from './helpers/tmp.mjs';
-import { classify, LIVE_PORTS } from '../lib/permission-rules.mjs';
+import { createServer } from 'node:net';
+import { classify, LIVE_PORTS, portListening } from '../lib/permission-rules.mjs';
 import { linkWorktree, unlinkWorktree } from '../tools/worktree-setup.mjs';
 
 const root = makeTmp('crux-track-a-');
@@ -105,6 +106,29 @@ test('A7: headless Edge or Chrome, with a profile in temp and no debugging port'
   human(good.replace(`${T}/prof`, `${fw(home)}/AppData/Local/Microsoft/Edge/User Data`));   // the user's real profile: a write outside
   human(good.replace(`${T}/a.png`, 'C:/Windows/a.png'));
   human(good.replace('http://localhost:4791/', 'https://example.com/'));                    // the network
+});
+
+test('A7: restart.mjs stops whatever listens on its port first: only a port this agent started, or one where nothing listens', async () => {
+  const free = () => new Promise(r => { const s = createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const quiet = await free();
+  const busy = await free();
+  const sock = createServer(); await new Promise(r => sock.listen(busy, '127.0.0.1', r));   // somebody else's process on a test port
+  try {
+    assert.equal(portListening(busy), true);
+    assert.equal(portListening(quiet), false);
+    // nothing listens: it is only a start
+    allow(`node hub/restart.mjs --port ${quiet} --no-open`);
+    assert.deepEqual(sh(`node hub/restart.mjs --port ${quiet} --no-open`).hubsStarted, [quiet]);
+    // something else listens, and this agent never started a hub there: for judgment
+    unsure(`node hub/restart.mjs --port ${busy} --no-open`);
+    unsure(`cd ${P}/hub && node restart.mjs --port ${busy}`);
+    assert.deepEqual(sh(`node hub/restart.mjs --port ${busy}`).hubsStarted, [busy], 'still noted: the request is not refused, only judged');
+    // a port this agent started a hub on is its own to restart
+    allow(`node hub/restart.mjs --port ${busy} --no-open`, 'Bash', { hubs: [busy] });
+    // the live ports, and no port (it would restart the live hub), stay stops
+    for (const p of [4747, 4748]) human(`node hub/restart.mjs --port ${p}`, 'Bash', { hubs: [p] });
+    human('node hub/restart.mjs');
+  } finally { await new Promise(r => sock.close(r)); }
 });
 
 test('A7: stopping only a hub this agent started, never "whatever listens on the port"', () => {

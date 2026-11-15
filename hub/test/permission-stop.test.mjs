@@ -93,7 +93,7 @@ test('hard stops: unfiltered, by name, by PID, the hub\'s own port or folder', (
   ]) human('PowerShell', c);
   for (const c of ['kill 1234', 'kill -9 1234', 'killall node', 'pkill node', 'pkill -f server.mjs', 'taskkill /IM node.exe', 'node hub/tools/stop-test-hub.mjs 4747',
     'node hub/tools/stop-test-hub.mjs', 'node hub/restart.mjs', `node -e "import('./hub/lib/relaunch.mjs').then(async m => { for (const p of await m.pidsOnPort(4747)) await m.stopTree(p) })"`]) human('Bash', c);
-  assert.equal(sh('node hub/restart.mjs --port 4752 --no-open').route, 'allow', 'restarting a test hub is fine');
+  assert.equal(sh('node hub/restart.mjs --port 4752 --no-open', { hubs: [4752] }).route, 'allow', 'restarting a test hub this agent started is fine');
 });
 
 test('hub/tools/stop-test-hub.mjs stops only the port it is given and refuses 4747', async () => {

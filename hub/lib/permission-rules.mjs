@@ -270,6 +270,13 @@ const OPTION_RISK = new Set(['git', 'rg', 'sort', 'sed', 'find', 'tree', 'xxd', 
 const KNOWN_NODE_E = new Set(["console.log(require('os').tmpdir())", 'console.log(require("os").tmpdir())', "require('os').tmpdir()", 'console.log(process.cwd())',
   'console.log(process.platform)', 'console.log(process.version)', 'console.log(process.arch)', 'console.log(Date.now())', 'console.log(new Date().toISOString())']);
 const GIT_READ_SUBS = new Set([...GIT_READ].filter(x => x !== 'ls-remote'));
+// Does anything listen on this port right now? One netstat call; when it cannot tell, yes (the safe answer).
+export function portListening(port) {
+  try {
+    const out = execFileSync('netstat', ['-an'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, windowsHide: true });
+    return new RegExp(`[:.]${Number(port)}\\s+\\S+\\s+LISTEN`, 'i').test(out);
+  } catch { return true; }
+}
 // A2: the PowerShell words that only open or close a block (the commands inside are read as parts of their own).
 const PS_BLOCK_WORD = /^(try|catch|finally|param|else|elseif|begin|process|end|dynamicparam|do|for|switch|break|continue|return|throw)$/i;
 // A2: Add-Type -AssemblyName System.* only loads a framework library. Anything else (-TypeDefinition, -MemberDefinition,
@@ -2100,6 +2107,14 @@ class Check {
     if (i >= 0) return this.script(this.blockText(args[i + 1] || ''));
     const file = args.find(x => !x.startsWith('-'));
     if (file && /^(server|restart)\.mjs$/.test(basename(file))) {
+      // restart.mjs stops whatever listens on its port before it starts: only a port this agent started a hub on, or one
+      // where nothing listens (looked at now), so it never stops somebody else's process.
+      if (basename(file) === 'restart.mjs') {
+        const i = args.indexOf('--port'), port = i >= 0 ? Number(args[i + 1]) : NaN;
+        if (Number.isInteger(port) && port > 0 && port < 65536 && !LIVE_PORTS.has(port) && !this.startedHubs.has(port) && portListening(port)) {
+          this.unsure(`restart.mjs would stop whatever listens on port ${port}, which this agent has not started a hub on`, true);
+        }
+      }
       this.testHubStart(args);   // restart.mjs with no port restarts the hub on 4747
       this.hubData(cwd, basename(file) === 'server.mjs');
     }

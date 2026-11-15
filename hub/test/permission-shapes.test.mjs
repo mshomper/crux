@@ -89,7 +89,7 @@ test('a test hub with no data folder of its own would share the live hub\'s sett
   // with both: contained, as before; restart.mjs reuses how the hub was last started
   allow('Bash', 'CRUX_HUB_DATA="$TEMP/x/data" CRUX_HOME="$TEMP/x/home" node server.mjs --port 4791 --no-agents');
   allow('Bash', 'export CRUX_HUB_DATA=/c/Users/mshom/AppData/Local/Temp/x/data CRUX_HOME=/c/Users/mshom/AppData/Local/Temp/x/home; node hub/server.mjs --port 4750');
-  allow('Bash', 'node hub/restart.mjs --port 4752 --no-open');
+  assert.equal(classify({ tool: 'Bash', input: { command: 'node hub/restart.mjs --port 4752 --no-open' }, projectDir: CRUX, tmp: TEMP, home: HOME, agent: 'w9', hubs: [4752] }).route, 'allow');
   // near misses: still hard stops (npm start in hub/ is covered in permission-rules.test.mjs, with a fake project)
   human('Bash', 'node server.mjs');
   human('Bash', 'node server.mjs --port 4747 --no-agents');
