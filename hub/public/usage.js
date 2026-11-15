@@ -69,15 +69,20 @@ export function aggregate(rows, { since = 0 } = {}) {
 // ---------- routing (guide sections 8 and 9) ----------
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 // What kind of agent a usage event was: its type, else the role its name shows.
-export function usageKind(ev) {
+// `known` maps "project\0agent" to the type the agent was created with (or later set to), for usage events logged
+// before they carried a type. What is left over truly never had one: "before types".
+export const NO_TYPE = 'before types';
+export function usageKind(ev, known = null, project = '') {
   if (ev.agentType) return ev.agentType;
   const a = String(ev.agent || '');
-  return /^orchestrator/.test(a) ? 'orchestrator' : /^conductor/.test(a) ? 'conductor' : 'no type';
+  if (/^orchestrator/.test(a)) return 'orchestrator';
+  if (/^conductor/.test(a)) return 'conductor';
+  return known?.get(`${project}\u0000${a}`) || NO_TYPE;
 }
 
 // Spend by agent type, the share of finished tasks that stayed at their starting setting, raises, and advisor calls.
 // rows: { project, ev } for usage, summary, agent_created and raise events (others are ignored).
-//   byType      - estimated cost per type from usage events at or after `since` (older events have no type: "no type")
+//   byType      - estimated cost per type from usage events at or after `since` (older events have no type: taken from the agent's agent_created / agent_settings rows; else "before types")
 //   tasks       - workers whose summary said outcome "done" (at or after `since`); `unraised` of them were never raised
 //                 (no raise event for that worker), so share = unraised / tasks; null when there are no such tasks
 //   raises/lowers - raise events at or after `since`
@@ -85,19 +90,23 @@ export function usageKind(ev) {
 export function routingStats(rows, { since = 0, now = Date.now() } = {}) {
   const byType = {};
   const raisedWorkers = new Set(), doneWorkers = new Set(), workers = new Set();
+  const known = new Map();   // "project\0agent" -> type, as of the rows seen so far (rows are in log order)
   let raises = 0, lowers = 0, advisorWeek = 0;
   for (const { project, ev } of rows) {
     const t = Date.parse(ev.ts);
-    if (ev.type === 'raise') {
+    if (ev.type === 'agent_settings' && 'agentType' in ev) {
+      if (ev.agentType) known.set(`${project}\u0000${ev.agent}`, ev.agentType); else known.delete(`${project}\u0000${ev.agent}`);
+    } else if (ev.type === 'raise') {
       if (ev.direction === 'raise') raisedWorkers.add(`${project}\u0000${ev.agent}`);
       if (t >= since) { if (ev.direction === 'raise') raises++; else if (ev.direction === 'lower') lowers++; }
     } else if (ev.type === 'usage') {
       if (t < since) continue;
-      const k = usageKind(ev);
+      const k = usageKind(ev, known, project);
       byType[k] = (byType[k] || 0) + sumCost(ev.models);
     } else if (ev.type === 'summary' && ev.outcome === 'done' && t >= since) {
       doneWorkers.add(`${project}\u0000${ev.from}`);
     } else if (ev.type === 'agent_created') {
+      if (ev.agentType) known.set(`${project}\u0000${ev.agent}`, ev.agentType);
       if (ev.role === 'worker') workers.add(`${project}\u0000${ev.agent}`);
       if (ev.agentType === 'advisor' && now - t <= WEEK_MS) advisorWeek++;
     }

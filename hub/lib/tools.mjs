@@ -148,12 +148,12 @@ export function cruxTools(hub, project, agent) {
           } catch (e) { return out(`Not changed: ${e.message}`); }
         }),
 
-      tool('start_worker', t('Start a new worker agent. Give it a short name (letters, digits, dashes), a one-line goal {{who}} sees, and the full task as its briefing. Optionally an agent type, and a model and effort that override the type\'s.'),
+      tool('start_worker', t('Start a new worker agent. Give it a short name (letters, digits, dashes), a one-line goal {{who}} sees, and the full task as its briefing. Every worker has an agent type: give one from list_agent_types; if you leave it out the worker is an "implementer" (the default worker). Optionally a model and effort that override the type\'s.'),
         {
           name: z.string().regex(/^[a-z0-9-]+$/i),
           goal: z.string().max(120).describe(t('One plain line for {{who}}, under 80 characters: what this worker is for.')),
           task: z.string(),
-          type: z.string().optional().describe('An agent type from list_agent_types.'),
+          type: z.string().optional().describe('An agent type from list_agent_types. Defaults to implementer when left out.'),
           model: z.string().optional().describe('opus, sonnet, haiku, fable, or a full model id. Leave out for the type\'s or the default.'),
           effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Leave out for the type\'s or the default.')
         },

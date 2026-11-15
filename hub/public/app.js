@@ -79,7 +79,7 @@ const map = new LiveMap($('#hud'), {
 // Decision 36: plan meters in the strip (not on the core) and the usage panel behind them.
 const usageUI = new UsageUI($('#hud'), {
   source: () => ({
-    rows: [...S.projects, ...(S.cplace ? [{ name: 'Conductor', events: S.cplace.events }] : [])].flatMap(p => p.events.filter(e => ['usage', 'summary', 'agent_created', 'raise'].includes(e.type)).map(ev => ({ project: p.name, ev }))),
+    rows: [...S.projects, ...(S.cplace ? [{ name: 'Conductor', events: S.cplace.events }] : [])].flatMap(p => p.events.filter(e => ['usage', 'summary', 'agent_created', 'agent_settings', 'raise'].includes(e.type)).map(ev => ({ project: p.name, ev }))),
     bootAt: S.bootAt, multi: S.projects.length > 1
   })
 });
