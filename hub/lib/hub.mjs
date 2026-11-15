@@ -90,6 +90,7 @@ export class Hub {
   constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null }) {
     this.noAgents = !!noAgents;
     this.checkerMade = checker;
+    this.checkGit = null;   // how the check asks git about a script (lib/permission-scripts.mjs); tests swap in a fake
     this.memory = memory;
     this.settings = settings;
     this.defaults = defaults || {};
@@ -632,7 +633,7 @@ export class Hub {
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
     // Decision 64 A: the checker starts in the folder this tool call runs in (toolUseID -> the hook's cwd).
-    const route = paused ? { to: null, stops: [this.memory.personalize(PAUSE_STOP)], rules: this.rulesFor(p)?.entryId || null } : this.routeFor(p, agent, toolName, input, toolUseID);
+    const route = paused ? this.pausedRoute(p, agent, toolName, input, toolUseID) : this.routeFor(p, agent, toolName, input, toolUseID);
     if (route.logged) {
       const i = input || {};
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
@@ -712,7 +713,7 @@ export class Hub {
   }
 
   // What the check is sent for one waiting request (see permission-check.mjs buildPrefix / buildSuffix).
-  checkRequest(a) {
+  async checkRequest(a) {
     const { p, agent, toolName, input, route } = a;
     const rules = this.rulesFor(p);
     const cwd = route.cwd || p.dir;
@@ -722,7 +723,7 @@ export class Hub {
       rulesId: rules?.entryId, rulesBody: rules?.body, worker: agent.name,
       goal: agent.goal || String(agent.task || '').split('\n')[0].slice(0, 200),
       tool: toolName, input, cwd, doubts: route.unsure || [],
-      scripts: isShell ? scriptsFor(String(input?.command || ''), { cwd, projectDir: p.dir }) : null
+      scripts: isShell ? await scriptsFor(String(input?.command || ''), { cwd, projectDir: p.dir, ...(this.checkGit ? { git: this.checkGit } : {}) }) : null
     };
   }
 
@@ -748,14 +749,20 @@ export class Hub {
 
   // The check answered (or failed) for a request it holds: apply it. A request you answered, or that timed out or was
   // cancelled while the check ran, is left alone (the 5-minute timer runs from the original request).
+  // Never rejects: whatever goes wrong, the request falls back (to the orchestrator, or to you) instead of hanging
+  // until the timer, and nothing is left as an unhandled rejection.
   async runCheck(id, a) {
-    let res;
-    try { res = await this.checker.run(this.checkRequest(a)); }
-    catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
-    this.logCheckUsage(a.p, id, res, false);
-    if (this.approvals.get(id) !== a || a.escalated || a.routedTo !== CHECK_NAME) return;
-    try { this.settleFromCheck(id, a, res); }
-    catch (e) { this.escalate(id, `The permission check's answer could not be applied: ${e?.message || e}`, 'hub'); }
+    try {
+      let res;
+      try { res = await this.checker.run(await this.checkRequest(a)); }
+      catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
+      try { this.logCheckUsage(a.p, id, res, false); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
+      if (this.approvals.get(id) !== a || a.escalated || a.routedTo !== CHECK_NAME) return;
+      this.settleFromCheck(id, a, res);
+    } catch (e) {
+      try { if (this.approvals.get(id) === a && !a.escalated) this.escalate(id, `The permission check's answer could not be applied: ${e?.message || e}`, 'hub'); }
+      catch (e2) { console.warn('Permission check failed:', e2?.message || e2); }
+    }
   }
 
   settleFromCheck(id, a, res) {
@@ -796,19 +803,23 @@ export class Hub {
 
   // Shadow mode: the check reads the same request the orchestrator was sent and writes one `check_shadow` line. It has
   // no answer tool and touches nothing; hub/tools/permission-study.mjs --check compares it with the real answer.
+  // Never rejects (a shadow run must not be able to disturb the real request).
   async runShadow(id, a) {
-    let res;
-    try { res = await this.checker.run(this.checkRequest(a)); }
-    catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
-    this.logCheckUsage(a.p, id, res, true);
-    const i = a.input || {};
-    // No thread: it is a log line for the study tool, not a message, so it never counts as unread in any thread.
-    a.p.log.append('check_shadow', {
-      approval: id, worker: a.agent.name, tool: a.toolName,
-      command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400),
-      valid: !!res.valid, answer: res.valid ? res.answer : null, reason: res.valid ? res.reason : res.error,
-      model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}), ms: res.ms ?? null
-    });
+    try {
+      let res;
+      try { res = await this.checker.run(await this.checkRequest(a)); }
+      catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
+      try { this.logCheckUsage(a.p, id, res, true); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
+      const i = a.input || {};
+      // No thread: it is a log line for the study tool, not a message, so it never counts as unread in any thread.
+      // answer: what the check ends up saying (an allow on an unread script is a consult); rawAnswer: what the model said.
+      a.p.log.append('check_shadow', {
+        approval: id, worker: a.agent.name, tool: a.toolName,
+        command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400),
+        valid: !!res.valid, answer: res.valid ? res.answer : null, rawAnswer: res.valid ? (res.raw || res.answer) : null, reason: res.valid ? res.reason : res.error,
+        model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}), ms: res.ms ?? null
+      });
+    } catch (e) { console.warn('Shadow check failed:', e?.message || e); }
   }
 
   // The orchestrator hears of the check's denials and escalations at its next turn (it does not wake for them).
@@ -880,10 +891,23 @@ export class Hub {
     // Decision 66: with the permission check on for this project, it answers instead of the orchestrator, even when no
     // orchestrator is running (a "consult" then comes to you). In shadow mode the orchestrator answers as before and the
     // check runs beside it, only logging.
-    const mode = this.checkMode(p);
+    // Never a connector (mail, calendar, drive) or any other MCP tool: R006 keeps those with the orchestrator or you, and
+    // their content is not sent to a model for a verdict. They go to the orchestrator as before, even in shadow mode.
+    const mode = connectorTool(toolName) || /^mcp__/.test(toolName) ? 'off' : this.checkMode(p);
     if (mode === 'on') return { to: CHECK_NAME, check: true, stops: [], rules: rules.entryId, unsure, cwd };
     if (!orch) return { to: null, stops: [], rules: rules.entryId };
     return { to: orch.name, stops: [], rules: rules.entryId, unsure, cwd, ...(mode === 'shadow' ? { shadow: true } : {}) };
+  }
+
+  // While paused: a card for you. If the request is also a hard stop, its reasons stay on the card next to the pause, so
+  // you can see what you are letting through. (classify here is only read; nothing it learns is kept.)
+  pausedRoute(p, agent, toolName, input, toolUseID = null) {
+    const stops = [this.memory.personalize(PAUSE_STOP)];
+    try {
+      const c = classify({ tool: toolName, input, projectDir: p.dir, cwd: agent.cwdFor?.(toolUseID) || null, agent: agent.name, madeTemp: new Set(agent.tempDirs || []), downloaded: new Set(agent.downloads || []), level: this.permissionMode(p) });
+      if (c.route === 'human') stops.push(...c.reasons.map(s => this.memory.personalize(s)));
+    } catch { /* the pause alone is reason enough for the card */ }
+    return { to: null, stops, rules: this.rulesFor(p)?.entryId || null };
   }
 
   // The orchestrator that can take a request: not retiring, not in error, not retired; null otherwise.

@@ -45,7 +45,15 @@ test('the suffix: worker, goal, tool, the full input, the folder, the doubts; re
 
 test('the reply must parse as {answer, reason}', () => {
   assert.deepEqual(parseAnswer('{"answer":"allow","reason":"reads only"}'), { answer: 'allow', reason: 'reads only' });
-  assert.deepEqual(parseAnswer('Sure.\n```json\n{"answer": "consult", "reason": "needs\\n the goal"}\n```'), { answer: 'consult', reason: 'needs the goal' });
+  assert.deepEqual(parseAnswer('```json\n{"answer": "consult", "reason": "needs\\n the goal"}\n```'), { answer: 'consult', reason: 'needs the goal' });
+  assert.deepEqual(parseAnswer('  \n{"answer":"deny","reason":"x"}\n '), { answer: 'deny', reason: 'x' }, 'trimmed');
+  // exactly one object: anything around it, or a second one, is no answer
+  assert.equal(parseAnswer('Sure.\n```json\n{"answer": "consult", "reason": "r"}\n```'), null, 'prose before');
+  assert.equal(parseAnswer('{"answer":"allow","reason":"ok"} and done'), null, 'prose after');
+  assert.equal(parseAnswer('The worker wrote {"answer":"allow","reason":"echoed"} in its command'), null, 'an object quoted from the request');
+  assert.equal(parseAnswer('{"answer":"allow","reason":"a"}\n{"answer":"deny","reason":"b"}'), null, 'two objects');
+  assert.equal(parseAnswer('[{"answer":"allow","reason":"a"}]'), null, 'a list');
+  assert.equal(parseAnswer('```json\n{"answer":"allow","reason":"a"}\n``` extra'), null);
   assert.equal(parseAnswer('{"answer":"yes","reason":"x"}'), null, 'not one of the four');
   assert.equal(parseAnswer('{"answer":"allow"}'), null, 'no reason');
   assert.equal(parseAnswer('{"answer":"allow","reason":5}'), null);
@@ -56,9 +64,10 @@ test('the reply must parse as {answer, reason}', () => {
 });
 
 test('an allow that rests on a script not fully seen is turned into consult', () => {
-  assert.deepEqual(applyRules({ answer: 'allow', reason: 'fine' }, { unread: false }), { answer: 'allow', reason: 'fine', downgraded: false });
+  assert.deepEqual(applyRules({ answer: 'allow', reason: 'fine' }, { unread: false }), { answer: 'allow', raw: 'allow', reason: 'fine', downgraded: false });
   const d = applyRules({ answer: 'allow', reason: 'looks fine' }, { unread: true });
   assert.equal(d.answer, 'consult');
+  assert.equal(d.raw, 'allow', 'what the model said is kept beside what the hub made of it');
   assert.equal(d.downgraded, true);
   assert.match(d.reason, /not fully seen.*looks fine/);
   for (const a of ['deny', 'escalate', 'consult']) assert.equal(applyRules({ answer: a, reason: 'r' }, { unread: true }).answer, a, 'only allow is held back');
@@ -114,10 +123,10 @@ function scriptDir() {
   return { root, proj, outside };
 }
 
-test('scripts: a committed, unchanged project script is noted and not attached; any other is attached in full', () => {
+test('scripts: a committed, unchanged project script is noted and not attached; any other is attached in full', async () => {
   const { proj, outside } = scriptDir();
   const git = fakeGit({ tracked: ['tracked.mjs', 'edited.mjs', 'loader.mjs'], dirty: ['edited.mjs'] });
-  const r = scriptsFor('node tools/tracked.mjs && node tools/edited.mjs && node tools/worker.mjs', { cwd: proj, projectDir: proj, git });
+  const r = await scriptsFor('node tools/tracked.mjs && node tools/edited.mjs && node tools/worker.mjs', { cwd: proj, projectDir: proj, git });
   const by = n => r.scripts.find(s => s.path.endsWith(n));
   assert.equal(by('tracked.mjs').kind, 'committed');
   assert.equal(by('tracked.mjs').text, undefined, 'nothing attached for a committed script');
@@ -130,39 +139,79 @@ test('scripts: a committed, unchanged project script is noted and not attached; 
   assert.match(s, /worker\.mjs: attached in full \(14 bytes\)/);
   assert.ok(s.includes('<<<nn script worker.mjs>>>\nconsole.log(3)\n<<<nn end>>>'));
   // changed from main by a commit on the worker's branch: not main's script
-  assert.equal(isProjectScript(join(proj, 'tools', 'tracked.mjs'), { projectDir: proj, git: fakeGit({ tracked: ['tracked.mjs'], changedFromMain: ['tracked.mjs'] }) }), false);
-  assert.equal(isProjectScript(join(proj, 'tools', 'tracked.mjs'), { projectDir: proj, git: fakeGit({ tracked: ['tracked.mjs'], noMain: true }) }), false, 'no main to compare with: not trusted');
-  assert.equal(isProjectScript(join(outside, 'tracked.mjs'), { projectDir: proj, git: fakeGit({ tracked: ['tracked.mjs'] }) }), false, 'outside the project is not project code');
+  assert.equal(await isProjectScript(join(proj, 'tools', 'tracked.mjs'), { projectDir: proj, git: fakeGit({ tracked: ['tracked.mjs'], changedFromMain: ['tracked.mjs'] }) }), false);
+  assert.equal(await isProjectScript(join(proj, 'tools', 'tracked.mjs'), { projectDir: proj, git: fakeGit({ tracked: ['tracked.mjs'], noMain: true }) }), false, 'no main to compare with: not trusted');
+  assert.equal(await isProjectScript(join(outside, 'tracked.mjs'), { projectDir: proj, git: fakeGit({ tracked: ['tracked.mjs'] }) }), false, 'outside the project is not project code');
 });
 
-test('scripts: cut off, loading other files, missing, binary, built from a variable, too many: all unread', () => {
+test('scripts: cut off, loading other files, missing, binary, built from a variable, too many: all unread', async () => {
   const { proj } = scriptDir();
   const git = fakeGit({ tracked: [] });
-  const big = scriptsFor('node tools/big.mjs', { cwd: proj, projectDir: proj, git });
+  const big = await scriptsFor('node tools/big.mjs', { cwd: proj, projectDir: proj, git });
   assert.equal(big.scripts[0].cutOff, true);
   assert.equal(Buffer.byteLength(big.scripts[0].text), SCRIPT_LIMIT, 'attached up to the limit');
   assert.equal(big.unread, true);
   assert.match(buildSuffix({ worker: 'w', tool: 'Bash', input: { command: 'c' }, scripts: big }), /CUT OFF \(\d+ bytes; only the first 16384 are attached\): you may not allow/);
-  const loads = scriptsFor('node tools/loader.mjs', { cwd: proj, projectDir: proj, git });
+  const loads = await scriptsFor('node tools/loader.mjs', { cwd: proj, projectDir: proj, git });
   assert.deepEqual(loads.scripts[0].loads, ['imports another file']);
   assert.equal(loads.unread, true);
   assert.match(buildSuffix({ worker: 'w', tool: 'Bash', input: { command: 'c' }, scripts: loads }), /imports another file, and those files are not attached: you may not allow/);
-  for (const [cmd, why] of [['node tools/nope.mjs', /does not exist/], ['node tools/bin.mjs', /binary/], ['node $f.mjs', /variable/], ['node tools/*.nomatch.mjs', /no file matches/]]) {
-    const r = scriptsFor(cmd, { cwd: proj, projectDir: proj, git });
+  for (const [cmd, why] of [['node tools/nope.mjs', /does not exist/], ['node tools/bin.mjs', /binary/], ['node $f.mjs', /built at run time/], ['node tools/*.nomatch.mjs', /no file matches/]]) {
+    const r = await scriptsFor(cmd, { cwd: proj, projectDir: proj, git });
     assert.equal(r.unread, true, cmd);
     assert.match(r.scripts[0].note, why, cmd);
     assert.match(buildSuffix({ worker: 'w', tool: 'Bash', input: { command: cmd }, scripts: r }), /NOT ATTACHED/);
   }
-  const same = scriptsFor(Array.from({ length: 12 }, () => 'node tools/worker.mjs').join(' && '), { cwd: proj, projectDir: proj, git });
+  const same = await scriptsFor(Array.from({ length: 12 }, () => 'node tools/worker.mjs').join(' && '), { cwd: proj, projectDir: proj, git });
   assert.equal(same.unread, false, 'the same file twice is one script');
   for (let i = 0; i < 4; i++) writeFileSync(join(proj, 'tools', `extra${i}.mjs`), 'console.log(0)');
-  const many = scriptsFor('node --test tools/*.mjs', { cwd: proj, projectDir: proj, git });   // 10 files
+  const many = await scriptsFor('node --test tools/*.mjs', { cwd: proj, projectDir: proj, git });   // 10 files
   assert.equal(many.unread, true, 'more scripts than can be listed: the rest are not seen');
   assert.ok(many.scripts.some(s => /more scripts/.test(s.path)));
-  const inline = scriptsFor(`node -e "import('./x.mjs')"`, { cwd: proj, projectDir: proj, git });
+  const inline = await scriptsFor(`node -e "import('./x.mjs')"`, { cwd: proj, projectDir: proj, git });
   assert.equal(inline.unread, true, 'inline code that loads a file');
-  assert.equal(scriptsFor('git status', { cwd: proj, projectDir: proj, git }).scripts.length, 0);
-  assert.equal(scriptsFor('git status', { cwd: proj, projectDir: proj, git }).unread, false);
+  assert.equal((await scriptsFor('git status', { cwd: proj, projectDir: proj, git })).scripts.length, 0);
+  assert.equal((await scriptsFor('git status', { cwd: proj, projectDir: proj, git })).unread, false);
+});
+
+// HIGH 1 (review of #91): every way of starting a script the hub cannot resolve to a file and read in full is unread.
+test('unread: an interpreter or runner whose script cannot be read in full, however it is written', async () => {
+  const root = makeTmp('crux-check-unread-');
+  const proj = join(root, 'proj');
+  mkdirSync(join(proj, 'tools'), { recursive: true });
+  writeFileSync(join(proj, 'evil.mjs'), 'console.log("evil")');
+  writeFileSync(join(proj, 'tools', 'evil.js'), 'console.log("evil")');   // node tools/evil finds this one
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ scripts: { build: 'node evil.mjs', lint: 'echo ok' } }));
+  const git = fakeGit({ tracked: [] });   // nothing is committed
+  const isUnread = async cmd => (await scriptsFor(cmd, { cwd: proj, projectDir: proj, git }));
+  // the reviewer's list (with a script that is not there to be read): each of these must come out unread
+  for (const cmd of [
+    'node ghost.mjs -c fast', 'node ./ghost.mjs -p', 'bash -c "node ghost.mjs"', 'cat ghost.mjs | node', 'node tools/ghost', 'python -m ghost', 'npm run ghost',
+    'node --test', 'node $(echo evil.mjs)',
+    // and the same idea in other shapes
+    'sh -c "node ghost.mjs"', 'bash -lc "node ghost.mjs"', 'pwsh -File ghost.ps1', 'pwsh -Command "node ghost.mjs"', 'powershell -NoProfile -c "node ghost.mjs"',
+    'cmd /c node ghost.mjs', 'npx evil', 'npm exec evil', 'deno run ghost.ts', 'node -', 'python -', 'python3 ghost.py', 'node `echo evil.mjs`', 'echo $(node ghost.mjs)',
+    'pnpm run nothing-here', 'yarn nothing-here', 'uv run python ghost.py', 'make', 'cargo run', 'bash', 'node', 'pwsh -EncodedCommand AAAA', 'Start-Process node -ArgumentList ghost.mjs',
+    'xargs node ghost.mjs', 'npm run build --prefix other', 'node --import ./ghost-loader.mjs evil.mjs', 'node -e "require(\'child_process\').execSync(\'node evil.mjs\')"',
+    'iex $payload', 'eval "$x"', 'node evil.mjs $(date)', 'python evil.py `x`'
+  ]) {
+    const r = await isUnread(cmd);
+    assert.equal(r.unread, true, `${cmd} must be unread: ${JSON.stringify(r.scripts.map(s => [s.path, s.kind, s.note]))} ${r.inlineLoads}`);
+  }
+  // an arrow after the script is its argument, not the interpreter's own flag
+  const a = await isUnread('node evil.mjs -c fast');
+  assert.deepEqual(a.scripts.map(s => s.path.endsWith('evil.mjs') && s.kind), ['attached'], 'the script is found and attached, not skipped');
+  // the ones that can be read in full are not unread: the file is attached whole
+  for (const cmd of ['node evil.mjs', 'node ./evil.mjs -p', 'bash -c "node evil.mjs"', 'node tools/evil', 'npm run build', 'node --test evil.mjs']) {
+    const r = await isUnread(cmd);
+    assert.equal(r.unread, false, `${cmd} resolves to a file that is attached whole: ${JSON.stringify(r.scripts.map(s => [s.path, s.kind, s.note]))}`);
+    assert.ok(r.scripts.some(s => s.kind === 'attached' && /evil\.(mjs|js)$/.test(s.path)), cmd);
+  }
+  assert.equal((await isUnread('git status && npm run lint')).unread, false, 'a package script that runs no file: package.json is attached whole and that is all there is to read');
+  assert.equal((await isUnread('git status')).unread, false);
+  assert.equal((await isUnread('node -e "console.log(1)"')).unread, false, 'inline code that loads nothing');
+  assert.equal((await isUnread('python3 -c "print(1)"')).unread, false);
+  assert.equal((await isUnread('node - <<\'EOF\'\nconsole.log(1)\nEOF')).unread, false, 'a heredoc is code in the command itself');
 });
 
 const reply = (answer, reason = 'because') => async () => ({ text: JSON.stringify({ answer, reason }), via: 'sdk', tokens: { input: 10, output: 5, cacheRead: 100, cacheCreation: 0 }, modelUsage: { [CHECK_MODEL]: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 0, costUSD: 0.001 } }, costUSD: 0.001 });
@@ -248,7 +297,10 @@ function setup({ orchestrator = true, live = true, mode = 'on', level = null, re
     return { text: JSON.stringify(out), via: 'sdk', tokens: { input: 30, output: 12, cacheRead: 800, cacheCreation: 0 }, modelUsage: { [CHECK_MODEL]: { inputTokens: 30, outputTokens: 12, cacheReadInputTokens: 800, cacheCreationInputTokens: 0, costUSD: 0.004 } }, costUSD: 0.004 };
   };
   const checker = new PermissionCheck({ call, timeoutMs });
+  // `npm run build` is a package script: its package.json is read like any script (here an untracked one, attached whole).
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'echo build' } }));
   const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }), checker });
+  hub.checkGit = async () => ({ code: 1, out: '' });   // no repo here: nothing is committed, and no process is started
   const p = hub.project('proj');
   p.board.addEntry({ kind: 'requirement', title: 'Orchestrator permission rules (test)', summary: 'rules', body: RULES, from: 'you' });
   let orch = null;
