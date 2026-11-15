@@ -4,7 +4,7 @@
 // Each running hub writes how it was started to <data>/launch-<port>.json, and a restarted hub's output goes to
 // <data>/hub-<port>.log. <data> is CRUX_HUB_DATA or ~/.crux-hub, outside every repo, as for the hub's settings.
 import { spawn, execFile } from 'node:child_process';
-import { openSync, closeSync, writeFileSync, readFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, openSync, closeSync, writeFileSync, readFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
@@ -24,6 +24,18 @@ export function testHubWithoutAgents({ args = [], env = process.env, tmp = tmpdi
   if (args.includes('--no-agents')) return true;
   const norm = s => resolve(String(s)).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
   return !!env.CRUX_HUB_DATA && (norm(env.CRUX_HUB_DATA) + '/').startsWith(norm(tmp) + '/');
+}
+
+// Only the live hub (the default port, 4747) may use the real ~/.crux-hub: its settings, secrets, VAPID key and the
+// phones' push subscriptions. Any other hub started with no data folder of its own (CRUX_HUB_DATA) gets a fresh
+// folder in the system temp folder, so it can never push to Matt's phone or write his settings. Sets CRUX_HUB_DATA
+// for this process, which every default (Push, HubSettings, Guard, Secrets, voice, Claude Code download) reads.
+// Returns the folder it made, or '' when nothing was changed.
+export function isolateNonLiveData({ port, env = process.env, tmp = tmpdir(), make = mkdtempSync } = {}) {
+  if (env.CRUX_HUB_DATA || Number(port) === DEFAULT_PORT) return '';
+  const dir = make(join(tmp, 'crux-hub-data-'));
+  env.CRUX_HUB_DATA = dir;
+  return dir;
 }
 
 // A test hub must be given its project folders on the command line; it never reads ~/crux/hub.json or uses the

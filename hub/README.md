@@ -55,7 +55,7 @@ In the box at the bottom, Enter sends; Alt+Enter or Shift+Enter starts a new lin
 | `CRUX_HUB_USE_API_KEY` | Set to `1` so agents use the key. |
 | `CRUX_HUB_PORT` | Port to listen on, if `--port` is not given (default 4747). |
 | `CRUX_HOME` | Your private memory folder: profile, conventions, roll-up, and pictures agents post. Default `~/crux`. |
-| `CRUX_HUB_DATA` | Where the hub keeps its own settings, notification keys and logs. Default `~/.crux-hub`. A folder inside the system temp folder makes a test hub (no agents start, nothing is pushed). |
+| `CRUX_HUB_DATA` | Where the hub keeps its own settings, notification keys and logs. Default `~/.crux-hub`, but only for the live hub (port 4747): a hub on any other port with no `CRUX_HUB_DATA` gets a fresh temp folder, so it never pushes to your phone or writes your real settings. A folder inside the system temp folder makes a test hub (no agents start, nothing is pushed). |
 | `CRUX_HUB_AGENTS` | Set to `1` to let a test hub start real agents. |
 | `CRUX_HUB_HOSTS` | Extra machine names the hub answers to, comma-separated (for example a Tailscale name without `.ts.net`). |
 | `CRUX_HUB_GH` | Full path to `gh`, if it is not on the PATH or in its usual Windows place. |
