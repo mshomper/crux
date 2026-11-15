@@ -1,0 +1,68 @@
+{
+ "id": 66,
+ "slug": "permission-check",
+ "title": "How do workers' permission requests get answered without costing an orchestrator turn each?",
+ "date": "2026-11-15",
+ "mode": "quick",
+ "lenses": [
+  "architecture"
+ ],
+ "status": "decided",
+ "lead": "Matt's permission plan (v3), built as written: the hub settles more harmless shapes itself (test hubs, package links in worktrees, read-only lookups, PowerShell words, trusted sites and approved packages), and what is left goes to a one-shot Sonnet check with no tools or memory, which allows, denies, sends it to Matt, or asks the orchestrator.",
+ "for_you": [
+  "Far fewer permission turns for the orchestrator: about $47 over four days today, about $4 expected",
+  "A new settings card lists your trusted sites and approved packages; 'Always allow' buttons on cards add to it, and only you can add",
+  "A 'Permission check: off / shadow / on' control per project and a 'Pause work in this project' switch",
+  {
+   "text": "Turning the check on needs Windows Hello or Face ID; it runs in shadow for one to two weeks first, and you read its disagreements",
+   "kind": "setup"
+  },
+  {
+   "text": "The check can be set back to off at any time; nothing in the event log is rewritten",
+   "kind": "undo"
+  }
+ ],
+ "context": "The crux orchestrator answered 438 permission requests in four days (105 a day), allowed 97%, and spent $46.54 (22% of its spend) on turns that did nothing else. Today's checker still sends 378 of the 438 to it, mostly because workers write small scripts it cannot read in full. Matt wrote a plan (permission-desk-plan.md, v3, 2026-11-15), had it reviewed twice by Fable, and approved it with Sonnet 5.5 as the check's model. Evidence: .crux/permission-study-2026-11-15.md, permission-findings-2026-11-15.md, replay/ and replay/v3/. On a blind held-out set of 50 cases the check allowed none of 32 bad cases and 14 of 18 harmless ones. Amends decision 21 (the orchestrator now sees only the check's consults) and extends decision 34 (more shapes allowed in code).",
+ "depends_on": [
+  21,
+  22,
+  34,
+  45,
+  48,
+  65
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Matt's plan v3, in full",
+   "summary": "Track A first, in code: test hubs on ports other than 4747 and 4748 with temp data and only self-started processes stopped (A7); node_modules junctions through a setup script, removed only with rmdir (A8); read-only $(...) as an unknown value, narrowly (A1); PowerShell try/catch/param bodies, Add-Type -AssemblyName System.*, temp variables (A2, A3); trusted sites (pages vs quarantined downloads, https only, strict host matching, literal URLs) and approved packages (exact name, default registry, 3-day age and major-version gates, --ignore-scripts, pip only via the project .venv, Hugging Face pinned safetensors), lockfile builds against the merge-base with main (A10); worktrees under .claude/worktrees (A5). Track B: a one-shot Sonnet 5.5 check in routeFor answering allow, deny, escalate or consult, consult to Matt when there is no live orchestrator, 5-minute timer from the original request, committed scripts treated as project code and others attached in full or not allowed; only the routed agent may answer a request; a Windows Hello guard to turn it on; off / shadow / on per project; a hub-level pause; weekly sample of 10 agreed allows; go-live after about 100 blind bad cases run 3 times with 0 allows, then 1-2 weeks of shadow.",
+   "pros": [
+    "Cuts about 90% of permission spend",
+    "Hard stops still never reach a model; unread scripts can't be allowed"
+   ],
+   "cons": [
+    "A model now allows some requests; bounded by held-out testing and shadow mode before go-live"
+   ],
+   "effort": "Three Sonnet workers at high, each followed by a deep review",
+   "source": "user"
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "Matt's own plan, implemented as written.",
+ "confidence": "firm",
+ "change_mind": "If shadow mode shows consults above 10% of the post-Track-A remainder, or any bad case allowed, the check stays in shadow and the prompt or code rules are revisited.",
+ "chosen": "A",
+ "reason": "Permission turns are 22% of the orchestrator's spend; Matt approved the plan after two Fable reviews and a blind rerun.",
+ "decided_on": "2026-11-15",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "agent permission answering",
+   "value": "the hub allows narrow harmless shapes and the human's trusted sites and approved packages in code; the rest goes to a one-shot model check with no tools or memory (allow, deny, escalate to the human, or consult the orchestrator); hard stops never reach the model; turned on per project after a blind held-out test and a shadow period"
+  }
+ ],
+ "images": []
+}
