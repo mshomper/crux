@@ -2,7 +2,7 @@
 // Crux hub: node server.mjs [--port 4747] [--retire-at 60] [project folders...]
 // Projects also come from ~/crux/hub.json ({ "projects": ["C:/path/a", ...] }). Default: the current folder.
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, rmSync } from 'node:fs';
 import { join, extname, resolve, normalize, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs'
 import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
-import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp, dataDir } from './lib/relaunch.mjs';
+import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp, dataDir, isolateNonLiveData } from './lib/relaunch.mjs';
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
@@ -47,6 +47,13 @@ const testPair = args.includes('--test-pair');
 if (testPair) args.splice(args.indexOf('--test-pair'), 1);
 const pairError = testPairError({ wanted: testPair, noAgents, port, env: process.env });
 if (pairError) { console.error(pairError); process.exit(1); }
+// Only the live hub (port 4747) uses the real ~/.crux-hub (its push keys and phone subscriptions). Any other hub with
+// no CRUX_HUB_DATA of its own gets a throwaway folder, so it cannot push to a phone or write the real settings.
+const ownData = isolateNonLiveData({ port });
+if (ownData) {
+  console.log(`Hub on port ${port} is not the live hub: its data folder is ${ownData} (the real ~/.crux-hub is never used, nothing is pushed to phones).`);
+  process.on('exit', () => { try { rmSync(ownData, { recursive: true, force: true }); } catch { } });
+}
 
 // Decisions 52 and 54: a hub that came with the desktop app (its build step leaves bundled.json here) has a first-run
 // screen for the API key, the project folders and Claude Code, and never takes its own folder as a project.

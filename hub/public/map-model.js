@@ -1,6 +1,7 @@
 // What the live map shows, worked out from the hub's project state and event stream.
 // No drawing here: stations, what needs you, the telemetry feed, and which pulses an event fires.
 import { openQuestions, pageAsk } from './questions.js';
+import { pendingApprovals } from './all-projects.js';
 
 const MAX_FEED = 16;
 
@@ -71,8 +72,7 @@ export class MapModel {
   pendingApprovals() {
     const p = this.project;
     if (!p) return [];
-    const done = new Set(p.events.filter(e => e.type === 'approval_result').map(e => e.approval));
-    return p.events.filter(e => e.type === 'approval' && !done.has(e.approval) && this.pending.has(e.approval));
+    return pendingApprovals(p, this.pending);   // the one rule, in all-projects.js
   }
 
   // Same rule as the Needs you list (questions.js).
