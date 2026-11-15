@@ -51,7 +51,8 @@ test('list_agents: each worker\'s context %, model, effort and whether it can be
   const { hub, p } = setup({ pct: 42 });
   hub.createAgent(p, { name: 'w2', role: 'worker', task: 'Review', goal: 'Review', settings: { model: 'opus', effort: 'high' } });
   const l = hub.agentList(p);
-  assert.equal(l.handoff.automatic_at_pct, 60);
+  assert.equal(l.handoff.worker_automatic_at_pct, 60);
+  assert.equal(l.handoff.orchestrator_automatic_at_pct, 60);
   assert.equal(l.handoff.orchestrator_may_from_pct, 35);
   assert.match(l.handoff.note, /hand off by themselves at 60%.*From 35%/);
   const [w1, w2] = l.workers;
@@ -92,10 +93,9 @@ test('refusals: below the floor, mid-turn, the orchestrator, an unknown name, no
   assert.equal(p.orchestrator().state === 'retired', false);
 });
 
-test('a project whose own mark is at or below the floor: the tool is not available there', () => {
+test('a worker mark at or below the floor: the tool is not available', () => {
   for (const mark of [35, 30]) {
-    const { hub, p, w, dir } = setup({ pct: 50 });
-    hub.settings.setProject(dir, { retireAt: mark });
+    const { hub, p, w } = setup({ pct: 50, settings: { workerRetireAt: mark } });
     const said = hub.handoffWorker(p, 'w1', 'orchestrator-1', 'heavy');
     assert.match(said, new RegExp(`Not available in proj: its hand-off mark \\(${mark}%\\) is at or below the hub's floor for early handoffs \\(35%\\)`));
     assert.equal(w.retiring, undefined);
@@ -103,8 +103,7 @@ test('a project whose own mark is at or below the floor: the tool is not availab
     assert.match(l.handoff.note, /Not available in proj/);
     assert.match(l.workers[0].handoff_worker, /Not available in proj/);
   }
-  const { hub, p, dir } = setup({ pct: 50 });
-  hub.settings.setProject(dir, { retireAt: 36 });
+  const { hub, p } = setup({ pct: 50, settings: { workerRetireAt: 36 } });
   assert.equal(hub.agentList(p).workers[0].handoff_worker, 'available now', 'a mark just above the floor');
 });
 
@@ -179,12 +178,16 @@ test('the floor: 35% by default, saved like the other numbers, bad values fall b
 });
 
 test('the Whole hub panel has the floor box with hover help; the project card does not', () => {
-  const nums = { permissionTimeoutSec: '120', retireAt: '60', idleHandoffMin: '60', idleFloorPct: '25', workerHandoffFloorPct: '35' };
+  const nums = { permissionTimeoutSec: '120', retireAt: '60', idleHandoffMin: '60', idleFloorPct: '25', workerHandoffFloorPct: '35', workerRetireAt: '60' };
   const html = hubPanel({ route: true, nums, errors: {} });
   assert.match(html, /When the orchestrator may hand a worker on/);
   assert.match(html, /data-ps-num="workerHandoffFloorPct" value="35"/);
   assert.match(html, /title="The orchestrator may hand a worker&#39;s task to a fresh agent once/);
-  const s = { routePermissions: true, permissionTimeoutSec: 120, retireAt: 60, idleHandoffMin: 60, idleFloorPct: 25, workerHandoffFloorPct: 35 };
+  assert.match(html, /Workers hand off at/);
+  assert.match(html, /data-ps-num="workerRetireAt" value="60"/);
+  const s = { routePermissions: true, permissionTimeoutSec: 120, retireAt: 60, idleHandoffMin: 60, idleFloorPct: 25, workerHandoffFloorPct: 35, workerRetireAt: 60 };
+  assert.deepEqual(hubChanges(s, { route: true, nums: { ...nums, workerRetireAt: '70' } }).body, { workerRetireAt: 70 });
+  assert.deepEqual(hubChanges(s, { route: true, nums: { ...nums, workerRetireAt: '0' } }).errors, { workerRetireAt: 'Between 1 and 100' });
   assert.deepEqual(hubChanges(s, { route: true, nums: { ...nums, workerHandoffFloorPct: '40' } }).body, { workerHandoffFloorPct: 40 });
   assert.deepEqual(hubChanges(s, { route: true, nums: { ...nums, workerHandoffFloorPct: '' } }).errors, { workerHandoffFloorPct: 'Needs a number' });
   assert.deepEqual(hubChanges(s, { route: true, nums: { ...nums, workerHandoffFloorPct: '120' } }).errors, { workerHandoffFloorPct: 'Between 0 and 100' });
@@ -197,4 +200,23 @@ test('the orchestrator is told when to use it', () => {
   assert.match(prompt, /handoff_worker \(decision 46\) only from the floor in list_agents \(35% by\s+default\)/);
   assert.match(prompt, /Not in a review-fix loop/);
   assert.match(prompt, /Always give the one-line reason/);
+});
+
+test('the project mark at 30 retires an orchestrator at 35%, not a worker (workers use their own mark, default 60)', () => {
+  const { hub, p, w } = setup({ pct: 35 });
+  hub.setHandoffNumbers(p, { retireAt: 30 });
+  assert.equal(hub.retireAtFor(p), 30);
+  const retired = [];
+  hub.retire = (_p, a) => retired.push(a.name);
+  hub.onIdle(p, w);
+  assert.deepEqual(retired, [], 'a worker at 35% keeps going');
+  const o = p.agents.get('orchestrator-1');
+  o.state = 'idle'; o.contextPct = 35;
+  hub.onIdle(p, o);
+  assert.deepEqual(retired, ['orchestrator-1'], 'the orchestrator at 35% hands off');
+  const l = hub.agentList(p).handoff;
+  assert.equal(l.orchestrator_automatic_at_pct, 30);
+  assert.equal(l.worker_automatic_at_pct, 60);
+  w.contextPct = 61; hub.onIdle(p, w);
+  assert.deepEqual(retired, ['orchestrator-1', 'w1'], 'a worker still hands off at the worker mark');
 });

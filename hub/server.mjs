@@ -258,10 +258,10 @@ const routes = {
   // { idleHandoffMin, idleFloorPct, retireAt } } where null means "use the hub default" (decisions 34, 44, 45).
   // Trusted is set only here, from the hub page (same-origin JSON, C001), never from a repo's .crux-hub.json.
   // workerHandoffFloorPct (decision 46 A) is hub-wide only.
-  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct }) => {
+  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt }) => {
     const p = project ? hub.project(project) : null;
     if (!p) {
-      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct }).filter(([, v]) => v != null));
+      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt }).filter(([, v]) => v != null));
       if (Object.keys(hubWide).length) hub.settings.set(hubWide);
     }
     if (p && permissionMode) hub.setPermissionMode(p, permissionMode);
