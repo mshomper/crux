@@ -61,6 +61,23 @@ test('the orchestrator allows: the worker goes ahead and the answer is logged as
   assert.match(hub.answerPermission(p, orch, id, 'allow', 'again'), /no longer waiting/);
 });
 
+// Plan B6: only the agent a request was routed to may answer it.
+test('B6: another worker or another orchestrator cannot answer a request routed elsewhere', async () => {
+  const { hub, p, orch, w } = setup();
+  const pending = ask(hub, p, w, 'npm run build');
+  const id = last(p, 'approval').approval;
+  const other = hub.startWorker(p, 'sneaky', 'Do something else', 'you', 'Other work');
+  const otherOrch = { name: 'orchestrator-9' };
+  for (const [who, answer] of [[other, 'allow'], [other, 'deny'], [other, 'escalate'], [otherOrch, 'allow'], [w, 'allow'], [null, 'allow']]) {
+    assert.match(hub.answerPermission(p, who, id, answer, 'trying'), /not routed to you/, `${who?.name} ${answer}`);
+  }
+  assert.equal(p.log.ofType('permission_answer').length, 0, 'nothing logged');
+  assert.equal(p.log.ofType('approval_escalated').length, 0, 'not escalated either');
+  assert.equal(hub.approvals.has(id), true, 'still waiting');
+  assert.match(hub.answerPermission(p, orch, id, 'allow', 'the routed orchestrator answers fine'), /Allowed/);
+  assert.equal((await pending).behavior, 'allow');
+});
+
 test('the orchestrator denies: the worker sees the reason', async () => {
   const { hub, p, orch, w } = setup();
   const pending = ask(hub, p, w, 'node scripts/unrelated.mjs');

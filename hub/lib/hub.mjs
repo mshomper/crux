@@ -819,6 +819,8 @@ export class Hub {
     const a = this.approvals.get(id);
     if (!a || a.p !== p) return 'That request is no longer waiting (answered by {{who}}, timed out, or cancelled).';
     if (!a.routedTo || a.escalated) return 'That request is already with {{who}}.';
+    // Plan B6: only the agent the request was routed to may answer it (not another worker or orchestrator).
+    if (!orch || a.routedTo !== orch.name) return 'That request was not routed to you, so you cannot answer it.';
     reason = String(reason || '').trim();
     if (!reason) return 'Give a one-line reason, then answer again.';
     if (answer === 'escalate') { this.escalate(id, reason, orch.name); return 'Sent to {{who}}.'; }
