@@ -691,6 +691,9 @@ export class Hub {
     return Object.fromEntries(Object.keys(HANDOFF_NUMBERS).map(k => [k, typeof own[k] === 'number' ? own[k] : null]));
   }
   retireAtFor(p) { return Number(this.handoffNumbers(p).retireAt) || this.retireAt; }
+  // Workers hand off at the hub-wide worker mark (default 60), not the project's orchestrator mark (decision 46).
+  workerRetireAt() { const v = Number(this.settings.get('workerRetireAt')); return v >= 1 && v <= 100 ? v : 60; }
+  markFor(p, agent) { return agent.role === 'worker' ? this.workerRetireAt() : this.retireAtFor(p); }
 
   // changes: any of idleHandoffMin, idleFloorPct, retireAt (null or '' = back to the hub default). Noted in the
   // project's orchestrator thread when something changed.
@@ -861,7 +864,7 @@ export class Hub {
     // Decision 62: a Conductor request it was given and did not answer gets one reminder, as a short follow-up turn,
     // before anything else, a threshold handoff included (that waits for the end of the reminder's turn).
     if (agent.role === 'orchestrator' && !p.hubWide && this.conductor?.remindReplies(p, agent)) return;
-    if (agent.contextPct != null && agent.contextPct >= this.retireAtFor(p)) {
+    if (agent.contextPct != null && agent.contextPct >= this.markFor(p, agent)) {
       this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role !== 'worker' ? 'the role' : 'its task'} on.`);
       this.retire(p, agent, { reason: 'threshold' });
       return;
@@ -1078,7 +1081,7 @@ export class Hub {
 
   // Null when early handoffs are possible in this project; else why not: its own mark is at or below the floor.
   earlyHandoffOff(p) {
-    const mark = this.retireAtFor(p), floor = this.workerFloor();
+    const mark = this.workerRetireAt(), floor = this.workerFloor();
     return mark > floor ? null : `Not available in ${p.name}: its hand-off mark (${mark}%) is at or below the hub's floor for early handoffs (${floor}%), so its workers hand off only by themselves at ${mark}%.`;
   }
 
@@ -1101,10 +1104,11 @@ export class Hub {
   // The orchestrator's list (list_agents): each worker's context %, model and effort, whether it can be handed on now,
   // and the project's two marks, so the orchestrator can judge.
   agentList(p) {
-    const mark = this.retireAtFor(p), floor = this.workerFloor();
+    const mark = this.workerRetireAt(), floor = this.workerFloor();
     return {
       handoff: {
-        automatic_at_pct: mark,
+        orchestrator_automatic_at_pct: this.retireAtFor(p),
+        worker_automatic_at_pct: mark,
         orchestrator_may_from_pct: floor,
         note: this.earlyHandoffOff(p) || `Workers hand off by themselves at ${mark}% of their context. From ${floor}% you may hand one on with handoff_worker at the end of its turn.`
       },
