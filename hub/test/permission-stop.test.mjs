@@ -60,11 +60,10 @@ test('A7: stopping by port is for judgment unless this agent started a test hub 
     assert.equal(r.route, 'human', `port ${p}: ${why(r)}`);
     assert.equal(at('PowerShell', `Get-NetTCPConnection -LocalPort ${p} | ForEach-Object { Stop-Process -Id $_.OwningProcess }`, { hubs: [p] }).route, 'human');
   }
-  // a hub it starts in this very command is its own to stop at the end of it
+  // a hub it starts in this very command does not vouch for the stop in the same command (round 1 HIGH 4); the hub is told what was started
   const r = sh('CRUX_HUB_DATA="$TEMP/x/data" CRUX_HOME="$TEMP/x/home" node server.mjs --port 4761 --no-agents & sleep 2; node hub/tools/stop-test-hub.mjs 4761');
-  assert.equal(r.route, 'allow', why(r));
+  assert.equal(r.route, 'unsure', why(r));
   assert.deepEqual(r.hubsStarted, [4761], 'the hub is told which port this request starts');
-  // ... but not another port
   assert.equal(sh('CRUX_HUB_DATA="$TEMP/x/data" CRUX_HOME="$TEMP/x/home" node server.mjs --port 4761 --no-agents & sleep 2; node hub/tools/stop-test-hub.mjs 4762').route, 'unsure');
 });
 

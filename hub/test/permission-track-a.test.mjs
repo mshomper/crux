@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSy
 import { join } from 'node:path';
 import { makeTmp } from './helpers/tmp.mjs';
 import { createServer } from 'node:net';
-import { classify, LIVE_PORTS, portListening } from '../lib/permission-rules.mjs';
+import { classify, LIVE_PORTS, portListening, listeningIn } from '../lib/permission-rules.mjs';
 import { linkWorktree, unlinkWorktree } from '../tools/worktree-setup.mjs';
 
 const root = makeTmp('crux-track-a-');
@@ -147,8 +147,160 @@ test('A7: stopping only a hub this agent started, never "whatever listens on the
   human('taskkill /PID 1234 /F', 'Bash', started);
   human('Stop-Process -Name node -Force', 'PowerShell', started);
   human('pkill -f server.mjs', 'Bash', started);
-  // a hub started and stopped in one command
-  allow(`${DATA} node server.mjs --port 4796 --no-agents & sleep 1; node hub/tools/stop-test-hub.mjs 4796`);
+  // round 1 HIGH 4: a start and a stop in one command: the start does not vouch for the stop
+  unsure(`${DATA} node server.mjs --port 4796 --no-agents & sleep 1; node hub/tools/stop-test-hub.mjs 4796`);
+});
+
+test('round 1 HIGH 4: a tracked port vouches only for a stop aimed at that port alone', () => {
+  const started = { hubs: [4791] };
+  const byPort = 'Get-NetTCPConnection -LocalPort 4791 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }';
+  allow(byPort, 'PowerShell', started);
+  // another way of picking processes in the same command: judged by itself, whatever ports appear
+  for (const c of [
+    `${byPort}; Get-Process -Name node | Stop-Process -Force`,
+    `${byPort}; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*phone*' } | ForEach-Object { $_.Terminate() }`,
+    `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*4791*' } | ForEach-Object { Stop-Process -Id $_.ProcessId }  # port 4791`,
+    `Get-NetTCPConnection -LocalPort 4791 | ForEach-Object { Stop-Process -Id $_.OwningProcess }; Get-Process | Where-Object { $_.Id -eq 99 } | Stop-Process`,
+    'Get-NetTCPConnection -LocalPort 4791 | ForEach-Object { taskkill /PID $_.OwningProcess /F }',
+    `Get-NetTCPConnection -LocalPort 4791 | ForEach-Object { Stop-Process -Id $_.OwningProcess }; Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ForEach-Object { Stop-Process -Id $_.ProcessId }`,
+  ]) notAllow(c, 'PowerShell', started);
+  notAllow('taskkill /PID 4791 /F', 'Bash', started);
+  notAllow('taskkill /IM node.exe /F # 4791', 'Bash', started);
+  notAllow('Stop-Process -Name node # 4791', 'PowerShell', started);
+  // an inline script: only the one stop shape, on a started port; a number in a comment, a PID or process.kill vouch for nothing
+  const shape = p => `import('./hub/lib/relaunch.mjs').then(async m => { for (const p of await m.pidsOnPort(${p})) await m.stopTree(p) })`;
+  allow(`node -e "${shape(4791)}"`, 'Bash', started);
+  unsure(`node -e "${shape(4792)}"`, 'Bash', started);
+  unsure(`node -e "// 4791\nprocess.kill(1234)"`, 'Bash', started);
+  unsure(`node -e "process.kill(4791)"`, 'Bash', started);
+  unsure(`node -e "${shape(4791)}; process.kill(1234)"`, 'Bash', started);
+  unsure(`node -e "${shape(4791)}; await m.stopTree(1234)"`, 'Bash', started);
+  notAllow(`node -e "/* 4791 */ require('child_process').execSync('taskkill /IM node.exe')"`, 'Bash', started);
+  human(`node -e "${shape(4747)}"`, 'Bash', { hubs: [4747] });
+});
+
+test('round 1 HIGH 1: a command that gives TEMP, TMP or TMPDIR a value of its own has no temp folder to speak of', () => {
+  const real = fw(home);
+  // the review's three commands
+  human(`$env:TEMP = "${real}\\x"; $t = [IO.Path]::GetTempPath(); Remove-Item -Recurse -Force "$t\\Documents"`, 'PowerShell');
+  notAllow(`$env:TMP = "${real}\\x"; Set-Content "$([IO.Path]::GetTempPath())evil.txt" 1`, 'PowerShell');
+  notAllow(`export TEMP=${real}; echo "alias git='x'" > "$(node -p "require('os').tmpdir()")/.bashrc"`);
+  // every way of setting it, and every way of reaching it afterwards
+  for (const c of [
+    `$env:TEMP = "${real}"; Set-Content "$env:TEMP\\a.txt" 1`, `$env:tmp = "${real}"; Set-Content "$env:TEMP\\a.txt" 1`, `Set-Item env:TEMP "${real}"; Set-Content "$env:TEMP\\a.txt" 1`,
+    `[Environment]::SetEnvironmentVariable("TEMP", "${real}"); Set-Content "$env:TEMP\\a.txt" 1`, `[Environment]::SetEnvironmentVariable('TMP', '${real}', 'Process'); Set-Content "$env:TMP\\a.txt" 1`,
+  ]) human(c, 'PowerShell');
+  for (const c of [
+    `TEMP=${real} node -e 1; echo x > "$TEMP/a"`, `export TMP=${real}; echo x > /tmp/a`, `TMPDIR=${real}; echo x > /tmp/a`, `printf -v TMPDIR '%s' ${real}; echo x > /tmp/a`, `for TMP in ${real}; do echo x > /tmp/a; done`,
+    `declare -x TEMP=${real}; echo x > /tmp/a`, `read TMP <<< ${real}; echo x > /tmp/a`, `env TEMP=${real} sh -c 'echo x > /tmp/a'`, `set TEMP=${real} && echo x > /tmp/a`,
+    `export TEMP=${real}; T=$(mktemp -d); echo x > "$T/a"; rm -rf "$T"`,
+  ]) notAllow(c);
+  // New-Item -Force on a folder that is already there does not make it this agent's own
+  mkdirSync(join(tmp, 'existing', 'keep'), { recursive: true });
+  unsure('New-Item -ItemType Directory -Force "$env:TEMP\\existing" | Out-Null; Remove-Item -Recurse -Force "$env:TEMP\\existing"', 'PowerShell');
+  unsure(`mkdir -p ${T}/existing && rm -rf ${T}/existing`);
+  allow('New-Item -ItemType Directory -Force "$env:TEMP\\fresh-one" | Out-Null; Remove-Item -Recurse -Force "$env:TEMP\\fresh-one"', 'PowerShell');   // one it makes itself
+  // and nothing changed for a command that leaves TEMP alone
+  allow('Set-Content "$env:TEMP\\ok.txt" 1', 'PowerShell');
+  allow('echo hi > /tmp/ok.txt');
+  allow('Set-Content -Path:"$env:TEMP\\ok.txt" -Value x', 'PowerShell');
+});
+
+test('round 1 HIGH 2: a .Delete() goes only to the Get-Item it is written on', () => {
+  const j = `${WT}/w1/hub/node_modules`.replace(/\//g, '\\'), real = `${WT}/w2/hub/node_modules`.replace(/\//g, '\\');
+  allow(`(Get-Item "${j}").Delete()`, 'PowerShell');
+  allow(`$i = Get-Item "${j}" -Force; $i.Delete()`, 'PowerShell');
+  allow(`$i = Get-Item -LiteralPath "${j}"; if ($i.LinkType -eq 'Junction') { $i.Delete() }`, 'PowerShell');
+  for (const c of [
+    `Get-Item "${j}" | Out-Null; (Get-ChildItem "${real}").Delete()`,
+    `(Get-Item "${j}"); (Get-ChildItem "${WT.replace(/\//g, '\\')}\\w2").Delete()`,
+    `$j = Get-Item "${j}"; (Get-ChildItem "${WT.replace(/\//g, '\\')}\\w2\\hub" | Select-Object -First 1).Delete()`,
+    `(Get-Item "${j}", "${real}").Delete()`,
+    `$i = Get-Item "${j}"; $i = Get-Item "${real}"; $i.Delete()`,                                // set twice
+    `$i = Get-Item "${j}"; foreach ($i in Get-ChildItem "${real}") { $i.Delete() }`,             // a loop variable too
+    `$i = Get-Item "${j}"; $i.Delete($true)`,                                                      // recursive
+    `$k = Get-Item "${j}"; $i.Delete()`,                                                           // another variable
+    `$i = Get-ChildItem "${real}"; $i.Delete()`,
+    `(Get-Item "${real}").Delete()`,                                                               // a real folder, not a junction
+  ]) notAllow(c, 'PowerShell');
+});
+
+test('round 1 HIGH 3: $(( )) holds literal numbers only; a name or value inside can run a command (array subscript)', () => {
+  allow('echo $((1 + 2 * 3))');
+  allow('echo "total $(( (4 + 5) % 3 ))"');
+  for (const c of [
+    'y=$(cat hub/package.json); echo $((y))', 'for y in $(ls hub); do echo $((y)); done', 'n=$((n+1)); echo $n', 'echo $(( $(cat hub/package.json) + 1 ))',
+    'a=1; echo $((a))', 'echo $((x[0]))', 'echo $(( ${y} ))', 'y=$(cat hub/package.json); [[ "$y" -eq 1 ]] && echo yes', 'y=$(cat hub/package.json); (( y > 1 )) && echo yes',
+  ]) notAllow(c);
+});
+
+test('round 1 MEDIUM 5: a test hub counts as this agent\'s only once the request is allowed (see permission-routing.test.mjs)', () => {
+  assert.deepEqual(sh(`${DATA} node server.mjs --port 4791`).hubsStarted, [4791], 'classify reports it; the hub notes it after the allow');
+});
+
+test('round 1 MEDIUM 6: find -delete through a junction is a doubt, like rm', () => {
+  const j = `${WT}/w1/hub/node_modules`;
+  for (const c of [
+    `find ${j} -delete`, `find ${j}/ -delete`, `find -L ${WT}/w1/hub -delete`, `find -H ${j} -type f -delete`, `find ${WT}/w1/hub -follow -delete`, `find ${WT}/w1/hub -name pkg -delete`,
+    `cd ${j} && find . -delete`, `find ${WT}/w1 -delete`, `find -P ${j}/pkg -delete`,
+  ]) unsure(c);
+  allow(`find ${WT}/w2/hub/node_modules -name own -delete`);
+  allow(`find ${P}/hub/tools -name '*.tmp' -delete`);
+  notAllow(`find ${j} -exec rm -rf {} +`);
+});
+
+test('round 1 MEDIUM 7: worktree-setup.mjs link makes a junction the rest of the command cannot delete through', () => {
+  const setup = `node ${P}/hub/tools/worktree-setup.mjs link ${WT}/w3`;
+  allow(setup);
+  for (const after of [`rm -rf ${WT}/w3/hub/node_modules/*`, `rm -rf ${WT}/w3/hub/node_modules/pkg`, `rm -rf ${WT}/w3/hub/node_modules`, `rm -rf ${WT}/w3/hub`]) {
+    notAllow(`${setup} && ${after}`);
+  }
+  allow(`rm -rf ${WT}/w3/hub/node_modules/pkg`);   // nothing there yet: an ordinary delete
+});
+
+test('round 1 LOW: an unknown value that could be several words or options is a doubt', () => {
+  for (const c of ['head -n $(cat hub/package.json) hub/x', 'tail -n "$(cat hub/package.json)" hub/x', 'head -c $(wc -c < hub/package.json) hub/package.json', 'date -d $(echo x)', 'wc -l $(ls hub)', 'cat -n "$(echo hub/package.json)"',
+    'grep "$(echo x)" hub/package.json', 'grep -f "$(echo x)" hub/package.json', 'grep -c "$(echo needle)" hub/package.json', 'ls $(echo -la)', 'sort $(echo -o) a']) unsure(c);
+  allow('grep -c -e "$(echo needle)" hub/package.json');
+  allow('grep -c -- "$(echo needle)" hub/package.json');
+  allow('echo "$(date)"');
+  allow('test -f "$(git rev-parse --show-toplevel)/hub/package.json" && echo yes');
+});
+
+test('round 1 LOW: the PATH rule', () => {
+  allow('$env:Path = "$env:USERPROFILE\\.cargo\\bin;$env:Path"', 'PowerShell');
+  allow('PATH="$HOME/.cargo/bin:$PATH"; ls');
+  allow('PATH=$HOME/.cargo/bin:$PATH ls');
+  for (const c of [
+    // HOME and USERPROFILE are not what they were
+    '$env:USERPROFILE = "C:\\evil"; $env:Path = "$env:USERPROFILE\\.cargo\\bin;$env:Path"', '$env:USERPROFILE = "C:\\evil"\n$env:Path = "$env:USERPROFILE\\.cargo\\bin;$env:Path"',
+    'export HOME=/tmp/x; PATH="$HOME/.cargo/bin:$PATH"; ls', 'HOME=/tmp/x PATH="$HOME/.cargo/bin:$PATH" ls', 'HOME=/tmp/x; PATH=$HOME/.cargo/bin:$PATH git status',
+    // relative folders
+    '$env:Path = "HOME\\.cargo\\bin;$env:Path"', '$env:Path = ".cargo\\bin;$env:Path"', 'PATH="HOME/.cargo/bin:$PATH"; ls', 'PATH=.cargo/bin:$PATH git status',
+    // the prefix form and the other ways to give PATH a value
+    'PATH=/tmp/evil:$PATH git status', 'PATH=/tmp/evil git status', 'printf -v PATH "%s" /tmp/evil; git status', 'read PATH <<< /tmp/evil; git status', 'declare PATH=/tmp/evil:$PATH; git status',
+    'for PATH in /tmp/evil; do git status; done', 'typeset -x PATH=/tmp/evil; git status', 'local PATH=/tmp/evil', 'export PATH=/tmp/evil:$PATH',
+  ]) notAllow(c);
+  for (const c of ['Set-Item env:Path C:\\evil', "[Environment]::SetEnvironmentVariable('Path', 'C:\\evil')", '$env:Path += ";C:\\evil"', 'Set-Item -Path env:PATH -Value C:\\evil', 'New-Item env:Path -Value x -Force', 'Set-Content env:PATH C:\\evil']) notAllow(c, 'PowerShell');
+  // a read of PATH, or a file named PATH, is no change
+  allow('echo "$PATH" | head -1');
+  allow('Write-Host $env:Path', 'PowerShell');
+  allow('Set-Content -Path:hub\\b.txt -Value x', 'PowerShell');
+  allow('ls hub/PATH.txt');
+});
+
+test('round 1 LOW: portListening reads the columns, not the word for the state', () => {
+  const de = 'Aktive Verbindungen\r\n\r\n  Proto  Lokale Adresse         Remoteadresse          Status\r\n  TCP    0.0.0.0:4791           0.0.0.0:0              ABHÖREN\r\n  TCP    127.0.0.1:50000        127.0.0.1:4799         HERGESTELLT\r\n  TCP    [::]:4800              [::]:0                 ABHÖREN\r\n';
+  assert.equal(listeningIn(de, 4791), true);
+  assert.equal(listeningIn(de, 4800), true, 'IPv6');
+  assert.equal(listeningIn(de, 50000), false, 'a client port is not listening');
+  assert.equal(listeningIn(de, 4799), false, 'the far end of a connection is not this machine listening');
+  assert.equal(listeningIn(de, 4792), false);
+  const linux = 'Active Internet connections\ntcp        0      0 0.0.0.0:4791          0.0.0.0:*             LISTEN\ntcp        0      0 10.0.0.1:22           10.0.0.2:5555         ESTABLISHED\n';
+  assert.equal(listeningIn(linux, 4791), true);
+  assert.equal(listeningIn(linux, 22), false);
+  assert.equal(listeningIn('', 4791), true, 'nothing it can read: listening');
+  assert.equal(listeningIn('Zugriff verweigert', 4791), true);
 });
 
 // ---------- A8: junctions ----------
@@ -272,7 +424,7 @@ test('A1: a $( ) of read-only commands is an unknown value, fine where it is onl
   allow('echo "branch: $(git branch --show-current) at $(git rev-parse --short HEAD)"');
   allow('n=$(wc -l < hub/package.json); echo "lines: $n"');
   allow('echo "files: $(ls hub | head -3)"');
-  allow('grep -c "$(echo needle)" hub/package.json');
+  allow(`grep -c -e "$(echo needle)" hub/package.json`);
   allow('test -f "$(git rev-parse --show-toplevel)/hub/package.json" && echo yes');
   allow('[ "$(git status --short | wc -l)" = "0" ] && echo clean');
   allow('for d in $(ls hub); do echo "== $d"; done');

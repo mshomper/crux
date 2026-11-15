@@ -273,9 +273,17 @@ const GIT_READ_SUBS = new Set([...GIT_READ].filter(x => x !== 'ls-remote'));
 // Does anything listen on this port right now? One netstat call; when it cannot tell, yes (the safe answer).
 export function portListening(port) {
   try {
-    const out = execFileSync('netstat', ['-an'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, windowsHide: true });
-    return new RegExp(`[:.]${Number(port)}\\s+\\S+\\s+LISTEN`, 'i').test(out);
+    // Read by column, not by the word for the state ("LISTENING" is translated on a non-English Windows): a listening
+    // socket is a TCP row whose local address ends in the port and whose remote address ends in :0 or :*.
+    return listeningIn(execFileSync('netstat', process.platform === 'win32' ? ['-an', '-p', 'TCP'] : ['-an'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, windowsHide: true }), port);
   } catch { return true; }
+}
+// netstat's text -> is anything listening on the port? True too when the text has no TCP rows (cannot tell).
+export function listeningIn(out, port) {
+  const rows = String(out).split(/\r?\n/).map(l => l.trim().split(/\s+/)).filter(w => /^tcp/i.test(w[0]));
+  if (!rows.length) return true;
+  const local = new RegExp(`[:.]${Number(port)}$`);
+  return rows.some(w => w.some((tok, i) => local.test(tok) && /[:.](0|\*)$/.test(w[i + 1] || '')));
 }
 // A2: the PowerShell words that only open or close a block (the commands inside are read as parts of their own).
 const PS_BLOCK_WORD = /^(try|catch|finally|param|else|elseif|begin|process|end|dynamicparam|do|for|switch|break|continue|return|throw)$/i;
@@ -284,12 +292,35 @@ const PS_BLOCK_WORD = /^(try|catch|finally|param|else|elseif|begin|process|end|d
 const ADD_TYPE_FLAGS = { ps: { AssemblyName: 'asm', TypeDefinition: 'code', MemberDefinition: 'code', Path: 'code', LiteralPath: 'code', Name: 'code', Namespace: 'code', Language: 'code',
   ReferencedAssemblies: 'code', OutputAssembly: 'code', OutputType: 'code', UsingNamespace: 'code', CompilerOptions: 'code', IgnoreWarnings: 'ok', PassThru: 'ok', ErrorAction: 'okv' }, valued: ['asm', 'code', 'okv'] };
 // A2: folders a session-only $env:Path prepend may name (the tools Matt's agents use), under the home folder or Program Files.
-const PATH_DIR = /^(?:\$\{?env:USERPROFILE\}?|\$HOME|%USERPROFILE%|HOME)[\\/](?:\.cargo[\\/]bin|AppData[\\/]Roaming[\\/]npm|\.local[\\/]bin|\.bun[\\/]bin)$|^(?:\$\{?env:ProgramFiles\}?|%ProgramFiles%|C:[\\/]Program Files)[\\/](?:nodejs|Git[\\/](?:cmd|bin|usr[\\/]bin)|GitHub CLI|Microsoft VS Code[\\/]bin)$/i;
+// Only forms that start from a variable (never a relative folder: a bare HOME\... is a folder named HOME under the cwd).
+const PATH_WRITE = /\b(?:printf\s+(?:-\S+\s+)*-v|read|mapfile|readarray|declare|typeset|local|for|setx|set|set-item|si|set-content|sc|add-content|ac|new-item|ni|set-variable|sv|setenvironmentvariable|clear-item|remove-item)\b[^\n;&|]{0,80}?(?:(?<![$\w{])env:PATH|(?<![$\w{.\\/:-])PATH)(?![\w.\\/:-])/i;
+const PATH_DIR = /^(?:\$\{?env:USERPROFILE\}?|\$HOME|%USERPROFILE%)[\\/](?:\.cargo[\\/]bin|AppData[\\/]Roaming[\\/]npm|\.local[\\/]bin|\.bun[\\/]bin)$|^(?:\$\{?env:ProgramFiles\}?|%ProgramFiles%|C:[\\/]Program Files)[\\/](?:nodejs|Git[\\/](?:cmd|bin|usr[\\/]bin)|GitHub CLI|Microsoft VS Code[\\/]bin)$/i;
 // A7: words in what a command sends to a test hub that make it a key, token or password being typed or submitted.
 const SENSITIVE_SEND = /\bkey\b|api[-_ ]?key|token|passw\w*|passkey|secret|credential|bearer|authorization|vapid|webauthn|private[-_ ]?key|\bpin\b/i;
 // A7: browser options that open a debugging port, load code or switch off the browser's own protection.
 const BROWSER_RISK = /^--(remote-debugging-\w+|remote-allow-origins|load-extension|disable-extensions-except|disable-web-security|no-sandbox|enable-automation|allow-file-access-from-files|disable-site-isolation-trials|enable-logging|js-flags|renderer-cmd-prefix|utility-cmd-prefix|gpu-launcher|ppapi-plugin-launcher|browser-subprocess-path|user-data-dir=\s*$)/i;
 
+// Does this command give one of these environment variables a value (PowerShell $env:X = / Set-Item env:X /
+// SetEnvironmentVariable, bash X=v, export, declare, local, printf -v X, read X, for X in, env X=, set X=, setx X)?
+// Used for TEMP (a spoofed temp folder makes every "temp" value untrustworthy) and for HOME / USERPROFILE (the folders a
+// PATH entry is judged by). Case-blind: Windows is.
+export function assignsEnv(cmd, names) {
+  const n = `(?:${names.join('|')})`;
+  const c = String(cmd || '');
+  return [
+    String.raw`\$\{?env:${n}\}?\s*[-+*/.]?=`,
+    String.raw`\b(?:set-item|si|new-item|ni|set-content|sc|add-content|ac|clear-item|remove-item|ri|set-itemproperty|new-itemproperty)\b[^\n;|]{0,80}?(?<![$\w{])env:${n}\b`,
+    String.raw`SetEnvironmentVariable\s*\(\s*['"]${n}['"]`,
+    String.raw`(?:^|[\s;&|(])(?:export\s+|declare\s+(?:-\S+\s+)*|typeset\s+(?:-\S+\s+)*|local\s+|readonly\s+|env\s+|set\s+|setx\s+)?(?:\w+=\S*\s+)*${n}=`,
+    String.raw`\bprintf\s+(?:-\S+\s+)*-v\s+${n}\b`,
+    String.raw`\b(?:read|mapfile|readarray|getopts)\s+(?:-\S+\s+)*(?:\w+\s+)*${n}\b`,
+    String.raw`\bfor\s+${n}\s+in\b`,
+    String.raw`\b(?:setx|set)\s+${n}\b`,
+    String.raw`\b(?:Set-Variable|sv|New-Variable|nv)\b[^\n;|]{0,60}?\b${n}\b`
+  ].some(re => new RegExp(re, 'i').test(c));
+}
+const TEMP_NAMES = ['TEMP', 'TMP', 'TMPDIR'];
+const HOME_NAMES = ['USERPROFILE', 'HOME', 'ProgramFiles', 'ProgramW6432', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH'];
 // Installers that put software on the whole machine: a stop at every level, Trusted included (decision 45).
 const SYSTEM_WIDE = new Set(['winget', 'choco', 'scoop', 'apt', 'apt-get', 'brew', 'conda', 'pipx', 'gem', 'install-module', 'install-package', 'install-script', 'update-module']);
 // Programs that read or download from a web address: Trusted lets them read and save into the project (decision 45).
@@ -370,6 +401,10 @@ export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdi
   c.envSet = new Map();  // environment settings the command makes for what follows (export X=, $env:X =)
   c.downloaded = new Set([...downloaded].map(norm));   // files downloaded (earlier, or in this command): running one is a stop
   c.cmdText = String(input.command || '');   // the whole command, for checks that look at all of it ($PSDefaultParameterValues)
+  // A command that gives TEMP, TMP or TMPDIR a value of its own: every value taken from them (GetTempPath(), os.tmpdir(),
+  // $env:TEMP, mktemp) is then anywhere, not the temp folder. HOME and friends likewise for the PATH rule.
+  c.spoof = /^(Bash|PowerShell)$/.test(tool) && assignsEnv(c.cmdText, TEMP_NAMES);
+  c.homeChanged = /^(Bash|PowerShell)$/.test(tool) && assignsEnv(c.cmdText, HOME_NAMES);
   c.assigned = new Set();     // every shell variable the command assigns, exported or not (see envNames)
   const out = classifyWith(c, tool, input);
   return { ...out, tempMade: [...c.tempMade], downloaded: [...c.downloaded], hubsStarted: [...c.hubsNow] };
@@ -488,7 +523,7 @@ class Check {
   }
   // The full path a word names, from the folder it is used in. Understands ~, temp variables and Git Bash's /c/... form.
   abs(p, cwd) {
-    let s = String(p).replace(TEMP_VARS, this.tmp.replace(/\\/g, '/'));
+    let s = String(p).replace(TEMP_VARS, this.spoof ? '/__spoofed_temp__' : this.tmp.replace(/\\/g, '/'));   // a TEMP the command set itself is anywhere
     s = s.replace(/\$\{?(?:env:)?(appdata|localappdata|userprofile|home)\}?(?![\w:])|%(appdata|localappdata|userprofile|home)%/gi,
       (m, a, b) => join(this.home, ...VAR_PATHS[(a || b).toLowerCase()]).replace(/\\/g, '/'));
     if (/^~(?=[\\/]|$)/.test(s)) s = this.home + s.slice(1);
@@ -498,7 +533,7 @@ class Check {
     // A system folder named through its variable ($PROGRAMFILES\x, $env:windir, %ProgramData%) is not a folder
     // inside the one the step runs in: outside, whatever comes after it.
     if (SYSTEM_DIR_VAR.test(s)) return 'outside';
-    if (/^\/tmp(\/|$)/.test(s)) return s === '/tmp' ? this.tmp : join(this.tmp, s.slice(5));
+    if (/^\/tmp(\/|$)/.test(s)) return this.spoof ? 'outside' : s === '/tmp' ? this.tmp : join(this.tmp, s.slice(5));   // Git Bash's /tmp follows TMP
     const m = /^\/([a-z])(\/.*)?$/i.exec(s);           // Git Bash: /c/Users/... is C:/Users/...
     if (m) s = `${m[1]}:${m[2] || '/'}`;
     else if (/^[\\/](?![\\/])/.test(s) && process.platform === 'win32') return 'outside'; // /usr/bin on Windows: not a project path
@@ -598,6 +633,8 @@ class Check {
   // powershell -Command runs from for the script inside it).
   command(cmd, ps, start = this.cwd0) {
     if (!cmd.trim()) return this.unsure('An empty command');
+    // PATH given a value by printf -v, read, declare, for, Set-Item env:Path and the like: which program runs next is not readable
+    if (PATH_WRITE.test(cmd)) this.unsure('Changes the search path (which program runs next) in a way the hub cannot read', true);
     // PowerShell reads curly quotes as quotes (‘ ’ ‚ ‛ as ', “ ” „ as "): read them the same way, so a quote the hub
     // missed cannot hide where a value ends (follow-up to PR #51).
     if (ps) cmd = cmd.replace(/[‘’‚‛]/g, "'").replace(/[“”„]/g, '"');
@@ -615,9 +652,11 @@ class Check {
     if (ps) {
       // A3: [IO.Path]::GetTempPath() is the temp folder: read as $env:TEMP (inside a string, with its closing slash).
       const GTP = String.raw`\[(?:system\.)?io\.path\]::gettemppath\(\s*\)`;
-      cmd = cmd.replace(new RegExp(String.raw`\$\(\s*${GTP}\s*\)`, 'gi'), () => '${env:TEMP}\\')
-        .replace(new RegExp(String.raw`\(\s*${GTP}\s*\)`, 'gi'), () => '$env:TEMP')
-        .replace(new RegExp(GTP, 'gi'), () => '$env:TEMP');
+      if (!this.spoof) {   // not when the command gave TEMP a value of its own
+        cmd = cmd.replace(new RegExp(String.raw`\$\(\s*${GTP}\s*\)`, 'gi'), () => '${env:TEMP}\\')
+          .replace(new RegExp(String.raw`\(\s*${GTP}\s*\)`, 'gi'), () => '$env:TEMP')
+          .replace(new RegExp(GTP, 'gi'), () => '$env:TEMP');
+      }
       // Variables the command sets itself ($s = ...) are its own, not the environment's.
       this.localVars ||= new Set();
       for (const m of cmd.matchAll(/\$(\w+)\s*=(?!=)/g)) this.localVars.add(m[1].toLowerCase());
@@ -690,7 +729,9 @@ class Check {
       // Fed by a pipe from a part that read a download (cat a.sh | tee b.sh): what it writes counts as downloaded.
       this.taintIn = this.pipedIn && tainted;
       this.partTainted = false;
+      this.curOp = part.op;
       cwd = this.part(part.text, cwd, ps);
+      this.prevHead = this.headOf(part.text).head;
       tainted = this.partTainted;
       if (this.opaqueN > before) {
         bit(part.text);   // a part the hub could not read in full: the scan reads it
@@ -781,7 +822,7 @@ class Check {
     s = s.replace(/\$\(\s*git\s+(?:branch\s+--show-current|rev-parse\s+--abbrev-ref\s+HEAD|symbolic-ref\s+--short\s+(?:-q\s+)?HEAD)\s*\)/g, CURRENT_BRANCH);
     if (ps) return s;
     s = s.replace(/\$\(\s*cygpath(?:\s+-[wmua])+\s+(?:"([^"`()\s]+)"|'([^'`()\s$]+)'|([^\s"'`()<>|;&]+))\s*\)/g, (all, dq, sq, bare) => dq ?? sq ?? bare);
-    if (/\s/.test(this.tmp)) return s;   // a temp path with spaces would split into several words
+    if (/\s/.test(this.tmp) || this.spoof) return s;   // a temp path with spaces would split into several words; a TEMP the command set is anywhere
     // A1/A3: node printing the temp folder (exact text only) is the temp folder.
     s = s.replace(/\$\(\s*node\s+-[ep]\s+(?:"([^"`$\\]*)"|'([^'`$\\]*)')\s*\)/g, (all, dq, sq) => KNOWN_NODE_E.has(dq ?? sq) && /tmpdir\(\)/.test(dq ?? sq) ? this.tmp.replace(/\\/g, '/') : all);
     let n = 0;
@@ -840,8 +881,9 @@ class Check {
     const end = this.subEnd(s, at + 1, ps);
     if (end < 0) return { text: s.slice(at), next: s.length };
     const whole = s.slice(at, end);
-    if (!ps && s[at + 2] === '(') {   // $(( arithmetic )): numbers and variables only
-      return { text: /^\$\(\([\w\s+\-*/%<>=!&|^$]*\)\)$/.test(whole) && !whole.includes('$(', 3) ? this.newVal() : whole, next: end };
+    if (!ps && s[at + 2] === '(') {   // $(( arithmetic )): literal numbers and operators only. A name or $name inside is
+      // evaluated, and bash runs a command found in an array subscript (y='a[$(cmd)]'; $((y))): a doubt.
+      return { text: /^\$\(\([\d\s+\-*/%<>=!&|^()]*\)\)$/.test(whole) ? this.newVal() : whole, next: end };
     }
     const inner = this.valInner(s.slice(at + 2, end - 1), ps, cwd);
     // The risky-word scan still reads what ran inside (decision 64 A): a value that turns into git push in an eval is a stop.
@@ -979,6 +1021,8 @@ class Check {
     const base = join(this.projectDir, '.claude', 'worktrees');
     if (!/^(link|unlink)$/.test(sub || '') || more.length || typeof w !== 'string' || ['null', 'outside', 'tmp'].includes(w) || norm(dirname(w)) !== norm(base)) {   // directly under it
       this.unsure('worktree-setup.mjs with words the hub cannot check (link or unlink, then one worktree under .claude/worktrees)', true);
+    } else if (sub === 'link') {
+      (this.madeLinks ||= []).push(norm(join(w, 'hub', 'node_modules')));   // a junction this very command makes, like mklink /J
     }
   }
   // A7: headless Edge or Chrome for a screenshot or PDF: the files it writes stay contained, its profile is a folder in
@@ -993,6 +1037,19 @@ class Check {
     }
     if (risky) return this.unsure(`A browser option that opens a debugging port, loads code or turns off its protection (${risky})`, true);
     if (!headless || !profile || this.where(profile, cwd) !== 'tmp') this.unsure('A browser that is not headless, or has no profile of its own in the temp folder', true);
+  }
+  // The paths a Get-Item names (-Path, -LiteralPath or the first word): [] unless exactly the kind it can read.
+  itemArgs(args) {
+    const out = [];
+    for (let i = 0; i < args.length; i++) {
+      const a = String(args[i]);
+      const m = /^-(lp|literalpath|path|pspath)(?::(.+))?$/i.exec(a);
+      if (m) { const v = m[2] ?? args[++i]; if (v != null) out.push(v); continue; }
+      if (/^-(force|erroraction|ea)$/i.test(a)) { if (/^-(erroraction|ea)$/i.test(a)) i++; continue; }
+      if (a.startsWith('-')) return [];   // an option it does not know
+      out.push(a);
+    }
+    return out;
   }
   // A8: does an install in this folder reach a node_modules that is a junction (so the project's own)? Looks in the
   // folder and every folder above it up to the project.
@@ -1017,8 +1074,15 @@ class Check {
     const okNames = names.length && names.every(v => typeof v === 'string' && String(v).split(',').map(x => x.trim()).filter(Boolean).every(x => /^System(\.[A-Za-z]\w*)*$/.test(x)));
     if (code || !okNames) return this.unsure('Add-Type that compiles code or loads something other than System.* (-TypeDefinition, -MemberDefinition, a path)');
   }
+  // bash PATH=value: known tool folders (absolute: a variable the command did not set itself) in front of $PATH, nothing else.
+  pathValueOk(val) {
+    if (this.homeChanged) return false;   // $HOME / $USERPROFILE this command sets itself name some other folder
+    const dirs = String(val).replace(/^["']|["']$/g, '').split(':');
+    return dirs.length >= 2 && /^\$\{?path\}?$/i.test(dirs.pop()) && dirs.every(d => PATH_DIR.test(d));
+  }
   // A2: $env:Path = "<known tool folder>;$env:Path": this session's search path only, with a folder from PATH_DIR in front.
   pathPrepend(words) {
+    if (this.homeChanged) return false;   // $env:USERPROFILE and the like are not what they were
     const m = /^\$env:path(?:=(.*))?$/i.exec(words[0].text);
     if (!m) return false;
     let val = null;
@@ -1042,7 +1106,9 @@ class Check {
     const flagged = texts.slice(1).find(t => /^-/.test(t) && VAL.test(t));
     if (flagged) return this.unsure(`A command substitution used as an option (${head})`);
     const rest = texts.slice(1);
-    if (TEXT_ONLY.has(head) || /^(true|false|test|\[|\[\[|test-path|basename|dirname|join-path|split-path|date|seq|printf|start-sleep|sleep|measure-object|measure|select-object|select|where-object|sort-object|format-table|format-list|ft|fl|out-string|convertto-json|convertfrom-json)$/.test(head)) {
+    // ([[ is not here: it evaluates its operands as arithmetic, and bash runs a command found in an array subscript. date is
+    // not either: an unquoted value can split into -s TIME.)
+    if (TEXT_ONLY.has(head) || /^(true|false|test|\[|test-path|basename|dirname|join-path|split-path|seq|printf|start-sleep|sleep|measure-object|measure|select-object|select|where-object|sort-object|format-table|format-list|ft|fl|out-string|convertto-json|convertfrom-json)$/.test(head)) {
       // text and tests: nothing is opened, written or run (a path in test -f only asks if it exists)
       return;
     }
@@ -1056,9 +1122,11 @@ class Check {
       return this.unsure(`A command substitution given to git ${sub || ''} (it may change a branch, a file or a setting)`);
     }
     if (FILE_READERS.has(head) || READ_HEADS.has(head)) {
-      const pat = patternWords(texts);
-      const bad = texts.findIndex((t, i) => i > 0 && VAL.test(t) && !pat.has(i) && !/^(-[nmcABC]|--(lines|max-count|bytes|context))$/.test(texts[i - 1] || ''));
-      if (bad >= 0) return this.unsure(`Reads a path the hub cannot read (${head} with a command substitution)`, true);
+      // A value is allowed only as the pattern of grep given with -e / --regexp or after --: anywhere else it may be a path
+      // (a secret), an option, or several words (an unquoted value splits: head -n $(cat f) x).
+      const grep = /^(grep|egrep|fgrep)$/.test(head);
+      const bad = texts.findIndex((t, i) => i > 0 && VAL.test(t) && !(grep && (/^(-e|--regexp)$/.test(texts[i - 1] || '') || texts.slice(1, i).includes('--')) && /^CRUXVAL\d+$/.test(t)));
+      if (bad >= 0) return this.unsure(`Reads a path the hub cannot read, or an option it cannot tell (${head} with a command substitution)`, true);
       return;
     }
     if (DOWNLOADERS.has(head) || NETWORK.has(head) || /:\/\//.test(texts[at])) return this.unsure(`A command substitution in a web address or a request body (${head})`);
@@ -1147,6 +1215,17 @@ class Check {
       if (/^\(+[^(]/.test(words[0].text)) words = [{ ...words[0], text: words[0].text.replace(/^\(+/, '') }, ...words.slice(1)];
       // param($a, $b = 1): a declaration; its names are values only known at run time
       if (/^param\(/i.test(words[0].text)) { for (const m of raw.matchAll(/\$(\w+)/g)) (this.localVars ||= new Set()).add(m[1].toLowerCase()); return cwd; }
+      // A8: $i = Get-Item X: $i is that one item, if nothing else ever gives $i a value (and it is no loop variable)
+      {
+        const m = /^\$(\w+)$/.exec(words[0].text);
+        if (m && words[1]?.text === '=' && /^(get-item|gi)$/i.test(words[2]?.text || '')) {
+          const n = m[1].toLowerCase();
+          const sets = (this.cmdText.match(new RegExp(String.raw`\$${m[1]}\s*[-+*/]?=(?!=)`, 'gi')) || []).length;
+          const loops = new RegExp(String.raw`\b(foreach|for)\s*\(\s*\$${m[1]}\b|\bparam\b[^)]*\$${m[1]}\b|-(out|pipeline|error|warning)variable\s*:?\s*${m[1]}\b|\$${m[1]}\s*\[\s*ref|\[ref\]\s*\$${m[1]}`, 'i').test(this.cmdText);
+          const t = this.itemArgs(words.slice(3).map(w => w.text));
+          if (sets === 1 && !loops && t.length === 1) (this.itemVars ||= new Map()).set(n, t[0]); else this.itemVars?.delete(n);
+        }
+      }
       // A2: a session-only $env:Path = "<known tool folder>;$env:Path" is a setting, not a doubt. Any other change of the
       // search path (a folder in temp or the project in front, a bare replacement, +=) decides which program runs next.
       if (this.pathPrepend(words)) return cwd;
@@ -1247,10 +1326,7 @@ class Check {
       if (pairs) for (const [k] of pairs) this.assigned.add(k);
       // A2 (shell side of the same rule): PATH decides which program runs next, so only a known tool folder in front of $PATH.
       const pathSet = pairs?.find(([k]) => k === 'path');
-      if (pathSet) {
-        const dirs = pathSet[1].split(':');
-        if (!(dirs.length >= 2 && /^\$\{?path\}?$/i.test(dirs.pop()) && dirs.every(d => PATH_DIR.test(d)))) this.unsure('Changes the search path (which program runs next) to something other than a known tool folder in front', true);
-      }
+      if (pathSet && !this.pathValueOk(pathSet[1])) this.unsure('Changes the search path (which program runs next) to something other than a known tool folder in front', true);
     }
     if (!pairs) return false;
     if (SECRET_VAR.test(pairs.map(p => p[0]).join(' ')) && pairs.some(p => /\$/.test(p[1]))) { for (const w of words) this.word(w, cwd); return false; }
@@ -1287,6 +1363,8 @@ class Check {
     while (words.length && /^\w+=/.test(words[0].text) && words.length > 1) {
       if (/^\w*PORT\w*=0*(\d+)$/i.test(words[0].text) && LIVE_PORTS.has(Number(/=0*(\d+)$/.exec(words[0].text)[1]))) this.stop(`Starts something on the live hub's port (${[...LIVE_PORTS].join(' or ')})`);
       if (SECRET_VAR.test(words[0].text.split('=')[0]) && /\$/.test(words[0].orig ?? words[0].text)) this.stop(`Passes what looks like a secret (${words[0].orig ?? words[0].text})`);
+      // PATH=dir:$PATH cmd: which program runs is decided by the folder in front
+      if (/^path=/i.test(words[0].text) && !this.pathValueOk(words[0].text.slice(5))) this.unsure('Runs a program with a search path other than a known tool folder in front', true);
       this.word({ ...words[0], text: words[0].text.replace(/^\w+=/, '') }, cwd);
       this.envNow.set(words[0].text.split('=')[0].toLowerCase(), words[0].text.replace(/^\w+=/, ''));
       words = words.slice(1);
@@ -1361,11 +1439,21 @@ class Check {
       if (head === 'add-type') return this.addType(args);
       // A2: a session-only prepend of a known tool folder (the part() check handles the whole assignment).
       // A8: (Get-Item X).Delete() and [IO.Directory]::Delete(X) with no "recurse" remove X itself: a junction, never what it points to.
-      if (/^(get-item|gi)$/.test(head)) { (this.itemTargets ||= []).push(...args.filter(a => !a.startsWith('-') || /^-(lp|literalpath|path)/i.test(a)).map(a => a.replace(/^-\w+[:=]?/, '')).filter(Boolean)); }
+      // The receiver of a .Delete() must be the Get-Item right in front of it ((Get-Item X).Delete(), one statement), or a
+      // variable set once, to one Get-Item. (Get-ChildItem ...).Delete(), $_.Delete(), $x.Delete($true) and any other
+      // receiver are doubts.
+      if (/^(get-item|gi)$/.test(head)) this.itemTargets = this.itemArgs(args);
       if (head === '.delete(' || head === '.delete()') {
         const t = this.itemTargets || []; this.itemTargets = [];
-        if (!t.length || args.length) return this.unsure('A .Delete() the hub cannot place');
+        const direct = /^(get-item|gi)$/.test(this.prevHead || '') && this.curOp === ')' && t.length === 1;
+        if (!direct || args.length) return this.unsure('A .Delete() whose receiver is not the Get-Item right in front of it');
         return this.removeLink(t, cwd, `(Get-Item ${t.join(' ')}).Delete()`);
+      }
+      const dv = /^\$(\w+)\.delete\((.*)$/.exec(head);
+      if (dv) {
+        const it = this.itemVars?.get(dv[1]);
+        if (!it || args.length || dv[2]) return this.unsure(`$${dv[1]}.Delete() on something that is not one Get-Item the hub can see`);
+        return this.removeLink([it], cwd, `$${dv[1]}.Delete() (from Get-Item ${it})`);
       }
       const dd = /^\[(?:system\.)?io\.directory\]::delete\((.*)$/i.exec(words[0].text);
       if (dd) {
@@ -1606,9 +1694,13 @@ class Check {
     if (head === 'find') {
       if (args.some(a => /^-(exec|execdir|ok|okdir)$/.test(a))) this.unsure('find runs other commands (-exec)');
       // -delete deletes under the folders it starts from; -fprint, -fprint0, -fprintf and -fls write a file.
-      const starts = []; for (const a of args) { if (/^[-(!]/.test(a)) break; starts.push(a); }
+      const starts = []; let k = 0;
+      while (k < args.length && (/^-[HLP]$/.test(args[k]) || /^-O\d$/.test(args[k]) || args[k] === '-D')) k += args[k] === '-D' ? 2 : 1;   // find's own options come before the folders
+      for (; k < args.length; k++) { if (/^[-(!]/.test(args[k])) break; starts.push(args[k]); }
       if (args.includes('-delete')) {
         for (const s of starts.length ? starts : ['.']) {
+          // A8: through a junction (the folder itself, one above it, one inside it; a trailing slash or -L / -follow follow it) it would empty the project's packages
+          if (this.throughLink(s, cwd)) this.unsure(`find ${s} -delete reaches through a link or junction: that could empty the folder it points to`, true);
           const w = this.where(s, cwd);
           if (w === 'outside') this.stop(`Deletes files outside the project or a temp folder (find ${s} -delete)`);
           else if (w === 'tmp' && !this.ownTemp(s, cwd)) this.unsure(`Deletes in a temp folder that is not this agent's own (find ${s} -delete)`, true);
@@ -1733,7 +1825,7 @@ class Check {
     let s = String(v).trim();
     const inner = /^\(([\s\S]*)\)$/.exec(s);
     if (inner) s = inner[1].trim();
-    if (/^"?\$\{?env:(temp|tmp)\}?"?$/i.test(s) || /^\[(system\.)?io\.path\]::gettemppath\(\s*\)$/i.test(s)) return this.tmp;
+    if (/^"?\$\{?env:(temp|tmp)\}?"?$/i.test(s) || /^\[(system\.)?io\.path\]::gettemppath\(\s*\)$/i.test(s)) return this.spoof ? null : this.tmp;
     const own = /^\$(\w+)$/.exec(s);
     if (own) return paths.get(own[1].toLowerCase()) || null;
     const j = /^join-path\s+(\S+|\([^()]*\))\s+(?:'([^'$`]+)'|"([^"$`]+)"|([\w.-]+))$/i.exec(s);
@@ -2021,6 +2113,15 @@ class Check {
     const verdicts = [...(this.cmdFilters || []).map(f => this.judgeCmd(f, cwd)), ...(this.portFilters || []).map(f => this.judgePort(f))];
     if (!how || !verdicts.length || verdicts.includes('bad')) {
       return this.stop(`Stops a process (${head}) the hub cannot tell is not the hub on port 4747 (no filter on its own temp folder or a port other than 4747)`);
+    }
+    // A tracked port vouches only for a stop aimed at that port alone: Get-NetTCPConnection -LocalPort N feeding
+    // Stop-Process -Id. Another way of picking processes in the same command (a command-line filter, Get-CimInstance, Get-Process,
+    // WMI, Terminate(), taskkill, pkill) is judged by itself, whatever ports appear (a port in a comment or string counts for nothing).
+    if (this.portFilters?.length) {
+      const other = /get-ciminstance|get-wmiobject|\bgcim\b|\bgwmi\b|get-process|\bgps\b|win32_process|\.terminate\s*\(|invoke-cimmethod|\bwmic\b|process\.kill|\btaskkill\b|\bpkill\b|\bkillall\b|\bkill\b/i;
+      if ((this.cmdFilters || []).length || !/^(stop-process|spps)$/.test(head) || other.test(this.cmdText)) {
+        return this.unsure('Stops processes picked by a port together with another way of picking them: the port alone cannot vouch for it', true);
+      }
     }
     if (verdicts.includes('unsure')) {
       if ((this.portFilters || []).some(f => this.judgePort(f) === 'unsure')) this.unsure('Stops whatever listens on a port this agent has not started a test hub on', true);
@@ -2523,7 +2624,8 @@ class Check {
   // Starting a test hub: the port is this agent's now (the hub keeps it), so it may stop it later (A7).
   testHubStart(args) {
     const port = this.hubPort(args);
-    if (port != null) { this.startedHubs.add(port); this.hubsNow.add(port); }
+    // Only noted for what comes after this request: a start and a stop in one command do not vouch for each other.
+    if (port != null) this.hubsNow.add(port);
   }
 
   // An inline script (node -e, python -c, a heredoc into node -) is judged by what it reaches for. The standard XML
@@ -2536,9 +2638,13 @@ class Check {
     if (/\b(rmSync|unlinkSync|rmdirSync|rm\(|unlink\(|rmdir\(|os\.remove|os\.unlink|shutil\.rmtree)\b/.test(code)) this.scriptDeletes(code);
     if (/\b(stopTree|pidsOnPort|process\.kill|taskkill)\b/.test(code)) {
       if (/474[78]/.test(code)) this.stop("An inline script that stops processes and names the live hub's port (4747 or 4748)");
-      else {   // A7: by port is "whatever listens there": only a port this agent started a test hub on
-        const ports = [...code.matchAll(/\b\d{4,5}\b/g)].map(m => Number(m[0]));
-        if (!ports.length || !ports.every(p => this.startedHubs?.has(p))) this.unsure('An inline script that stops processes by port or id, not on a test hub this agent started', true);
+      else {   // A7: by port is "whatever listens there": only the one shape below, on a port this agent started a test hub on
+        const shape = /for\s*\(\s*const\s+(\w+)\s+of\s+await\s+\w+\.pidsOnPort\(\s*(\d{2,5})\s*\)\s*\)\s*await\s+\w+\.stopTree\(\s*\1\s*\)/g;
+        const found = [...code.matchAll(shape)];
+        const uses = (code.match(/\b(stopTree|pidsOnPort|process\.kill|taskkill)\b/g) || []).length;   // each shape holds two
+        if (!found.length || uses !== found.length * 2 || !found.every(m => this.startedHubs?.has(Number(m[2])))) {
+          this.unsure('An inline script that stops processes by port or id, other than the one shape, on a test hub this agent started', true);
+        }
       }
     }
     if (/process\.env|os\.environ|homedir\(\)|expanduser/.test(code)) this.stop('An inline script that reads environment variables or the home folder');
