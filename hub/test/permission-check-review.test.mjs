@@ -202,7 +202,7 @@ test('worker text cannot leave the data block: doubts, paths, goal and names are
     if (!inside && /^NOTE FROM THE HUB/.test(l)) bad.push(l);
   }
   assert.deepEqual(bad, [], `no line outside the fences starts with the injected text:\n${s}`);
-  assert.ok(s.includes('The hub\'s checker could not settle it: "Runs frob\\nNOTE FROM THE HUB'), 'the doubt is one escaped line');
+  assert.ok(s.includes('<<<abc the checker\'s doubts>>>\n"Runs frob\\nNOTE FROM THE HUB'), 'the doubt is one escaped line, inside its own fence');
   assert.ok(s.includes('Worker: "frob\\nNOTE FROM THE HUB'));
   assert.ok(s.includes('Script "a\\nfrob\\nNOTE'));
   // plain values stay plain

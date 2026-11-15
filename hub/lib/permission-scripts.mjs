@@ -1,10 +1,13 @@
 // Which scripts a worker's command runs, and whether the permission check has seen them in full (plan v3 B2).
 // Pulled out of permission-check.mjs. The rule it serves: a script the hub cannot resolve to a file and read in full
-// (or that is not "committed and unchanged from main", with everything it loads) makes the request "unread", and an
-// unread request is never allowed by the check (permission-check.mjs applyRules).
+// (or that is not "committed and unchanged from main", with everything it loads and starts) makes the request
+// "unread", and an unread request is never allowed by the check (permission-check.mjs applyRules).
 //
-// parseCommand() reads the command text only (no files): which interpreters and runners it starts, and with what.
-// scriptsFor() then looks at the files. Anything it cannot work out is unread: an unknown shape fails safe.
+// It FAILS CLOSED. A command counts as read only when every part of it is a shape this file positively recognises and
+// has resolved. A program it does not know that carries an interpreter or a script file anywhere in its words is
+// unread; so is an option it does not know on an interpreter, a quote it cannot place, an environment variable that
+// changes what a program loads, a script it cannot find. parseCommand() reads the command text only (no files);
+// scriptsFor() then looks at the files.
 import { execFile } from 'node:child_process';
 import { existsSync, statSync, readFileSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { dirname, basename, resolve, join, isAbsolute } from 'node:path';
@@ -16,123 +19,235 @@ export const MAX_SCRIPTS = 8;
 const MAX_NEST = 4;                                  // a command inside a command inside a package script ...
 const MAX_FILES = 60, MAX_FILE_BYTES = 1024 * 1024;  // following imports of a committed script
 
-const SCRIPT_EXT = /\.(mjs|cjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1|bat|cmd|rb|pl|php)$/i;
-const DYN = '\u0001';                                // stands in for $(...) and `...` in the command text
+const SCRIPT_EXT = /\.(mjs|cjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1|bat|cmd|rb|pl|php|lua)$/i;
+const DYN = '\u0001';                                // stands in for $(...) and `...` in a word
 
-// ---------- reading the command ----------
-// $(...) and `...` are pulled out (they run commands of their own) and left as a marker in the text.
-function pullSubs(cmd) {
-  let out = '', i = 0, sq = false, dq = false;
-  const subs = [];
-  while (i < cmd.length) {
-    const c = cmd[i];
-    if (!sq && c === '"' && cmd[i - 1] !== '\\') dq = !dq;
-    else if (!dq && c === "'") sq = !sq;
-    if (!sq && c === '$' && cmd[i + 1] === '(') {
-      let depth = 1, j = i + 2;
-      while (j < cmd.length && depth) { if (cmd[j] === '(') depth++; else if (cmd[j] === ')') depth--; j++; }
-      subs.push(cmd.slice(i + 2, depth ? j : j - 1));
-      out += DYN; i = j; continue;
-    }
-    if (!sq && c === '`') {
-      const j = cmd.indexOf('`', i + 1);
-      if (j > 0) { subs.push(cmd.slice(i + 1, j)); out += DYN; i = j + 1; continue; }
-    }
-    out += c; i++;
+// ---------- reading the command: quotes, substitutions, heredocs ----------
+// The text between $( and its matching ), as the shell would take it. -1: never closed.
+function matchParen(t, i, shell) {
+  let depth = 1, q = null;
+  for (let j = i; j < t.length; j++) {
+    const c = t[j];
+    if (q === "'") { if (c === "'") q = null; continue; }
+    if (q === '"') { if (c === '\\' && shell === 'bash') { j++; continue; } if (c === '"') q = null; continue; }
+    if (c === "'" && shell !== 'cmd') q = "'";
+    else if (c === '"') q = '"';
+    else if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return j;
   }
-  return { text: out, subs };
+  return -1;
 }
-const words = seg => (seg.match(/"(?:[^"\\]|\\.)*"|'[^']*'|\S+/g) || []).map(w => w.replace(/^["']|["']$/g, ''));
-// Split at ; | & newlines and brackets (not inside quotes): each part is one command.
-function segments(cmd) {
-  const out = []; let cur = '', q = null;
-  for (let i = 0; i < cmd.length; i++) {
-    const c = cmd[i];
-    if (q) { if (c === q && cmd[i - 1] !== '\\') q = null; cur += c; continue; }
-    if (c === '"' || c === "'") { q = c; cur += c; continue; }
-    if ('\n;|&(){}'.includes(c)) { out.push(cur); cur = ''; continue; }
-    cur += c;
+// Heredoc bodies are data (or the code of the command that reads them): they come out of the command text, in order of
+// the markers, so a quote inside one cannot hide what follows it.
+function stripHeredocs(text, why) {
+  const lines = text.split('\n'), out = [], bodies = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    out.push(line);
+    for (const m of line.matchAll(/(?<!<)<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_]\w*))/g)) {
+      const tag = m[2] || m[3] || m[4], body = [];
+      let j = i + 1;
+      for (; j < lines.length; j++) { if ((m[1] ? lines[j].replace(/^\t+/, '') : lines[j]) === tag) break; body.push(lines[j]); }
+      if (j >= lines.length) { why.push('a heredoc that never ends'); bodies.push(body.join('\n')); i = lines.length; break; }
+      bodies.push(body.join('\n'));
+      i = j;
+    }
   }
-  out.push(cur);
-  return out;
+  return { text: out.join('\n'), bodies };
 }
+// Words per command, split as the shell splits them: bash (no escapes in '...', backslash outside and in "..."), PowerShell
+// (backslash is a plain character; '' and "" are a quote; a backtick is an escape the hub does not follow, so it is unread),
+// cmd (only "..." quotes; ^ is an escape the hub does not follow). $(...) and `...` (bash) become DYN in the word and their
+// text goes to subs.
+export function lex(raw, shell = 'bash') {
+  const why = [], subs = [];
+  let text = String(raw ?? '').replace(/\r\n?/g, '\n'), bodies = [];
+  if (shell === 'bash') ({ text, bodies } = stripHeredocs(text, why));
+  if (shell === 'powershell' && text.includes('`')) why.push('it has a backtick, an escape the hub does not follow in PowerShell');
+  if (shell === 'cmd' && text.includes('^')) why.push('it has a ^, an escape the hub does not follow in cmd');
+  if (shell === 'bash' && /\$['"]/.test(text)) why.push('it uses $\'...\' quoting, which the hub does not follow');
+  const segs = [];
+  let words = [], cur = '', has = false, q = null;
+  const endWord = () => { if (has) words.push(cur); cur = ''; has = false; };
+  const endSeg = () => { endWord(); if (words.length) segs.push(words); words = []; };
+  const sub = (i, open) => {   // a substitution starting at text[i]; returns the index to carry on from
+    if (open === '(') {
+      const j = matchParen(text, i + 2, shell);
+      if (j < 0) { why.push('a $( that is never closed'); return text.length; }
+      subs.push(text.slice(i + 2, j)); cur += DYN; has = true; return j;
+    }
+    let k = i + 1;
+    while (k < text.length && text[k] !== '`') k += text[k] === '\\' ? 2 : 1;
+    if (k >= text.length) { why.push('a backtick that is never closed'); return text.length; }
+    subs.push(text.slice(i + 1, k)); cur += DYN; has = true; return k;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i], n = text[i + 1];
+    if (q === "'") {
+      if (c === "'") { if (shell === 'powershell' && n === "'") { cur += "'"; i++; } else q = null; } else cur += c;
+      continue;
+    }
+    if (q === '"') {
+      if (shell === 'bash' && c === '\\') { if (n && '"\\$`'.includes(n)) { cur += n; i++; } else if (n === '\n') i++; else cur += c; continue; }
+      if (c === '"') { if (shell !== 'bash' && n === '"') { cur += '"'; i++; } else q = null; continue; }
+      if (c === '$' && n === '(' && shell !== 'cmd') { i = sub(i, '('); continue; }
+      if (c === '`' && shell === 'bash') { i = sub(i, '`'); continue; }
+      cur += c;
+      continue;
+    }
+    if (c === '\\' && shell === 'bash') { has = true; if (n === undefined) cur += c; else if (n === '\n') { i++; has = cur !== ''; } else { cur += n; i++; } continue; }
+    if (c === "'" && shell !== 'cmd') { q = "'"; has = true; continue; }
+    if (c === '"') { q = '"'; has = true; continue; }
+    if (c === '$' && n === '(' && shell !== 'cmd') { i = sub(i, '('); continue; }
+    if (c === '`' && shell === 'bash') { i = sub(i, '`'); continue; }
+    if (c === '\n' || ';|&(){}'.includes(c)) { endSeg(); continue; }
+    if (/\s/.test(c)) { endWord(); continue; }
+    cur += c; has = true;
+  }
+  if (q) why.push('a quote that is never closed');
+  endSeg();
+  return { segs, subs, bodies, why };
+}
+
 const dynamic = x => x.includes(DYN) || /\$[\w{(]|%\w+%|^~/.test(x);
 const bareSpec = s => !/^(\.{1,2}[\\/]|[\\/]|[A-Za-z]:|file:)/.test(s);   // a package name: dependency code, not a file here
 const SHELLS = /^(bash|sh|zsh|dash|ksh|ash)$/;
 const NODEISH = /^(node|nodejs|tsx|ts-node|ts-node-esm)$/;
 const PYTHONISH = /^(python[\d.]*|py|pypy[\d.]*)$/;
-const NODE_VALUE = new Set(['--input-type', '-C', '--conditions', '--title', '--env-file', '--stack-trace-limit', '--test-name-pattern', '--test-reporter', '--test-concurrency', '--test-timeout']);
+// Programs and words that start code. An unknown program with one of these (or a script file) among its words is unread.
+const CARRIES = /^(node|nodejs|deno|bun|bunx|tsx|ts-node|ts-node-esm|python[\d.]*|py|pypy[\d.]*|bash|sh|zsh|dash|ksh|ash|fish|pwsh|powershell|cmd|wsl|ruby|perl|php|lua|npm|npx|pnpm|pnpx|yarn|uv|uvx|poetry|pipx|cargo|go|dotnet|make|gmake|nmake|just|task|java|javaw|mshta|wscript|cscript|rundll32|regsvr32|msiexec|invoke-expression|iex|invoke-command|icm|start-process|saps)$/i;
+// Programs that only read, write or report, and never start what is in their arguments.
+const SAFE_HEADS = new Set(['echo', 'printf', 'cat', 'type', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'grep', 'egrep', 'fgrep', 'rg', 'ls', 'dir', 'll', 'tree', 'stat', 'file', 'pwd', 'which', 'where', 'whereis',
+  'get-command', 'gcm', 'test', '[', 'true', 'false', ':', 'sleep', 'start-sleep', 'date', 'mkdir', 'md', 'touch', 'cp', 'copy', 'mv', 'move', 'rm', 'del', 'erase', 'rmdir', 'rd', 'ri', 'remove-item', 'copy-item', 'cpi', 'move-item', 'mi',
+  'new-item', 'ni', 'rename-item', 'get-childitem', 'gci', 'get-content', 'gc', 'set-content', 'sc', 'add-content', 'ac', 'select-string', 'sls', 'select-object', 'where-object', 'foreach-object', 'sort-object', 'measure-object',
+  'format-table', 'format-list', 'out-null', 'out-file', 'out-string', 'write-host', 'write-output', 'write-error', 'test-path', 'join-path', 'split-path', 'resolve-path', 'get-item', 'get-date', 'get-location', 'set-variable',
+  'get-process', 'get-service', 'get-filehash', 'convertto-json', 'convertfrom-json', 'basename', 'dirname', 'readlink', 'realpath', 'cygpath', 'mktemp', 'expr', 'diff', 'cmp', 'du', 'df', 'ps', 'tasklist', 'taskkill', 'stop-process',
+  'netstat', 'curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm', 'gh', 'msedge', 'chrome', 'chromium', 'exit', 'return', 'popd']);
+const GIT_EXEC = /^(-x|--exec(=.*)?|-c|--upload-pack(=.*)?|--receive-pack(=.*)?|--exec-path(=.*)?|--ext-cmd(=.*)?|--config-env(=.*)?)$/;
+// What an environment variable can change in what a program loads or runs.
+const ENV_LOADS = /(?:^|[^A-Za-z0-9_])(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|PYTHONPATH|PYTHONSTARTUP|PYTHONHOME|PYTHONUSERBASE|PYTHONINSPECT|PYTHONBREAKPOINT|BASH_ENV|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|GIT_SSH_COMMAND|GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EDITOR|GIT_SEQUENCE_EDITOR|GIT_PAGER|GIT_ASKPASS|GIT_EXEC_PATH|GIT_CONFIG_\w+|GIT_DIR|GIT_WORK_TREE|COMSPEC|PATHEXT|PSModulePath)(?![A-Za-z0-9_])|npm_config_\w+|NPM_CONFIG_\w+|--node-options|(?:^|[\s;&|(])(?:export\s+|set\s+|\$env:)?PATH\s*=/i;
+// Flags with no value that are safe on each interpreter. Anything else is unread: it could load or run something else.
+const NODE_OK = /^(--test|--test-only|--test-update-snapshots|--no-warnings|--no-deprecation|--trace-warnings|--trace-deprecation|--throw-deprecation|--enable-source-maps|--experimental-vm-modules|--experimental-strip-types|--no-experimental-strip-types|--use-strict|--expose-gc|--check|-c|--watch|--experimental-default-type=(module|commonjs)|--input-type=(module|commonjs)|--test-reporter=(spec|tap|dot|junit|lcov)|--test-concurrency=\d+|--test-timeout=\d+|--test-name-pattern=.*|--max-old-space-size=\d+|--stack-trace-limit=\d+)$/;
+const NODE_VALUE_OK = { '--input-type': /^(module|commonjs)$/, '--test-reporter': /^(spec|tap|dot|junit|lcov)$/, '--test-concurrency': /^\d+$/, '--test-timeout': /^\d+$/, '--test-name-pattern': /^[\s\S]*$/ };
+const PY_OK = /^-([BuOsEIqbSd]+|OO)$/;
+const BASH_OK = /^(-[euxfnvlhBCpPa]+|--norc|--noprofile|--posix|--login|--version|--help)$/;
+const PS_OK = /^-(noprofile|noninteractive|nologo|mta|sta)$/i;
+const PS_VALUE = /^-(ep|executionpolicy|windowstyle|outputformat|inputformat)$/i;
+const PM_OK = /^(--silent|-s|--if-present|--quiet|-q|--no-progress|--no-fund|--no-audit|--ignore-scripts|--offline|--prefer-offline|--no-color|--color|--loglevel=\w+|--frozen-lockfile|--immutable)$/;
+const DENO_OK = /^(-A|--allow-[a-z-]+(=.*)?|--deny-[a-z-]+(=.*)?|--no-prompt|--quiet|-q|--no-check|--check|--no-lock)$/;
 const PM_BUILTIN = new Set(['install', 'i', 'add', 'remove', 'rm', 'uninstall', 'update', 'up', 'upgrade', 'list', 'ls', 'info', 'why', 'init', 'link', 'unlink', 'audit', 'outdated', 'config', 'cache', 'store', 'publish', 'pack', 'version', 'help', 'import', 'prune', 'rebuild', 'dedupe', 'fetch', 'patch', 'licenses', 'create', 'set', 'get', 'workspace', 'workspaces', 'env', 'login', 'logout', 'whoami', 'view', 'search', 'ci', 'cit', 'ddp', 'doctor', 'explain', 'diff', 'pkg']);
+const INTERP = /^(node|nodejs|tsx|ts-node|ts-node-esm|python[\d.]*|py|pypy[\d.]*|bash|sh|zsh|dash|ksh|ash|pwsh|powershell|cmd|ruby|perl|php|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|poetry|pipx|hatch|pdm|cargo|go|dotnet|make|gmake|nmake|just|task)$/;
+
+// Words that carry an interpreter or a script file anywhere inside them, quoted or not.
+function carries(words, { scriptsToo = true } = {}) {
+  for (const w of words) for (const t of String(w).split(/[\s;&|=,(){}"'`<>]+/).filter(Boolean)) {
+    if (CARRIES.test(basename(t.replace(/\\/g, '/')).replace(/\.exe$/i, ''))) return t;
+    if (scriptsToo && SCRIPT_EXT.test(t)) return t;
+  }
+  return null;
+}
 
 // What a command starts. files: { path, mode } with mode 'file' (as written), 'node' (a node entry: may omit the
 // extension), 'module' (python -m), 'direct' (a path used as the command word). inline: code written in the command.
-// nested: command text to read in turn (bash -c "...", $(...)). runners: npm-style script names. unread: why not.
-export function parseCommand(cmd) {
+// nested: { cmd, shell } command text to read in turn (bash -c "...", $(...)). runners: npm-style script names.
+// unread: { head, why } for anything the hub cannot read in full.
+export function parseCommand(cmd, { shell = 'bash' } = {}) {
   const out = { files: [], inline: [], nested: [], runners: [], unread: [] };
-  const { text, subs } = pullSubs(String(cmd || ''));
-  out.nested.push(...subs.map(s => ({ cmd: s, at: '' })));
+  const lx = lex(cmd, shell);
+  for (const why of lx.why) out.unread.push({ head: '(command)', why });
+  out.nested.push(...lx.subs.map(s => ({ cmd: s, at: '', shell })));
+  if (ENV_LOADS.test(String(cmd || ''))) out.unread.push({ head: '(environment)', why: 'it sets something that changes what a program loads or runs (NODE_OPTIONS, PYTHONPATH, PATH ...)' });
   // "cd hub && npm test": the folder a later part of the command runs in. Each file, runner and nested command is
   // tagged with it (`at`, relative to where the whole command runs), so it is looked for where it really is.
-  let at = '';
+  let at = '', bodyAt = 0;
   const tagNew = () => {
     for (const x of [...out.files, ...out.runners]) if (x.at === undefined) x.at = at;
-    out.nested = out.nested.map(n => (typeof n === 'string' ? { cmd: n, at } : n));
+    for (const n of out.nested) if (n.at === undefined) n.at = at;
   };
-  for (const seg of segments(text)) {
+  for (const w0 of lx.segs) {
     tagNew();
-    let w = words(seg);
+    let w = w0;
+    const markers = w.filter(x => /^<<-?[^<]/.test(x));   // a heredoc marker word takes the next body, in order
+    const body = markers.length ? markers.map(() => lx.bodies[bodyAt++] ?? '').join('\n') : null;
     for (;;) {   // VAR=x in front, and wrappers: timeout 5 node x.mjs, env X=1 node x.mjs, sudo ..., . ./x.sh (sourced)
       if (!w.length) break;
-      if (/^[A-Za-z_]\w*=/.test(w[0])) { w.shift(); continue; }
-      if (/^(timeout|time|nohup|env|call|start|sudo|exec|command|nice|builtin)$/i.test(w[0]) && w.length > 1) { w.shift(); while (w.length && (/^(-\S+|\d+(\.\d+)?[smhd]?)$/.test(w[0]) || /^[A-Za-z_]\w*=/.test(w[0]))) w.shift(); continue; }
+      if (/^[A-Za-z_]\w*=/.test(w[0])) { w = w.slice(1); continue; }
+      if (/^(timeout|time|nohup|env|call|start|sudo|exec|command|nice|builtin)$/i.test(w[0]) && w.length > 1) { w = w.slice(1); while (w.length && (/^(-\S+|\d+(\.\d+)?[smhd]?)$/.test(w[0]) || /^[A-Za-z_]\w*=/.test(w[0]))) w = w.slice(1); continue; }
       break;
     }
     if (!w.length) continue;
     const word0 = w[0], rest = w.slice(1);
     const head = basename(word0.replace(/\\/g, '/')).replace(/\.exe$/i, '').toLowerCase();
+    if (dynamic(word0)) { out.unread.push({ head: '(command)', why: 'what it runs is built at run time' }); continue; }
     if (/^(cd|chdir|pushd|set-location|sl)$/.test(head)) {
       const arg = rest.find(x => !/^\/d$/i.test(x) && !/^-(path|literalpath|l|p)$/i.test(x));
       // a folder it cannot work out, or a cd inside a group or after ||, whose reach cannot be told from the text
-      if (!arg || arg === '-' || dynamic(arg) || /[(){}]/.test(text) || text.includes('||')) out.unread.push({ head: 'cd', why: 'moves to a folder the hub cannot work out' });
+      if (!arg || arg === '-' || dynamic(arg) || /[(){}]/.test(String(cmd)) || String(cmd).includes('||')) out.unread.push({ head: 'cd', why: 'moves to a folder the hub cannot work out' });
       else at = isAbsolute(arg) ? arg : join(at || '.', arg);
       continue;
     }
     if (word0 === '.' || head === 'source') {   // ". ./x.sh", "source x.sh"
-      if (rest[0] && !dynamic(rest[0])) out.files.push({ path: rest[0], mode: 'file' }); else if (rest[0]) out.unread.push({ head: 'source', why: 'its path is built at run time' });
+      if (rest[0] && !dynamic(rest[0])) out.files.push({ path: rest[0], mode: 'file' }); else out.unread.push({ head: 'source', why: 'its path is built at run time' });
       continue;
     }
     if (head === 'xargs') {   // xargs [flags] cmd args: the rest is a command
       let i = 0;
       while (i < rest.length && rest[i].startsWith('-')) i += /^-[INPdELsa]$/.test(rest[i]) ? 2 : 1;
-      if (i < rest.length) out.nested.push(rest.slice(i).join(' ')); continue;
+      if (i < rest.length) out.nested.push({ cmd: rest.slice(i).join(' '), shell }); else out.unread.push({ head, why: 'what it starts is not clear' });
+      continue;
     }
     if (/^(start-process|saps)$/.test(head)) {
       let file = null, args = [], i = 0;
       for (; i < rest.length; i++) {
-        const lx = rest[i].toLowerCase();
-        if (lx === '-filepath') file = rest[++i];
-        else if (lx === '-argumentlist') { args = rest.slice(i + 1); break; }
-        else if (/^-(windowstyle|workingdirectory|redirectstandard\w+|verb|credential)$/.test(lx)) i++;
+        const lx2 = rest[i].toLowerCase();
+        if (lx2 === '-filepath') file = rest[++i];
+        else if (lx2 === '-argumentlist') { args = rest.slice(i + 1); break; }
+        else if (/^-(windowstyle|workingdirectory|redirectstandard\w+|verb|credential)$/.test(lx2)) i++;
         else if (!rest[i].startsWith('-')) { if (file === null) file = rest[i]; else args.push(rest[i]); }
       }
-      if (file) out.nested.push([file, ...args].join(' ').replace(/,/g, ' ')); else out.unread.push({ head, why: 'what it starts is not clear' });
+      if (file) out.nested.push({ cmd: [file, ...args].join(' ').replace(/,/g, ' '), shell }); else out.unread.push({ head, why: 'what it starts is not clear' });
       continue;
     }
-    const interp = NODEISH.test(head) || PYTHONISH.test(head) || SHELLS.test(head) || /^(pwsh|powershell|cmd|ruby|perl|php|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|poetry|pipx|cargo|go|dotnet|make|gmake|nmake|just|task)$/.test(head);
-    if (interp) {
-      if (rest.some(dynamic) || dynamic(word0)) { out.unread.push({ head, why: 'its arguments are built at run time' }); continue; }
-      starts(head, rest, out, cmd);
+    if (head === 'git') {   // git runs a program for -x, -c core.x=..., --upload-pack ...: it is not just a read
+      const bad = rest.find(x => GIT_EXEC.test(x));
+      if (bad) out.unread.push({ head, why: `git is told to run something (${bad})` });
+      else {   // subcommands that run a command they are given, or store one
+        const sub = rest.find(x => !x.startsWith('-')), t = carries(rest);
+        if (/^(submodule|bisect|filter-branch|rebase|difftool|mergetool|config|instaweb|daemon|credential|am|hook|maintenance)$/.test(sub || '') && t) out.unread.push({ head, why: `git is given a program or script (${t}) to run or keep` });
+      }
+      continue;
+    }
+    if (head === 'find' || head === 'fd') {
+      if (rest.some(x => /^-(exec|execdir|ok|okdir|fprint\w*|fls)$/.test(x) || /^(-x|--exec|-X|--exec-batch)$/.test(x))) out.unread.push({ head, why: 'it runs a command on what it finds' });
+      continue;
+    }
+    if (head === 'sed' || head === 'awk' || head === 'gawk') {   // 'e' in sed and system() in awk run programs: any interpreter in the text counts
+      const t = carries(rest, { scriptsToo: false });
+      if (t) out.unread.push({ head, why: `its program text names an interpreter (${t})` });
+      continue;
+    }
+    if (INTERP.test(head)) {
+      if (rest.some(dynamic)) { out.unread.push({ head, why: 'its arguments are built at run time' }); continue; }
+      starts(head, rest, out, { shell, body });
     } else if (SCRIPT_EXT.test(word0)) out.files.push({ path: word0, mode: 'file' });   // the command word is itself a script: ./run.sh, x.ps1, build.bat
     else if (/[\\/]/.test(word0)) out.files.push({ path: word0, mode: 'direct' });      // ./tool, .\tool: a program in the project, if it is one
+    else if (!SAFE_HEADS.has(head)) {   // a program the hub does not know: unread if an interpreter or a script file is anywhere in its words
+      const t = carries(rest);
+      if (t) out.unread.push({ head, why: `it starts a program the hub does not know, with ${t} among its words` });
+    }
   }
   tagNew();
   return out;
 }
 
-function starts(head, rest, out, cmd) {
+function starts(head, rest, out, { shell, body }) {
   const unread = why => out.unread.push({ head, why });
-  const stdin = () => (/<<-?\s*['"]?\w+/.test(cmd) ? out.inline.push({ code: cmd, heredoc: true }) : unread('reads its code from standard input'));
   const file = (path, mode = 'file') => out.files.push({ path, mode });
+  const nest = (cmd, sh = shell) => out.nested.push({ cmd, shell: sh });
+  const odd = x => unread(`an option the hub does not read (${x})`);
+  // the code comes from a heredoc on this very command, or from somewhere the hub cannot see
+  const stdin = (kind = 'code') => (body ? (kind === 'shell' ? nest(body) : out.inline.push({ code: body, heredoc: true })) : unread('reads its code from standard input'));
+  if (rest.length === 1 && /^(-v|-V|--version|-h|--help)$/.test(rest[0]) && !/^(npm|pnpm|yarn|bun|npx|cargo|go|dotnet)$/.test(head)) return;   // asks for a version or help: runs nothing
   if (NODEISH.test(head)) {
     let test = false;
     for (let i = 0; i < rest.length; i++) {
@@ -140,15 +255,15 @@ function starts(head, rest, out, cmd) {
       if (/^(-e|-p|-pe|--eval|--print)$/.test(x)) { out.inline.push({ code: rest[i + 1] ?? '' }); return; }   // what follows is the code's own arguments
       const ev = /^--(?:eval|print)=([\s\S]*)$/.exec(x);
       if (ev) { out.inline.push({ code: ev[1] }); return; }
-      if (/^(-r|--require|--import|--loader|--experimental-loader)$/.test(x)) { const v = rest[++i]; if (v === undefined) unread('a preload with no name'); else if (!bareSpec(v)) file(v); continue; }
+      if (/^(-r|--require|--import|--loader|--experimental-loader)$/.test(x)) { const v = rest[++i]; if (v === undefined) return unread('a preload with no name'); if (!bareSpec(v)) file(v); continue; }
       const pl = /^--(?:import|require|loader|experimental-loader)=([\s\S]*)$/.exec(x);
       if (pl) { if (!bareSpec(pl[1])) file(pl[1]); continue; }
       if (x === '--test') { test = true; continue; }
       if (x === '-') return stdin();
-      if (NODE_VALUE.has(x)) { i++; continue; }
       if (x === '--') { const next = rest.slice(i + 1); if (next[0]) file(next[0], 'node'); else unread('no script named'); return; }
-      if (x.startsWith('-')) continue;
-      if (test) { for (const f of rest.slice(i)) if (!f.startsWith('-')) file(f, 'node'); return; }
+      if (NODE_VALUE_OK[x]) { if (rest[i + 1] === undefined || !NODE_VALUE_OK[x].test(rest[i + 1])) return odd(x); i++; continue; }
+      if (x.startsWith('-')) { if (NODE_OK.test(x)) continue; return odd(x); }
+      if (test) { for (const f of rest.slice(i)) { if (f.startsWith('-')) { if (!NODE_OK.test(f)) return odd(f); } else file(f, 'node'); } return; }
       return file(x, 'node');   // the first positional is the script; the rest are its own arguments, even "-c" or "-p"
     }
     return test ? unread('runs every test file it finds') : stdin();
@@ -160,8 +275,8 @@ function starts(head, rest, out, cmd) {
       if (x === '-m') { if (rest[i + 1]) file(rest[i + 1], 'module'); else unread('no module named'); return; }
       if (/^-m./.test(x)) return file(x.slice(2), 'module');
       if (x === '-') return stdin();
-      if (/^-[WXQ]$/.test(x)) { i++; continue; }
-      if (x.startsWith('-')) continue;
+      if (/^-[WX]$/.test(x)) { i++; continue; }
+      if (x.startsWith('-')) { if (PY_OK.test(x)) continue; return odd(x); }
       return file(x);
     }
     return stdin();
@@ -169,54 +284,63 @@ function starts(head, rest, out, cmd) {
   if (SHELLS.test(head)) {
     for (let i = 0; i < rest.length; i++) {
       const x = rest[i];
-      if (/^-[A-Za-z]*c$/.test(x)) { if (rest[i + 1] === undefined) unread('no command given'); else out.nested.push(rest[i + 1]); return; }
-      if (x === '-s') return stdin();
-      if (/^[-+]o$|^--(rcfile|init-file)$/.test(x)) { i++; continue; }
-      if (x.startsWith('-') || x.startsWith('+')) continue;
+      if (/^-[euxfnvlhBCpPa]*c$/.test(x)) { if (rest[i + 1] === undefined) unread('no command given'); else nest(rest[i + 1], 'bash'); return; }
+      if (x === '-s') return stdin('shell');
+      if (/^[-+]o$/.test(x)) { if (!/^(pipefail|errexit|nounset|xtrace|noglob|verbose)$/.test(rest[i + 1] || '')) return odd(x); i++; continue; }
+      if (x.startsWith('-') || x.startsWith('+')) { if (BASH_OK.test(x)) continue; return odd(x); }
       return file(x);
     }
-    return stdin();
+    return stdin('shell');
   }
   if (/^(pwsh|powershell)$/.test(head)) {
     for (let i = 0; i < rest.length; i++) {
       const x = rest[i], lx = x.toLowerCase();
       if (/^-(f|file)$/.test(lx)) { if (rest[i + 1] === undefined) unread('no file named'); else file(rest[i + 1]); return; }
-      if (/^-(c|command|cm|com\w*)$/.test(lx)) { out.nested.push(rest.slice(i + 1).join(' ')); return; }
+      if (/^-(c|command|cm|com\w*)$/.test(lx)) { nest(rest.slice(i + 1).join(' '), 'powershell'); return; }
       if (/^-(e|ec|enc\w*)$/.test(lx)) return unread('runs an encoded command');
-      if (/^-(ep|executionpolicy|windowstyle|w|wd|workingdirectory|inputformat|if|outputformat|of|version|psconsolefile|configurationname|settingsfile)$/.test(lx)) { i++; continue; }
-      if (x.startsWith('-')) continue;
+      if (PS_VALUE.test(lx)) { if (rest[i + 1] === undefined) return odd(x); i++; continue; }
+      if (x.startsWith('-')) { if (PS_OK.test(x)) continue; return odd(x); }
       if (SCRIPT_EXT.test(x)) return file(x);
-      out.nested.push(rest.slice(i).join(' ')); return;
+      nest(rest.slice(i).join(' '), 'powershell'); return;
     }
-    return stdin();
+    return stdin('shell');
   }
   if (head === 'cmd') {
-    const k = rest.findIndex(x => /^\/{1,2}[ck]$/i.test(x));
-    return k < 0 ? unread('opens a command prompt') : void out.nested.push(rest.slice(k + 1).join(' '));
+    for (let i = 0; i < rest.length; i++) {
+      if (/^\/{1,2}[ck]$/i.test(rest[i])) { nest(rest.slice(i + 1).join(' '), 'cmd'); return; }
+      if (!/^\/{1,2}[dsq]$/i.test(rest[i])) return odd(rest[i]);
+    }
+    return unread('opens a command prompt');
   }
   if (/^(ruby|perl|php)$/.test(head)) {
     for (let i = 0; i < rest.length; i++) {
       const x = rest[i];
       if (x === '-e' || (head === 'php' && x === '-r')) { out.inline.push({ code: rest[i + 1] ?? '' }); return; }
       if (x === '-') return stdin();
-      if (x.startsWith('-')) continue;
+      if (x.startsWith('-')) return odd(x);
       return file(x);
     }
     return stdin();
   }
   if (head === 'deno') {
-    const sub = rest.find(x => !x.startsWith('-')), after = rest.slice(rest.indexOf(sub) + 1).filter(x => !x.startsWith('-'));
-    if (sub === 'run') { const t = after[0]; if (!t) return unread('no script named'); return /^(https?|npm|jsr|data):/i.test(t) ? unread('runs code from the internet') : file(t, 'node'); }
+    const sub = rest.find(x => !x.startsWith('-'));
+    for (const x of rest.slice(0, rest.indexOf(sub) < 0 ? rest.length : rest.indexOf(sub))) if (!DENO_OK.test(x)) return odd(x);
+    const after = rest.slice(rest.indexOf(sub) + 1);
+    const pos = after.filter(x => !x.startsWith('-'));
+    for (const x of after) if (x.startsWith('-') && !DENO_OK.test(x)) return odd(x);
+    if (sub === 'run') { const t = pos[0]; if (!t) return unread('no script named'); return /^(https?|npm|jsr|data):/i.test(t) ? unread('runs code from the internet') : file(t, 'node'); }
     if (sub === 'task') return unread('runs a task from deno.json');
-    if (sub === 'eval') { out.inline.push({ code: after[0] ?? '' }); return; }
-    if (sub === 'test' || sub === 'bench') { const fs = after.filter(f => SCRIPT_EXT.test(f)); return fs.length ? fs.forEach(f => file(f, 'node')) : unread('runs every test file it finds'); }
+    if (sub === 'eval') { out.inline.push({ code: pos[0] ?? '' }); return; }
+    if (sub === 'test' || sub === 'bench') { const fs = pos.filter(f => SCRIPT_EXT.test(f)); return fs.length ? fs.forEach(f => file(f, 'node')) : unread('runs every test file it finds'); }
     if (sub === 'repl') return unread('opens a prompt');
-    return;
+    if (!sub) return;
+    if (/^(fmt|lint|info|doc|types|completions|upgrade|help|--version)$/.test(sub)) return;
+    return unread(`a deno command the hub does not read (${sub})`);
   }
   if (/^(bunx|npx|pnpx)$/.test(head)) return unread('downloads and runs a package');
   if (/^(bun|npm|pnpm|yarn)$/.test(head)) {
     const dd = rest.indexOf('--'), args = dd < 0 ? rest : rest.slice(0, dd);
-    if (args.some(x => /^(--prefix|-C|--workspace|-w|--workspaces|-ws|--cwd|--dir|-F|--filter|--include-workspace-root)(=|$)/.test(x))) return unread('runs a package script in another folder');
+    for (const x of args) if (x.startsWith('-') && !PM_OK.test(x)) return odd(x);   // --prefix, -C, --workspace, --script-shell, --node-options ...
     const pos = args.filter(x => !x.startsWith('-'));
     const sub = pos[0];
     if (!sub) return;
@@ -239,8 +363,8 @@ function starts(head, rest, out, cmd) {
     let j = 0;
     while (j < tail.length && /^(--no-sync|--frozen|--locked|--offline|--quiet|-q|--no-project)$/.test(tail[j])) j++;
     if (j >= tail.length) return unread('no command named');
-    if (tail[j].startsWith('-')) return unread('an option the hub does not read');
-    out.nested.push(tail.slice(j).join(' '));
+    if (tail[j].startsWith('-')) return odd(tail[j]);
+    nest(tail.slice(j).join(' '));
     return;
   }
   if (/^(cargo|dotnet)$/.test(head)) { if (rest.some(x => /^(run|test|bench|build|check|clippy|doc|watch)$/.test(x))) unread('builds and runs project code the hub does not read'); return; }
@@ -249,13 +373,30 @@ function starts(head, rest, out, cmd) {
 }
 
 // The script paths as written, for the tests and the simple cases.
-export function scriptPaths(cmd) {
-  return [...new Set(parseCommand(cmd).files.map(f => f.path))];
+export function scriptPaths(cmd, opts) {
+  return [...new Set(parseCommand(cmd, opts).files.map(f => f.path))];
 }
 
-// ---------- text that loads something unseen ----------
+// ---------- text that loads, runs or starts something unseen ----------
+// A call that starts a process, a worker or a script. A regex's .exec( is not one (only files that use child_process count).
+const SPAWN_CALL = /(?<![.\w])(?:spawn|spawnSync|execFile|execFileSync|execSync|fork)\s*\(|(?<![.\w])exec\s*\(|(?:\w|\))\s*\.\s*(?:spawn|spawnSync|execFile|execFileSync|execSync|fork)\s*\(|(?:\b(?:child_process|cp|childProcess|child|proc)|\))\s*\.\s*exec\s*\(|\bnew\s+Worker\b|\.\s*Worker\b|\bexecPath\b|\bargv0\b|\bvm\s*\.\s*(?:runIn\w*|Script|compileFunction)|\bchild_process\s*\.\s*\w+\s*\(/;
+const SCRIPT_LITERAL = /['"`]([^'"`\n]*\.(?:mjs|cjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1|bat|cmd|rb|pl|php|lua))['"`]/g;
+// Does this JS or Python text start a process, a worker or a script of its own (other than git and gh)?
+export function spawns(text, python = false) {
+  const t = String(text || '');
+  if (python) {
+    // a use of the process modules (an import alone starts nothing), other than a list call on git or gh
+    const rest = t.replace(/subprocess\s*\.\s*\w+\s*\(\s*\[\s*['"](?:git|gh)['"]/g, '');
+    return /\bsubprocess\s*\.\s*\w+|\bfrom\s+subprocess\s+import\b|\bmultiprocessing\b|\bpty\s*\.|\bos\s*\.\s*(?:system|exec\w*|spawn\w*|popen)|\bPopen\b|\brunpy\b|\bimportlib\b|__import__|\b(?:exec|eval|compile)\s*\(/.test(rest);
+  }
+  if (!/\bchild_process\b|\bWorker\b|worker_threads|\bexecPath\b|\bargv0\b|\bvm\s*\./.test(t)) return false;
+  const rest = t.replace(/(?<![.\w])(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*['"`](?:git|gh)(?:\.exe)?['"`]/g, '').replace(/\b\w+\s*\.\s*(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*['"`](?:git|gh)(?:\.exe)?['"`]/g, '');
+  return SPAWN_CALL.test(rest);
+}
 // Reasons text loads, runs or evals something the check cannot see (empty: nothing found).
-export function loadsUnseen(text, { python = false, dir = '', skipRuns = false } = {}) {
+// inline: the text is code written in the command (-e, -c): starting a process only counts there when it names a script
+// file (execSync('git status') is a plain one-liner); in a script file any process it starts is unseen code.
+export function loadsUnseen(text, { python = false, dir = '', skipRuns = false, inline = false } = {}) {
   const t = String(text || ''), why = [];
   const add = s => { if (!why.includes(s)) why.push(s); };
   if (/\b(?:import|export)\b[^'"`;]*?\bfrom\s*['"](?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:|file:|#)/.test(t) || /^\s*import\s*['"](?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:|file:|#)/m.test(t)) add('imports another file');
@@ -270,8 +411,9 @@ export function loadsUnseen(text, { python = false, dir = '', skipRuns = false }
       else if (dir && (existsSync(join(dir, `${mod}.py`)) || existsSync(join(dir, mod, '__init__.py')))) add(`imports ${mod}.py, next to it`);
     }
   }
+  if (spawns(t, python) && (!inline || [...t.matchAll(SCRIPT_LITERAL)].length)) add(inline ? 'starts another script' : 'starts another program or script, which is not attached');
   if (/^\s*(?:source|\.)\s+[^\s=]/m.test(t) || /^\s*\.\s+["'$]/m.test(t)) add('sources another script');
-  if (/\b(?:iex|Invoke-Expression)\b/i.test(t)) add('evals text');
+  if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|\[scriptblock\]|\[System\.Reflection|\[Reflection\./i.test(t)) add('evals text');
   if (/\bImport-Module\s+\S/i.test(t) || /\bInvoke-Command\b[^\n]*-FilePath/i.test(t)) add('loads another script or module');
   if (/(?:^|[;\s])&\s*\$\w/.test(t)) add('runs a command named in a variable');
   if (!skipRuns && /\b(?:node|nodejs|python[\d.]*|py|bash|sh|pwsh|powershell|ruby|perl)\s+(?:-\S+\s+)*["']?[\w.\\/:~$-]+\.(?:mjs|cjs|js|py|sh|ps1|rb|pl)\b/i.test(t)) add('runs another script');
@@ -319,7 +461,9 @@ export async function isCommittedFile(file, { projectDir, git = defaultGit, main
   } catch { return false; }
 }
 
-// What a JS or Python file loads by relative path, and whether anything it loads cannot be followed statically.
+// What a JS or Python file loads or starts by relative path, and whether anything it loads or starts cannot be followed
+// statically. A file that starts a process, a worker or a script counts as loading what it starts: those scripts are
+// followed too when they are named in the text, and a spawn whose target is not named makes the file unresolvable.
 export function importsOf(text, file) {
   const t = String(text || ''), dir = dirname(file), python = /\.py$/i.test(file);
   const specs = new Set();
@@ -332,6 +476,10 @@ export function importsOf(text, file) {
     }
     for (const m of t.matchAll(/^[ \t]*(?:from\s+(\w+)\s+import|import\s+(\w+))/gm)) { const mod = m[1] || m[2]; if (existsSync(join(dir, `${mod}.py`)) || existsSync(join(dir, mod, '__init__.py'))) specs.add(join(dir, mod)); }
     if (/\b(?:exec|eval|__import__|compile)\s*\(|\brunpy\b|\bimportlib\b/.test(t)) unresolvable = true;
+    if (spawns(t, true)) {
+      const lits = [...t.matchAll(SCRIPT_LITERAL)].map(m => m[1]);
+      if (!lits.length) unresolvable = true; else for (const l of lits) specs.add(isAbsolute(l) ? l : resolve(dir, l));
+    }
     return { specs: [...specs], unresolvable };
   }
   const grab = re => { for (const m of t.matchAll(re)) specs.add(m[1]); };
@@ -343,9 +491,14 @@ export function importsOf(text, file) {
   for (const s of specs) {
     if (/^(node:|data:|https?:)/.test(s) || bareSpec(s) && !s.startsWith('#')) continue;   // a built-in or a dependency
     if (s.startsWith('#') || /^file:/.test(s) && /[?#]/.test(s)) { unresolvable = true; continue; }
-    files.push(s.replace(/^file:\/*/, '').replace(/^([A-Za-z]:)/, '$1'));
+    files.push(s.replace(/^file:\/*/, ''));
   }
-  return { specs: files.map(s => (isAbsolute(s) ? s : resolve(dir, s))), unresolvable };
+  const found = files.map(s => (isAbsolute(s) ? s : resolve(dir, s)));
+  if (spawns(t)) {   // starts something: only fine when every script it names is here (and committed, which the chain checks)
+    const lits = [...t.matchAll(SCRIPT_LITERAL)].map(m => m[1]);
+    if (!lits.length) unresolvable = true; else for (const l of lits) found.push(isAbsolute(l) ? l : resolve(dir, l));
+  }
+  return { specs: found, unresolvable };
 }
 const JS_CANDIDATES = ['', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '/index.js', '/index.mjs', '/index.cjs'];
 const PY_CANDIDATES = ['.py', '/__init__.py', ''];
@@ -357,9 +510,9 @@ function resolveImport(abs, python) {
   return null;
 }
 
-// "Committed and unchanged from main", for a script and everything it loads by relative import or require, followed
-// all the way down. A dynamic import, a computed require or an import that cannot be found makes it false: such a
-// script is attached instead, and the unread rule applies to it.
+// "Committed and unchanged from main", for a script and everything it loads by relative import or require or starts by
+// name, followed all the way down. A dynamic import, a computed require, a spawn it cannot name, or an import that
+// cannot be found makes it false: such a script is attached instead, and the unread rule applies to it.
 export async function isProjectScript(file, opts = {}) {
   const cache = opts.cache || new Map(), seen = new Set(), todo = [file];
   while (todo.length) {
@@ -391,25 +544,37 @@ function expandGlob(path) {
 }
 
 const PY_MODULES_OK = new Set(['venv', 'json.tool', 'ensurepip']);   // standard modules that run nothing of the project's
+const DIRECT_EXT = ['', '.ps1', '.bat', '.cmd', '.exe', '.com'];      // what PowerShell tries for .\evil
 // Where the files a command names are, as the items to look at: { path } or { path, kind: 'unknown' | 'missing', note }.
-function itemsFor(files, base, projectDir) {
+function itemsFor(files, base0, projectDir) {
   const items = [];
   const add = f => items.push({ path: f });
-  const base0 = base;
   for (const { path: r, mode, at } of files) {
     const base = at ? resolve(base0, at) : base0;   // after a cd in the command, where it really runs
     if (/[$`\u0001]|^~|%\w+%/.test(r)) { items.push({ path: r, kind: 'unknown', note: 'its path is built from a variable or a command' }); continue; }
     const abs = isAbsolute(r) ? r : resolve(base, r);
     if (mode === 'module') {
-      const local =[resolve(base, `${r.replace(/\./g, '/')}.py`), resolve(base, r.replace(/\./g, '/'), '__main__.py')].filter(f => existsSync(f));
+      const local = [resolve(base, `${r.replace(/\./g, '/')}.py`), resolve(base, r.replace(/\./g, '/'), '__main__.py')].filter(f => existsSync(f));
       if (local.length) local.forEach(add);
       else if (!PY_MODULES_OK.has(r)) items.push({ path: `python -m ${r}`, kind: 'unknown', note: 'it runs a module the hub cannot read here' });
       continue;
     }
-    if (mode === 'direct') {
-      let real; try { real = realpathSync(abs); } catch { continue; }   // not there: a program on the PATH, not a script of the project's
-      const mine = (projectDir && within(real, realpathSync(projectDir))) || within(real, realpathSync(tmpdir()));
-      if (mine && !/[\\/]node_modules[\\/]/i.test(real) && statSync(real).isFile()) add(abs);
+    if (mode === 'direct') {   // .\evil, ./evil, & .\evil: the file as named, then with .ps1 .bat .cmd .exe; not there: unread
+      // Git Bash writes a Windows path as /c/Program Files/...: the same file, so it is looked for as C:/Program Files/...
+      const win = process.platform === 'win32' && /^\/[A-Za-z]\//.test(r) ? `${r[1].toUpperCase()}:${r.slice(2)}` : abs;
+      const found = DIRECT_EXT.map(e => win + e).filter(f => { try { return statSync(f).isFile(); } catch { return false; } });
+      if (!found.length) {
+        // not there: unread for a relative path or one in the project or temp (it may be made by the command itself);
+        // an absolute path elsewhere is a system program this machine does not have, which cannot run anyway
+        if (!isAbsolute(r) || (projectDir && within(win, projectDir)) || within(win, tmpdir())) items.push({ path: abs, kind: 'missing', note: 'no such file to run' });
+        continue;
+      }
+      for (const f of found) {
+        let real; try { real = realpathSync(f); } catch { continue; }
+        const mine = (projectDir && within(real, realpathSync(projectDir))) || within(real, realpathSync(tmpdir()));
+        if (mine) { if (!/[\\/]node_modules[\\/]/i.test(real)) add(f); }   // a program outside the project and temp is a system program
+        else if (!isAbsolute(r)) items.push({ path: f, kind: 'unreadable', note: 'a program outside the project' });
+      }
       continue;
     }
     if (mode === 'node' && !SCRIPT_EXT.test(abs) && !/[*?]/.test(abs)) {   // node tools/evil: the file, then .js .cjs .mjs, then a folder's index
@@ -425,6 +590,8 @@ function itemsFor(files, base, projectDir) {
     if (!files2.length) items.push({ path: abs, kind: 'missing', note: /[*?]/.test(abs) ? 'no file matches this pattern' : 'the file does not exist' });
     for (const f of files2) add(f);
   }
+  // Python reads sitecustomize and usercustomize from the script's folder before it runs anything.
+  for (const it of [...items]) if (!it.kind && /\.py$/i.test(it.path)) for (const n of ['sitecustomize.py', 'usercustomize.py']) { const f = join(dirname(it.path), n); if (existsSync(f)) add(f); }
   return items;
 }
 
@@ -447,37 +614,41 @@ function findPackageJson(from, projectDir) {
 //   { path, kind: 'missing' | 'unreadable' | 'unknown', note } never allowed
 // `unread` is true when any script is not fully seen: the answer may not be allow (enforced in applyRules).
 // Reads every shell string, $(...) and package script the command starts, down to MAX_NEST levels.
-export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainRefs } = {}) {
+// shell: 'bash' (the Bash tool) or 'powershell' (the PowerShell tool): how the text is split into words.
+export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainRefs, shell = 'bash' } = {}) {
   const base = cwd || projectDir || process.cwd();
   const cache = new Map(), opts = { projectDir, git, mainRefs, cache };
   const out = [], inlineLoads = [], seenPaths = new Set();
   let attachedBytes = 0;
-  const queue = [{ cmd: String(cmd || ''), cwd: base, depth: 0 }], seenCmds = new Set();
+  const queue = [{ cmd: String(cmd || ''), cwd: base, depth: 0, shell }], seenCmds = new Set();
   const items = [];
+  const npmScriptShell = process.platform === 'win32' ? 'cmd' : 'bash';
   while (queue.length) {
     const q = queue.shift();
-    const key = `${norm(q.cwd)}\u0000${q.cmd}`;
+    const key = `${norm(q.cwd)}\u0000${q.shell}\u0000${q.cmd}`;
     if (seenCmds.has(key)) continue;
     seenCmds.add(key);
     if (q.depth > MAX_NEST) { out.push({ path: '(a command)', kind: 'unknown', note: 'commands inside commands go too deep to read' }); continue; }
-    const p = parseCommand(q.cmd);
+    const p = parseCommand(q.cmd, { shell: q.shell });
     for (const u of p.unread) out.push({ path: `(${u.head})`, kind: 'unknown', note: u.why });
     for (const it of itemsFor(p.files, q.cwd, projectDir)) items.push(it);
-    for (const i of p.inline) for (const r of loadsUnseen(i.code, { python: !!i.python, skipRuns: !!i.heredoc })) if (!inlineLoads.includes(r)) inlineLoads.push(r);
-    for (const n of p.nested) queue.push({ cmd: n.cmd, cwd: n.at ? resolve(q.cwd, n.at) : q.cwd, depth: q.depth + 1 });
+    for (const i of p.inline) for (const r of loadsUnseen(i.code, { python: !!i.python, inline: true })) if (!inlineLoads.includes(r)) inlineLoads.push(r);
+    for (const n of p.nested) queue.push({ cmd: n.cmd, cwd: n.at ? resolve(q.cwd, n.at) : q.cwd, depth: q.depth + 1, shell: n.shell || q.shell });
     for (const r of p.runners) {   // npm run x: the package's own script text is the command
       const pkg = findPackageJson(r.at ? resolve(q.cwd, r.at) : q.cwd, projectDir);
       if (!pkg) { out.push({ path: `(${r.tool} ${r.name})`, kind: 'unknown', note: 'no package.json here to read the script from' }); continue; }
+      // an .npmrc can set node-options (a preload) for every script it runs: one that is not committed is not read
+      let npmrcBad = false;
+      for (const d of new Set([dirname(pkg), projectDir].filter(Boolean))) { const f = join(d, '.npmrc'); if (existsSync(f) && !(await isCommittedFile(f, opts))) npmrcBad = true; }
+      if (npmrcBad) { out.push({ path: `(${r.tool} ${r.name})`, kind: 'unknown', note: 'an .npmrc here is not committed and unchanged, and it can set what npm runs first' }); continue; }
       let scripts;
       try { if (statSync(pkg).size > 256 * 1024) throw new Error('big'); scripts = JSON.parse(readFileSync(pkg, 'utf8')).scripts; } catch { out.push({ path: pkg, kind: 'unreadable', note: 'package.json could not be read' }); continue; }
       const names = [r.hooks ? `pre${r.name}` : null, r.name, r.hooks ? `post${r.name}` : null].filter(Boolean);
       if (typeof scripts?.[r.name] !== 'string') { out.push({ path: `(${r.tool} ${r.name})`, kind: 'unknown', note: 'package.json has no such script' }); continue; }
       items.push({ path: pkg });
-      for (const n of names) if (typeof scripts?.[n] === 'string') queue.push({ cmd: scripts[n], cwd: dirname(pkg), depth: q.depth + 1 });
+      for (const n of names) if (typeof scripts?.[n] === 'string') queue.push({ cmd: scripts[n], cwd: dirname(pkg), depth: q.depth + 1, shell: npmScriptShell });
     }
   }
-  // Text run as a command (iex, eval) is never a file the hub could read, wherever it sits in the command.
-  if (/\b(?:iex|Invoke-Expression)\b|(?:^|[;&|(\s])eval\s/i.test(String(cmd || '')) && !inlineLoads.includes('evals text')) inlineLoads.push('evals text');
   const unique = new Map();   // the same file named twice is one script
   for (const it of items) unique.set(it.kind ? `${it.kind}\u0000${it.path}` : norm(it.path), it);
   items.length = 0; items.push(...unique.values());
@@ -506,6 +677,8 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     const data = /^package\.json$/i.test(basename(it.path));
     out.push({ path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) });
   }
+  // Text run as a command (iex, eval) is never a file the hub could read, wherever it sits in the command.
+  if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|(?:^|[;&|(\s])eval\s/i.test(String(cmd || '')) && !inlineLoads.includes('evals text')) inlineLoads.push('evals text');
   const unread = out.some(s => s.kind !== 'committed' && (s.kind !== 'attached' || s.cutOff || s.loads.length)) || inlineLoads.length > 0;
   return { scripts: out, inlineLoads, unread };
 }

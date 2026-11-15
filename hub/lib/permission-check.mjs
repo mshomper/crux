@@ -104,7 +104,9 @@ export function buildSuffix({ worker, goal, tool, input, cwd, doubts = [], scrip
     const extra = Object.fromEntries(Object.entries(input || {}).filter(([k]) => !['command', 'description'].includes(k)));
     if (Object.keys(extra).length) lines.push(f.open('other input'), JSON.stringify(extra, null, 1), f.close);
   } else lines.push(f.open('input'), JSON.stringify(input ?? {}, null, 1), f.close);
-  lines.push(doubts?.length ? `The hub's checker could not settle it: ${doubts.map(one).join('; ')}.` : "The hub's checker found no hard stop in it, but could not settle it.");
+  // The checker's doubts quote the worker's own command (a program name, a URL, a path), so they sit inside a fence too.
+  if (doubts?.length) lines.push("The hub's checker could not settle it, for these reasons (worker text is quoted in them):", f.open("the checker's doubts"), ...doubts.map(one), f.close);
+  else lines.push("The hub's checker found no hard stop in it, but could not settle it.");
   if (scripts) {
     for (const s of scripts.scripts) {
       if (s.kind === 'committed') lines.push(`Script ${one(s.path)}: project script, committed`);
@@ -127,6 +129,8 @@ export function parseAnswer(text) {
   const fenced = /^```(?:json)?[ \t]*\r?\n?([\s\S]*?)\r?\n?```$/.exec(s);
   if (fenced) s = fenced[1].trim();
   if (!s.startsWith('{') || !s.endsWith('}')) return null;
+  // JSON.parse keeps the last of two equal keys: {"answer":"deny", ..., "answer":"allow"}. Two of either key is no answer.
+  if ((s.match(/"answer"\s*:/g) || []).length > 1 || (s.match(/"reason"\s*:/g) || []).length > 1) return null;
   let o;
   try { o = JSON.parse(s); } catch { return null; }
   if (!o || typeof o !== 'object' || Array.isArray(o) || !ANSWERS.includes(o.answer) || typeof o.reason !== 'string') return null;
