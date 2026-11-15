@@ -118,7 +118,7 @@ test('a handoff from a fresh draft: same model and effort, the handoff, the reas
   assert.deepEqual(p.log.ofType('worker_handoff').map(e => [e.agent, e.by, e.contextPct]), [['w1', 'orchestrator-1', 48]]);
   const succ = p.agents.get('w1-2');
   assert.ok(succ, 'a successor started');
-  assert.deepEqual([succ.role, succ.predecessor, succ.task, succ.goal, succ.model, succ.effort, succ.type], ['worker', 'w1', 'Build the export panel', 'Export panel', 'claude-sonnet-5-5', 'medium', null]);
+  assert.deepEqual([succ.role, succ.predecessor, succ.task, succ.goal, succ.model, succ.effort, succ.type], ['worker', 'w1', 'Build the export panel', 'Export panel', 'claude-sonnet-5-5', 'medium', 'implementer']);
   assert.equal(succ.handoffEntry, w.leftHandoff);
   const h = p.board.read(w.leftHandoff);
   assert.match(h.body, /the export panel, half built/);
