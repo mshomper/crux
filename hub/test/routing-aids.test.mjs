@@ -185,6 +185,22 @@ test('routingStats: spend by type, tasks finished at their starting setting, rai
   assert.equal(usageKind({ agent: 'conductor-2' }), 'conductor');
 });
 
+test('routingStats: old usage events take their agent\'s type from agent_created; truly untyped ones are "before types"', () => {
+  const r = (type, o, project = 'proj') => ({ project, ev: ev(type, o) });
+  const s = routingStats([
+    r('agent_created', { agent: 'old', role: 'worker', agentType: 'reviewer' }),
+    r('agent_created', { agent: 'switched', role: 'worker', agentType: 'implementer' }),
+    r('agent_created', { agent: 'bare', role: 'worker', agentType: null }),
+    r('usage', { agent: 'old', models: { m: { cost: 4 } } }),
+    r('usage', { agent: 'switched', models: { m: { cost: 2 } } }),
+    r('agent_settings', { agent: 'switched', agentType: 'solver' }),
+    r('usage', { agent: 'switched', models: { m: { cost: 1 } } }),
+    r('usage', { agent: 'bare', models: { m: { cost: 3 } } }),
+    r('usage', { agent: 'old', models: { m: { cost: 5 } } }, 'other')   // same name, another project: not resolved
+  ], { since: 0 });
+  assert.deepEqual(s.types.map(t => [t.type, t.cost]), [['before types', 8], ['reviewer', 4], ['implementer', 2], ['solver', 1]]);
+});
+
 test('the usage panel shows spend by type, the kept share and advisor calls this week', () => {
   const html = panelHtml({ plan: null, rows, bootAt: 0, range: 'session', now: Date.parse('2026-11-16T10:00:00Z') });
   assert.match(html, /By type/);

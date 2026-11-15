@@ -102,6 +102,21 @@ test('start_worker with a type: model, effort, tools and instructions come from 
   assert.ok(!p.agents.has('x') && !p.agents.has('y'), 'a bad pick creates nothing');
 });
 
+test('start_worker with no type makes an implementer, and a handoff keeps (or gives) the type', () => {
+  const { hub, p } = setup({ homeTypes: { 'implementer.md': '---\nname: implementer\nmodel: sonnet\neffort: medium\n---\nBuild it.' } });
+  const w = hub.startWorker(p, 'w', 'task');
+  assert.deepEqual([w.type, w.model, w.effort], ['implementer', 'claude-sonnet-5-5', 'medium']);
+  assert.equal(p.log.ofType('agent_created').at(-1).agentType, 'implementer');
+  const bare = setup();
+  assert.equal(bare.hub.startWorker(bare.p, 'x', 'task').type, 'implementer', 'recorded even when the type file is missing');
+  const o = hub.ensureOrchestrator(p);
+  assert.equal(o.type, null, 'the orchestrator is labelled by role, not type');
+  const old = hub.startWorker(p, 'old', 'task');
+  old.type = null;   // a worker from before types
+  const succ = hub.createAgent(p, { name: 'old', role: 'worker', settings: { type: old.type || undefined, inherited: true } });
+  assert.equal(succ.type, 'implementer');
+});
+
 test('defaults per role apply when nothing is picked; an untyped default agent passes no model', () => {
   const { hub, p } = setup({ defaults: { worker: { model: 'haiku', effort: 'low' } } });
   const w = hub.startWorker(p, 'w', 'task');
@@ -192,7 +207,7 @@ test('set_agent_settings: the orchestrator makes the same change as the chip, lo
   assert.deepEqual(calls, [['model', 'claude-sonnet-5-5'], ['flags', { effortLevel: 'high' }]], 'a live switch, as from the chip');
   const ev = p.log.ofType('agent_settings').at(-1);
   assert.deepEqual([ev.by, ev.model, ev.effort], ['orchestrator-1', 'claude-sonnet-5-5', 'high']);
-  const lines = p.log.ofType('notice').filter(n => /orchestrator-1 set w to Sonnet 5\.5 · effort high; it applies now/.test(n.text));
+  const lines = p.log.ofType('notice').filter(n => /orchestrator-1 set w to (implementer · )?Sonnet 5\.5 · effort high; it applies now/.test(n.text));
   assert.deepEqual(lines.map(n => n.thread).sort(), ['orchestrator', 'w'], 'logged in the worker\'s thread and the orchestrator\'s');
 
   await hub.setAgentSettings(p, 'w', settingsChanges({ type: 'reviewer' }), o.name);

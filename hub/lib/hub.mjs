@@ -59,6 +59,7 @@ const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 6
 export const DRAFT_FRESH_MS = 60 * 60 * 1000;
 // How often the hub looks for an orchestrator that has sat idle past the idle window (decision 37).
 const IDLE_CHECK_MS = 5 * 60 * 1000;
+const DEFAULT_WORKER_TYPE = 'implementer';   // the routing guide's default worker (decision 65)
 const hasNotes = n => !!n && ['in_flight', 'promises', 'risks', 'next_steps'].some(k => toList(n[k]).length);
 const toList = x => (Array.isArray(x) ? x : x ? [x] : []).map(s => String(s).trim()).filter(Boolean);
 const when = ts => new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
@@ -292,7 +293,9 @@ export class Hub {
   resolveSettings(p, role, { type, model, effort, inherited = false } = {}) {
     // The Conductor without its own defaults runs as the orchestrator does (model and effort; never a type).
     const dflt = this.defaults[role] || (role === CONDUCTOR_ROLE ? { ...this.defaults.orchestrator, type: undefined } : null) || {};
-    const typeName = type === undefined ? dflt.type : type;
+    // Every worker has a type (guide, decision 65): none given means the default worker, "implementer".
+    const defaulted = role === 'worker' && !(type === undefined ? dflt.type : type);
+    const typeName = defaulted ? DEFAULT_WORKER_TYPE : type === undefined ? dflt.type : type;
     const t = typeName ? this.agentTypes(p).get(typeName) : null;
     if (typeName && !t && type !== undefined && !inherited) {
       const names = this.agentTypes(p).list().map(x => x.name);
@@ -302,7 +305,7 @@ export class Hub {
     const pickModel = model !== undefined && model !== '' ? modelId(model) : undefined;
     const pickEffort = effort !== undefined && effort !== '' ? effortLevel(effort) : undefined;
     return {
-      type: t?.name || null,
+      type: t?.name || (defaulted ? DEFAULT_WORKER_TYPE : null),
       model: pickModel !== undefined ? pickModel : t?.model || modelId(dflt.model) || null,
       effort: pickEffort !== undefined ? pickEffort : t?.effort || effortLevel(dflt.effort) || null
     };
@@ -1086,7 +1089,7 @@ export class Hub {
     old.retiring = 'overlap';
     const entryId = old.leftHandoff;
     // The successor keeps its predecessor's type, model and effort.
-    const settings = { type: old.type, model: old.model, effort: old.effort, inherited: true };
+    const settings = { type: old.type || undefined, model: old.model, effort: old.effort, inherited: true };   // a worker with no type gets the default one
     const succ = old.role !== 'worker'
       ? this.createAgent(p, { role: old.role, predecessor: old.name, handoffEntry: entryId, settings })
       : this.createAgent(p, { name: old.name.replace(/-\d+$/, ''), role: 'worker', task: old.task, goal: old.goal, predecessor: old.name, handoffEntry: entryId, settings });
