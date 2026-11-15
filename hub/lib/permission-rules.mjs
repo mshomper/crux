@@ -31,9 +31,17 @@ const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(
 const SHORT_PART = /~\d/;
 // ~user (Git Bash: that user's home, a sibling of this one) and Windows device forms (\\?\C:\x, \\.\C:\x, //?/C:/x)
 // read as the plain path they open (review round 1). \\?\UNC\server\x stays a network path.
+// A device path with no drive letter after its prefix (\\?\GLOBALROOT\Device\HarddiskVolume4\..., \\.\Volume{guid}\...,
+// \\.\PhysicalDrive0, \\.\pipe\x) can open any file on the machine, so it is kept as written: abs() reads it as
+// outside (a stop for writes and deletes), and secretAt / touchesSecrets count it as a secret (review round 2).
+export const opaqueDevice = s => {
+  const d = /^[\\/]{2}[?.][\\/](.*)$/s.exec(String(s));
+  return !!d && !/^([a-z]:([\\/]|$)|unc[\\/])/i.test(d[1]);
+};
 export function homeAndDevice(s, home = homedir()) {
   s = String(s);
   const dev = /^[\\/]{2}[?.][\\/](.*)$/s.exec(s);
+  if (dev && opaqueDevice(s)) return s;
   if (dev) s = /^unc[\\/]/i.test(dev[1]) ? `//${dev[1].slice(4)}` : dev[1];
   const user = /^~([\w.-]+)(?=[\\/]|$)/.exec(s);
   if (user) s = join(dirname(home), user[1]) + s.slice(user[0].length);
@@ -459,7 +467,7 @@ class Check {
   // every file it would match on disk (cat ~/.ss*/id_*, cat .en?) (review of decision 64 A).
   secretAt(p, cwd) {
     const raw = String(p);
-    if (SECRET.test(norm(raw))) return true;
+    if (SECRET.test(norm(raw)) || opaqueDevice(raw)) return true;
     for (const one of this.ps ? [raw] : braceWords(raw)) {
       if (one !== raw && SECRET.test(norm(one))) return true;
       this.shortFail = false;
@@ -473,6 +481,15 @@ class Check {
       }
     }
     return false;
+  }
+  // Does a word name a file or folder on disk (a short name the hub cannot expand counts as one)?
+  patternOnDisk(p, cwd) {
+    if (opaqueDevice(p)) return true;
+    this.shortFail = false;
+    const a = this.abs(p, cwd);
+    if (this.shortFail) return true;
+    if (typeof a !== 'string' || ['null', 'outside', 'tmp'].includes(a)) return false;
+    try { return existsSync(a); } catch { return false; }
   }
   // R004: reading anywhere is fine (secrets aside); writing outside the project folder or a temp folder is a hard stop.
   path(p, cwd, { write = false } = {}) {
@@ -857,7 +874,7 @@ class Check {
             : r.length === 4 && /^-path$/i.test(r[0]) && /^-childpath$/i.test(r[2]) ? [r[1], r[3]] : [];
           if (a && b && /^\$\{?env:(temp|tmp)\}?$|^[a-z]:[\\/]/i.test(a) && !/\$/.test(b)) { val = `${a}\\${b}`; joined = true; }
         }
-        if (val != null && (last.quoted || joined || /^\d+$/.test(val))) pairs = [[`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase(), val]];
+        if (val != null && !last.built && (last.quoted || joined || /^\d+$/.test(val))) pairs = [[`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase(), val]];
         else if (m[3] !== undefined || words[1]?.text === '=' || /^=/.test(words[1]?.text || '')) {
           this.vars.delete(`${m[1] ? 'env:' : ''}${m[2]}`.toLowerCase());
           if (m[1]) this.envSet.set(m[2].toLowerCase(), null);   // $env:X = <something not literal>: still an environment setting
@@ -1246,7 +1263,10 @@ class Check {
     if (/^(tar|bsdtar)$/.test(head) && args.some((a, i) => (i === 0 && /^-?[a-zA-Z]*c/.test(a) && !a.startsWith('--')) || /^-[a-zA-Z]*c/.test(a) && !a.startsWith('--') || long(a, '--create') || a === '-c')) {
       return hit([...args.filter(a => !a.startsWith('-')), ...args.flatMap((a, i) => (a === '-C' || a === '--directory' ? [args[i + 1]] : []))].filter(Boolean));
     }
-    if (/^(zip|7z|7za|robocopy|xcopy)$/.test(head)) return hit(args.filter(a => !/^[-/]/.test(a) || /^\/[a-z](\/|$)/i.test(a)));
+    // xcopy and robocopy are Windows programs: every /X word is a switch (/C, /E, /MIR, /R:3), never the C: drive;
+    // a Git Bash path (/c/Users/...) still has a second slash (review round 2).
+    if (/^(robocopy|xcopy)$/.test(head)) return hit(args.filter(a => !/^-/.test(a) && !/^\/[^/\\]*$/.test(a)));
+    if (/^(zip|7z|7za)$/.test(head)) return hit(args.filter(a => !/^[-/]/.test(a) || /^\/[a-z](\/|$)/i.test(a)));
     if (/^(cp|copy)$/.test(head) && args.some(a => /^(-[a-zA-Z]*[rRa][a-zA-Z]*|--recursive|--archive)$/.test(a))) return hit(args.filter(a => !a.startsWith('-')));
     const psRec = args.some(a => /^-(r(e(c(u(r(se?)?)?)?)?)?|depth)(:\$true)?$/i.test(a));
     if (/^(copy-item|cpi)$/.test(head) && psRec) {
@@ -1384,7 +1404,12 @@ class Check {
       }
       if (/\$\?/.test(t)) { /* exit status: fine */ }
     }
-    if (pattern) return;   // a search pattern: text, not a path or an address
+    // A search pattern: text, not a path or an address. One that also names a file on disk keeps its secret check,
+    // in case the hub misread which word is the pattern (review round 2).
+    if (pattern) {
+      if (!t.startsWith('-') && this.patternOnDisk(t, cwd) && this.secretAt(t, cwd)) this.stop(`Touches secrets or credentials: ${t}`);
+      return;
+    }
     // Addresses: this machine (localhost in any spelling, localAddress) and local files are not the network. A file://
     // address is checked for secrets like any path, and remembered: a downloader given one is a stop (run()).
     const url = /(?:^|=)((?:https?|ftp|wss?|file):\/\/\S+)/i.exec(t)?.[1];
@@ -2413,6 +2438,8 @@ export function tokens(part, ps = false) {
       continue;
     }
     cur ||= { text: '', quoted: false, vars: false };
+    // PowerShell 'pu'+'sh' is text joined at run time, not one literal word (built: review round 2).
+    if (ps && ((c === '+' && cur.quoted) || ((c === "'" || c === '"') && cur.text.endsWith('+')))) cur.built = true;
     if (c === "'" || c === '"') {
       let j = part.indexOf(c, i + 1);
       while (c === '"' && j > 0 && part[j - 1] === '\\') j = part.indexOf(c, j + 1);   // \" inside "..."
@@ -2488,6 +2515,8 @@ const SEARCH_VALUED = {
   grep: /^(-f|-m|-A|-B|-C|-d|-D|--file|--max-count|--context|--after-context|--before-context|--directories|--devices|--include|--exclude|--exclude-dir|--label|--color|--colour|--binary-files)$/,
   rg: /^(-f|-m|-A|-B|-C|-g|-t|-T|-j|-M|-r|-E|--file|--max-count|--context|--after-context|--before-context|--glob|--iglob|--type|--type-not|--threads|--max-columns|--max-depth|--max-filesize|--sort|--sortr|--color|--colors|--encoding|--engine|--replace|--pre|--pre-glob|--ignore-file|--path-separator|--type-add|--context-separator|--field-match-separator)$/
 };
+// Short options that take a value (besides -e, the pattern, and -f, a patterns file).
+const SHORT_VALUED = { grep: 'mABCdD', rg: 'mABCgtTjMrE', 'git-grep': 'mABCO' };
 export function patternWords(w) {
   const out = new Set();
   let k = 0; while (k < w.length - 1 && /^\w+=/.test(w[k])) k++;
@@ -2500,32 +2529,54 @@ export function patternWords(w) {
   }
   if (/^(grep|egrep|fgrep|rg|git-grep)$/.test(head)) {
     const valued = head === 'rg' ? SEARCH_VALUED.rg : SEARCH_VALUED.grep;
+    const shortValued = SHORT_VALUED[head] || SHORT_VALUED.grep;
     let explicit = false, first = -1;
     for (let j = i; j < w.length; j++) {
       const a = String(w[j]);
       if (a === '--') { if (first < 0 && !explicit) first = j + 1; break; }
-      if (/^(-e|--regexp)$/.test(a)) { out.add(j + 1); explicit = true; j++; continue; }
-      if (/^--regexp=|^-e./.test(a)) { out.add(j); explicit = true; continue; }
-      if (/^(-f|--file)/.test(a)) explicit = true;   // patterns read from a file: that file is a path
-      if (head === 'rg' && /^--(files|type-list)$/.test(a)) explicit = true;   // no pattern at all: every word is a path
-      if (valued.test(a)) { j++; continue; }
-      if (a.startsWith('-')) continue;
+      if (a.startsWith('--')) {
+        // Long options by any unique start, as GNU grep takes them (--reg=x is --regexp=x; review round 2).
+        const name = a.split('=')[0];
+        if (name.length >= 5 && '--regexp'.startsWith(name)) { if (a.includes('=')) out.add(j); else { out.add(j + 1); j++; } explicit = true; continue; }
+        if (name === '--file') { explicit = true; if (!a.includes('=')) j++; continue; }   // patterns read from a file: that file is a path
+        if (head === 'rg' && /^--(files|type-list)$/.test(a)) explicit = true;   // no pattern at all: every word is a path
+        if (!a.includes('=') && valued.test(a)) j++;
+        continue;
+      }
+      if (a === '-') continue;   // standard input
+      if (/^-./.test(a)) {
+        // A cluster of short options (-ie<pat>, -we<pat>, -n1e <pat>): the first one that takes a value takes the rest
+        // of the word, or the next word when nothing is left (review round 2).
+        for (let c = 1; c < a.length; c++) {
+          const ch = a[c], rest = a.slice(c + 1);
+          if (ch === 'e') { if (rest) out.add(j); else { out.add(j + 1); j++; } explicit = true; break; }
+          if (ch === 'f') { explicit = true; if (!rest) j++; break; }   // the patterns file is a path
+          if (shortValued.includes(ch)) { if (!rest && !(head === 'git-grep' && ch === 'O')) j++; break; }   // git grep -O's value is attached only
+        }
+        continue;
+      }
       if (first < 0) first = j;
     }
     if (!explicit && first >= 0) out.add(first);
   } else if (head === 'findstr') {
-    const c = w.findIndex((a, j) => j > k && /^\/c:/i.test(a));
-    if (c >= 0) out.add(c);
-    else { const j = w.findIndex((a, j2) => j2 > k && !String(a).startsWith('/')); if (j >= 0) out.add(j); }
+    // /g:file reads the patterns from a file: every other word is a file to search (review round 2).
+    if (!w.some((a, j) => j > k && /^\/g:/i.test(a))) {
+      const c = w.findIndex((a, j) => j > k && /^\/c:/i.test(a));
+      if (c >= 0) out.add(c);
+      else { const j = w.findIndex((a, j2) => j2 > k && !String(a).startsWith('/')); if (j >= 0) out.add(j); }
+    }
   } else if (/^(select-string|sls)$/.test(head)) {
+    // PowerShell takes a parameter by any unique start: -Lit is -LiteralPath, -Patt is -Pattern (-Pat is ambiguous with
+    // -Path and fails), -Inc is -Include (review round 2). -Name:value carries its value in the same word.
+    const ps = (a, full, min) => { const n = a.slice(1).split(':')[0].toLowerCase(); return n.length >= min && full.startsWith(n); };
     let named = false, first = -1;
     for (let j = i; j < w.length; j++) {
       const a = String(w[j]);
-      if (/^-pat(t(e(rn?)?)?)?$/i.test(a)) { out.add(j + 1); named = true; j++; continue; }
-      if (/^-pat(t(e(rn?)?)?)?:/i.test(a)) { out.add(j); named = true; continue; }
-      if (/^-(path|literalpath|lp|pspath|include|exclude|encoding|context|culture|inputobject)$/i.test(a)) { j++; continue; }
-      if (a.startsWith('-')) continue;
-      if (first < 0) first = j;
+      if (!a.startsWith('-')) { if (first < 0) first = j; continue; }
+      const joined = a.includes(':');
+      if (ps(a, 'pattern', 4)) { out.add(joined ? j : j + 1); named = true; if (!joined) j++; continue; }
+      if (ps(a, 'path', 4) || ps(a, 'literalpath', 3) || /^-(lp|pspath)(:|$)/i.test(a) || ps(a, 'include', 3) || ps(a, 'exclude', 2)
+        || ps(a, 'encoding', 2) || ps(a, 'context', 2) || ps(a, 'culture', 2) || ps(a, 'inputobject', 3)) { if (!joined) j++; continue; }
     }
     if (!named && first >= 0) out.add(first);
   }
@@ -2562,7 +2613,10 @@ export function touchesSecrets(tool, input = {}, cwd = null) {
     return long === null || SECRET_STRICT.test(norm(long));
   };
   // Paths are also tested in their plain form (device prefix dropped, /c/ mapped), short names expanded.
-  const named = v => SECRET_STRICT.test(norm(v)) || SECRET_STRICT.test(norm(full(v))) || shortSecret(v);
+  const named = v => SECRET_STRICT.test(norm(v)) || opaqueDevice(v) || SECRET_STRICT.test(norm(full(v))) || shortSecret(v);
+  // A word read as a search pattern that also names a file on disk keeps its secret check: if the hub misread
+  // which word is the pattern, that word is a file the search reads (review round 2).
+  const onDisk = v => { try { const f = full(v); const l = longPath(f); return l === null || existsSync(l); } catch { return false; } };
   if (!/^(Bash|PowerShell)$/.test(tool)) {
     // Grep's pattern is the text it searches for, not a path: searching for ".crux-hub" is not reading it.
     const paths = [input.file_path, input.path, input.notebook_path, tool === 'Grep' ? null : input.pattern];
@@ -2583,8 +2637,13 @@ export function touchesSecrets(tool, input = {}, cwd = null) {
     const ws = tokens(part);
     const pat = patternWords(ws.map(x => x.text));
     for (const [i, w] of ws.entries()) {
-      if (pat.has(i)) { if (w.vars && /\$(?!_|psitem|null|true|false|\?|lastexitcode|\(|env:te?mp\b)[\w{]/i.test(w.text.replace(TEMP_VARS, ''))) return true; continue; }
-      const v = /^--?[\w-]+=(.+)$/.exec(w.text)?.[1] ?? w.text;
+      if (pat.has(i)) {
+        if (w.vars && /\$(?!_|psitem|null|true|false|\?|lastexitcode|\(|env:te?mp\b)[\w{]/i.test(w.text.replace(TEMP_VARS, ''))) return true;
+        if (!w.text.startsWith('-') && named(w.text) && onDisk(w.text)) return true;
+        continue;
+      }
+      // --file=x, and PowerShell's -Path:x / -Lit:x, name x too (review round 2).
+      const v = /^--?[\w-]+=(.+)$/.exec(w.text)?.[1] ?? (tool === 'PowerShell' ? /^-[\w-]+:(.+)$/.exec(w.text)?.[1] : null) ?? w.text;
       if (named(v) || braceWords(v).some(x => SECRET_STRICT.test(norm(x)))) return true;
       if (deep && !/^-/.test(v) && /^(~|[\\/]|[a-z]:|\.\.?$|\.\.[\\/])/i.test(v) && secretTree(longPath(full(v)) ?? full(v))) return true;
       if (/[*?[]/.test(v) && (moves || !cwd || globHits(v))) return true;

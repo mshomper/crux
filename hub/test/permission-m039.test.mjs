@@ -253,6 +253,63 @@ test('R1 queued: a search pattern that mentions .crux-hub is not a read of it', 
   assert.equal(touchesSecrets('Bash', { command: 'grep x ~/.crux-hub/settings.json' }, proj), true);
 });
 
+// ---------- review round 2 (checker-review-2): every command it listed ----------
+test('R2 HIGH 1: a device path with no drive letter (GLOBALROOT, Volume{...}, PhysicalDrive, pipe) is outside, and a secret for reads', () => {
+  const rest = H.replace(/^[A-Za-z]:/, '');   // /Users/<you>
+  matt({ file_path: `//?/GLOBALROOT/Device/HarddiskVolume4${rest}/evil.txt`, content: 'x' }, 'Write');
+  matt(`rm -rf //?/GLOBALROOT/Device/HarddiskVolume3${rest}/Documents`);
+  matt(`echo x > //?/GLOBALROOT/Device/HarddiskVolume4${rest}/evil.txt`);
+  matt(`cp hub/a.txt //?/Volume{01234567-89ab-cdef-0123-456789abcdef}${rest}/x`);
+  matt(`Remove-Item -Recurse '\\\\?\\GLOBALROOT\\Device\\HarddiskVolume4${rest.replace(/\//g, '\\')}\\Documents'`, ps);
+  const read = `cat //?/GLOBALROOT/Device/HarddiskVolume4${rest}/CRUX-H~1/settings.json`;
+  assert.equal(gate(read), true, read);
+  matt(read);
+  for (const f of ['\\\\.\\PhysicalDrive0', '\\\\.\\pipe\\x', `//./GLOBALROOT/Device/HarddiskVolume4${rest}/notes.txt`]) {
+    assert.equal(touchesSecrets('Read', { file_path: f }, proj), true, f);
+    matt({ file_path: f }, 'Read');
+  }
+  // the device form of a path with its drive letter is still that path: inside the project it is contained
+  const P = proj.replace(/\\/g, '/');
+  allow({ file_path: `//?/${P}/hub/b.txt`, content: 'x' }, 'Write');
+  allow({ file_path: `\\\\?\\${proj}\\hub\\a.txt` }, 'Read');
+  matt({ file_path: `//?/C:/Windows/evil.txt`, content: 'x' }, 'Write');
+});
+
+test('R2 HIGH 2: a pattern given in a joined or shortened option leaves the next word a file, which is checked', () => {
+  for (const c of ['grep -iePRIVATE ~/.crux-hub/settings.json', `grep -iePRIVATE ${H}/.ssh/id_rsa`, 'grep --reg=PRIVATE ~/.crux-hub/settings.json',
+    'grep --regex=PRIVATE ~/.ssh/id_rsa', 'grep -wePRIVATE .env', 'rg -iePRIVATE ~/.crux-hub/settings.json', 'git grep -iePRIVATE -- .env',
+    'git grep --no-index -iePRIVATE ~/.ssh/id_rsa', 'grep -ie PRIVATE .env', 'grep -n1e PRIVATE .env', 'grep --reg PRIVATE .env', 'grep -if pats.txt .env',
+    'findstr /g:pats.txt .env']) {
+    assert.equal(gate(c), true, c);
+    matt(c);
+  }
+  for (const c of [`Select-String -Lit ${home}\\.ssh\\id_rsa x`, `Select-String -LiteralP ${home}\\.ssh\\id_rsa -Patt x`, 'Select-String -Patt x -Pa .env',
+    'sls x -Lit:.env', 'Select-String -Inc *.txt x .env']) {
+    assert.equal(gate(c, ps), true, c);
+    matt(c, ps);
+  }
+  // a word read as the pattern that names a secret file on disk keeps its check (grep --color takes its value only
+  // with =, so here "always" is the pattern and .env the file)
+  assert.equal(gate('grep --color always .env'), true);
+  matt('grep --color always .env');
+  // contained searches still pass, and a pattern that only mentions a secret is text
+  for (const c of ['grep -iePRIVATE hub/a.txt', 'grep -ie PRIVATE hub/a.txt', 'grep --reg=PRIVATE hub', 'rg -iePRIVATE hub', 'git grep -iePRIVATE -- hub',
+    'grep -n "\\.env" hub/a.txt', 'grep -rn "id_rsa" hub']) {
+    assert.equal(gate(c), false, c);
+    allow(c);
+  }
+  allow('Select-String -Lit hub\\a.txt x', ps);
+  allow("Select-String -Patt '.crux-hub' -Pa hub\\a.txt", ps);
+});
+
+test('R2 LOW: xcopy and robocopy switches are switches, not the C: drive', () => {
+  notMatt(`xcopy hub\\lib ${tmp}\\x /E /I /C`, ps);
+  notMatt(`robocopy hub ${tmp}\\x /E /R:1 /W:1`, ps);
+  matt(`robocopy ${home} h /E`, ps);
+  matt(`xcopy ${home} ${tmp}\\h /E /I /C`, ps);
+  matt(`robocopy ${bashHome} h /E`);
+});
+
 test('6. a literal iex text is read as a command, and Start-Process arguments are scanned with their quotes opened', () => {
   matt('iex("Set-Content C:\\Windows\\evil.ps1 x")', ps);
   matt("iex 'Set-Content C:\\Windows\\evil.ps1 x'", ps);

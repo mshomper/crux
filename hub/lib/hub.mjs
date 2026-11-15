@@ -636,9 +636,12 @@ export class Hub {
     // they are allowed and logged in its thread for Matt to audit.
     // Never a connector or any other MCP server's tool (plugin servers can reach mail and calendar too): the
     // orchestrator's own requests for those come to Matt as a card.
-    // Nor one that runs text the hub cannot read as a command (iex ('git pu' + 'sh'), sh -c "$x", Start-Process with
-    // built-up arguments): it could hide any hard stop, so it comes to you (review of M039, round 1).
-    const opaqueRun = c.unsure.some(u => /^Runs (text as a command|commands the hub cannot read)/.test(u));
+    // Nor one that runs text the hub cannot read as a command (iex ('git pu' + 'sh'), [scriptblock]::Create), or a
+    // wrapper (sh -c, xargs, Start-Process) fed a variable or a built-up argument: it could hide any hard stop, so it
+    // comes to you (review of M039, round 1). A wrapper with plain words (xargs wc -l, cmd /c npm start) is allowed and
+    // logged like any other unclear request (round 2: notice volume).
+    const opaqueRun = c.unsure.some(u => /^Runs text as a command/.test(u))
+      || (c.unsure.some(u => /^Runs commands the hub cannot read/.test(u)) && c.unsure.some(u => /^(Uses a variable|An argument in brackets|Command substitution)/.test(u)));
     if (route === 'unsure' && agent.role === 'orchestrator' && this.autoLike(p) && !opaqueRun && !connectorTool(toolName) && !/^mcp__(?!crux__)/.test(toolName)) return { allow: true, logged: unsure };
     if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
