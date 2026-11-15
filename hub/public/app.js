@@ -480,7 +480,9 @@ function lastLine(p, t) {
   if (ev.type === 'pick') return `Picked D${pad(ev.decision)} ${ev.label}`;
   return `${ev.from === 'you' ? 'You: ' : ''}${ev.from === 'you' ? String(ev.text || '').replace(/^> /gm, '') : ev.text}`;
 }
-function unread(p, t) { return threadEvents(p, t).length > (S.seen[key(p.name, t)] || 0); }
+// Permission answers (the orchestrator's routine replies) don't light the dot; seen counts the same events.
+const unreadCount = (p, t) => threadEvents(p, t).filter(e => e.type !== 'permission_answer').length;
+function unread(p, t) { return unreadCount(p, t) > (S.seen[key(p.name, t)] || 0); }
 
 // An agent's icon carries a ring in its model's hue (decision 20); no ring until its model is known.
 // Decision 39: each row also carries a pin (shown on hover or keyboard focus, lit while pinned). The row is a
@@ -1004,7 +1006,8 @@ function feedFor(t) {
         default: return '';
       }
     }).join('');
-    if (S.seen[key(p.name, t)] !== evs.length) { S.seen[key(p.name, t)] = evs.length; store.set('seen', S.seen); }
+    const seenN = unreadCount(p, t);
+    if (S.seen[key(p.name, t)] !== seenN) { S.seen[key(p.name, t)] = seenN; store.set('seen', S.seen); }
     return html || (t === 'orchestrator'
       ? `<div class="empty"><h2>Talk to the orchestrator</h2><p>It reads the memory board, starts agents, answers their questions and brings decisions to you. Say what you want done on ${esc(p.name)}.</p></div>`
       : `<div class="empty"><p>No messages yet.</p></div>`);
