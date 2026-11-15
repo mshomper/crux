@@ -1,0 +1,78 @@
+/* Plan v3, A10: the trusted sites and approved packages card (lists-card.js), in the settings card's HUD look
+   (project-settings.css), and the "Always allow this site / package" buttons on permission cards (app.js).
+   Nothing scrolls sideways; rows stack on a phone. */
+
+.pset.plist{z-index:2}
+.pl-body{display:grid;gap:4px}
+.ps-sec-head .ps-n{margin-left:2px;font:500 10.5px var(--mono);letter-spacing:.06em;color:var(--faint)}
+.pl-list{margin:0 0 10px;padding:0;list-style:none;display:grid;gap:8px}
+.pl-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:3px 10px;padding:9px 10px;min-width:0;
+  border:1px solid var(--hud-line);border-radius:2px;background:rgba(18,26,37,.6)}
+.pl-ico{display:grid;place-items:center;width:30px;height:28px;color:var(--hud-ice);background:rgba(111,227,255,.1);clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)}
+.pl-ico .icon{width:16px;height:16px}
+.pl-main{display:grid;gap:1px;min-width:0}
+.pl-name{min-width:0;font:600 13.5px/1.25 var(--mono);color:var(--text);overflow-wrap:anywhere}
+.pl-sub{display:flex;align-items:center;flex-wrap:wrap;gap:4px 6px;font:500 11px/1.3 var(--mono);color:var(--faint)}
+.pl-warn{display:inline-grid;place-items:center;cursor:help}
+.pl-warn .icon{width:13px;height:13px;color:var(--hud-amber,#f3b955);filter:drop-shadow(0 0 4px rgba(243,185,85,.5))}
+.pl-acts{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px;min-width:0}
+.pl-row.armed .pl-acts{grid-column:1/-1;justify-content:flex-start;padding-top:4px}   /* the confirm step gets a row of its own */
+.pl-meta{grid-column:2/-1;font:500 10.5px/1.35 var(--mono);letter-spacing:.02em;color:var(--faint);overflow-wrap:anywhere}
+.pl-tag{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;font:600 10px/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);border:1px solid var(--hud-line);border-radius:3px;cursor:help}
+.pl-tag .icon{width:12px;height:12px}
+.pl-tag.dl{color:var(--hud-cyan);border-color:var(--hud-edge2,rgba(111,227,255,.4));background:rgba(111,227,255,.08)}
+.pl-btn{display:grid;place-items:center;width:32px;height:32px;padding:0;color:var(--hud-dim);background:rgba(10,16,24,.8);border:1px solid var(--hud-edge);border-radius:3px;cursor:pointer}
+.pl-btn .icon{width:15px;height:15px}
+.pl-btn:hover,.pl-btn:focus-visible{color:var(--hud-ice);border-color:var(--hud-cyan);outline:none}
+.pl-btn.rm:hover,.pl-btn.rm:focus-visible{color:#f4a5ab;border-color:rgba(242,114,122,.6)}
+.pl-confirm{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0}
+.pl-q{font-size:12px;color:var(--muted)}
+.pl-confirm .btn{min-height:32px;padding:0 10px;font-size:12px}
+.pl-empty{margin:0 0 10px;font-size:12.5px;color:var(--faint)}
+.pl-error{display:flex;align-items:flex-start;gap:7px;margin:0 0 12px;padding:8px 10px;font-size:12.5px;line-height:1.4;color:var(--text);border:1px solid rgba(243,185,85,.45);border-radius:2px;background:rgba(243,185,85,.07)}
+.pl-error .icon{flex:none;width:14px;height:14px;margin-top:1px;color:var(--hud-amber,#f3b955)}
+
+/* the add forms: folded, open on request */
+.pl-add{border:1px dashed var(--hud-edge);border-radius:2px;background:rgba(111,227,255,.025)}
+.pl-add summary{display:flex;align-items:center;gap:8px;padding:9px 12px;list-style:none;cursor:pointer;font:600 10.5px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--hud-cyan)}
+.pl-add summary::-webkit-details-marker{display:none}
+.pl-add summary .icon{width:14px;height:14px}
+.pl-add summary:focus-visible{outline:none;box-shadow:inset 0 0 0 1px var(--hud-cyan)}
+.pl-form{display:grid;gap:10px;padding:2px 12px 12px}
+.pl-field{display:grid;gap:5px;min-width:0}
+.pl-field>span{display:flex;align-items:center;gap:6px;font:600 10px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--hud-label)}
+.pl-field input{width:100%;min-width:0;box-sizing:border-box;margin:0;font:500 14px var(--mono);color:var(--hud-ice);background:var(--hud-deep);border:1px solid var(--hud-edge);border-radius:2px;padding:8px 10px}
+.pl-field input::placeholder{color:rgba(150,232,255,.32)}
+.pl-field input:focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.22),0 0 18px -6px rgba(111,227,255,.5)}
+.pl-field .ps-seg{justify-self:start;max-width:100%;flex-wrap:wrap}
+.pl-submit{justify-self:start}
+
+/* the entry on the project settings card */
+.ps-lists-link{display:flex;align-items:center;gap:10px;width:100%;margin:0;padding:11px 12px;text-align:left;font:inherit;color:var(--text);background:rgba(18,26,37,.6);border:1px solid var(--hud-line);border-radius:2px;cursor:pointer}
+.ps-lists-link:hover,.ps-lists-link:focus-visible{border-color:var(--hud-cyan);outline:none}
+.ps-lists-link .icon{flex:none;width:17px;height:17px;color:var(--hud-dim)}
+.ps-lists-link span{flex:1;min-width:0;font-size:13px;line-height:1.35}
+.ps-lists-link .ps-chev{flex:none;width:14px;height:14px}
+
+/* "Always allow this site / package" on a permission card, and on a one-line audit entry */
+.list-add{flex:1 1 220px}
+.list-add .icon{flex:none;width:13px;height:13px;align-self:center;color:var(--hud-cyan)}
+.perm-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;min-width:0}
+.perm-wrap .perm-line{flex:1 1 320px;min-width:0}
+.perm-wrap .list-add{flex:0 1 auto;font-size:12px;padding:3px 4px}
+.mini-approval-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;min-width:0}
+
+@media (max-width:720px){
+  .pset.plist{z-index:2}
+  .pl-row{grid-template-columns:auto minmax(0,1fr)}
+  .pl-acts{grid-column:1/-1;justify-content:flex-start}
+  .pl-meta{grid-column:1/-1}
+  .pl-row.single{grid-template-columns:auto minmax(0,1fr) auto}   /* one button: beside the name, not under it */
+  .pl-row.single .pl-acts{grid-column:auto}
+  .pl-btn{width:44px;height:44px}
+  .pl-confirm .btn{min-height:44px}
+  .pl-field input{min-height:44px;font-size:16px}
+  .pl-submit{width:100%;justify-content:center;min-height:46px}
+  .ps-lists-link{min-height:46px}
+  .perm-wrap .list-add{min-height:44px}
+}

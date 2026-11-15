@@ -127,6 +127,8 @@ export function projectCard(p, hub, d) {
     <section class="ps-sec"><h3 class="ps-sec-head">How much agents may do ${help('Pick one. The chosen level shows what runs on its own and what comes to you; hover the others for theirs.')}</h3>
       <div class="ps-levels" role="radiogroup" aria-label="How much agents may do">${LEVEL_ORDER.map(k => plate(k, d.level === k)).join('')}</div>
       ${always(d.alwaysOpen)}</section>
+    <section class="ps-sec"><h3 class="ps-sec-head">Trusted sites and packages ${help('The sites agents may read or download from and the packages they may install without asking you, each added by you. They are kept on this computer and apply in every project unless narrowed to one.')}</h3>
+      <button type="button" class="ps-lists-link" data-ps-lists title="See, add and remove the sites and packages agents may use without asking">${ic('globe')}<span>Sites and packages agents may use without asking</span>${ic('chev', 'ps-chev')}</button></section>
     <section class="ps-sec"><h3 class="ps-sec-head">When the orchestrator hands off</h3>
       <div class="ps-nums">${NUMBERS.map(f => numRow(f, d.nums[f.k], hub[f.k], d.errors?.[f.k], 'p')).join('')}</div></section>
     <section class="ps-sec ps-last"><h3 class="ps-sec-head">Connectors</h3>
@@ -240,6 +242,8 @@ export class SettingsCards {
     if (e.target === this.el) { const out = this.downOutside; this.downOutside = false; return out ? this.close() : undefined; }   // the backdrop
     if (e.target.closest('[data-ps-close]')) return this.close();
     if (e.target.closest('[data-ps-done]')) return this.done();
+    if (e.target.closest('[data-ps-lists]')) return void this.host.openLists?.(this.p);   // plan v3 A10 (lists-card.js): opens over this card
+
     const lv = e.target.closest('[data-ps-level]');
     if (lv && this.d.level !== lv.dataset.psLevel) { this.d.level = lv.dataset.psLevel; this.render(); this.el.querySelector('.ps-lv.on')?.focus({ preventScroll: true }); return; }
     const sg = e.target.closest('[data-ps-seg]');

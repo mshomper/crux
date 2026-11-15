@@ -40,7 +40,7 @@ const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';   // no 0/O, 1/I/L
 
 // The only POSTs a device without the cookie may make: the steps of pairing it.
 export const OPEN_POSTS = new Set(['/api/pair/code', '/api/pair/options', '/api/pair/finish']);
-export const PURPOSES = new Set(['project', 'hub', 'push', 'pair', 'unpair']);
+export const PURPOSES = new Set(['project', 'hub', 'push', 'pair', 'unpair', 'lists']);
 export const NOT_PAIRED = 'This device is not paired with the hub, so it cannot make changes. Pair it first: "Pair this device" on the hub page.';
 
 export class GuardError extends Error {
@@ -455,11 +455,22 @@ export function stepUpNeed(route, body = {}, hub) {
 function needFor(route, body, hub) {
   switch (route) {
     case 'POST /api/settings': return settingsNeed(body, hub);
+    // Plan v3 A10: adding a trusted site or approved package (or letting a site's downloads in) lets agents act without a
+    // card, so it needs a fresh step-up made for exactly that entry. Removing one needs only the cookie.
+    case 'POST /api/lists/add': return listsNeed(body);
+    case 'POST /api/lists/access': return body.access === 'downloads' ? { purpose: 'lists', scope: `lists;downloads;${String(body.id || '').slice(0, 40)}`, why: 'Let agents download files from a trusted site' } : null;
     case 'POST /api/push/subscribe': return { purpose: 'push', scope: 'push', why: 'Add this device to the hub\'s notifications' };
     case 'POST /api/pair/issue': return { purpose: 'pair', scope: 'pair', why: 'Pair another device' };
     case 'POST /api/devices/remove': return { purpose: 'unpair', scope: `device=${String(body.id || '').slice(0, 40)}`, why: 'Unpair a device and its passkey' };
     default: return null;
   }
+}
+
+function listsNeed(body = {}) {
+  const site = body.kind === 'site', what = String(site ? body.host : body.name || '').trim().slice(0, 80);
+  const scope = body.scope === 'project' ? 'project' : 'all';
+  return { purpose: 'lists', scope: `lists;${site ? 'site' : String(body.eco || '').slice(0, 20)};${what};${site ? `${body.access || 'pages'};${String(body.pin || '').slice(0, 80)};` : ''}${scope}`,
+    why: site ? `Add ${what} to your trusted sites${body.access === 'downloads' ? ' for downloads' : ''}` : `Add ${what} to your approved packages` };
 }
 
 // Settings: raising a project to Trusted, turning its connectors on, turning orchestrator answers on, and any other

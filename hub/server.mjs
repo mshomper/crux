@@ -354,6 +354,12 @@ const routes = {
 
   'POST /api/pick': ({ project, picks }) => ({ picked: hub.pickMany(hub.project(project), picks).map(d => d.id) }),
   'POST /api/approval': ({ id, allow, note, always }) => { hub.answerApproval(id, !!allow, note, !!always); return { ok: true }; },
+  // Plan v3 A10: Matt's trusted sites and approved packages. Read here; changed only by these page actions (never by an
+  // agent tool). Adding, and letting a site's downloads in, ask for a fresh step-up (lib/guard.mjs); removing does not.
+  'GET /api/lists': ({ project }) => hub.listsView(hub.project(String(project || ''))),
+  'POST /api/lists/add': async body => { const p = hub.project(String(body.project || '')); await hub.addToLists(p, body); return hub.listsView(p); },
+  'POST /api/lists/access': ({ project, id, access }) => { const p = hub.project(String(project || '')); hub.setListAccess(p, String(id || ''), access); return hub.listsView(p); },
+  'POST /api/lists/remove': ({ project, id }) => { const p = hub.project(String(project || '')); hub.removeFromLists(p, String(id || '')); return hub.listsView(p); },
   'POST /api/retire-finished': ({ project, agent }) => ({ result: hub.retireFinished(hub.project(project), agent) }),
   // The orchestrator's handoff, a worker's, or (project "~conductor") the Conductor's.
   'POST /api/retire': ({ project, agent }) => { const p = hub.place(project); hub.retire(p, p.hubWide ? p.orchestrator() : agent || p.orchestrator()); return { ok: true }; },

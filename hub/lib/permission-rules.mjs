@@ -20,6 +20,7 @@ import { tmpdir, homedir } from 'node:os';
 import { readFileSync, existsSync, statSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { gitReadRuns, gitNoIndex, GIT_SAFE_CONFIG } from './permissions.mjs';
+import { settleLists } from './permission-lists.mjs';
 
 const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
@@ -311,7 +312,7 @@ export function mergeNeedsOwner({ level = 'auto', into = null } = {}) {   // esl
 // level: the project's permission level (decision 45); only 'trusted' changes what is allowed here.
 // downloaded: files this agent downloaded in earlier requests (the result's downloaded lists this request's too), so
 // running one later (bash x.sh, node x.js, .\x.ps1) is a stop across tool calls (review of decision 64 A).
-export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], level = 'auto' }) {
+export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], level = 'auto', lists = null }) {
   const c = new Check(projectDir, tmp, home, cwd);
   c.level = level;
   c.trusted = level === 'trusted';
@@ -323,7 +324,7 @@ export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdi
   c.downloaded = new Set([...downloaded].map(norm));   // files downloaded (earlier, or in this command): running one is a stop
   c.cmdText = String(input.command || '');   // the whole command, for checks that look at all of it ($PSDefaultParameterValues)
   c.assigned = new Set();     // every shell variable the command assigns, exported or not (see envNames)
-  const out = classifyWith(c, tool, input);
+  const out = settleLists(classifyWith(c, tool, input), { lists, tool, input, projectDir: c.projectDir, cwd: c.cwd0, tmp: c.tmp, home: c.home, downloaded: c.downloaded });   // A10: Matt's lists
   return { ...out, tempMade: [...c.tempMade], downloaded: [...c.downloaded] };
 }
 
