@@ -54,10 +54,12 @@ export const NUMBERS = [
 // Hub-wide only (decision 46 A): no box on the project card.
 export const WORKER_FLOOR = { k: 'workerHandoffFloorPct', icon: 'handoff', label: 'From', unit: '% context', min: 0, max: 100,
   tip: 'The orchestrator may hand a worker\'s task to a fresh agent once the worker has used this much of its context, at the end of a turn, and says why. Below it, never. Every agent still hands off by itself at its project\'s hand-off mark; in a project whose mark is at or below this number, that is the only handoff (decision 46).' };
-export const TIMEOUT = { k: 'permissionTimeoutSec', icon: 'clock', label: 'Comes to you after', unit: 'seconds', min: 10, max: 3600,
+export const WORKER_MARK = { k: 'workerRetireAt', icon: 'gauge', label: 'Workers hand off at', unit: '% context', min: 1, max: 100,
+  tip: 'A worker hands its task to a fresh agent by itself once it has used this much of its context (decision 46). Separate from the orchestrator\'s mark, so a worker deep in a long job keeps its large context.' };
+export const TIMEOUT ={ k: 'permissionTimeoutSec', icon: 'clock', label: 'Comes to you after', unit: 'seconds', min: 10, max: 3600,
   tip: 'How long the orchestrator has to answer a worker\'s request before the card comes to you.' };
 // Every box in the Whole hub panel.
-export const HUB_FIELDS = [TIMEOUT, ...NUMBERS, WORKER_FLOOR];
+export const HUB_FIELDS = [TIMEOUT, ...NUMBERS, WORKER_MARK, WORKER_FLOOR];
 
 // A typed value: '' (use the default, when allowed), a whole number in range, or an error in plain words.
 export function readNumber(text, f, { allowEmpty = true } = {}) {
@@ -144,7 +146,7 @@ export function hubPanel(d) {
     <section class="ps-sec"><h3 class="ps-sec-head">Handoff defaults for every project ${help('A project can set its own numbers on its settings card; an empty box there uses these.')}</h3>
       <div class="ps-nums">${NUMBERS.map(f => numRow(f, d.nums[f.k], null, d.errors?.[f.k], 'h')).join('')}</div></section>
     <section class="ps-sec ps-last"><h3 class="ps-sec-head">When the orchestrator may hand a worker on</h3>
-      <div class="ps-nums">${numRow(WORKER_FLOOR, d.nums[WORKER_FLOOR.k], null, d.errors?.[WORKER_FLOOR.k], 'h')}</div></section>
+      <div class="ps-nums">${[WORKER_FLOOR, WORKER_MARK].map(f => numRow(f, d.nums[f.k], null, d.errors?.[f.k], 'h')).join('')}</div></section>
   </div>
   ${foot('Saved on this computer when you press Done. Numbers a project set for itself stay as they are.')}`;
 }
