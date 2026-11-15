@@ -100,6 +100,7 @@ export function lex(raw, shell = 'bash') {
     if (c === '"') { q = '"'; has = true; continue; }
     if (c === '$' && n === '(' && shell !== 'cmd') { i = sub(i, '('); continue; }
     if (c === '`' && shell === 'bash') { i = sub(i, '`'); continue; }
+    if (c === '&' && (cur.endsWith('>') || n === '>')) { cur += c; has = true; continue; }   // 2>&1 and &>file are redirects, not a new command
     if (c === '\n' || ';|&(){}'.includes(c)) { endSeg(); continue; }
     if (/\s/.test(c)) { endWord(); continue; }
     cur += c; has = true;
@@ -114,16 +115,40 @@ const bareSpec = s => !/^(\.{1,2}[\\/]|[\\/]|[A-Za-z]:|file:)/.test(s);   // a p
 const SHELLS = /^(bash|sh|zsh|dash|ksh|ash)$/;
 const NODEISH = /^(node|nodejs|tsx|ts-node|ts-node-esm)$/;
 const PYTHONISH = /^(python[\d.]*|py|pypy[\d.]*)$/;
-// Programs and words that start code. An unknown program with one of these (or a script file) among its words is unread.
-const CARRIES = /^(node|nodejs|deno|bun|bunx|tsx|ts-node|ts-node-esm|python[\d.]*|py|pypy[\d.]*|bash|sh|zsh|dash|ksh|ash|fish|pwsh|powershell|cmd|wsl|ruby|perl|php|lua|npm|npx|pnpm|pnpx|yarn|uv|uvx|poetry|pipx|cargo|go|dotnet|make|gmake|nmake|just|task|java|javaw|mshta|wscript|cscript|rundll32|regsvr32|msiexec|invoke-expression|iex|invoke-command|icm|start-process|saps)$/i;
-// Programs that only read, write or report, and never start what is in their arguments.
+// ROUND 3: the reader is an allowlist all the way down. A segment is "read" only when its head is a program the hub
+// positively knows cannot start another program (SAFE_HEADS, with only the long options in SAFE_LONG), or one of the few
+// it follows (an interpreter with its allowlisted flags, git with allowlisted subcommands, npm run/test/start, ...).
+// Everything else (tar, gh, a dependency's bin, a program built from a quoted sum, a stranger's cmdlet) is unread, so a
+// program the hub has never heard of cannot hide a worker's file in its arguments. Unread means the check can never allow it.
+// Programs that only read, write or report, and never start what is in their arguments. (Not here: gh and wget, which
+// can run an alias or an askpass program; tar, which runs -I; find, sed and awk, which have their own rules.)
 const SAFE_HEADS = new Set(['echo', 'printf', 'cat', 'type', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'grep', 'egrep', 'fgrep', 'rg', 'ls', 'dir', 'll', 'tree', 'stat', 'file', 'pwd', 'which', 'where', 'whereis',
   'get-command', 'gcm', 'test', '[', 'true', 'false', ':', 'sleep', 'start-sleep', 'date', 'mkdir', 'md', 'touch', 'cp', 'copy', 'mv', 'move', 'rm', 'del', 'erase', 'rmdir', 'rd', 'ri', 'remove-item', 'copy-item', 'cpi', 'move-item', 'mi',
   'new-item', 'ni', 'rename-item', 'get-childitem', 'gci', 'get-content', 'gc', 'set-content', 'sc', 'add-content', 'ac', 'select-string', 'sls', 'select-object', 'where-object', 'foreach-object', 'sort-object', 'measure-object',
   'format-table', 'format-list', 'out-null', 'out-file', 'out-string', 'write-host', 'write-output', 'write-error', 'test-path', 'join-path', 'split-path', 'resolve-path', 'get-item', 'get-date', 'get-location', 'set-variable',
   'get-process', 'get-service', 'get-filehash', 'convertto-json', 'convertfrom-json', 'basename', 'dirname', 'readlink', 'realpath', 'cygpath', 'mktemp', 'expr', 'diff', 'cmp', 'du', 'df', 'ps', 'tasklist', 'taskkill', 'stop-process',
-  'netstat', 'curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm', 'gh', 'msedge', 'chrome', 'chromium', 'exit', 'return', 'popd']);
-const GIT_EXEC = /^(-x|--exec(=.*)?|-c|--upload-pack(=.*)?|--receive-pack(=.*)?|--exec-path(=.*)?|--ext-cmd(=.*)?|--config-env(=.*)?)$/;
+  'netstat', 'curl', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm', 'exit', 'return', 'popd',
+  'read', 'export', 'unset', 'local', 'declare', 'shift']);
+// Words that only structure a script (if/then/for ...): the command that follows one of the lead-in words is read in turn.
+const LEAD_INS = /^(if|then|else|elif|elseif|do|while|until|!)$/i;
+const KEYWORDS = new Set(['fi', 'done', 'esac', 'for', 'foreach', 'case', 'in', 'select', 'try', 'catch', 'finally', 'switch', 'param', 'break', 'continue', 'throw', 'if', 'else', 'elseif', 'while', 'do', 'then', 'until']);
+// The long options (--name) a SAFE program may take. Any other long option could name a program to run
+// (rg --pre, sort --compress-program, ...), so the segment is unread.
+const SAFE_LONG = /^--(help|version|recursive|force|verbose|quiet|silent|parents|no-clobber|interactive|color|colour|count|line-number|no-line-number|ignore-case|smart-case|case-sensitive|invert-match|files-with-matches|files-without-match|word-regexp|line-regexp|fixed-strings|extended-regexp|perl-regexp|regexp|include|exclude|exclude-dir|max-count|lines|bytes|numeric-sort|reverse|unique|human-readable|all|almost-all|long|time|sort|hidden|glob|iglob|no-ignore|type|files|json|context|after-context|before-context|text|binary|null|follow|no-heading|heading|with-filename|no-filename|only-matching|dereference|preserve|update|target-directory|no-target-directory|backup|suffix|summarize|max-depth|block-size|format|date|utc|show-all|squeeze-blank|number|number-nonblank|ignore-errors|append|dry-run|output|unrestricted|no-messages|column|trim|byte-offset|stats|no-config|ignore-file|no-follow|max-filesize|threads|fail|location|silent|show-error|header|data|request|write-out|connect-timeout|max-time|retry|compressed|head|get|no-progress-meter)(=|$)/;
+// git: only these subcommands are read. Any other name could be an external "git-x" program or an alias (aliases cannot
+// shadow these built-in names), and `git -c`, `-C`, --git-dir, --exec ... are never read.
+const GIT_SUBS = new Set(['status', 'log', 'diff', 'show', 'add', 'commit', 'branch', 'fetch', 'pull', 'push', 'checkout', 'switch', 'restore', 'stash', 'merge', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'cat-file', 'remote', 'tag',
+  'blame', 'shortlog', 'describe', 'worktree', 'show-ref', 'for-each-ref', 'merge-base', 'cherry-pick', 'revert', 'mv', 'rm', 'reset', 'diff-tree', 'diff-index', 'name-rev', 'reflog', 'version']);
+const GIT_MUTATES = new Set(['checkout', 'switch', 'restore', 'reset', 'merge', 'pull', 'stash', 'cherry-pick', 'revert', 'rm', 'mv', 'worktree']);
+const GIT_GLOBAL_OK = /^(--no-pager|--no-optional-locks|--paginate|-p|--literal-pathspecs|--no-literal-pathspecs|--no-replace-objects|--bare)$/;
+const GIT_LONG_OK = /^--(oneline|graph|stat|shortstat|numstat|name-only|name-status|no-edit|edit|amend|no-verify|message|all|force|force-with-lease|set-upstream|delete|no-track|track|porcelain|short|branch|format|pretty|since|until|after|before|author|committer|grep|abbrev-commit|abbrev|decorate|no-decorate|cached|staged|quiet|verbose|dry-run|ff-only|no-ff|ff|squash|rebase|no-rebase|prune|tags|no-tags|follow|reverse|max-count|patch|unified|word-diff|color|no-color|no-pager|no-merge|merges|first-parent|date|relative-date|stat-width|summary|find-renames|no-renames|diff-filter|full-index|binary|check|ignore-space-change|ignore-all-space|ignore-blank-lines|stdin|help|version|list|contains|merged|no-merged|show-current|sort|points-at|set-upstream-to|unset-upstream|move|copy|create|orphan|detach|ours|theirs|source|patch-with-stat|no-commit|signoff|no-gpg-sign|allow-empty|allow-empty-message|reset-author|date-order|topo-order|skip|root|exit-code|name|always|tags|long|dirty|match|unmerged|untracked-files|ignored|ahead-behind|no-ahead-behind|column|no-column|ignore-submodules|pickaxe-all|text|no-index|full-history|simplify-by-decoration|ancestry-path|left-right|boundary|pathspec-from-file|pathspec-file-nul|recurse-submodules|no-recurse-submodules|depth|unshallow|shallow-since|atomic|mirror|follow-tags|no-follow-tags|porcelain|progress|no-progress|keep|soft|mixed|hard|merge|keep-index|include-untracked|only|include|autosquash|no-autosquash|strategy|strategy-option|fixup|ignore-date|committer-date-is-author-date|cleanup|verify|no-signoff|lock|unlock|force-create|remove-empty|upstream|rename-limit|inter-hunk-context|function-context|no-prefix|src-prefix|dst-prefix|minimal|patience|histogram|diff-algorithm|dirstat|compact-summary|raw|output)(=|$)/;
+// A word that names a program to run: never read when it follows git's own options.
+const GIT_BAD_LONG = /^--(exec|upload-pack|receive-pack|exec-path|ext-cmd|config-env|config|git-dir|work-tree|open-files-in-pager|ext-diff|textconv|template|editor)(=|$)/;
+// Flags that need no fuss for find: anything else (-exec, -ok, -fprint, -delete is fine) is unread.
+const FIND_OK = /^(-name|-iname|-path|-ipath|-regex|-iregex|-type|-maxdepth|-mindepth|-mtime|-mmin|-atime|-ctime|-newer|-size|-empty|-not|-and|-or|-o|-a|!|-print|-print0|-prune|-delete|-depth|-user|-group|-perm|-readable|-writable|-executable|-xdev|-mount|-follow|-L|-H|-P|-true|-false)$/;
+// Commands that change what files hold. A command that changes a script (or the tree) and runs one is not "what was read".
+const WRITERS = new Set(['cp', 'copy', 'mv', 'move', 'tee', 'set-content', 'sc', 'add-content', 'ac', 'out-file', 'copy-item', 'cpi', 'move-item', 'mi', 'rename-item', 'new-item', 'ni', 'touch', 'curl', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm']);
+const CODE_FILE = /(\.(mjs|cjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1|bat|cmd|rb|pl|php|lua)|package\.json|\.npmrc)$/i;
 // What an environment variable can change in what a program loads or runs.
 const ENV_LOADS = /(?:^|[^A-Za-z0-9_])(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|PYTHONPATH|PYTHONSTARTUP|PYTHONHOME|PYTHONUSERBASE|PYTHONINSPECT|PYTHONBREAKPOINT|BASH_ENV|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|GIT_SSH_COMMAND|GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EDITOR|GIT_SEQUENCE_EDITOR|GIT_PAGER|GIT_ASKPASS|GIT_EXEC_PATH|GIT_CONFIG_\w+|GIT_DIR|GIT_WORK_TREE|COMSPEC|PATHEXT|PSModulePath)(?![A-Za-z0-9_])|npm_config_\w+|NPM_CONFIG_\w+|--node-options|(?:^|[\s;&|(])(?:export\s+|set\s+|\$env:)?PATH\s*=/i;
 // Flags with no value that are safe on each interpreter. Anything else is unread: it could load or run something else.
@@ -135,26 +160,21 @@ const PS_OK = /^-(noprofile|noninteractive|nologo|mta|sta)$/i;
 const PS_VALUE = /^-(ep|executionpolicy|windowstyle|outputformat|inputformat)$/i;
 const PM_OK = /^(--silent|-s|--if-present|--quiet|-q|--no-progress|--no-fund|--no-audit|--ignore-scripts|--offline|--prefer-offline|--no-color|--color|--loglevel=\w+|--frozen-lockfile|--immutable)$/;
 const DENO_OK = /^(-A|--allow-[a-z-]+(=.*)?|--deny-[a-z-]+(=.*)?|--no-prompt|--quiet|-q|--no-check|--check|--no-lock)$/;
-const PM_BUILTIN = new Set(['install', 'i', 'add', 'remove', 'rm', 'uninstall', 'update', 'up', 'upgrade', 'list', 'ls', 'info', 'why', 'init', 'link', 'unlink', 'audit', 'outdated', 'config', 'cache', 'store', 'publish', 'pack', 'version', 'help', 'import', 'prune', 'rebuild', 'dedupe', 'fetch', 'patch', 'licenses', 'create', 'set', 'get', 'workspace', 'workspaces', 'env', 'login', 'logout', 'whoami', 'view', 'search', 'ci', 'cit', 'ddp', 'doctor', 'explain', 'diff', 'pkg']);
+// Known gap, left on purpose (LOW): on Windows a bare `node` could be picked up from the current folder as node.cmd / node.exe.
+// Claude Code starts its shells with NoDefaultCurrentDirectoryInExePath set, so the current folder is not searched; an
+// explicit ./node or .\node is a path, and is read as the project file it names (parseCommand, `pathy`).
 const INTERP = /^(node|nodejs|tsx|ts-node|ts-node-esm|python[\d.]*|py|pypy[\d.]*|bash|sh|zsh|dash|ksh|ash|pwsh|powershell|cmd|ruby|perl|php|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|uv|poetry|pipx|hatch|pdm|cargo|go|dotnet|make|gmake|nmake|just|task)$/;
-
-// Words that carry an interpreter or a script file anywhere inside them, quoted or not.
-function carries(words, { scriptsToo = true } = {}) {
-  for (const w of words) for (const t of String(w).split(/[\s;&|=,(){}"'`<>]+/).filter(Boolean)) {
-    if (CARRIES.test(basename(t.replace(/\\/g, '/')).replace(/\.exe$/i, ''))) return t;
-    if (scriptsToo && SCRIPT_EXT.test(t)) return t;
-  }
-  return null;
-}
 
 // What a command starts. files: { path, mode } with mode 'file' (as written), 'node' (a node entry: may omit the
 // extension), 'module' (python -m), 'direct' (a path used as the command word). inline: code written in the command.
 // nested: { cmd, shell } command text to read in turn (bash -c "...", $(...)). runners: npm-style script names.
 // unread: { head, why } for anything the hub cannot read in full.
-export function parseCommand(cmd, { shell = 'bash' } = {}) {
-  const out = { files: [], inline: [], nested: [], runners: [], unread: [] };
+export function parseCommand(cmd, { shell = 'bash', cwd = '' } = {}) {
+  const out = { files: [], inline: [], nested: [], runners: [], unread: [], mutates: false };
   const lx = lex(cmd, shell);
   for (const why of lx.why) out.unread.push({ head: '(command)', why });
+  // PowerShell's call operator and dot-sourcing, followed by an expression or a variable: &('no'+'de') evil, & $x, .(...)
+  if (shell === 'powershell' && /(?:^|[;&|{(\s])[&.]\s*[($]/.test(String(cmd || ''))) out.unread.push({ head: '(command)', why: 'it calls a program named by an expression or a variable' });
   out.nested.push(...lx.subs.map(s => ({ cmd: s, at: '', shell })));
   if (ENV_LOADS.test(String(cmd || ''))) out.unread.push({ head: '(environment)', why: 'it sets something that changes what a program loads or runs (NODE_OPTIONS, PYTHONPATH, PATH ...)' });
   // "cd hub && npm test": the folder a later part of the command runs in. Each file, runner and nested command is
@@ -172,6 +192,7 @@ export function parseCommand(cmd, { shell = 'bash' } = {}) {
     for (;;) {   // VAR=x in front, and wrappers: timeout 5 node x.mjs, env X=1 node x.mjs, sudo ..., . ./x.sh (sourced)
       if (!w.length) break;
       if (/^[A-Za-z_]\w*=/.test(w[0])) { w = w.slice(1); continue; }
+      if (LEAD_INS.test(w[0]) && w.length > 1) { w = w.slice(1); continue; }   // "then node x.mjs": the command after it
       if (/^(timeout|time|nohup|env|call|start|sudo|exec|command|nice|builtin)$/i.test(w[0]) && w.length > 1) { w = w.slice(1); while (w.length && (/^(-\S+|\d+(\.\d+)?[smhd]?)$/.test(w[0]) || /^[A-Za-z_]\w*=/.test(w[0]))) w = w.slice(1); continue; }
       break;
     }
@@ -208,39 +229,55 @@ export function parseCommand(cmd, { shell = 'bash' } = {}) {
       if (file) out.nested.push({ cmd: [file, ...args].join(' ').replace(/,/g, ' '), shell }); else out.unread.push({ head, why: 'what it starts is not clear' });
       continue;
     }
-    if (head === 'git') {   // git runs a program for -x, -c core.x=..., --upload-pack ...: it is not just a read
-      const bad = rest.find(x => GIT_EXEC.test(x));
-      if (bad) out.unread.push({ head, why: `git is told to run something (${bad})` });
-      else {   // subcommands that run a command they are given, or store one
-        const sub = rest.find(x => !x.startsWith('-')), t = carries(rest);
-        if (/^(submodule|bisect|filter-branch|rebase|difftool|mergetool|config|instaweb|daemon|credential|am|hook|maintenance)$/.test(sub || '') && t) out.unread.push({ head, why: `git is given a program or script (${t}) to run or keep` });
-      }
-      continue;
+    // "> file" and ">> file": a write. A write to code, or to a name built at run time, is noted (see scriptsFor).
+    for (let k = 0; k < w.length; k++) { const m = /^\d*>>?(.*)$/.exec(w[k]); if (m) { const tgt = m[1] || w[k + 1] || ''; if (CODE_FILE.test(tgt) || dynamic(tgt)) out.mutates = true; } }
+    // A program that is not a plain name, or that is a script file itself.
+    const pathy = /[\\/]/.test(word0), absolute = pathy && (isAbsolute(word0) || /^\/[A-Za-z]\//.test(word0)), inDeps = /[\\/]node_modules[\\/]/i.test(word0);
+    const known = SAFE_HEADS.has(head) || INTERP.test(head) || head === 'git' || head === 'find' || KEYWORDS.has(head);
+    if (SCRIPT_EXT.test(word0)) { out.files.push({ path: word0, mode: 'file' }); continue; }   // the command word is itself a script: ./run.sh, x.ps1, build.bat
+    if (pathy) {   // ./tool, .\tool: a program of the project, if it is one. Never read as the interpreter its name looks like.
+      out.files.push({ path: word0, mode: 'direct', known });
+      if (!((absolute || inDeps) && known)) { if (inDeps && !known) out.unread.push({ head, why: 'a program from a dependency, which can run any file it is given' }); continue; }
     }
-    if (head === 'find' || head === 'fd') {
-      if (rest.some(x => /^-(exec|execdir|ok|okdir|fprint\w*|fls)$/.test(x) || /^(-x|--exec|-X|--exec-batch)$/.test(x))) out.unread.push({ head, why: 'it runs a command on what it finds' });
-      continue;
-    }
-    if (head === 'sed' || head === 'awk' || head === 'gawk') {   // 'e' in sed and system() in awk run programs: any interpreter in the text counts
-      const t = carries(rest, { scriptsToo: false });
-      if (t) out.unread.push({ head, why: `its program text names an interpreter (${t})` });
+    if (head === 'git') { gitSegment(rest, out); continue; }
+    if (head === 'find') {   // -exec, -ok, -fprint ... : only the plain tests and -print / -delete are read
+      const bad = rest.find(x => /^-/.test(x) && !FIND_OK.test(x));
+      if (bad) out.unread.push({ head, why: `find is given an option the hub does not read (${bad})` });
       continue;
     }
     if (INTERP.test(head)) {
       if (rest.some(dynamic)) { out.unread.push({ head, why: 'its arguments are built at run time' }); continue; }
-      starts(head, rest, out, { shell, body });
-    } else if (SCRIPT_EXT.test(word0)) out.files.push({ path: word0, mode: 'file' });   // the command word is itself a script: ./run.sh, x.ps1, build.bat
-    else if (/[\\/]/.test(word0)) out.files.push({ path: word0, mode: 'direct' });      // ./tool, .\tool: a program in the project, if it is one
-    else if (!SAFE_HEADS.has(head)) {   // a program the hub does not know: unread if an interpreter or a script file is anywhere in its words
-      const t = carries(rest);
-      if (t) out.unread.push({ head, why: `it starts a program the hub does not know, with ${t} among its words` });
+      starts(head, rest, out, { shell, body, cwd, at });
+    } else if (SAFE_HEADS.has(head)) {   // reads, writes or reports; only the long options on the short list
+      const bad = rest.slice(0, rest.indexOf('--') < 0 ? rest.length : rest.indexOf('--')).find(x => x.startsWith('--') && !SAFE_LONG.test(x));
+      if (bad) out.unread.push({ head, why: `an option the hub does not read (${bad}), which could name a program to run` });
+      else if (WRITERS.has(head) && rest.some(x => CODE_FILE.test(x) || dynamic(x))) out.mutates = true;
+    } else if (!KEYWORDS.has(head)) {
+      out.unread.push({ head, why: 'a program that is not on the hub\'s short list of programs that only read, write or report' });
     }
   }
   tagNew();
   return out;
 }
 
-function starts(head, rest, out, { shell, body }) {
+// git: only the subcommands in GIT_SUBS, with no global option that moves it (-C, --git-dir ...) or runs something (-c).
+function gitSegment(rest, out) {
+  const unread = why => out.unread.push({ head: 'git', why });
+  let i = 0;
+  while (i < rest.length && rest[i].startsWith('-')) { if (!GIT_GLOBAL_OK.test(rest[i])) return unread(`a git option the hub does not read (${rest[i]})`); i++; }
+  const sub = rest[i];
+  if (sub === undefined) return;
+  if (!GIT_SUBS.has(sub)) return unread(`git ${sub}: not a subcommand the hub reads (it could be an alias or an external git-${sub} program)`);
+  if (GIT_MUTATES.has(sub)) out.mutates = true;
+  for (const x of rest.slice(i + 1)) {
+    if (x === '--') break;
+    if (GIT_BAD_LONG.test(x) || /^-O/.test(x)) return unread(`git is told to run or load something (${x})`);
+    if (x.startsWith('--') && !GIT_LONG_OK.test(x)) return unread(`a git option the hub does not read (${x})`);
+  }
+}
+
+function starts(head, rest, out, ctx) {
+  const { shell, body } = ctx;
   const unread = why => out.unread.push({ head, why });
   const file = (path, mode = 'file') => out.files.push({ path, mode });
   const nest = (cmd, sh = shell) => out.nested.push({ cmd, shell: sh });
@@ -345,21 +382,27 @@ function starts(head, rest, out, { shell, body }) {
     const sub = pos[0];
     if (!sub) return;
     if (head === 'bun' && (SCRIPT_EXT.test(sub) || /[\\/]/.test(sub))) return file(sub, 'node');
-    if (['exec', 'dlx', 'x'].includes(sub)) return unread('downloads and runs a package');
-    let name = null;
-    if (['run', 'run-script', 'rum', 'urn'].includes(sub)) name = pos[1];
-    else if (head === 'npm') name = { test: 'test', t: 'test', tst: 'test', start: 'start', stop: 'stop', restart: 'restart' }[sub] || null;
-    else if (!PM_BUILTIN.has(sub)) name = sub;   // pnpm and yarn run a package script by its bare name
+    // Round 3: only run / test / start (and stop, restart). Everything else (install, pack, version, rebuild, link, publish,
+    // init, create, explore, exec, a bare script name ...) can run a lifecycle script or a program from the project.
+    let name = null, extra = [];
+    if (['run', 'run-script', 'rum', 'urn'].includes(sub)) { name = pos[1]; extra = pos.slice(2); }
+    else if (['test', 'start', 'stop', 'restart'].includes(sub) || (head === 'npm' && ['t', 'tst'].includes(sub))) { name = { t: 'test', tst: 'test' }[sub] || sub; extra = pos.slice(1); }
+    if (!name) return unread(`${head} ${sub}: only run, test and start are read (the others can run lifecycle scripts or a program of the project)`);
     if (head === 'bun' && sub === 'test' && !pos[1]) return unread('runs every test file it finds');
-    if (name && head === 'bun' && (SCRIPT_EXT.test(name) || /[\\/]/.test(name))) return file(name, 'node');
-    if (name) out.runners.push({ tool: head, name, hooks: head === 'npm' });
+    if (head === 'bun' && (SCRIPT_EXT.test(name) || /[\\/]/.test(name))) return file(name, 'node');
+    // What follows the script name (or `--`) is appended to the script's last command: it can name a file for the
+    // program inside to run (npm test -- ./evil.mjs). Only plain words, and flags on the short lists, are read.
+    for (const x of [...extra, ...(dd < 0 ? [] : rest.slice(dd + 1))]) {
+      if (x.startsWith('-')) { if (!(NODE_OK.test(x) || PM_OK.test(x) || /^--(coverage|reporter|bail|run|ui|passWithNoTests|runInBand|verbose|json)(=\w+)?$/.test(x))) return odd(x); continue; }
+      if (/[\\/]/.test(x) || SCRIPT_EXT.test(x) || /[=:*?]/.test(x)) return unread(`an argument that could name a file for the script to run (${x})`);
+      if (ctx.cwd) { try { if (existsSync(resolve(ctx.cwd, ctx.at || '', x))) return unread(`an argument that names an existing file (${x})`); } catch { /* not a file */ } }
+    }
+    out.runners.push({ tool: head, name, hooks: true });
     return;
   }
-  if (/^(uv|poetry|pipx|hatch|pdm)$/.test(head)) {
-    const i = rest.indexOf('run');
-    if (i < 0) return;
-    if (head === 'pipx') return unread('downloads and runs a package');
-    const tail = rest.slice(i + 1);
+  if (/^(uv|poetry|hatch|pdm)$/.test(head)) {   // only `run <command>`; install, sync, pip ... build and run project code
+    if (rest[0] !== 'run') return unread(`${head} ${rest[0] ?? ''}: only "run" is read`);
+    const tail = rest.slice(1);
     let j = 0;
     while (j < tail.length && /^(--no-sync|--frozen|--locked|--offline|--quiet|-q|--no-project)$/.test(tail[j])) j++;
     if (j >= tail.length) return unread('no command named');
@@ -367,9 +410,8 @@ function starts(head, rest, out, { shell, body }) {
     nest(tail.slice(j).join(' '));
     return;
   }
-  if (/^(cargo|dotnet)$/.test(head)) { if (rest.some(x => /^(run|test|bench|build|check|clippy|doc|watch)$/.test(x))) unread('builds and runs project code the hub does not read'); return; }
-  if (head === 'go') { if (rest.some(x => /^(run|test|generate)$/.test(x))) unread('builds and runs project code the hub does not read'); return; }
-  if (/^(make|gmake|nmake|just|task)$/.test(head)) return unread('runs commands from a build file the hub does not read');
+  // pipx, cargo, dotnet, go, make, just, task, npx ... build or download and run code the hub does not read.
+  return unread('builds or downloads and runs code the hub does not read');
 }
 
 // The script paths as written, for the tests and the simple cases.
@@ -549,7 +591,7 @@ const DIRECT_EXT = ['', '.ps1', '.bat', '.cmd', '.exe', '.com'];      // what Po
 function itemsFor(files, base0, projectDir) {
   const items = [];
   const add = f => items.push({ path: f });
-  for (const { path: r, mode, at } of files) {
+  for (const { path: r, mode, at, known } of files) {
     const base = at ? resolve(base0, at) : base0;   // after a cd in the command, where it really runs
     if (/[$`\u0001]|^~|%\w+%/.test(r)) { items.push({ path: r, kind: 'unknown', note: 'its path is built from a variable or a command' }); continue; }
     const abs = isAbsolute(r) ? r : resolve(base, r);
@@ -572,8 +614,10 @@ function itemsFor(files, base0, projectDir) {
       for (const f of found) {
         let real; try { real = realpathSync(f); } catch { continue; }
         const mine = (projectDir && within(real, realpathSync(projectDir))) || within(real, realpathSync(tmpdir()));
-        if (mine) { if (!/[\\/]node_modules[\\/]/i.test(real)) add(f); }   // a program outside the project and temp is a system program
+        if (mine) { if (!/[\\/]node_modules[\\/]/i.test(real)) add(f); }   // a dependency's own program is read by what its name is (parseCommand)
         else if (!isAbsolute(r)) items.push({ path: f, kind: 'unreadable', note: 'a program outside the project' });
+        // a system program: fine when its name is one the hub reads (git, node, cat ...); any other one could run what it is given
+        else if (!known) items.push({ path: f, kind: 'unreadable', note: 'a system program that is not on the hub\'s short list' });
       }
       continue;
     }
@@ -619,7 +663,7 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
   const base = cwd || projectDir || process.cwd();
   const cache = new Map(), opts = { projectDir, git, mainRefs, cache };
   const out = [], inlineLoads = [], seenPaths = new Set();
-  let attachedBytes = 0;
+  let attachedBytes = 0, sawWrite = false, sawRun = false;
   const queue = [{ cmd: String(cmd || ''), cwd: base, depth: 0, shell }], seenCmds = new Set();
   const items = [];
   const npmScriptShell = process.platform === 'win32' ? 'cmd' : 'bash';
@@ -629,7 +673,9 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     if (seenCmds.has(key)) continue;
     seenCmds.add(key);
     if (q.depth > MAX_NEST) { out.push({ path: '(a command)', kind: 'unknown', note: 'commands inside commands go too deep to read' }); continue; }
-    const p = parseCommand(q.cmd, { shell: q.shell });
+    const p = parseCommand(q.cmd, { shell: q.shell, cwd: q.cwd });
+    if (p.mutates) sawWrite = true;
+    if (p.files.length || p.runners.length || p.inline.length) sawRun = true;
     for (const u of p.unread) out.push({ path: `(${u.head})`, kind: 'unknown', note: u.why });
     for (const it of itemsFor(p.files, q.cwd, projectDir)) items.push(it);
     for (const i of p.inline) for (const r of loadsUnseen(i.code, { python: !!i.python, inline: true })) if (!inlineLoads.includes(r)) inlineLoads.push(r);
@@ -649,6 +695,9 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
       for (const n of names) if (typeof scripts?.[n] === 'string') queue.push({ cmd: scripts[n], cwd: dirname(pkg), depth: q.depth + 1, shell: npmScriptShell });
     }
   }
+  // A command that changes a script (or the working tree) and runs a script is not what was read: the files were looked at
+  // before the command ran.
+  if (sawWrite && sawRun) out.push({ path: '(command)', kind: 'unknown', note: 'it changes a script or the tree and runs a script in the same command, so what runs is not what was read' });
   const unique = new Map();   // the same file named twice is one script
   for (const it of items) unique.set(it.kind ? `${it.kind}\u0000${it.path}` : norm(it.path), it);
   items.length = 0; items.push(...unique.values());

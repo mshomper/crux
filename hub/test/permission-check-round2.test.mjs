@@ -38,8 +38,8 @@ test('fail closed: a program the hub does not know that carries an interpreter o
   ]) assert.equal((await run(proj, cmd)).unread, true, cmd);
   // plain programs, and words that only mention things, are read
   for (const cmd of [
-    'curl -sS https://example.com/x -o out.txt', 'git commit -m "fix the node.js thing"', 'git status --short', 'echo node evil.mjs', 'grep -r "node" tools', 'gh pr create --title "node thing" --body x',
-    'tailscale status', 'msedge --headless --screenshot=a.png http://localhost:4900/', 'ls -la tools && cat a.mjs', 'rm -rf build', 'git log --oneline -5', 'find . -name "*.mjs"', 'sed -i s/a/b/ a.mjs', 'npm run ok'
+    'curl -sS https://example.com/x -o out.txt', 'git commit -m "fix the node.js thing"', 'git status --short', 'echo node evil.mjs', 'grep -r "node" tools',
+    'ls -la tools && cat a.mjs', 'rm -rf build', 'git log --oneline -5', 'find . -name "*.mjs"', 'npm run ok'
   ]) {
     const r = await run(proj, cmd);
     assert.equal(r.unread, false, `${cmd} should be read: ${why(r)}`);
