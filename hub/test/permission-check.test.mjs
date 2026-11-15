@@ -494,7 +494,7 @@ test('on: the script text is sent to the check, and what the hub could not read 
 
 test('hard stops, Auto allows and merge passes are unchanged; the check is not asked', async () => {
   const { hub, p, w, calls } = setup({ level: 'auto' });
-  assert.equal((await ask(hub, p, w, 'git status && npm run build')).behavior, 'allow', 'Auto allows contained work with no check');
+  assert.equal((await ask(hub, p, w, 'git status && ls scripts')).behavior, 'allow', 'Auto allows contained work with no check (a script run is looked at first: decision 67)');
   ask(hub, p, w, 'git push origin main');
   const ap = last(p, 'approval');
   assert.equal(ap.routedTo, null);
@@ -562,10 +562,10 @@ test('shadow: a failing check is logged as invalid and changes nothing', async (
 
 test('pause: every new request is held as a card for you, even one Auto would allow; the check and the orchestrator are not asked', async () => {
   const { hub, p, w, calls } = setup({ level: 'auto', mode: 'on' });
-  assert.equal((await ask(hub, p, w, 'npm run build')).behavior, 'allow', 'before the pause');
+  assert.equal((await ask(hub, p, w, 'mkdir -p out/build')).behavior, 'allow', 'before the pause (a contained write: Auto allows it)');
   hub.setPaused(p, true);
   assert.equal(hub.isPaused(p), true);
-  ask(hub, p, w, 'npm run build');
+  ask(hub, p, w, 'mkdir -p out/build');
   const ap = last(p, 'approval');
   assert.equal(ap.routedTo, null);
   assert.match(ap.stops[0], /paused/);
@@ -576,7 +576,7 @@ test('pause: every new request is held as a card for you, even one Auto would al
   assert.equal(calls.length, 0);
   assert.equal(sent.filter(([n]) => n !== 'builder').length, 0);
   hub.setPaused(p, false);
-  assert.equal((await ask(hub, p, w, 'npm run build')).behavior, 'allow', 'resumed');
+  assert.equal((await ask(hub, p, w, 'mkdir -p out/build')).behavior, 'allow', 'resumed');
 });
 
 test('pause: workers are told to stop at their next turn, the orchestrator is noted, and it comes back on resume', () => {

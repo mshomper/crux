@@ -20,7 +20,7 @@ import { answerMessage, answerNote } from '../public/questions.js';
 import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage, FABLE_NOTE } from './usage.mjs';
-import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, sdkCall, apiCall } from './permission-check.mjs';
+import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, parseCommand, sdkCall, apiCall } from './permission-check.mjs';
 import { totalsOf, sumCost } from '../public/usage.js';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
@@ -638,7 +638,15 @@ export class Hub {
       const i = input || {};
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
     }
+    // Decision 67: with the check on or in shadow, Auto's "it runs a script inside the project" is looked at first (below).
+    if (route.allow && route.scriptGate) return this.gateScript(p, agent, toolName, input, route, { signal, title, description, suggestions });
     if (route.allow) return Promise.resolve({ behavior: 'allow', updatedInput: input });   // auto mode, contained (decision 34)
+    return this.openApproval(p, agent, toolName, input, route, { signal, title, description, suggestions });
+  }
+
+  // The card, its waiting entry and its timer: a request that is not settled on the spot. waitedMs: time already spent on
+  // this request (the script look-up of decision 67), so the 5 minutes still run from the original request.
+  openApproval(p, agent, toolName, input, route, { signal, title, description, suggestions, waitedMs = 0 } = {}) {
     return new Promise(resolvePromise => {
       const id = randomUUID();
       const always = CommandPolicy.alwaysRules(toolName, input, suggestions);
@@ -655,7 +663,7 @@ export class Hub {
       p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input), routedTo: route.to, stops: route.stops, rules: route.rules });
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
       if (route.to) {
-        entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), this.settings.get('permissionTimeoutSec') * 1000);
+        entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), Math.max(0, this.settings.get('permissionTimeoutSec') * 1000 - waitedMs));
         entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
         if (route.check) this.runCheck(id, entry);   // the 5 minutes above run from this request, whatever the check says
         else {
@@ -724,7 +732,7 @@ export class Hub {
       goal: agent.goal || String(agent.task || '').split('\n')[0].slice(0, 200),
       tool: toolName, input, cwd, doubts: route.unsure || [],
       // shell: how its text is split into words (Git Bash for Bash, PowerShell for PowerShell)
-      scripts: isShell ? await scriptsFor(String(input?.command || ''), { cwd, projectDir: p.dir, shell: toolName === 'PowerShell' ? 'powershell' : 'bash', ...(this.checkGit ? { git: this.checkGit } : {}) }) : null
+      scripts: route.scripts !== undefined ? route.scripts : isShell ? await scriptsFor(String(input?.command || ''), { cwd, projectDir: p.dir, shell: toolName === 'PowerShell' ? 'powershell' : 'bash', ...(this.checkGit ? { git: this.checkGit } : {}) }) : null
     };
   }
 
@@ -872,7 +880,7 @@ export class Hub {
     for (const d of c.downloaded || []) { agent.downloads.delete(d); agent.downloads.add(d); }
     while (agent.downloads.size > 200) agent.downloads.delete(agent.downloads.values().next().value);
     if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
-    if (route === 'allow' && this.autoLike(p)) return { allow: true };
+    if (route === 'allow' && this.autoLike(p)) return this.scriptGateFor(p, agent, toolName, input, cwd, rules) || { allow: true };
     // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,
     // they are allowed and logged in its thread for Matt to audit.
     // Never a connector or any other MCP server's tool (plugin servers can reach mail and calendar too): the
@@ -898,6 +906,46 @@ export class Hub {
     if (mode === 'on') return { to: CHECK_NAME, check: true, stops: [], rules: rules.entryId, unsure, cwd };
     if (!orch) return { to: null, stops: [], rules: rules.entryId };
     return { to: orch.name, stops: [], rules: rules.entryId, unsure, cwd, ...(mode === 'shadow' ? { shadow: true } : {}) };
+  }
+
+  // Decision 67: a worker request Auto allows only because it runs a script inside the project is not simply allowed when
+  // the permission check is on (or in shadow) for the project: the script chain must be committed and unchanged from main
+  // first (gateScript). Off: unchanged. Returns { allow: true, scriptGate } to be looked at, or null for "allow as today".
+  // Only a request that starts a script, a package script, a shell string or code written in the command is looked at, so
+  // a plain `git status` never waits for git. Never a connector or other MCP tool, the orchestrator's own requests, or
+  // anything when routing is off or there are no rules (nothing then asks the check).
+  scriptGateFor(p, agent, toolName, input, cwd, rules) {
+    if (agent.role !== 'worker' || !rules || !this.settings.get('routePermissions') || !/^(Bash|PowerShell)$/.test(toolName)) return null;
+    const mode = this.checkMode(p);
+    if (mode === 'off') return null;
+    const c = parseCommand(String(input?.command || ''), { shell: toolName === 'PowerShell' ? 'powershell' : 'bash' });
+    if (!(c.files.length || c.runners.length || c.inline.length || c.nested.length || c.unread.length)) return null;
+    return { allow: true, scriptGate: { mode, cwd: cwd || p.dir, rules: rules.entryId, since: Date.now() } };
+  }
+
+  // Decision 67. Committed and unchanged scripts (and nothing else unread) stay allowed at once. A worker-written, changed
+  // or unread chain: with the check on, it is asked like any request the hub could not settle (the 5 minutes run from the
+  // request); in shadow mode it is allowed as today and the check reads it and writes a check_shadow line.
+  async gateScript(p, agent, toolName, input, route, { signal, title, description, suggestions } = {}) {
+    const g = route.scriptGate;
+    let scripts = null;
+    try {
+      scripts = await scriptsFor(String(input?.command || ''), { cwd: g.cwd, projectDir: p.dir, shell: toolName === 'PowerShell' ? 'powershell' : 'bash', ...(this.checkGit ? { git: this.checkGit } : {}) });
+    } catch (e) { console.warn('Script look-up failed:', e?.message || e); }
+    const clean = !!scripts && !scripts.unread && scripts.scripts.every(s => s.kind === 'committed');
+    if (clean) return { behavior: 'allow', updatedInput: input };
+    if (signal?.aborted) return { behavior: 'deny', message: 'Cancelled' };
+    const unsure = [scripts ? 'Auto mode would allow it because it runs a script inside the project, but that script (or something it loads) is not committed and unchanged from main'
+      : 'Auto mode would allow it because it runs a script inside the project, and the hub could not look at the script'];
+    if (g.mode === 'shadow') {
+      // Allowed as today. The check reads it beside, and the allow is logged under the same request id so the study can compare.
+      const id = randomUUID();
+      const i = input || {};
+      p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || '').slice(0, 400), answer: 'allow', reason: 'Auto mode: it runs a script inside the project (the check reads it in shadow mode only)', by: 'hub' });
+      this.runShadow(id, { p, agent, toolName, input, route: { unsure, cwd: g.cwd, rules: g.rules, scripts } });
+      return { behavior: 'allow', updatedInput: input };
+    }
+    return this.openApproval(p, agent, toolName, input, { to: CHECK_NAME, check: true, stops: [], rules: g.rules, unsure, cwd: g.cwd, scripts }, { signal, title, description, suggestions, waitedMs: Date.now() - g.since });
   }
 
   // While paused: a card for you. If the request is also a hard stop, its reasons stay on the card next to the pause, so
