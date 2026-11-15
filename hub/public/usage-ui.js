@@ -6,13 +6,14 @@
 //             per model and per agent; Fable's share. Spend is an estimate from list prices, not a bill.
 // The core has no meters of its own: its readout stays as it is (Matt's rule).
 import { hueOf, modelLabel, MODEL_HUES } from './models.js';
-import { meterList, aggregate, fmtTokens, fmtCost, fmtLeft } from './usage.js';
+import { meterList, aggregate, routingStats, fmtTokens, fmtCost, fmtLeft } from './usage.js';
 import { nameHtml, nameParts } from './agent-name.js';
 
 export const STALE_MS = 15 * 60 * 1000;   // a snapshot older than this is shown dimmed, with when it was read
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const X = '<svg class="hud-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-const pctText = p => (p == null ? '–' : `${Math.round(p)}%`);
+const TYPE_HUE = '#8792ad';   // types have no model hue; the same neutral as an agent with no model
+const pctText =p => (p == null ? '–' : `${Math.round(p)}%`);
 const clock = iso => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 const whenText = iso => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
 export const isStale = (plan, now = Date.now()) => !plan?.asOf || now - Date.parse(plan.asOf) > STALE_MS;
@@ -58,13 +59,23 @@ export function panelHtml({ plan, rows, bootAt, range = 'today', multi = false, 
     : '';
   const modelRow = m => `<li style="--mh:${hueOf(m.id) || '#8792ad'}"><span class="up-dot"></span><div><b>${esc(modelLabel(m.id))}</b><i>${esc(rowTokens(m))}</i></div><em>${fmtCost(m.cost)}</em></li>`;
   const agentRow = a => `<li style="--mh:${hueOf(a.model) || '#8792ad'}"><span class="up-dot"></span><div><b>${nameParts(a.agent).v != null ? nameHtml(a.agent, a.project) : esc(multi ? `${a.project} / ${a.agent}` : a.agent)}</b><i>${esc(a.model ? modelLabel(a.model) + ' · ' : '')}${esc(rowTokens(a))}</i></div><em>${fmtCost(a.cost)}</em></li>`;
+  // Routing (guide sections 8 and 9): spend by type, tasks finished at their starting setting, raises, advisor calls.
+  const rs = routingStats(rows, { since, now });
+  const typeRow = t => `<li style="--mh:${TYPE_HUE}"><span class="up-dot"></span><div><b>${esc(t.type)}</b><i>${Math.round(t.share * 100)}% of spend</i></div><em>${fmtCost(t.cost)}</em></li>`;
+  const kept = rs.share == null ? 'none yet' : `${Math.round(rs.share * 100)}%`;
+  const routing = `<h4>Routing</h4><ul class="up-list up-route" style="--mh:${TYPE_HUE}">
+      <li title="Worker tasks that ended with outcome done and were never raised to a bigger model or effort. The aim is above 80%."><span class="up-dot"></span><div><b>Finished at starting setting</b><i>${rs.tasks ? `${rs.unraised} of ${rs.tasks} finished tasks` : 'no finished tasks logged in this period'}</i></div><em>${kept}</em></li>
+      <li title="Times a model or effort was raised, and lowered again, in this period."><span class="up-dot"></span><div><b>Raises</b><i>${rs.lowers} lowered</i></div><em>${rs.raises}</em></li>
+      <li title="Advisor workers started in the last 7 days."><span class="up-dot"></span><div><b>Advisor calls this week</b><i>last 7 days</i></div><em>${rs.advisorWeek}</em></li></ul>`;
   const spend = `<div class="up-tabs" role="tablist" aria-label="Period">
       <button role="tab" aria-selected="${range === 'today'}" data-range="today">Today</button><button role="tab" aria-selected="${range === 'session'}" data-range="session">Since hub start</button></div>
     ${empty ? `<p class="up-faint">${range === 'session' ? 'Nothing since the hub started.' : 'Nothing logged today.'} Totals appear after an agent's next reply.</p>` : `
     <div class="up-total"><b>${fmtCost(agg.total.cost)}</b><span>estimated · ${fmtTokens(agg.total.input + agg.total.output)} input and output tokens</span></div>
     ${fable}
     <h4>By model</h4><ul class="up-list">${agg.models.map(modelRow).join('')}</ul>
-    <h4>By agent</h4><ul class="up-list">${agg.agents.map(agentRow).join('')}</ul>`}`;
+    <h4>By type</h4><ul class="up-list">${rs.types.map(typeRow).join('')}</ul>
+    <h4>By agent</h4><ul class="up-list">${agg.agents.map(agentRow).join('')}</ul>`}
+    ${routing}`;
 
   return `<header class="up-head"><span class="hud-k">Usage</span><b>${plan?.subscription ? esc(`${plan.subscription[0].toUpperCase()}${plan.subscription.slice(1)} plan`) : 'Plan'}</b><button class="up-x" data-up-close aria-label="Close" title="Close">${X}</button></header>
     <div class="up-body"><h3>Plan limits</h3>${plans}<h3>Estimated spend</h3>${spend}

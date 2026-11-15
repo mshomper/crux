@@ -186,7 +186,7 @@ test('set_agent_settings: the orchestrator makes the same change as the chip, lo
   const calls = [];
   w.q = { setModel: async m => calls.push(['model', m]), applyFlagSettings: async s => calls.push(['flags', s]) };
   w.state = 'working';
-  const r = await hub.setAgentSettings(p, 'w', settingsChanges({ model: 'sonnet', effort: 'high' }), o.name);
+  const r = await hub.setAgentSettings(p, 'w', settingsChanges({ model: 'sonnet', effort: 'high' }), o.name, 'tests failed twice');
   assert.equal(r.when, 'now');
   assert.deepEqual(calls, [['model', 'claude-sonnet-5-5'], ['flags', { effortLevel: 'high' }]], 'a live switch, as from the chip');
   const ev = p.log.ofType('agent_settings').at(-1);
@@ -200,7 +200,7 @@ test('set_agent_settings: the orchestrator makes the same change as the chip, lo
   assert.deepEqual([w.type, w.model, w.effort], [null, null, null], '"default" and "none" reset');
 
   // Changing itself by its thread name; your own chip changes are logged once, in the agent's thread.
-  await hub.setAgentSettings(p, 'orchestrator', { effort: 'max' }, o.name);
+  await hub.setAgentSettings(p, 'orchestrator', { effort: 'max' }, o.name, 'planning turn');
   assert.equal(o.effort, 'max');
   const before = p.log.ofType('notice').length;
   await hub.setAgentSettings(p, 'w', { effort: 'low' });

@@ -60,6 +60,18 @@ ln -s ~/crux-repo/crux-dig ~/.claude/skills/crux-dig
 
 To see the pages before installing, open [example/demo-decisions/index.html](example/demo-decisions/index.html): a made-up hiking-trail planner, with placeholder sources.
 
+## 4. Optional: the starter agent types (for the Hub)
+
+[agent-types/starter/](agent-types/starter/) holds sixteen short agent files (implementer, reviewer, solver, clerk and so on), each with a model, an effort level and standing instructions. The Hub reads them as its agent types. Copy them into `~/.claude/agents/` (on Windows, `C:\Users\<you>\.claude\agents\`), leaving out the README there. In PowerShell:
+
+```powershell
+$to = "$env:USERPROFILE\.claude\agents"
+New-Item -ItemType Directory -Force -Path $to | Out-Null
+Get-ChildItem "$env:USERPROFILE\Documents\GitHub\crux\agent-types\starter\*.md" -Exclude README.md | Copy-Item -Destination $to
+```
+
+On Mac and Linux: `mkdir -p ~/.claude/agents && cp $(ls ~/crux-repo/agent-types/starter/*.md | grep -v README) ~/.claude/agents/`. Existing files with the same names are overwritten, so look first. A project can override a type with a file of the same name in its own `.claude/agents/`.
+
 ---
 
 ## How it works

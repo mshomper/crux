@@ -37,6 +37,7 @@ export function cruxTools(hub, project, agent) {
         decisions_needed: z.array(z.number()).optional().default([]).describe(t('Crux decision numbers waiting on {{who}}.')),
         blocked_on: list,
         next_step: z.string().optional().default(''),
+        outcome: z.enum(['done', 'partial', 'blocked']).optional().describe('How the round went: done (the task is finished), partial (some left), or blocked. Optional; the usage panel uses it.'),
         visuals: list.describe('Ids from post_visual that help answer the questions.'),
         // Rolling handoff draft (decision 16, 37): the hub keeps the newest, so a handoff need not wake the agent.
         handoff_notes: z.object({
@@ -130,18 +131,19 @@ export function cruxTools(hub, project, agent) {
         }),
 
       // Decision 20: the same change as the model chip on a thread. Logged in that agent's thread and in yours.
-      tool('set_agent_settings', t('Change a running or resting agent\'s model, effort or type: the same as {{who}} clicking the model chip on its thread. Model and effort switch at once on a live agent; a new type (with its tools and instructions) applies once the agent is free, and it keeps its conversation. Send only what changes. Logged in that agent\'s thread and in yours.'),
+      tool('set_agent_settings', t('Change a running or resting agent\'s model, effort or type: the same as {{who}} clicking the model chip on its thread. Model and effort switch at once on a live agent; a new type (with its tools and instructions) applies once the agent is free, and it keeps its conversation. Send only what changes. Raising a model or effort needs a one-line reason (logged as a raise, for the usage panel); lowering logs too. Logged in that agent\'s thread and in yours.'),
         {
+          reason: z.string().max(200).optional().describe('One plain line why, e.g. "tests failed twice at medium". Required when you raise a model or effort.'),
           name: z.string().describe('The agent\'s name from list_agents, or "orchestrator" for yourself.'),
           model: z.string().optional().describe('opus, sonnet, haiku, fable, a full model id, or "default". Leave out to keep it.'),
           effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'default']).optional().describe('Leave out to keep it.'),
           type: z.string().optional().describe('An agent type from list_agent_types, or "none". A new type brings its own model and effort unless you set those too. Leave out to keep it.')
         },
-        async ({ name, ...picks }) => {
+        async ({ name, reason, ...picks }) => {
           const changes = settingsChanges(picks);
           if (!Object.keys(changes).length) return out('Nothing to change: give a model, an effort or a type.');
           try {
-            const r = await hub.setAgentSettings(project, name.trim(), changes, agent.name);
+            const r = await hub.setAgentSettings(project, name.trim(), changes, agent.name, reason);
             return out(r.changed ? `${name} now runs as ${r.settings}; it applies ${r.when}.` : `No change: ${name} already runs as ${r.settings}.`);
           } catch (e) { return out(`Not changed: ${e.message}`); }
         }),

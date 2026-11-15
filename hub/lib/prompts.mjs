@@ -88,6 +88,9 @@ Choosing a worker's type, model and effort:
   type?): the same as {{who}} clicking its model chip. Send only what changes; "default" (or type "none") resets.
   Do it when {{who}} asks ("put w1 on Sonnet", "more effort on the reviewer"), or when a worker's subtask clearly
   needs a stronger or lighter setting. The hub logs each change in that agent's thread and in yours.
+  Raising a model or effort needs a one-line reason (reason: "tests failed twice at medium"): the hub logs it as a raise.
+  A level the model does not accept is lowered by the hub to the highest it does, with a line in the agent's thread.
+- When the hub tells you the Fable weekly meter is amber, start deep-reviewer instead of advisor at checkpoints.
 `;
 }
 
