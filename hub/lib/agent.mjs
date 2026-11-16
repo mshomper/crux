@@ -109,7 +109,6 @@ export class Agent {
   // meta (optional): { request } for a Conductor brief (decision 62); noted as delivered once Claude Code takes it in.
   send(textMsg, attachments = [], meta = null) {
     if (this.state === 'retired' && !this.retiring) throw new Error(`${this.name} has retired`);
-    this.interrupted = false;   // a new message ends any interrupt the hub caused: its result has long arrived
     // A test hub: the message is in the log, but no Claude Code process starts.
     if (this.hub.noAgents) {
       if (!this.toldNoAgents) { this.toldNoAgents = true; this.hub.notice(this.project, this.thread, `Test hub: ${this.name} does not start here, so messages to it are kept but not read.`); }
@@ -227,7 +226,13 @@ export class Agent {
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
       // Only notes where the call runs (noteCwd); it never allows, denies or changes anything.
-      hooks: { PreToolUse: [{ hooks: [async input => { this.noteCwd(input); this.noteSubagent(input); return {}; }] }] },
+      // Notes where the call runs (noteCwd) and which subagent made it; the one thing it can refuse is the Expedition Lead's
+      // Agent tool after a hub stop (hub.expeditionToolBlock). Everything else is left to the permission callback.
+      hooks: { PreToolUse: [{ hooks: [async input => {
+        this.noteCwd(input); this.noteSubagent(input);
+        const why = input?.agent_id ? null : this.hub.expeditionToolBlock?.(p, this, input?.tool_name);
+        return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : {};
+      }] }] },
       ...(builtIn?.length ? { tools: builtIn } : {}),
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),

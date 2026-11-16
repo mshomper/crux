@@ -25,7 +25,7 @@ import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, parseCommand, sdk
 import { totalsOf, sumCost } from '../public/usage.js';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
-import { ExpeditionWatchdog } from './expedition-watchdog.mjs';
+import { ExpeditionWatchdog, HUB_STOPS as EXPEDITION_HUB_STOPS } from './expedition-watchdog.mjs';
 import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
 
 export class Project {
@@ -136,9 +136,11 @@ export class Hub {
     this.idleTimer.unref?.();
     this.usage.restore();
     // The Expedition watchdog (decisions 69 and 71): rebuilt from the logs now, checked every 30 seconds and after every
-    // counted message. Nothing launches an expedition yet, so until phase 5 it finds nothing to watch.
+    // counted message. Nothing launches an expedition yet, so until phase 5 it finds nothing to watch. A live hub makes its
+    // first check only after resumeAll (below), so a Lead cannot get both a resume message and its final message from one
+    // start; a test hub has no resume and checks at once.
     this.expeditionWatch = new ExpeditionWatchdog(this, expeditionWatch);   // tests pass { now, timers, checkMs, stopWaitMs }
-    this.expeditionWatch.start();
+    this.expeditionWatch.start({ firstCheck: this.noAgents });
     // Decision 64 A raised a shorter saved permission wait to 5 minutes, once: said once in each orchestrator thread.
     const from = this.settings?.timeoutRaisedFrom;
     if (from != null) {
@@ -151,6 +153,7 @@ export class Hub {
     if (!this.noAgents) setTimeout(() => {
       for (const p of this.projects.values()) this.rulesHint(p);
       this.resumeAll();
+      this.expeditionWatch.safeCheck();   // after the resume plan is made: an expedition stop a restart cut short is carried on now
       try { this.conductor?.resume(); } catch (e) { console.warn('Conductor resume failed:', e.message); }
     }, 0);
   }
@@ -518,9 +521,12 @@ export class Hub {
   leadStart(p, lead, { type, goal = '', task }) {
     const ex = this.leadScope(p, lead), s = ex.state();
     const role = expeditionRoleOfType(String(type ?? '').trim());
-    // After the stop only a Verifier may start: it checks the report's numbers and claims (spec 4.8, step 1).
-    const open = s.started && (['planning', 'running'].includes(s.phase) || (s.phase === 'stopped' && role === 'verifier'));
-    if (!open) throw new Error(s.phase === 'stopped' ? `Expedition ${ex.id} is stopped: only a Verifier can be started now, to check the report.` : `Expedition ${ex.id} is ${s.phase === 'new' ? 'not started' : s.phase}: no new agents can be started.`);
+    // After the Lead's own stop (passed, no-progress) only a Verifier may start: it checks the report's numbers and claims
+    // (spec 4.8, step 1). After a hub stop (time, budget, the user's Stop) nothing may: the team is retired, the budget is
+    // gone, and the report says the claims were not checked.
+    const leadStop = s.stopped && !EXPEDITION_HUB_STOPS.includes(s.stopped.reason);
+    const open = s.started && (['planning', 'running'].includes(s.phase) || (s.phase === 'stopped' && role === 'verifier' && leadStop));
+    if (!open) throw new Error(s.phase === 'stopped' ? (leadStop ? `Expedition ${ex.id} is stopped: only a Verifier can be started now, to check the report.` : `Expedition ${ex.id} was stopped by the hub (${s.stopped.reason}): no agent can be started now. The report says the claims were not checked.`) : `Expedition ${ex.id} is ${s.phase === 'new' ? 'not started' : s.phase}: no new agents can be started.`);
     const allowed = EXPEDITION_HUB_ROLES.filter(r => r !== 'lead');
     if (!role || !allowed.includes(role)) throw new Error(`An expedition starts only these roles, by type: ${allowed.map(r => EXPEDITION_ROLES[r].type).join(', ')}. Gatherers (expedition-gatherer) are not started: call them with the Agent tool.`);
     const brief = String(task ?? '').trim();
@@ -568,7 +574,8 @@ export class Hub {
     for (const [name, body] of Object.entries(test || {})) ex.write(`test/${name}`, body);
     const hours = Number(envelope.hours) > 0 ? Number(envelope.hours) : undefined;
     const limit = Math.min(GATHERER_LIMIT, Math.max(1, Math.round(Number(gatherers)) || 3));
-    // planStart: the 7-day meter's reading now (spend measure 2 counts the rise from it); null under an API key or before the meters load.
+    // planStart: the 7-day meter's reading at launch, as a record (it can be minutes old; null under an API key or before the
+    // meters load). Spend measure 2 counts from the first fresh reading after the launch, which the watchdog logs itself.
     ex.start({ envelope: { ...envelope, ...(hours ? { hours } : {}), gatherers: limit }, roles: merged, planStart: this.expeditionWatch.planStart() });
     const e = ex.state().started.envelope;
     const task = [
@@ -580,6 +587,22 @@ export class Hub {
     ].join('\n');
     const lead = this.startWorker(p, 'exp-lead', task, by, `Expedition ${id}`.slice(0, 90), { type: merged.lead.type, model: merged.lead.model, effort: merged.lead.effort, expedition: id, expeditionRole: 'lead' });
     return { id, lead: lead.name, expedition: ex.state().started };
+  }
+
+  // An expedition agent whose expedition is in its last stretch (the 90% note has gone, or it has stopped): no handoff.
+  expeditionClosing(p, agent) {
+    if (!agent?.expedition) return false;
+    const s = this.expeditionOf(p, agent).state();
+    return !!(s.reserveNote || s.stopped);
+  }
+
+  // After a hub stop (time, budget, the user's Stop) the Lead may not call the Agent tool: its gatherers are gone with the
+  // interrupt, and a new one would spend budget that is used up. Asked from the PreToolUse hook (the Agent call does not reach
+  // canUseTool, M046), which can deny. A plain-words reason, or null.
+  expeditionToolBlock(p, agent, toolName) {
+    if (agent?.expeditionRole !== 'lead' || !agent.expedition || !['Agent', 'Task'].includes(toolName)) return null;
+    const stopped = this.expeditionOf(p, agent).state().stopped;
+    return stopped && EXPEDITION_HUB_STOPS.includes(stopped.reason) ? `The expedition was stopped by the hub (${stopped.reason}): no gatherer can be started now. Write the report from what exists and say the claims were not checked.` : null;
   }
 
   // The user's Stop (reason 'Matt'): the watchdog's stop sequence for one expedition (spec 4.4 and 4.8). Nothing calls it
@@ -1559,9 +1582,10 @@ export class Hub {
     // Decision 62: a Conductor request it was given and did not answer gets one reminder, as a short follow-up turn,
     // before anything else, a threshold handoff included (that waits for the end of the reminder's turn).
     if (agent.role === 'orchestrator' && !p.hubWide && this.conductor?.remindReplies(p, agent)) return;
-    // No handoff once the 90% note has gone: the Lead (or any member) finishes the write-up itself, and the final turn must not
-    // wait on a successor's start-up (plan phase 2). Before 90% the threshold handoff applies as for any worker.
-    if (agent.contextPct != null && agent.contextPct >= this.markFor(p, agent) && !(agent.expedition && this.expeditionOf(p, agent).state().reserveNote)) {
+    // No handoff once the 90% note has gone, or the expedition has stopped: the Lead (or any member) finishes the write-up
+    // itself, and the final turn must not land on an agent that is handing over (plan phase 2). Before 90% the threshold
+    // handoff applies as for any worker.
+    if (agent.contextPct != null && agent.contextPct >= this.markFor(p, agent) && !this.expeditionClosing(p, agent)) {
       this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role !== 'worker' ? 'the role' : 'its task'} on.`);
       this.retire(p, agent, { reason: 'threshold' });
       return;

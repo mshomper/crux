@@ -76,10 +76,11 @@ class Track {
     this.dollars = num(env.dollars) > 0 ? num(env.dollars) : null;      // null: no dollar cap set (decision 69: until the figure is confirmed)
     this.percent = num(env.percent) > 0 ? num(env.percent) : DEFAULT_ENVELOPE.percent;
     this.roles = started.roles || {};
-    const ps = started.planStart;
-    this.planStart = ps && Number.isFinite(Number(ps.sevenDayPct)) ? { pct: Number(ps.sevenDayPct), resetsAt: ps.resetsAt || null } : null;   // null: no plan readings (API key, or the meters had not loaded)
-    this.meter = { pct: null, resetsAt: null, risen: 0 };
+    // started.planStart is the reading the launch saw: it can be minutes old, and null before the meters load or under an API
+    // key, so it is only a record. Measure 2 counts from the first FRESH reading after the launch (a 'meter' note in the log).
+    this.meter = { baseline: null, resetsAt: null, banked: 0, cur: 0 };   // this window's baseline and rise so far; the rise of windows that have reset
     this.settledUSD = 0;                  // the usage events' figures: results, which win
+    this.runningTasks = new Set();        // the Lead's subagent tasks running now, from the expedition_subagent events
     this.pausedMs = 0;
     this.pausedSince = paused ? this.startMs : null;
     this.reserve = null; this.final = null; this.stopped = null;
@@ -97,20 +98,25 @@ class Track {
       this.settle(e.agent);
     } else if (e.type === 'expedition_note') {
       if (e.kind === 'final') this.final = this.final || e;
+      else if (e.kind === 'meter') { if (this.meter.baseline == null && Number.isFinite(Number(e.pct))) this.setBaseline(Number(e.pct), e.resetsAt || null); }
       else this.reserve = this.reserve || e;
     } else if (e.type === 'expedition_stopped') this.stopped = this.stopped || e;
     else if (e.type === 'expedition_loop') this.loops.push(e);
+    else if (e.type === 'expedition_subagent') { if (e.phase === 'started') this.runningTasks.add(e.taskId); else this.runningTasks.delete(e.taskId); }
   }
 
-  // A result's figure replaces everything estimated for that agent since its last one.
+  // A result's figure replaces everything estimated for that agent since its last one, except a gatherer's frames while that
+  // gatherer is still running: it can outlive the Lead's turn, and a result that comes before it ends may not hold its spend
+  // yet. Those estimates stand (high, on purpose) until the first result after the gatherer has ended.
   settle(agent) {
     const ids = this.inflight.get(agent);
     if (!ids) return;
     const done = this.settledIds.get(agent) || new Set();
-    for (const id of ids.keys()) done.add(id);
+    const keep = new Map();
+    for (const [id, x] of ids) { if (x.taskId && this.runningTasks.has(x.taskId)) keep.set(id, x); else done.add(id); }
     while (done.size > KEEP_IDS) done.delete(done.values().next().value);
     this.settledIds.set(agent, done);
-    this.inflight.delete(agent);
+    if (keep.size) this.inflight.set(agent, keep); else this.inflight.delete(agent);
   }
 
   setPaused(on, tsMs) {
@@ -120,16 +126,20 @@ class Track {
   // Wall clock since the start, less the time the user held the project paused.
   activeMs(now) { return Math.max(0, now - this.startMs - this.pausedMs - (this.pausedSince != null ? Math.max(0, now - this.pausedSince) : 0)); }
 
-  // One reading of the 7-day window ({ pct, resetsAt }). The rise since launch is added up reading by reading: inside one
-  // window it is the climb; when the window has reset it began again at zero, so the new reading is all new. (What was
-  // spent between the last old reading and the reset is not seen; the guard is conservative anyway, it also counts other work.)
+  // Measure 2 (the 7-day plan meter). Readings are always percent 0 to 100 here: the usage call gives that, and a streamed
+  // rate_limit event (a fraction of 1) is converted to it before the plan is stored (public/usage.js), so both sources
+  // arrive as the same scale. The rise is NOT summed reading by reading (a meter that dips and recovers would count the
+  // recovery again): inside one window it is the current reading minus the window's baseline. When the window resets, its
+  // rise is banked and the new window starts from its first reading (what came before that first reading is not seen; the
+  // guard is conservative anyway, it also counts other work in the window).
+  setBaseline(pct, resetsAt) { this.meter.baseline = pct; this.meter.resetsAt = resetsAt || null; this.meter.cur = 0; }
   observePlan(w) {
-    if (!this.planStart || !w || !Number.isFinite(w.pct)) return;
     const m = this.meter;
-    if (m.pct == null) { m.pct = this.planStart.pct; m.resetsAt = this.planStart.resetsAt; }
-    m.risen += sameWindow(m.resetsAt, w.resetsAt) ? Math.max(0, w.pct - m.pct) : w.pct;
-    m.pct = w.pct; m.resetsAt = w.resetsAt || m.resetsAt;
+    if (m.baseline == null || !w || !Number.isFinite(w.pct)) return;
+    if (sameWindow(m.resetsAt, w.resetsAt)) { m.cur = Math.max(0, w.pct - m.baseline); if (!m.resetsAt) m.resetsAt = w.resetsAt || null; }
+    else { m.banked += m.cur; this.setBaseline(w.pct, w.resetsAt); }
   }
+  get risen() { return this.meter.banked + this.meter.cur; }
 
   // Count one assistant message of one of this expedition's agents (a subagent's frame too), once per message id. Several
   // frames of one message repeat the same usage and none is marked final, so the first sight counts and a later frame can
@@ -147,7 +157,7 @@ class Track {
     const model = msg.model || prev?.model || agent.modelSeen || agent.model;
     const cost = messageCost(model, merged, effort);
     if (prev && cost <= prev.cost) return false;
-    ids.set(id, { model, tokens: merged, cost });
+    ids.set(id, { model, tokens: merged, cost, taskId: m.agent_id || null });
     this.inflight.set(agent.name, ids);
     return true;
   }
@@ -160,7 +170,7 @@ class Track {
     return {
       time: this.activeMs(now) / this.limitMs,
       spend: this.dollars ? this.spendUSD(fallback) / this.dollars : null,
-      meter: this.planStart ? this.meter.risen / this.percent : null
+      meter: this.meter.baseline != null ? this.risen / this.percent : null
     };
   }
 }
@@ -191,7 +201,7 @@ export function reserveText({ which, detail }) {
 }
 export function finalText({ reason, detail }) {
   const why = { time: `the time limit is used (${detail})`, budget: `the budget is used (${detail})`, Matt: 'the user pressed Stop' }[reason] || reason;
-  return `[From the hub] The expedition has stopped: ${why}. Everyone else on your team is retired and any gatherer still running was stopped, so no more results will come in. This is your final turn: write REPORT.md from what exists in the folder (the hub adds the generated "how it ran" section), say plainly what is unfinished, and say that the claims were not all checked if the Verifier's check did not finish. You may still start a Verifier (only that role) to check the report's numbers and claims. Do not send your post_summary yet: the hub tells you when the report, branch and card are done.`;
+  return `[From the hub] The expedition has stopped: ${why}. Everyone else on your team is retired and any gatherer still running was stopped, so no more results will come in, and no agent or gatherer can be started now. This is your final turn: write REPORT.md from what exists in the folder (the hub adds the generated "how it ran" section), say plainly what is unfinished, and state in the report that the claims were not checked. Do not send your post_summary yet: the hub tells you when the report, branch and card are done.`;
 }
 
 const realTimers = { setTimeout: (...a) => setTimeout(...a), clearTimeout: x => clearTimeout(x), setInterval: (...a) => setInterval(...a), clearInterval: x => clearInterval(x) };
@@ -203,14 +213,17 @@ export class ExpeditionWatchdog {
     this.timer = null;
   }
 
-  // Rebuild from every project's log, finish any stop a restart cut short, then check every checkMs.
-  start() {
+  // Rebuild from every project's log, then check every checkMs. firstCheck: also check now, which finishes a stop a restart cut
+  // short (the hub passes false for a live hub and checks after it has resumed its agents, so a Lead never gets both its resume
+  // message and its final message from one start). A failure is logged, never thrown: the watchdog must not take the hub down.
+  start({ firstCheck = true } = {}) {
     this.stop();
-    this.check(this.now());   // reads the logs (the rebuild), sends nothing that was already sent, resumes a cut stop sequence
-    this.timer = this.timers.setInterval(() => { try { this.check(this.now()); } catch (e) { console.warn('Expedition watchdog:', e?.message || e); } }, this.checkMs);
+    if (firstCheck) this.safeCheck();
+    this.timer = this.timers.setInterval(() => this.safeCheck(), this.checkMs);
     this.timer.unref?.();
   }
   stop() { if (this.timer) this.timers.clearInterval(this.timer); this.timer = null; }
+  safeCheck() { try { return this.check(this.now()); } catch (e) { console.warn('Expedition watchdog:', e?.message || e); return []; } }
 
   watch(p) {
     let w = this.watches.get(p);
@@ -219,24 +232,32 @@ export class ExpeditionWatchdog {
   }
   trackOf(p, id) { const w = this.watch(p); w.ingest(); return w.tracks.get(id) || null; }
 
-  // The 7-day window as the hub's plan meters show it now: { pct, resetsAt }, or null (an API key, or not loaded yet).
+  // The 7-day window as the hub's plan meters show it now: { pct (0 to 100), resetsAt, asOfMs (when the plan was read) }, or
+  // null (an API key, or not loaded yet).
   planWindow() {
-    const w = this.hub.usage?.available === false ? null : this.hub.usage?.plan?.windows?.seven_day;
-    return w && Number.isFinite(w.pct) ? { pct: w.pct, resetsAt: w.resetsAt || null } : null;
+    const plan = this.hub.usage?.available === false ? null : this.hub.usage?.plan;
+    const w = plan?.windows?.seven_day;
+    return w && Number.isFinite(w.pct) ? { pct: w.pct, resetsAt: w.resetsAt || null, asOfMs: at(plan.asOf) } : null;
   }
-  // What launchExpedition records at the start: the readings measure 2 counts from (null: measure 2 is absent).
+  // What launchExpedition records at the start, as a record only (it can be minutes old, or null before the meters load or
+  // under an API key). Measure 2 counts from the first fresh reading after the launch instead (checkTrack).
   planStart() { const w = this.planWindow(); return w ? { sevenDayPct: w.pct, resetsAt: w.resetsAt } : null; }
 
   // ---------- counting (Agent.onMessage) ----------
-  // Every assistant message of an expedition agent. Counted once per id; the limits are checked after each one.
+  // Every assistant message of an expedition agent. Counted once per id; the limits are checked after each one. After a stop
+  // the counting goes on (the Lead's final turn and the report's spend), with no limit left to check.
   onAssistant(agent, m) {
     try {
       const w = this.watch(agent.project); w.ingest();
       const t = w.tracks.get(agent.expedition);
-      if (!t || t.stopped || !t.countMessage(agent, m)) return;
-      this.checkTrack(w, t, this.now());
+      if (!t || !t.countMessage(agent, m)) return;
+      if (!t.stopped) this.checkTrack(w, t, this.now());
     } catch (e) { console.warn('Expedition watchdog:', e?.message || e); }
   }
+
+  // The expedition's spend as the watchdog counts it: results plus the estimate for messages since each agent's last result,
+  // also after a stop (for the report's totals). null when the expedition is unknown.
+  spendOf(p, id) { const t = this.trackOf(p, id); return t ? { spendUSD: t.spendUSD(this.fallbackUSD(t)), settledUSD: t.settledUSD, estimatedUSD: t.inflightUSD() } : null; }
   // After a result: its usage event is in the log now and replaces the estimate (Track.apply settles it).
   onResult(agent) {
     try {
@@ -276,8 +297,12 @@ export class ExpeditionWatchdog {
       if (HUB_STOPS.includes(t.stopped.reason) && !t.final && !t.sequence) { this.beginSequence(p, t, t.stopped.reason, t.stopped.totals?.detail || ''); return { expedition: t.id, did: 'resume', reason: t.stopped.reason }; }
       return null;
     }
-    t.observePlan(this.planWindow());
     const ex = this.hub.expeditionOf(p, t.id);
+    // Measure 2: the baseline is the first reading taken after the launch (asOf newer than the start), written to the log as a
+    // 'meter' note so a restart counts from the same place. No reading yet, or under an API key: measure 2 waits, it is not off.
+    const reading = this.planWindow();
+    if (reading && t.meter.baseline == null && reading.asOfMs >= t.startMs) { ex.note('meter baseline', { kind: 'meter', pct: reading.pct, resetsAt: reading.resetsAt, asOf: new Date(reading.asOfMs).toISOString() }); w.ingest(); }
+    else t.observePlan(reading);
     // The backstop for the Lead's own no-progress stop (expedition_loop_result): only if two loops made no progress and
     // the stop is somehow not logged. No one is retired for it, as for the tool's own stop.
     const [a, b] = t.loops.slice(-2);
@@ -298,10 +323,10 @@ export class ExpeditionWatchdog {
   describe(t, which, now) {
     if (which === 'time') return `${hours(t.activeMs(now))} of ${hours(t.limitMs)}`;
     if (which === 'spend') return `${usd(t.spendUSD(this.fallbackUSD(t)))} of ${usd(t.dollars)}, an estimate until each result`;
-    return `the 7-day plan meter is up ${t.meter.risen.toFixed(1)} of ${t.percent} points since launch`;
+    return `the 7-day plan meter is up ${t.risen.toFixed(1)} of ${t.percent} points since launch`;
   }
   totals(t, now, which = null) {
-    return { ...howItRan(t.p.log.events, t.id).totals, spendUSD: Math.round(t.spendUSD(this.fallbackUSD(t)) * 10000) / 10000, activeMs: t.activeMs(now), pausedMs: t.pausedMs + (t.pausedSince != null ? Math.max(0, now - t.pausedSince) : 0), meterRisePoints: t.planStart ? Math.round(t.meter.risen * 10) / 10 : null, ...(which ? { detail: this.describe(t, which, now) } : {}) };
+    return { ...howItRan(t.p.log.events, t.id).totals, spendUSD: Math.round(t.spendUSD(this.fallbackUSD(t)) * 10000) / 10000, activeMs: t.activeMs(now), pausedMs: t.pausedMs + (t.pausedSince != null ? Math.max(0, now - t.pausedSince) : 0), meterRisePoints: t.meter.baseline != null ? Math.round(t.risen * 10) / 10 : null, ...(which ? { detail: this.describe(t, which, now) } : {}) };
   }
 
   // The 90% note: logged first, then sent, so it goes at most once, restart or not.
@@ -367,8 +392,13 @@ export class ExpeditionWatchdog {
       if (a.expeditionRole === 'lead') continue;
       try { hub.finishRetire(p, a); } catch (e) { console.warn(`Could not retire ${a.name}:`, e?.message || e); }
     }
-    // 4. The Lead's one final message: logged first, so it is never sent twice.
+    // 4. A Lead that is writing its handoff when the stop comes hands over to a successor first: wait for it (the successor
+    // exists once the handoff is written; the fallback time bounds the wait), then the final turn goes to whoever holds the role.
     const ex = hub.expeditionOf(p, t.id);
+    if (ex.state().finalNote) return;
+    const writing = () => [...p.agents.values()].some(a => a.expedition === t.id && a.expeditionRole === 'lead' && a.state !== 'retired' && a.retiring === 'writing');
+    if (writing()) await this.waitUntil(() => !writing(), this.stopWaitMs);
+    // 5. The Lead's one final message: logged first, so it is never sent twice.
     if (ex.state().finalNote) return;
     const lead = hub.expeditionLead(p, t.id);
     ex.note('final', { kind: 'final', reason, lead: lead?.name || null }); this.watch(p).ingest();
@@ -378,14 +408,16 @@ export class ExpeditionWatchdog {
   }
 
   // Resolves true when none of these agents is in a turn, false after ms (the fallback timer).
-  waitIdle(agents, ms) {
-    const busy = () => agents.some(a => ['working', 'starting'].includes(a.state));
-    if (!busy()) return Promise.resolve(true);
+  waitIdle(agents, ms) { return this.waitUntil(() => !agents.some(a => ['working', 'starting'].includes(a.state)), ms); }
+
+  // Resolves true as soon as done() holds (looked at again on every hub event), false after ms (the fallback timer).
+  waitUntil(done, ms) {
+    if (done()) return Promise.resolve(true);
     return new Promise(resolve => {
       let off = () => { }, timer = null;
-      const done = ok => { off(); this.timers.clearTimeout(timer); resolve(ok); };
-      off = this.hub.on(ev => { if (ev.type === 'agent_state' && !busy()) done(true); });
-      timer = this.timers.setTimeout(() => done(false), ms);
+      const finish = ok => { off(); this.timers.clearTimeout(timer); resolve(ok); };
+      off = this.hub.on(() => { if (done()) finish(true); });
+      timer = this.timers.setTimeout(() => finish(false), ms);
     });
   }
 }

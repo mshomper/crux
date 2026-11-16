@@ -69,6 +69,13 @@ function restart(S, watch = {}) {
   return { hub, p, wd: hub.expeditionWatch, lead: p.agents.get(S.lead.name), members: S.members.map(m => p.agents.get(m.name)) };
 }
 
+// The 7-day meter as the hub holds it (percent 0 to 100), read at asOfMs (default: just after the launch, so it is fresh).
+const plan = (S, pct, resetsAt = WINDOW, asOfMs = S.t0 + 1000) => {
+  S.hub.usage.plan = { windows: { five_hour: null, seven_day: { key: 'seven_day', label: '7-day', pct, resetsAt } }, models: [], statuses: {}, asOf: new Date(asOfMs).toISOString() };
+  S.hub.usage.available = true;
+};
+const meterRise = S => S.wd.trackOf(S.p, S.id).risen;
+
 // ---------- time ----------
 test('time: below the limit nothing happens; at 100% the stop is logged with its totals, then members are interrupted, retired, and the Lead has its final message', async () => {
   const S = setup();
@@ -92,7 +99,8 @@ test('time: below the limit nothing happens; at 100% the stop is logged with its
   const finals = toLead(S, '[From the hub] The expedition has stopped');
   assert.equal(finals.length, 1, 'the Lead gets exactly one final message');
   assert.match(finals[0][1], /time limit is used/);
-  assert.match(finals[0][1], /claims were not all checked/);
+  assert.match(finals[0][1], /state in the report that the claims were not checked/);
+  assert.doesNotMatch(finals[0][1], /Verifier/, 'after a hub stop no Verifier is offered');
   assert.equal(S.ex.state().finalNote.kind, 'final');
   // A further check does nothing more.
   assert.deepEqual(S.wd.check(S.clock.t + HOUR), []);
@@ -218,51 +226,93 @@ test('no handoff once the 90% note has gone; before it, the threshold handoff ap
 });
 
 // ---------- spend measure 2 ----------
-test('spend 2: the 7-day meter rising 7 points since launch stops it (budget); 90% of that is the note', async () => {
-  const S = setup({ planStart: { sevenDayPct: 20, resetsAt: WINDOW } });
+test('spend 2: the 7-day meter rising 7 points since the first fresh reading stops it (budget); 90% of that is the note', async () => {
+  const S = setup({ planStart: null });   // nothing was known at launch: measure 2 waits for the first fresh reading, it is not off
   interruptible([S.lead, ...S.members]);
-  const plan = (pct, resetsAt = WINDOW) => { S.hub.usage.plan = { windows: { five_hour: null, seven_day: { key: 'seven_day', pct, resetsAt } }, models: [] }; S.hub.usage.available = true; };
-  plan(24.5);
-  assert.deepEqual(S.wd.check(S.t0 + 1000), [], '4.5 points');
-  plan(26.5);
-  assert.deepEqual(S.wd.check(S.t0 + 2000).map(d => [d.did, d.measure]), [['note', 'meter']], '6.5 of 7 points: past 90%');
+  assert.deepEqual(S.wd.check(S.t0 + 500), [], 'no reading yet');
+  plan(S, 20);
+  assert.deepEqual(S.wd.check(S.t0 + 1000), [], 'the first fresh reading is the baseline, not a rise');
+  const base = S.p.log.ofType('expedition_note').find(e => e.kind === 'meter');
+  assert.deepEqual([base.pct, base.resetsAt, base.expedition], [20, WINDOW, S.id], 'logged, so a restart counts from the same place');
+  plan(S, 24.5);
+  assert.deepEqual(S.wd.check(S.t0 + 2000), [], '4.5 points');
+  plan(S, 26.5);
+  assert.deepEqual(S.wd.check(S.t0 + 3000).map(d => [d.did, d.measure]), [['note', 'meter']], '6.5 of 7 points: past 90%');
   assert.match(toLead(S, '[From the hub] 90%')[0][1], /7-day plan meter/);
-  plan(27);
-  assert.deepEqual(S.wd.check(S.t0 + 3000).map(d => [d.did, d.reason, d.measure]), [['stop', 'budget', 'meter']]);
+  plan(S, 27);
+  assert.deepEqual(S.wd.check(S.t0 + 4000).map(d => [d.did, d.reason, d.measure]), [['stop', 'budget', 'meter']]);
   await S.wd.settled();
   assert.equal(stoppedOf(S).totals.meterRisePoints, 7);
   assert.match(stoppedOf(S).totals.detail, /up 7\.0 of 7 points/);
+  assert.equal(S.p.log.ofType('expedition_note').filter(e => e.kind === 'meter').length, 1, 'one baseline note only');
+  assert.equal(S.ex.state().reserveNote.kind, 'reserve', 'the meter note is not the 90% note');
 });
 
-test('spend 2 is re-based when the window resets: the rise adds up across the reset instead of going negative', () => {
-  const S = setup({ planStart: { sevenDayPct: 90, resetsAt: WINDOW } });
-  const plan = (pct, resetsAt) => { S.hub.usage.plan = { windows: { five_hour: null, seven_day: { key: 'seven_day', pct, resetsAt } }, models: [] }; S.hub.usage.available = true; };
-  plan(94, WINDOW);
-  S.wd.check(S.t0 + 1000);
-  assert.equal(S.wd.trackOf(S.p, S.id).meter.risen, 4);
-  plan(2, NEXT_WINDOW);   // the window reset: the meter starts again from zero
+test('spend 2 counts the rise above the window\'s baseline, not step by step: a meter that dips and recovers does not count the recovery again', () => {
+  const S = setup({ planStart: null });
+  plan(S, 10);
+  S.wd.check(S.t0 + 1000);   // baseline 10
+  const readings = [13, 12.6, 13, 12.6, 13, 12.6, 13];
+  for (const [i, r] of readings.entries()) { plan(S, r); S.wd.check(S.t0 + 2000 + i); }
+  assert.equal(meterRise(S), 3, 'the known answer: 13 - 10, not 4.2');
+  assert.deepEqual(S.wd.check(S.t0 + 9000), [], '3 of 7 points: nothing');
+  plan(S, 12.6); S.wd.check(S.t0 + 9500);
+  assert.ok(Math.abs(meterRise(S) - 2.6) < 1e-9, 'the rise follows the current reading: a dip lowers it');
+});
+
+test('spend 2: a rate_limit event (utilization a fraction of 1) and the usage call (0 to 100) land on the same scale', () => {
+  const S = setup({ planStart: null });
+  plan(S, 10);
+  S.wd.check(S.t0 + 1000);   // baseline 10 (the usage call's scale)
+  S.hub.usage.rateLimit({ rateLimitType: 'seven_day', status: 'allowed', unifiedWindows: { seven_day: { status: 'allowed', utilization: 0.13, resetsAt: Date.parse(WINDOW) / 1000 } } }, S.p);   // 13 percent
+  assert.equal(S.hub.usage.plan.windows.seven_day.pct, 13);
   S.wd.check(S.t0 + 2000);
-  assert.equal(S.wd.trackOf(S.p, S.id).meter.risen, 6, '4 before the reset plus 2 after');
-  plan(2.5, NEXT_WINDOW);
-  assert.equal(S.wd.check(S.t0 + 3000)[0].did, 'note', '4 + 2.5 = 6.5 of 7');
-  plan(2.5, '2026-11-27T00:00:09Z');   // the same window read again, a few seconds off: not a reset
-  S.wd.check(S.t0 + 4000);
-  assert.equal(S.wd.trackOf(S.p, S.id).meter.risen, 6.5, 'a few seconds\' difference in the reset time is the same window');
-  plan(3.2, NEXT_WINDOW);
-  assert.equal(S.wd.check(S.t0 + 5000)[0].did, 'stop', '4 + 3.2 = 7.2 is over 7');
+  assert.equal(meterRise(S), 3, '0.13 is 13 percent: a rise of 3, not 0.13 and not 12.87');
+});
+
+test('spend 2 is re-based when the window resets: the old window\'s rise is banked and the new one starts from its first reading', () => {
+  const S = setup({ planStart: null });
+  plan(S, 90, WINDOW);
+  S.wd.check(S.t0 + 1000);
+  plan(S, 94, WINDOW);
+  S.wd.check(S.t0 + 2000);
+  assert.equal(meterRise(S), 4);
+  plan(S, 2, NEXT_WINDOW);   // the window reset: the meter starts again from zero, and the first reading of the new window is its baseline
+  S.wd.check(S.t0 + 3000);
+  assert.equal(meterRise(S), 4, 'banked: 4 from the old window, nothing yet from the new one');
+  plan(S, 4.5, NEXT_WINDOW);
+  assert.equal(S.wd.check(S.t0 + 4000)[0].did, 'note', '4 + 2.5 = 6.5 of 7');
+  plan(S, 4.5, '2026-11-27T00:00:09Z');   // the same window read again, a few seconds off: not a reset
+  S.wd.check(S.t0 + 5000);
+  assert.equal(meterRise(S), 6.5, 'a few seconds\' difference in the reset time is the same window');
+  plan(S, 5.2, NEXT_WINDOW);
+  assert.equal(S.wd.check(S.t0 + 6000)[0].did, 'stop', '4 + 3.2 = 7.2 is over 7');
   assert.equal(stoppedOf(S)?.reason, 'budget');
 });
 
-test('spend 2 is absent under an API key (no plan readings): only the other limits apply', () => {
-  const S = setup({ planStart: null });
-  S.hub.usage.plan = { windows: { seven_day: { key: 'seven_day', pct: 99, resetsAt: WINDOW } }, models: [] };
-  assert.deepEqual(S.wd.check(S.t0 + 1000), [], 'no baseline was recorded, so a meter that is up means nothing here');
-  assert.equal(S.wd.planStart() !== null, true, 'a plan that does load gives a baseline for the next launch');
-  S.hub.usage.available = false; S.hub.usage.plan = null;
-  assert.equal(S.wd.planStart(), null, 'under an API key the meters hide: no baseline');
-  const T = setup({ planStart: { sevenDayPct: 10, resetsAt: WINDOW } });
+test('spend 2 waits for a FRESH reading: one taken before the launch is no baseline; under an API key it never starts, and the other limits still apply', () => {
+  const S = setup({ planStart: { sevenDayPct: 50, resetsAt: WINDOW } });   // the launch saw a reading, but it can be minutes old
+  plan(S, 50, WINDOW, S.t0 - 60000);
+  assert.deepEqual(S.wd.check(S.t0 + 1000), []);
+  assert.equal(S.wd.trackOf(S.p, S.id).meter.baseline, null, 'a stale reading is not the baseline');
+  plan(S, 51, WINDOW, S.t0 + 2000);
+  S.wd.check(S.t0 + 3000);
+  assert.equal(S.wd.trackOf(S.p, S.id).meter.baseline, 51, 'the first fresh reading is');
+  assert.equal(S.wd.planStart().sevenDayPct, 51, 'a plan that loads gives a record for the next launch');
+  // An API key: the meters hide.
+  const T = setup({ planStart: null });
   T.hub.usage.plan = null; T.hub.usage.available = false;
-  assert.deepEqual(T.wd.check(T.t0 + 1000), [], 'the meters vanish mid-run: nothing new is read, nothing trips');
+  assert.equal(T.wd.planStart(), null);
+  assert.deepEqual(T.wd.check(T.t0 + 1000), []);
+  assert.equal(T.wd.trackOf(T.p, T.id).meter.baseline, null);
+  T.clock.t = T.t0 + 7 * HOUR;
+  assert.equal(T.wd.check(T.clock.t)[0].did, 'stop', 'time still stops it');
+  // The meters vanish mid-run: nothing new is read, and what was counted stands.
+  const U = setup({ planStart: null });
+  plan(U, 10); U.wd.check(U.t0 + 1000); plan(U, 12, WINDOW); U.wd.check(U.t0 + 2000);
+  U.hub.usage.plan = null; U.hub.usage.available = false;
+  assert.deepEqual(U.wd.check(U.t0 + 3000), []);
+  assert.equal(meterRise(U), 2);
 });
 
 test('launchExpedition records the 7-day reading it will count from (null under an API key)', () => {
@@ -337,10 +387,18 @@ test('a counted message past the dollar cap stops the expedition at once, withou
   assert.equal(stoppedOf(S)?.reason, 'budget');
   await S.wd.settled();
   assert.deepEqual(S.members.map(m => m.state), ['retired', 'retired']);
-  // After the stop a further message is not counted toward anything (the Lead's final turn).
+  // After the stop the spend is still counted (the Lead's final turn goes in the report), with no limit left to check: no second stop.
   const t = S.wd.trackOf(S.p, S.id);
-  S.lead.onMessage(assistant('later', { input_tokens: 5 }), null);
-  assert.equal(t.inflight.get(S.lead.name).has('later'), false);
+  const before = S.wd.spendOf(S.p, S.id).spendUSD;
+  S.lead.onMessage(assistant('later', { input_tokens: 5, output_tokens: 3000 }), null);
+  assert.equal(t.inflight.get(S.lead.name).has('later'), true);
+  assert.ok(S.wd.spendOf(S.p, S.id).spendUSD > before);
+  assert.equal(S.p.log.ofType('expedition_stopped').length, 1);
+  // And its result replaces the estimate as before.
+  S.se.usage('lead', { cost: 0.2 });
+  S.lead.onMessage({ type: 'result', subtype: 'success', is_error: false, modelUsage: {} }, { getContextUsage: async () => ({ percentage: 5 }) });
+  assert.equal(t.inflight.has(S.lead.name), false);
+  assert.ok(Math.abs(S.wd.spendOf(S.p, S.id).settledUSD - 0.2) < 1e-9);
 });
 
 test('a gatherer whose own frames never reach the stream is estimated from task_progress (a priced-high lower bound), until it ends', () => {
@@ -404,7 +462,8 @@ test('restart in the middle of the stop sequence: the sequence is carried on onc
 });
 
 test('restart rebuilds the clock, the spend, the pause and the meter from the log', () => {
-  const S = setup({ envelope: { hours: 6, dollars: 10, percent: 7 }, planStart: { sevenDayPct: 50, resetsAt: WINDOW } });
+  const S = setup({ envelope: { hours: 6, dollars: 10, percent: 7 }, planStart: null });
+  plan(S, 50); S.wd.check(S.t0 + 500);   // the baseline note
   S.p.log.append('project_settings', { paused: true, by: 'you', thread: 'orchestrator', ts: new Date(S.t0 + HOUR).toISOString() });
   S.p.log.append('project_settings', { paused: false, by: 'you', thread: 'orchestrator', ts: new Date(S.t0 + 2 * HOUR).toISOString() });
   S.se.usage('lead', { cost: 2.5 }); S.se.usage('builder', { cost: 1 });
@@ -414,7 +473,8 @@ test('restart rebuilds the clock, the spend, the pause and the meter from the lo
   const t = R.wd.trackOf(R.p, S.id);
   assert.equal(t.activeMs(S.clock.t), 3 * HOUR);
   assert.ok(Math.abs(t.settledUSD - 3.5) < 1e-9);
-  assert.equal(t.meter.risen, 2);
+  assert.equal(t.meter.baseline, 50, 'the baseline comes from the log, not from the first reading the new hub sees');
+  assert.equal(t.risen, 2);
   assert.equal(t.reserve, null);
 });
 
@@ -546,12 +606,15 @@ test('Agent.interrupt: only a turn in progress is interrupted; its error result 
   a.state = 'working'; a.q = { interrupt: async () => { throw new Error('gone'); } };
   assert.equal(await a.interrupt(), false);
   assert.equal(a.interrupted, false);
-  // An interrupt that found no result (a race) is cleared by the next message.
+  // The flag is cleared only when the result comes in, never by a message sent in between (the result may still be on its way).
   a.q = { interrupt: async () => ({}) }; a.state = 'working';
   await a.interrupt();
   assert.equal(a.interrupted, true);
   realSend.call(a, 'carry on');   // the real send (recordAgents replaced the one on the prototype)
-  assert.equal(a.interrupted, false);
+  assert.equal(a.interrupted, true, 'a send does not clear it');
+  await a.onMessage({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_streaming', modelUsage: {} }, { getContextUsage: async () => ({ percentage: 5 }) });
+  assert.equal(a.interrupted, false, 'the result clears it');
+  assert.equal(a.lastTurn.error, false);
 });
 
 test('Agent.stopTasks stops the subagent tasks the hub counted that are still open', async () => {
@@ -563,6 +626,130 @@ test('Agent.stopTasks stops the subagent tasks the hub counted that are still op
   S.lead.onTask({ type: 'system', subtype: 'task_notification', task_id: 't1', status: 'stopped' });
   assert.equal(await S.lead.stopTasks(), 1);
   assert.deepEqual(stopped, ['t2']);
+});
+
+// ---------- review round 1 ----------
+test('M2: after a hub stop no Verifier is offered or allowed, and the Lead\'s Agent tool is refused; after passed or no-progress a Verifier may still start', async () => {
+  const verifier = { type: 'expedition-verifier', goal: 'Check the report', task: 'Check the numbers and claims in REPORT.md.' };
+  for (const reason of ['time', 'budget', 'Matt']) {
+    const S = setup();
+    S.wd.stopNow(S.p, S.id, reason);
+    await S.wd.settled();
+    assert.throws(() => S.hub.leadStart(S.p, S.lead, verifier), new RegExp(`stopped by the hub \\(${reason}\\).*claims were not checked`), reason);
+    const why = S.hub.expeditionToolBlock(S.p, S.lead, 'Agent');
+    assert.match(why, new RegExp(`stopped by the hub \\(${reason}\\)`));
+    assert.equal(S.hub.expeditionToolBlock(S.p, S.lead, 'Task') !== null, true);
+    assert.equal(S.hub.expeditionToolBlock(S.p, S.lead, 'Bash'), null, 'only the Agent tool');
+    assert.equal(S.hub.expeditionToolBlock(S.p, S.se.agents.builder, 'Agent'), null, 'only the Lead');
+    // The PreToolUse hook the Lead runs with denies it, and leaves a gatherer's own calls and every other tool alone.
+    const hook = S.lead.options().hooks.PreToolUse[0].hooks[0];
+    const out = await hook({ tool_name: 'Agent', tool_use_id: 'tu1' });
+    assert.deepEqual([out.hookSpecificOutput.hookEventName, out.hookSpecificOutput.permissionDecision], ['PreToolUse', 'deny']);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /no gatherer can be started now/);
+    assert.deepEqual(await hook({ tool_name: 'Bash', tool_use_id: 'tu2' }), {});
+    assert.deepEqual(await hook({ tool_name: 'Agent', tool_use_id: 'tu3', agent_id: 'g1', agent_type: 'expedition-gatherer' }), {});
+  }
+  for (const reason of ['passed', 'no-progress']) {
+    const S = setup();
+    S.ex.loop({ number: 1, passing: 1, progress: true });
+    S.ex.stop({ reason, totals: {} });
+    assert.ok(S.hub.leadStart(S.p, S.lead, verifier), `a Verifier may start after ${reason}`);
+    assert.equal(S.hub.expeditionToolBlock(S.p, S.lead, 'Agent'), null, 'and the Agent tool is not refused');
+  }
+  // Before any stop the hook allows the Agent tool.
+  const T = setup();
+  assert.deepEqual(await T.lead.options().hooks.PreToolUse[0].hooks[0]({ tool_name: 'Agent', tool_use_id: 'x' }), {});
+});
+
+test('M3: no handoff once the expedition has stopped, whatever the reason, so the final turn cannot land on a Lead that is handing over', () => {
+  for (const reason of ['passed', 'time']) {
+    const S = setup();
+    S.ex.loop({ number: 1, passing: 1, progress: true });
+    S.ex.stop({ reason, totals: {} });
+    S.lead.contextPct = 99;
+    S.hub.onIdle(S.p, S.lead);
+    assert.notEqual(S.lead.state, 'retired', reason);
+    assert.equal(S.p.log.ofType('notice').filter(e => /handing/.test(e.text)).length, 0);
+  }
+});
+
+test('M3: a Lead that is writing its handoff when the stop comes is waited for, and the final message goes to whoever holds the role afterwards', async () => {
+  const S = setup();
+  S.lead.retiring = 'writing';
+  S.wd.stopNow(S.p, S.id, 'Matt');
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+  assert.equal(S.ex.state().finalNote, null, 'the final message is held back while the Lead is still writing its handoff');
+  assert.equal(sent.filter(([, t]) => t.startsWith('[From the hub] The expedition has stopped')).length, 0);
+  // The handoff is written: the successor exists, the predecessor answers it during the overlap.
+  S.lead.retiring = 'overlap';
+  const succ = S.hub.startWorker(S.p, 'exp-lead-2', 'Carry on.', 'hub', 'Lead', { type: 'expedition-lead', expedition: S.id, expeditionRole: 'lead' });
+  succ.state = 'idle';
+  await S.wd.settled();
+  const finals = sent.filter(([, t]) => t.startsWith('[From the hub] The expedition has stopped'));
+  assert.deepEqual(finals.map(([n]) => n), [succ.name], 'once, and to the successor');
+  assert.equal(S.ex.state().finalNote.lead, succ.name);
+});
+
+test('M3: if the handoff never finishes, the 60 s fallback sends the final message to the Lead that is there', async () => {
+  const S = setup();
+  S.lead.retiring = 'writing';
+  S.wd.stopNow(S.p, S.id, 'time');
+  await new Promise(r => setImmediate(r));
+  assert.ok(S.timers.pending(STOP_WAIT_MS));
+  S.timers.fire(STOP_WAIT_MS);
+  await S.wd.settled();
+  assert.deepEqual(sent.filter(([, t]) => t.startsWith('[From the hub] The expedition has stopped')).map(([n]) => n), [S.lead.name]);
+});
+
+test('L7: a live hub makes its first watchdog check only after resumeAll, never from the constructor; a failing check is logged, not thrown', async () => {
+  const order = [];
+  const resume = Hub.prototype.resumeAll, check = ExpeditionWatchdog.prototype.safeCheck;
+  Hub.prototype.resumeAll = function (...a) { order.push('resume'); return resume.apply(this, a); };
+  ExpeditionWatchdog.prototype.safeCheck = function (...a) { order.push('check'); return check.apply(this, a); };
+  try {
+    const S = setup();
+    order.length = 0;
+    const hub = new Hub({ projects: [S.dir], memory: new Memory(join(S.root, 'home')), agentHome: join(S.root, 'agents-home'), noAgents: false, settings: new HubSettings({ file: null, initial: {} }) });
+    assert.deepEqual(order, [], 'the constructor itself checks nothing');
+    await new Promise(r => setTimeout(r, 30));
+    assert.deepEqual(order, ['resume', 'check'], 'resumeAll first, then the first check');
+    hub.expeditionWatch.stop();
+  } finally { Hub.prototype.resumeAll = resume; ExpeditionWatchdog.prototype.safeCheck = check; }
+  // A check that throws is swallowed (and logged) so the hub carries on.
+  const T = setup();
+  T.wd.check = () => { throw new Error('boom'); };
+  const warn = console.warn; let warned = '';
+  console.warn = (...a) => { warned += a.join(' '); };
+  try { assert.deepEqual(T.wd.safeCheck(), []); T.wd.start({ firstCheck: true }); } finally { console.warn = warn; }
+  assert.match(warned, /Expedition watchdog: boom/);
+});
+
+test('a backgrounded gatherer that outlives the Lead\'s turn keeps its estimate across the Lead\'s result, until a result after it ended', () => {
+  const S = setup({ envelope: { hours: 6, dollars: 1000 } });
+  const t = S.wd.trackOf(S.p, S.id);
+  const result = () => S.lead.onMessage({ type: 'result', subtype: 'success', is_error: false, modelUsage: {} }, { getContextUsage: async () => ({ percentage: 5 }) });
+  S.lead.onTask({ type: 'system', subtype: 'task_started', task_id: 'g7', subagent_type: 'expedition-gatherer', task_type: 'local_agent' });
+  S.lead.onMessage(assistant('lead1', { input_tokens: 5, output_tokens: 20 }), null);
+  S.lead.onMessage(assistant('gat1', { input_tokens: 4, output_tokens: 30, cache_read_input_tokens: 2986, cache_creation_input_tokens: 837 }, { parent_tool_use_id: 'tu', agent_id: 'g7', message: { id: 'gat1', model: MODEL.haiku, usage: { input_tokens: 4, output_tokens: 30, cache_read_input_tokens: 2986, cache_creation_input_tokens: 837 }, content: [] } }), null);
+  const gatherer = messageCost(MODEL.haiku, { input: 4, output: 30, cacheRead: 2986, cacheWrite: 837 }, 'low');
+  // The Lead's turn ends while g7 is still running: the result's figure replaces the Lead's own estimate, not the gatherer's.
+  S.se.usage('lead', { cost: 0.01 });
+  result();
+  assert.equal(t.inflight.get(S.lead.name).size, 1);
+  assert.ok(t.inflight.get(S.lead.name).has('gat1'));
+  assert.ok(Math.abs(S.wd.spendOf(S.p, S.id).spendUSD - (0.01 + gatherer)) < 1e-9, 'the result plus the running gatherer\'s estimate');
+  // The gatherer ends, but no result has come since: the estimate stands (a result before it ended may not hold its spend).
+  S.lead.onTask({ type: 'system', subtype: 'task_notification', task_id: 'g7', status: 'completed', usage: { total_tokens: 3867 } });
+  assert.equal(t.inflight.get(S.lead.name).size, 1);
+  // The first result after it ended covers it: the estimate goes.
+  S.se.usage('lead', { cost: 0.02 });
+  result();
+  assert.equal(t.inflight.has(S.lead.name), false);
+  assert.ok(Math.abs(S.wd.spendOf(S.p, S.id).spendUSD - 0.03) < 1e-9);
+  // A late repeat of the gatherer's frame is not counted again.
+  S.lead.onMessage(assistant('gat1', { input_tokens: 4 }, { parent_tool_use_id: 'tu', agent_id: 'g7' }), null);
+  assert.equal(t.inflight.has(S.lead.name), false);
 });
 
 // ---------- the whole story ----------
