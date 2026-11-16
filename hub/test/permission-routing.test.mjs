@@ -352,6 +352,7 @@ test('the orchestrator prompt reads the rules from the board, and explains the t
 test('auto mode (decision 34): contained work is allowed at once, only unclear requests reach the orchestrator', async () => {
   const { hub, p, orch, w } = setup();
   writeFileSync(join(p.dir, '.crux-hub.json'), '{ "permissions": "auto" }');
+  writeFileSync(join(p.dir, 'package.json'), JSON.stringify({ scripts: { build: 'echo build' } }));   // npm run reads the script it runs
   assert.equal(hub.permissionMode(p), 'auto');
   const before = p.log.events.length;
   for (const c of ['npm run build', 'rm -rf hub/tmp', 'git commit -m "x"', 'git push -u origin feat/routing', 'CRUX_HUB_DATA=/tmp/crux-x/data CRUX_HOME=/tmp/crux-x/home node server.mjs --port 4750']) {
@@ -382,8 +383,8 @@ test('auto mode applies to the orchestrator too: its reads and contained work pa
   const before = p.log.ofType('permission_answer').length;
   for (const c of [
     `cd ${p.dir.replace(/\\/g, '/')} && git status --short`,
-    'curl -s localhost:4747/api/state | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>console.log(JSON.parse(s).projects.length))"',
-    'tail -n 400 .crux/events.jsonl | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>console.log(s.split(\'\\n\').length))"',
+    'curl -s localhost:4747/api/state | jq ".projects | length"',   // a node -e filter is inline code now: a doubt, logged (fix/inline-code-doubt)
+    'tail -n 400 .crux/events.jsonl | wc -l',
     'grep -n "classify" hub/lib/permissions.mjs | head -30'
   ]) assert.equal((await go(c)).behavior, 'allow', c);
   assert.equal(p.log.ofType('permission_answer').length, before, 'clear reads are not logged');
