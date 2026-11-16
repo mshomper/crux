@@ -147,8 +147,13 @@ const GIT_BAD_LONG = /^--(exec|upload-pack|receive-pack|exec-path|ext-cmd|config
 // Flags that need no fuss for find: anything else (-exec, -ok, -fprint, -delete is fine) is unread.
 const FIND_OK = /^(-name|-iname|-path|-ipath|-regex|-iregex|-type|-maxdepth|-mindepth|-mtime|-mmin|-atime|-ctime|-newer|-size|-empty|-not|-and|-or|-o|-a|!|-print|-print0|-prune|-delete|-depth|-user|-group|-perm|-readable|-writable|-executable|-xdev|-mount|-follow|-L|-H|-P|-true|-false)$/;
 // Commands that change what files hold. A command that changes a script (or the tree) and runs one is not "what was read".
-const WRITERS = new Set(['cp', 'copy', 'mv', 'move', 'tee', 'set-content', 'sc', 'add-content', 'ac', 'out-file', 'copy-item', 'cpi', 'move-item', 'mi', 'rename-item', 'new-item', 'ni', 'touch', 'curl', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm']);
-const CODE_FILE = /(\.(mjs|cjs|js|jsx|ts|tsx|py|sh|bash|ps1|psm1|bat|cmd|rb|pl|php|lua)|package\.json|\.npmrc)$/i;
+// Round 4: ANY write counts, whatever the file names (cp -r stage/. . changes tools/a.mjs without naming it). Not here:
+// mkdir and touch (they add an empty folder or a timestamp, not content).
+const WRITERS = new Set(['cp', 'copy', 'mv', 'move', 'rm', 'del', 'erase', 'rmdir', 'rd', 'ri', 'remove-item', 'tee', 'set-content', 'sc', 'add-content', 'ac', 'out-file', 'copy-item', 'cpi', 'move-item', 'mi', 'rename-item', 'new-item', 'ni']);
+const DOWNLOADERS = new Set(['curl', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm']);   // write only with an output option
+const WRITES_FILE = /^(-o\S*|-O|--output(=.*)?|--remote-name|-outfile)$/i;
+// A redirect writes unless it goes nowhere or to another stream (2>&1, >/dev/null, > $null, > nul).
+const NOWHERE = /^(&\d|\/dev\/null|\$null|nul|NUL)$/;
 // What an environment variable can change in what a program loads or runs.
 const ENV_LOADS = /(?:^|[^A-Za-z0-9_])(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|PYTHONPATH|PYTHONSTARTUP|PYTHONHOME|PYTHONUSERBASE|PYTHONINSPECT|PYTHONBREAKPOINT|BASH_ENV|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|GIT_SSH_COMMAND|GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EDITOR|GIT_SEQUENCE_EDITOR|GIT_PAGER|GIT_ASKPASS|GIT_EXEC_PATH|GIT_CONFIG_\w+|GIT_DIR|GIT_WORK_TREE|COMSPEC|PATHEXT|PSModulePath)(?![A-Za-z0-9_])|npm_config_\w+|NPM_CONFIG_\w+|--node-options|(?:^|[\s;&|(])(?:export\s+|set\s+|\$env:)?PATH\s*=/i;
 // Flags with no value that are safe on each interpreter. Anything else is unread: it could load or run something else.
@@ -230,7 +235,7 @@ export function parseCommand(cmd, { shell = 'bash', cwd = '' } = {}) {
       continue;
     }
     // "> file" and ">> file": a write. A write to code, or to a name built at run time, is noted (see scriptsFor).
-    for (let k = 0; k < w.length; k++) { const m = /^\d*>>?(.*)$/.exec(w[k]); if (m) { const tgt = m[1] || w[k + 1] || ''; if (CODE_FILE.test(tgt) || dynamic(tgt)) out.mutates = true; } }
+    for (let k = 0; k < w.length; k++) { const m = /^\d*>>?(.*)$/.exec(w[k]); if (m) { const tgt = m[1] || w[k + 1] || ''; if (!NOWHERE.test(tgt)) out.mutates = true; } }
     // A program that is not a plain name, or that is a script file itself.
     const pathy = /[\\/]/.test(word0), absolute = pathy && (isAbsolute(word0) || /^\/[A-Za-z]\//.test(word0)), inDeps = /[\\/]node_modules[\\/]/i.test(word0);
     const known = SAFE_HEADS.has(head) || INTERP.test(head) || head === 'git' || head === 'find' || KEYWORDS.has(head);
@@ -251,7 +256,7 @@ export function parseCommand(cmd, { shell = 'bash', cwd = '' } = {}) {
     } else if (SAFE_HEADS.has(head)) {   // reads, writes or reports; only the long options on the short list
       const bad = rest.slice(0, rest.indexOf('--') < 0 ? rest.length : rest.indexOf('--')).find(x => x.startsWith('--') && !SAFE_LONG.test(x));
       if (bad) out.unread.push({ head, why: `an option the hub does not read (${bad}), which could name a program to run` });
-      else if (WRITERS.has(head) && rest.some(x => CODE_FILE.test(x) || dynamic(x))) out.mutates = true;
+      else if (WRITERS.has(head) || (DOWNLOADERS.has(head) && rest.some(x => WRITES_FILE.test(x)))) out.mutates = true;
     } else if (!KEYWORDS.has(head)) {
       out.unread.push({ head, why: 'a program that is not on the hub\'s short list of programs that only read, write or report' });
     }
@@ -531,7 +536,9 @@ export function importsOf(text, file) {
   if (/\b(?:require|import)\s*\(\s*(?!['"`][^'"`$]*['"`]\s*\))/.test(t) || /\b(?:eval|execScript)\s*\(|\bnew\s+Function\b|\bFunction\s*\(/.test(t)) unresolvable = true;
   const files = [];
   for (const s of specs) {
-    if (/^(node:|data:|https?:)/.test(s) || bareSpec(s) && !s.startsWith('#')) continue;   // a built-in or a dependency
+    // a built-in or a dependency. Writes into node_modules / .venv that change what a committed script imports are a hard
+    // stop in the permission rules (Track A), not something this reader can see.
+    if (/^(node:|data:|https?:)/.test(s) || bareSpec(s) && !s.startsWith('#')) continue;
     if (s.startsWith('#') || /^file:/.test(s) && /[?#]/.test(s)) { unresolvable = true; continue; }
     files.push(s.replace(/^file:\/*/, ''));
   }
