@@ -25,7 +25,7 @@ function tree(files) {
 }
 const BASE = { 'evil.mjs': 'console.log("evil")', 'evil.sh': 'echo evil', 'a.mjs': 'console.log("a")', 'a.py': 'print(1)', 'tools/a.mjs': 'console.log(1)' };
 const run = (proj, cmd, opts = {}) => scriptsFor(cmd, { cwd: proj, projectDir: proj, git: fakeGit(opts.git), shell: opts.shell || 'bash' });
-const why = r => JSON.stringify([r.scripts.map(s => [s.path.split(/[\\/]/).pop(), s.kind, s.note || (s.loads || []).join('+')]), r.inlineLoads]);
+const why = r => JSON.stringify([r.scripts.map(s => [s.path.split(/[\\/]/).pop(), s.kind, s.note || '']), r.inlineLoads]);
 
 test('fail closed: a program the hub does not know that carries an interpreter or a script anywhere in its words is unread', async () => {
   const proj = tree({ ...BASE, 'package.json': JSON.stringify({ scripts: { x: 'cross-env node evil.mjs', y: 'nodemon evil.mjs', z: 'concurrently "node evil.mjs" "node a.mjs"', ok: 'echo hi' } }) });
@@ -50,8 +50,8 @@ test('fail closed: .\\evil and ./evil are tried as .ps1, .bat, .cmd, .exe; nothi
   const proj = tree({ 'evil.ps1': 'Write-Host evil', 'run.bat': 'echo run', 'plain': 'echo plain', 'only.mjs': 'x' });
   for (const [cmd, shell, found] of [['.\\evil', 'powershell', 'evil.ps1'], ['& .\\evil', 'powershell', 'evil.ps1'], ['./evil', 'bash', 'evil.ps1'], ['.\\run', 'powershell', 'run.bat'], ['./plain', 'bash', 'plain']]) {
     const r = await run(proj, cmd, { shell });
-    assert.ok(r.scripts.some(s => s.path.endsWith(found) && s.kind === 'attached'), `${cmd} finds ${found}: ${why(r)}`);
-    assert.equal(r.unread, false, `${cmd} is attached whole`);
+    assert.ok(r.scripts.some(s => s.path.endsWith(found) && s.kind === 'uncommitted'), `${cmd} finds ${found}: ${why(r)}`);
+    assert.equal(r.unread, false, `${cmd} is a file that was found`);
   }
   for (const [cmd, shell] of [['.\\ghost', 'powershell'], ['& .\\ghost', 'powershell'], ['./ghost', 'bash'], ['.\\only', 'powershell'], ['& "$PWD\\evil"', 'powershell'], ['& $x', 'powershell']])
     assert.equal((await run(proj, cmd, { shell })).unread, true, cmd);
@@ -166,24 +166,19 @@ test('a file that starts a process is committed only when everything it starts i
   const all = ['spawny.mjs', 'names.mjs', 'child.mjs', 'gitonly.mjs', 'regex.mjs', 'worker.mjs', 'run.py', 'helper.py', 'pygit.py', 'pyfree.py'];
   const t = { git: { tracked: all } };
   const kind = async (cmd, opts = t) => (await run(proj, cmd, opts)).scripts.map(s => s.kind);
-  assert.deepEqual(await kind('node tools/spawny.mjs'), ['attached'], 'spawns whatever it is told: not committed');
-  assert.equal((await run(proj, 'node tools/spawny.mjs', t)).unread, true, 'and what it starts is not attached');
+  assert.deepEqual(await kind('node tools/spawny.mjs'), ['uncommitted'], 'spawns whatever it is told: not committed');
   assert.deepEqual(await kind('node tools/names.mjs'), ['committed'], 'starts child.mjs, which is here and committed');
-  assert.deepEqual(await kind('node tools/names.mjs', { git: { tracked: all, dirty: ['child.mjs'] } }), ['attached'], 'child.mjs changed: the chain is not committed');
-  assert.equal((await run(proj, 'node tools/names.mjs', { git: { tracked: all, dirty: ['child.mjs'] } })).unread, true);
-  assert.deepEqual(await kind('node tools/names.mjs', { git: { tracked: all.filter(x => x !== 'child.mjs') } }), ['attached'], 'child.mjs not committed');
+  assert.deepEqual(await kind('node tools/names.mjs', { git: { tracked: all, dirty: ['child.mjs'] } }), ['uncommitted'], 'child.mjs changed: the chain is not committed');
+  assert.deepEqual(await kind('node tools/names.mjs', { git: { tracked: all.filter(x => x !== 'child.mjs') } }), ['uncommitted'], 'child.mjs not committed');
   assert.deepEqual(await kind('node tools/gitonly.mjs'), ['committed'], 'only git: nothing unseen');
   assert.deepEqual(await kind('node tools/regex.mjs'), ['committed'], 'a regex .exec is not a process');
   assert.deepEqual(await kind('node tools/worker.mjs'), ['committed'], 'a worker on a named, committed file');
   assert.deepEqual(await kind('python tools/run.py'), ['committed'], 'python: helper.py named, committed');
-  assert.deepEqual(await kind('python tools/run.py', { git: { tracked: all, dirty: ['helper.py'] } }), ['attached']);
+  assert.deepEqual(await kind('python tools/run.py', { git: { tracked: all, dirty: ['helper.py'] } }), ['uncommitted']);
   assert.deepEqual(await kind('python tools/pygit.py'), ['committed']);
-  assert.deepEqual(await kind('python tools/pyfree.py'), ['attached'], 'runs whatever it is given');
-  // the same files, not committed (untracked), are attached and flagged
-  const open = await run(proj, 'node tools/names.mjs', { git: { tracked: [] } });
-  assert.ok(open.scripts[0].loads.includes('starts another program or script, which is not attached'));
-  assert.ok(open.scripts[0].loads.some(l => /loads the process module/.test(l)), 'and it loads the process module (review of #95)');
-  assert.equal(open.unread, true);
+  assert.deepEqual(await kind('python tools/pyfree.py'), ['uncommitted'], 'runs whatever it is given');
+  // the same files, none committed: not committed
+  assert.deepEqual(await kind('node tools/names.mjs', { git: { tracked: [] } }), ['uncommitted']);
   // the detector itself
   assert.equal(spawns("import { execFile } from 'node:child_process'; execFile('git', [])"), false);
   assert.equal(spawns("import cp from 'node:child_process'; cp.execSync('node x.mjs')"), true);

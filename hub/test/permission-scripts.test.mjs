@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { makeTmp } from './helpers/tmp.mjs';
-import { SCRIPT_LIMIT, scriptPaths, scriptsFor, loadsUnseen, isProjectScript, isCommittedFile, importsOf, defaultGit } from '../lib/permission-scripts.mjs';
+import { scriptPaths, scriptsFor, loadsUnseen, isProjectScript, isCommittedFile, importsOf, defaultGit } from '../lib/permission-scripts.mjs';
 
 // ---------- part 1: scripts ----------
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -31,9 +31,9 @@ test('git: a file name is a name, never a pattern; ignored and untracked files a
   assert.equal(await isCommittedFile(join(dir, 'tools', '[restart].mjs'), { projectDir: dir }), false, 'a file called [restart].mjs is not r.mjs');
   assert.equal(await isProjectScript(join(dir, 'tools', '[restart].mjs'), { projectDir: dir }), false);
   const r = await scriptsFor('node tools/[restart].mjs', { cwd: dir, projectDir: dir });
-  assert.equal(r.unread, false, 'it is attached whole, not trusted');
-  assert.equal(r.scripts[0].kind, 'attached');
-  assert.match(r.scripts[0].text, /evil/);
+  assert.equal(r.unread, false, 'it is a file, found, and not trusted');
+  assert.equal(r.scripts[0].kind, 'uncommitted');
+  assert.equal(r.scripts[0].text, undefined, 'no script text is kept: the check is not sent it (decision 73)');
   // ignored (and so also untracked): never committed
   writeFileSync(join(dir, 'tools', 'ignored.mjs'), 'console.log("x")');
   assert.equal(await isCommittedFile(join(dir, 'tools', 'ignored.mjs'), { projectDir: dir }), false);
@@ -109,11 +109,9 @@ test('committed means the entry script and everything it loads, down the chain',
   assert.equal(ok.unread, false);
   // the reviewer's case: a committed entry that imports a changed file
   const dirtyDep = await run({ tracked: all, dirty: ['b.mjs'] });
-  assert.equal(dirtyDep.scripts[0].kind, 'attached', 'two imports down, one file is changed: not committed, so attached');
-  assert.deepEqual(dirtyDep.scripts[0].loads, ['imports another file']);
-  assert.equal(dirtyDep.unread, true, 'and the unread rule applies: what it imports is not attached');
+  assert.equal(dirtyDep.scripts[0].kind, 'uncommitted', 'two imports down, one file is changed: not committed, so the gate sends it to the check');
   const untrackedDep = await run({ tracked: ['entry.mjs', 'a.mjs'] });
-  assert.equal(untrackedDep.unread, true);
+  assert.equal(untrackedDep.scripts[0].kind, 'uncommitted');
   assert.equal(await isProjectScript(join(proj, 'tools', 'lone.mjs'), { projectDir: proj, git: fakeGit({ tracked: all }) }), true, 'no imports: just the file');
 });
 
@@ -128,8 +126,7 @@ test('committed: an import that cannot be followed statically makes the script n
   ]) {
     const proj = tree({ [`tools/${name}.mjs`]: text });
     const r = await scriptsFor(`node tools/${name}.mjs`, { cwd: proj, projectDir: proj, git: fakeGit({ tracked: [`${name}.mjs`] }) });
-    assert.equal(r.scripts[0].kind, 'attached', `${name}: tracked and clean, but not followable, so attached`);
-    assert.equal(r.unread, true, name);
+    assert.equal(r.scripts[0].kind, 'uncommitted', `${name}: tracked and clean, but not followable, so not committed`);
   }
   // built-ins and packages are not files here
   const proj = tree({ 'tools/ok.mjs': "import fs from 'node:fs';\nimport z from 'zod';\nconsole.log(fs, z)" });
@@ -142,8 +139,7 @@ test('committed: python follows its sibling modules too', async () => {
   const ok = await scriptsFor('python tools/run.py', { cwd: proj, projectDir: proj, git: fakeGit({ tracked: ['run.py', 'helper.py'] }) });
   assert.equal(ok.scripts[0].kind, 'committed');
   const bad = await scriptsFor('python tools/run.py', { cwd: proj, projectDir: proj, git: fakeGit({ tracked: ['run.py', 'helper.py'], dirty: ['helper.py'] }) });
-  assert.equal(bad.scripts[0].kind, 'attached');
-  assert.equal(bad.unread, true);
+  assert.equal(bad.scripts[0].kind, 'uncommitted');
 });
 
 test('package scripts: npm run reads the package.json text; its commands are read in turn, so a changed file behind it is seen', async () => {
@@ -153,7 +149,7 @@ test('package scripts: npm run reads the package.json text; its commands are rea
   assert.deepEqual(ok.scripts.map(s => s.kind), ['committed', 'committed'], 'package.json and the script it runs');
   assert.equal(ok.unread, false);
   const edited = await scriptsFor('npm run go', { cwd: proj, projectDir: proj, git: fakeGit({ tracked: ['package.json', 'x.mjs'], dirty: ['x.mjs'] }) });
-  assert.ok(edited.scripts.some(s => /x\.mjs$/.test(s.path) && s.kind === 'attached'), 'the changed file behind a committed package script is attached');
+  assert.ok(edited.scripts.some(s => /x\.mjs$/.test(s.path) && s.kind === 'uncommitted'), 'the changed file behind a committed package script is not committed');
   const hooks = await scriptsFor('npm test', { cwd: proj, projectDir: proj, git: g });
   assert.equal(hooks.scripts.filter(s => /pre\.mjs$/.test(s.path)).length, 1, 'npm test also runs pretest');
   assert.equal((await scriptsFor('npm run nope', { cwd: proj, projectDir: proj, git: g })).unread, true);
@@ -220,49 +216,39 @@ function scriptDir() {
   writeFileSync(join(proj, 'tools', 'edited.mjs'), 'console.log(2)');
   writeFileSync(join(proj, 'tools', 'worker.mjs'), 'console.log(3)');
   writeFileSync(join(proj, 'tools', 'loader.mjs'), "import { x } from './lib.mjs';\nconsole.log(x)");
-  writeFileSync(join(proj, 'tools', 'big.mjs'), 'x'.repeat(SCRIPT_LIMIT + 500));
-  writeFileSync(join(proj, 'tools', 'bin.mjs'), Buffer.from([0x61, 0, 0x62]));
   writeFileSync(join(outside, 'tracked.mjs'), 'console.log(4)');
   return { root, proj, outside };
 }
 
-test('scripts: a committed, unchanged project script is noted and not attached; any other is attached in full', async () => {
+test('scripts: a committed, unchanged project script is "committed"; any other file is "uncommitted" and nothing of it is kept', async () => {
   const { proj, outside } = scriptDir();
   const git = fakeGitB({ tracked: ['tracked.mjs', 'edited.mjs', 'loader.mjs'], dirty: ['edited.mjs'] });
   const r = await scriptsFor('node tools/tracked.mjs && node tools/edited.mjs && node tools/worker.mjs', { cwd: proj, projectDir: proj, git });
   const by = n => r.scripts.find(s => s.path.endsWith(n));
   assert.equal(by('tracked.mjs').kind, 'committed');
-  assert.equal(by('tracked.mjs').text, undefined, 'nothing attached for a committed script');
-  assert.equal(by('edited.mjs').kind, 'attached', 'changed in the tree: attached');
-  assert.equal(by('edited.mjs').text, 'console.log(2)');
-  assert.equal(by('worker.mjs').kind, 'attached', 'not tracked: attached');
-  assert.equal(r.unread, false, 'all fully seen');
-  assert.equal(by('worker.mjs').bytes, 14);
-  assert.equal(by('worker.mjs').text, 'console.log(3)');
+  assert.equal(by('edited.mjs').kind, 'uncommitted', 'changed in the tree');
+  assert.equal(by('worker.mjs').kind, 'uncommitted', 'not tracked');
+  assert.equal(r.unread, false, 'every script was found as a file');
+  for (const s of r.scripts) assert.deepEqual(Object.keys(s).sort(), ['kind', 'path'], 'only the path and the kind: no text, size or budget (decision 73)');
   // changed from main by a commit on the worker's branch: not main's script
   assert.equal(await isProjectScript(join(proj, 'tools', 'tracked.mjs'), { projectDir: proj, git: fakeGitB({ tracked: ['tracked.mjs'], changedFromMain: ['tracked.mjs'] }) }), false);
   assert.equal(await isProjectScript(join(proj, 'tools', 'tracked.mjs'), { projectDir: proj, git: fakeGitB({ tracked: ['tracked.mjs'], noMain: true }) }), false, 'no main to compare with: not trusted');
   assert.equal(await isProjectScript(join(outside, 'tracked.mjs'), { projectDir: proj, git: fakeGitB({ tracked: ['tracked.mjs'] }) }), false, 'outside the project is not project code');
 });
 
-test('scripts: cut off, loading other files, missing, binary, built from a variable, too many: all unread', async () => {
+test('scripts: loading other files, missing, built from a variable, too many: not fully resolved', async () => {
   const { proj } = scriptDir();
   const git = fakeGitB({ tracked: [] });
-  const big = await scriptsFor('node tools/big.mjs', { cwd: proj, projectDir: proj, git });
-  assert.equal(big.scripts[0].cutOff, true);
-  assert.equal(Buffer.byteLength(big.scripts[0].text), SCRIPT_LIMIT, 'attached up to the limit');
-  assert.equal(big.unread, true);
   const loads = await scriptsFor('node tools/loader.mjs', { cwd: proj, projectDir: proj, git });
-  assert.deepEqual(loads.scripts[0].loads, ['imports another file']);
-  assert.equal(loads.unread, true);
-  for (const [cmd, why] of [['node tools/nope.mjs', /does not exist/], ['node tools/bin.mjs', /binary/], ['node $f.mjs', /built at run time/], ['node tools/*.nomatch.mjs', /no file matches/]]) {
+  assert.equal(loads.scripts[0].kind, 'uncommitted', 'a script that imports a file: not committed, so the gate sends it to the check');
+  for (const [cmd, why] of [['node tools/nope.mjs', /does not exist/], ['node $f.mjs', /built at run time/], ['node tools/*.nomatch.mjs', /no file matches/]]) {
     const r = await scriptsFor(cmd, { cwd: proj, projectDir: proj, git });
     assert.equal(r.unread, true, cmd);
     assert.match(r.scripts[0].note, why, cmd);
   }
   const same = await scriptsFor(Array.from({ length: 12 }, () => 'node tools/worker.mjs').join(' && '), { cwd: proj, projectDir: proj, git });
   assert.equal(same.unread, false, 'the same file twice is one script');
-  for (let i = 0; i < 4; i++) writeFileSync(join(proj, 'tools', `extra${i}.mjs`), 'console.log(0)');
+  for (let i = 0; i < 6; i++) writeFileSync(join(proj, 'tools', `extra${i}.mjs`), 'console.log(0)');
   const many = await scriptsFor('node --test tools/*.mjs', { cwd: proj, projectDir: proj, git });   // 10 files
   assert.equal(many.unread, true, 'more scripts than can be listed: the rest are not seen');
   assert.ok(many.scripts.some(s => /more scripts/.test(s.path)));
@@ -298,14 +284,14 @@ test('unread: an interpreter or runner whose script cannot be read in full, howe
   }
   // an arrow after the script is its argument, not the interpreter's own flag
   const a = await isUnread('node evil.mjs -c fast');
-  assert.deepEqual(a.scripts.map(s => s.path.endsWith('evil.mjs') && s.kind), ['attached'], 'the script is found and attached, not skipped');
-  // the ones that can be read in full are not unread: the file is attached whole
+  assert.deepEqual(a.scripts.map(s => s.path.endsWith('evil.mjs') && s.kind), ['uncommitted'], 'the script is found, not skipped');
+  // the ones that resolve to a file are not unread: the file is found and, being uncommitted, goes to the check
   for (const cmd of ['node evil.mjs', 'node ./evil.mjs -p', 'bash -c "node evil.mjs"', 'node tools/evil', 'npm run build', 'node --test evil.mjs']) {
     const r = await isUnread(cmd);
-    assert.equal(r.unread, false, `${cmd} resolves to a file that is attached whole: ${JSON.stringify(r.scripts.map(s => [s.path, s.kind, s.note]))}`);
-    assert.ok(r.scripts.some(s => s.kind === 'attached' && /evil\.(mjs|js)$/.test(s.path)), cmd);
+    assert.equal(r.unread, false, `${cmd} resolves to a file: ${JSON.stringify(r.scripts.map(s => [s.path, s.kind, s.note]))}`);
+    assert.ok(r.scripts.some(s => s.kind === 'uncommitted' && /evil\.(mjs|js)$/.test(s.path)), cmd);
   }
-  assert.equal((await isUnread('git status && npm run lint')).unread, false, 'a package script that runs no file: package.json is attached whole and that is all there is to read');
+  assert.equal((await isUnread('git status && npm run lint')).unread, false, 'a package script that runs no file: package.json is the only file');
   assert.equal((await isUnread('git status')).unread, false);
   assert.equal((await isUnread('node -e "console.log(1)"')).unread, false, 'inline code that loads nothing');
   assert.equal((await isUnread('python3 -c "print(1)"')).unread, false);

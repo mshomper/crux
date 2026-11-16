@@ -56,6 +56,8 @@ test('another project\'s data is one plain fact in the instructions, not a code 
   const s = buildPrefix(FACTS);
   assert.ok(s.includes(OTHER_PROJECTS_FACT));
   assert.match(OTHER_PROJECTS_FACT, /Escalate a read of it unless the worker's goal names that project/);
+  assert.match(OTHER_PROJECTS_FACT, /its \.crux event log and its private files/, 'only a hub project\'s own data');
+  assert.match(OTHER_PROJECTS_FACT, /Reading ordinary files elsewhere on this machine .* is fine/, 'it does not contradict R005');
   assert.ok(!s.includes('AcuLoad'), 'no project is named to the model');
 });
 

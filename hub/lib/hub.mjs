@@ -1217,7 +1217,7 @@ export class Hub {
         if (route.check) this.runCheck(id, entry);   // the 5 minutes above run from this request, whatever the check says
         else {
           // Shadow mode changes nothing live: the request goes to the orchestrator at once, as today, with no note about the
-          // check. What the hub's own scan finds is only logged, in check_shadow (scanStops, scanDoubts).
+          // check. What the check would have answered is only logged, in check_shadow.
           try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd), [], { approval: id }); }
           catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
           if (route.shadow) this.runShadow(id, entry);
