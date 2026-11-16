@@ -4,7 +4,7 @@
 //
 // The invariant test (expedition-invariant.test.mjs) and the dry run (expedition.test.mjs) use it, and every later phase
 // reruns the invariant test with it: extend run() when a phase adds a step, and the invariant still has to hold.
-import { mkdirSync, copyFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, copyFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeTmp } from './tmp.mjs';
@@ -168,6 +168,10 @@ export class StubExpedition {
     hub.postSummary(p, lead, summary({ done: ['A round of the plan'], questions: ['Matt: is 1 MB fine?'], decisions_needed: [8] }));
     // Phase 2: the Lead talks to its team through the scoped tool, and retires one member the same way.
     hub.leadMessage(p, lead, this.agents.builder.name, 'Build against the frozen test.');
+    // Phase 4: a write the deny rule misses (a script copying over it, say) changes the frozen test/; the hub finds it at the
+    // next loop, restores it from its copy and logs expedition_integrity. Nothing of that reaches the orchestrator or a card.
+    writeFileSync(join(ex.root, 'test', 'CHECKLIST.md'), '1. Everything passes (weakened).\n');
+    ex.checkFrozen('loop');
     // Build-verify loops: the second makes progress; the test passes.
     ex.loop({ number: 1, passing: 1, progress: true });
     ex.write('verify/VERDICT.md', '# Verdict\n1 PASS, 2 PARTIAL, 3 PASS\n');
@@ -202,6 +206,7 @@ export class StubExpedition {
     ask(builder, 'Bash', { command: 'git push --force origin main' });
     ask(lead, 'WebFetch', { url: 'https://example.org/benchmarks', prompt: 'the numbers' }, { toolUseID: 'tu-1', agentID: 'agent-1' });
     ask(builder, 'Write', { file_path: join(p.dir, '.claude', 'settings.local.json'), content: '{}' });
+    ask(builder, 'Edit', { file_path: join(this.ex.root, 'test', 'CHECKLIST.md'), old_string: '1.', new_string: '0.' });   // phase 4: the frozen test is refused, not parked
     ask(builder, 'Bash', { command: 'git status' });
   }
 

@@ -8,6 +8,14 @@ const text = s => ({ content: [{ type: 'text', text: typeof s === 'string' ? s :
 const list = z.array(z.string()).optional().default([]);
 const heading = what => z.array(z.string()).min(1).describe(`${what}. Write "none" if there is nothing.`);
 
+// What the hub tells the Lead when test/ no longer matched its frozen hash (Expedition.checkFrozen's answer).
+function integrityText(ex, r) {
+  const names = r.changed?.length ? ` (${r.changed.slice(0, 8).join(', ')}${r.changed.length > 8 ? `, and ${r.changed.length - 8} more` : ''})` : '';
+  return r.restored
+    ? `test/ no longer matched the hash logged at the gate${names}. The hub restored it from its copy in .crux/expeditions/${ex.id}/frozen/ and logged it.`
+    : `test/ no longer matched the hash logged at the gate${names}, and the hub could not restore it (${r.why || 'unknown reason'}). Nothing run against it can be trusted.`;
+}
+
 export function cruxTools(hub, project, agent) {
   // Agents call the person by name (from the core profile), or "the user".
   const t = s => hub.memory.personalize(s);
@@ -203,29 +211,37 @@ export function cruxTools(hub, project, agent) {
         { text: z.string().describe('What was parked, in one plain sentence.'), reason: z.string().describe('Why it is outside the brief.') },
         attempt('Not parked', ({ text: what, reason }) => { hub.expeditionOf(project, agent).park({ text: what, reason, maker: agent.name }); return 'Parked; it is listed in the report.'; })),
 
-      tool('expedition_close_gate', 'Close the plan gate, once: after the Advisor has reviewed the plan and you have amended test/ as needed. The hub hashes test/ and logs the Advisor\'s verdict and your amendments. From here test/ is frozen by agreement: nobody changes it (the hub\'s own lock on it comes in a later phase, so the agreement is what holds it for now).',
+      tool('expedition_close_gate', 'Close the plan gate, once: after the Advisor has reviewed the plan and you have amended test/ as needed. The hub hashes test/, keeps a copy of it outside the worktree (.crux/expeditions/<id>/frozen/) and logs the Advisor\'s verdict and your amendments. From here test/ is locked by the hub: plain writes into it are refused, and at every expedition_loop_result and at expedition_finish the hub compares test/ with the logged hash. If anything differs it restores test/ from its copy, logs it, and counts that as a Verifier FAIL.',
         { verdict: z.string().describe('The Advisor\'s verdict in a line, e.g. "approve with changes".'), amendments: z.array(z.string()).optional().default([]).describe('The amendments made to the test at the gate, one line each. Empty if none.') },
-        attempt('Gate not closed', ({ verdict, amendments }) => `Gate closed. The hub logged the test's hash (${hub.expeditionOf(project, agent).gate({ verdict, amendments }).testHash.slice(0, 12)}). Treat test/ as frozen from here: do not change it, and tell the others the same. Building and verifying can start.`)),
+        attempt('Gate not closed', ({ verdict, amendments }) => `Gate closed. The hub logged the test's hash (${hub.expeditionOf(project, agent).gate({ verdict, amendments }).testHash.slice(0, 12)}) and kept a copy of test/ outside the worktree. test/ is locked from here: writes into it are refused, and the hub checks it against that copy at every loop result and at the finish, restoring it (and counting a Verifier FAIL) if it changed. The Verifier runs the stored copy. Building and verifying can start.`)),
 
-      tool('expedition_loop_result', 'Log the end of one build-verify loop: how many success-test items pass now. The hub numbers the loop and judges whether it made progress (more items passing than any earlier loop). When a second loop in a row makes no progress the hub stops the expedition itself (reason no-progress); you do not call anything for that.',
+      tool('expedition_loop_result', 'Log the end of one build-verify loop: how many success-test items pass now. The hub first checks test/ against the frozen copy; if it differs it restores it and the loop is a Verifier FAIL with no progress. Otherwise it numbers the loop and judges whether it made progress (more items passing than any earlier loop). When a second loop in a row makes no progress the hub stops the expedition itself (reason no-progress); you do not call anything for that.',
         { passing: z.number().int().min(0).describe('Items passing after this loop.') },
         attempt('Not logged', ({ passing }) => {
-          const ex = hub.expeditionOf(project, agent), loops = ex.state().loops;
-          const progress = passing > Math.max(0, ...loops.map(l => l.passing));
+          const ex = hub.expeditionOf(project, agent);
+          ex.need('running');
+          const integrity = ex.checkFrozen('loop');   // before the loop is judged: a changed test makes it a FAIL
+          const tampered = integrity.ok === false;
+          const loops = ex.state().loops;
+          const progress = !tampered && passing > Math.max(0, ...loops.filter(l => !l.tampered).map(l => l.passing));
           const stuck = !progress && loops.length > 0 && !loops.at(-1).progress;
-          const ev = ex.loop({ number: loops.length + 1, passing, progress });
-          const line = `Loop ${ev.number}: ${passing} passing, ${progress ? 'progress' : 'no progress'}.`;
+          const ev = ex.loop({ number: loops.length + 1, passing, progress, tampered });
+          const line = tampered
+            ? `Loop ${ev.number}: FAIL. ${integrityText(ex, integrity)} The ${passing} passing you reported do not count: this loop is a Verifier FAIL with no progress. Run the loop again against the restored test.`
+            : `Loop ${ev.number}: ${passing} passing, ${progress ? 'progress' : 'no progress'}.`;
           if (!stuck) return line;
           ex.stop({ reason: 'no-progress', totals: howItRan(project.log.events, ex.id).totals });
           return `${line} Two loops in a row made no progress, so the hub has stopped the expedition (no-progress). Write the report now; the Verifier can still check it.`;
         })),
 
-      tool('expedition_finish', 'End the expedition because the success test passes. Only while it is running (the gate is closed) and after at least one build-verify loop was logged. It records the stop; it does not retire anyone (everyone but you is retired only at the hub\'s time or budget stop). Then write REPORT.md and have the Verifier check it. The hub\'s end step (report copied to the branch, push, draft PR, the card) is done by the hub later; send your one summary only when it tells you so. No-progress, time, budget and the user\'s Stop come from the hub, not from you.',
+      tool('expedition_finish', 'End the expedition because the success test passes. Only while it is running (the gate is closed) and after at least one build-verify loop was logged, and with test/ unchanged from the frozen copy (the hub checks; if it changed it restores it and refuses: that is a Verifier FAIL). It records the stop; it does not retire anyone (everyone but you is retired only at the hub\'s time or budget stop). Then write REPORT.md and have the Verifier check it. The hub\'s end step (report copied to the branch, push, draft PR, the card) is done by the hub later; send your one summary only when it tells you so. No-progress, time, budget and the user\'s Stop come from the hub, not from you.',
         {},
         attempt('Not finished', () => {
           const ex = hub.expeditionOf(project, agent), s = ex.state();
           if (s.phase !== 'running') throw new Error(`The expedition is ${s.phase === 'new' ? 'not started' : s.phase}: it can be finished as passed only while it is running, after the plan gate.`);
           if (!s.loops.length) throw new Error('No build-verify loop is logged yet: log one with expedition_loop_result before you finish.');
+          const integrity = ex.checkFrozen('finish');
+          if (integrity.ok === false) throw new Error(`${integrityText(ex, integrity)} This counts as a Verifier FAIL, so it is not finished as passed: have the Verifier run the restored test in another build-verify loop first.`);
           ex.stop({ reason: 'passed', totals: howItRan(project.log.events, ex.id).totals });
           return 'Stopped (passed). Write REPORT.md now and have the Verifier check it. The hub\'s own end step comes later.';
         }))

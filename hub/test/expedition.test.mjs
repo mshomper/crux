@@ -365,7 +365,7 @@ test('a dry run with stub agents writes every file of the layout and every event
   const { env, ex } = fresh();
   ex.run();
   const x = ex.ex;
-  assert.deepEqual(x.files(), ['BRIEF.md', 'DECISIONS.md', 'PLAN.md', 'REPORT.md', 'notes-1.md', 'notes-2.md', 'notes-3.md', 'skeptic.md', 'synthesis.md', 'test/CHECKLIST.md', 'test/run.json', 'verify/VERDICT.md']);
+  assert.deepEqual(x.files(), ['BRIEF.md', 'DECISIONS.md', 'PLAN.md', 'REPORT.md', 'frozen/CHECKLIST.md', 'frozen/run.json', 'notes-1.md', 'notes-2.md', 'notes-3.md', 'skeptic.md', 'synthesis.md', 'test/CHECKLIST.md', 'test/run.json', 'verify/VERDICT.md']);
   assert.ok(existsSync(join(env.dir, '.crux', 'expeditions', ex.id, 'REPORT.md')));
   assert.match(x.read('REPORT.md'), /## How it ran/);
   assert.match(x.read('synthesis.md'), /Superseded by REPORT\.md where they differ/);

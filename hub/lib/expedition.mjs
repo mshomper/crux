@@ -3,8 +3,9 @@
 // end sequence (phase 5) use it. Private to the project like events.jsonl (kept out of git); the report is copied onto
 // the branch at the end.
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, statSync, lstatSync, readlinkSync, rmSync, cpSync } from 'node:fs';
 import { join, posix } from 'node:path';
+import { normalizeOverlay } from './permission-lists.mjs';
 
 // ---------- roles (spec section 3) ----------
 // runs: 'hub' = its own hub agent under the Lead (thread, station, usage and permission requests of its own);
@@ -32,7 +33,8 @@ export const defaultRoles = () => Object.fromEntries(Object.entries(ROLES).map((
 export const DEFAULT_ENVELOPE = { hours: 6, percent: 7, dollars: null };
 
 // ---------- the event kinds (spec 4.3, plus the plan's three) ----------
-export const EVENT_KINDS = ['expedition_started', 'expedition_gate', 'expedition_decision', 'expedition_parked', 'expedition_loop', 'expedition_stopped', 'expedition_note', 'expedition_step', 'expedition_subagent'];
+// expedition_integrity (phase 4): the frozen test/ no longer matched its hash at a loop or the finish, and was restored.
+export const EVENT_KINDS = ['expedition_started', 'expedition_gate', 'expedition_decision', 'expedition_parked', 'expedition_loop', 'expedition_stopped', 'expedition_note', 'expedition_step', 'expedition_subagent', 'expedition_integrity'];
 export const STOP_REASONS = ['passed', 'time', 'budget', 'no-progress', 'Matt'];
 // The end (spec 4.8), as logged steps: each is skipped if its event exists, so the end never runs twice.
 export const END_STEPS = ['report', 'commit', 'push', 'pr', 'card', 'summary'];
@@ -45,6 +47,42 @@ const text = (v, what) => { const s = String(v ?? '').trim(); if (!s) throw new 
 // The files an agent may write by name; test/ holds anything under it. frozen/ and the rest are the hub's.
 const FIXED = ['BRIEF.md', 'PLAN.md', 'DECISIONS.md', 'synthesis.md', 'skeptic.md', 'REPORT.md', 'verify/VERDICT.md'];
 const NOTES = /^notes-[A-Za-z0-9][\w-]*\.md$/;
+
+// ---------- the freeze (spec 4.5) ----------
+// Every entry under dir as { rel (forward slashes, sorted), file, link }. A link (a symlink or a Windows junction) is an
+// entry of its own and is never followed, so a planted link cannot make test/ hash like something it is not.
+function tree(dir) {
+  const out = [];
+  const walk = (d, rel) => {
+    for (const name of readdirSync(d)) {
+      const f = join(d, name), r = rel ? `${rel}/${name}` : name, st = lstatSync(f);
+      if (st.isSymbolicLink()) out.push({ rel: r, file: f, link: readlinkSync(f) });
+      else if (st.isDirectory()) walk(f, r);
+      else out.push({ rel: r, file: f, link: null });
+    }
+  };
+  if (existsSync(dir)) walk(dir, '');
+  return out.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+}
+const rootLink = dir => { try { return lstatSync(dir).isSymbolicLink() ? readlinkSync(dir) : null; } catch { return null; } };
+const bytesOf = e => (e.link != null ? Buffer.from(`link:${e.link}`) : readFileSync(e.file));
+// Sorted paths plus bytes, SHA-256: for regular files the same hash the gate always logged. prefix: 'test/' for both test/
+// and its frozen copy, so the two hash alike when they hold the same files.
+function treeHash(dir, prefix = 'test/') {
+  const h = createHash('sha256');
+  const top = rootLink(dir);
+  if (top != null) return h.update(`root-link:${top}`).digest('hex');
+  for (const e of tree(dir)) h.update(prefix + e.rel).update('\0').update(bytesOf(e)).update('\0');
+  return h.digest('hex');
+}
+// Which names differ between two folders: changed, added or removed, for the log and the Lead's message.
+function treeDiff(frozen, now) {
+  const fp = dir => new Map(rootLink(dir) != null ? [['(the test folder itself is a link)', 'x']] : tree(dir).map(e => [e.rel, sha(bytesOf(e))]));
+  const a = fp(frozen), b = fp(now), out = [];
+  for (const [k, v] of b) out.push(!a.has(k) ? `${k} (added)` : a.get(k) !== v ? `${k} (changed)` : null);
+  for (const k of a.keys()) if (!b.has(k)) out.push(`${k} (removed)`);
+  return out.filter(Boolean).sort();
+}
 
 export class Expedition {
   constructor(project, id) {
@@ -109,11 +147,43 @@ export class Expedition {
 
   // The hash the freeze logs (spec 4.5): sorted paths plus bytes of everything under test/, SHA-256.
   testHash() {
-    const files = this.testFiles();
-    if (!files.length) throw new Error('The success test is empty: put CHECKLIST.md or run.json in test/ first.');
-    const h = createHash('sha256');
-    for (const f of files) h.update(f).update('\0').update(readFileSync(join(this.root, ...f.split('/')))).update('\0');
-    return h.digest('hex');
+    if (!this.testFiles().length) throw new Error('The success test is empty: put CHECKLIST.md or run.json in test/ first.');
+    return treeHash(this.testDir);
+  }
+  get testDir() { return join(this.root, 'test'); }
+  // The copy kept at the gate, outside the worktree (spec 4.5). Only the hub writes it; the Track A rule denies plain
+  // writes there and the hash check below is what really guards test/.
+  get frozenDir() { return join(this.root, 'frozen'); }
+  // Copy test/ to frozen/ (replacing any earlier copy) and return the hash both now have. Throws if the copy differs.
+  freeze() {
+    const want = this.testHash();
+    rmSync(this.frozenDir, { recursive: true, force: true });
+    cpSync(this.testDir, this.frozenDir, { recursive: true, verbatimSymlinks: true });
+    if (treeHash(this.frozenDir) !== want) throw new Error('The frozen copy of test/ does not match test/, so the gate stays open: try again.');
+    return want;
+  }
+  // Compare test/ with the hash the gate logged (phase 4; called at each loop and at the finish). If it differs, restore
+  // test/ from the frozen copy, log expedition_integrity, and say what happened; the caller tells the Lead it counts as a
+  // Verifier FAIL. If the frozen copy itself no longer matches the hash, nothing can be restored and that is said too.
+  // -> { checked: false } before the gate; { checked: true, ok: true }; { checked: true, ok: false, restored, changed, why }
+  checkFrozen(at) {
+    const gate = this.state().gate;
+    if (!gate) return { checked: false };
+    const want = gate.testHash, found = treeHash(this.testDir);
+    if (found === want) return { checked: true, ok: true };
+    const changed = treeDiff(this.frozenDir, this.testDir);
+    let restored = false, why = null;
+    if (treeHash(this.frozenDir) !== want) why = 'the frozen copy itself no longer matches the logged hash';
+    else {
+      try {
+        rmSync(this.testDir, { recursive: true, force: true });
+        cpSync(this.frozenDir, this.testDir, { recursive: true, verbatimSymlinks: true });
+        restored = treeHash(this.testDir) === want;
+        if (!restored) why = 'test/ still differs after the copy';
+      } catch (e) { why = e?.message || String(e); }
+    }
+    this.record('expedition_integrity', { at, restored, changed: changed.slice(0, 20), changedCount: changed.length, expectedHash: want, foundHash: found, ...(why ? { why } : {}) });
+    return { checked: true, ok: false, restored, changed, why };
   }
   briefHash() { return sha(text(this.read('BRIEF.md'), 'BRIEF.md')); }
 
@@ -133,19 +203,26 @@ export class Expedition {
   }
 
   // Launch: records the brief's hash, the envelope, the roles and the plan-meter readings at the start (spec 4.3).
-  start({ envelope = {}, roles = {}, planStart = null } = {}) {
+  // preApprovals (phase 4; the launch panel fills it in phase 5): { sites: [{ host, access, pin, subdomains }], packages:
+  // [{ eco, name, baseMajor, baseMinor, revision }] } for this expedition's agents only. Checked with the same rules as
+  // Matt's own lists and stored in the start event, which is where the hub reads it back (it survives a restart and ends
+  // at expedition_stopped); never written to his settings.
+  start({ envelope = {}, roles = {}, planStart = null, preApprovals = null } = {}) {
     this.need('new');
     const merged = Object.fromEntries(Object.entries(defaultRoles()).map(([r, d]) => [r, { ...d, ...(roles[r] || {}) }]));
     const problem = Expedition.rolesProblem(merged);
     if (problem) throw new Error(problem);
-    return this.record('expedition_started', { briefHash: this.briefHash(), envelope: { ...DEFAULT_ENVELOPE, ...envelope }, roles: merged, planStart, branch: this.branch });
+    const pre = normalizeOverlay(preApprovals, { strict: true });
+    return this.record('expedition_started', { briefHash: this.briefHash(), envelope: { ...DEFAULT_ENVELOPE, ...envelope }, roles: merged, planStart, branch: this.branch, preApprovals: pre });
   }
 
   // The plan gate closes: the Advisor's verdict, the amendments to the test, and the hash that freezes it (spec 4.5).
   // Amendments are possible only before this; a second gate is refused.
+  // Phase 4: closing it also keeps the copy of test/ outside the worktree (frozen/), the reference for every later check.
   gate({ verdict, amendments = [] } = {}) {
     this.need('planning');
-    return this.record('expedition_gate', { verdict: text(verdict, 'The Advisor\'s verdict'), amendments: [].concat(amendments).map(String).filter(Boolean), testHash: this.testHash() });
+    const said = text(verdict, 'The Advisor\'s verdict');
+    return this.record('expedition_gate', { verdict: said, amendments: [].concat(amendments).map(String).filter(Boolean), testHash: this.freeze() });
   }
 
   // One decision on Matt's behalf: one numbered line in DECISIONS.md and one event (spec 6).
@@ -164,11 +241,13 @@ export class Expedition {
   }
 
   // A build-verify loop ended (spec 4.3): its number, the items passing, and whether that is progress.
-  loop({ number, passing, progress }) {
+  // tampered (phase 4): test/ no longer matched its hash when the loop was logged; the loop is a Verifier FAIL and counts
+  // for no progress (and its passing figure is left out of the best so far).
+  loop({ number, passing, progress, tampered = false }) {
     this.need('running');
     if (!Number.isInteger(number) || number < 1) throw new Error('A loop has a number from 1.');
     if (!Number.isInteger(passing) || passing < 0) throw new Error('A loop reports how many items pass.');
-    return this.record('expedition_loop', { number, passing, progress: !!progress });
+    return this.record('expedition_loop', { number, passing, progress: !!progress, ...(tampered ? { tampered: true } : {}) });
   }
 
   // The end: why, and the totals at that moment (the watchdog's, phase 3).
@@ -211,7 +290,7 @@ export class Expedition {
     const of = type => mine.filter(e => e.type === type);
     const s = {
       started: of('expedition_started')[0] || null, gate: of('expedition_gate')[0] || null, stopped: of('expedition_stopped')[0] || null,
-      decisions: of('expedition_decision'), parked: of('expedition_parked'), loops: of('expedition_loop'), notes: of('expedition_note'), subagents: of('expedition_subagent'),
+      decisions: of('expedition_decision'), parked: of('expedition_parked'), loops: of('expedition_loop'), notes: of('expedition_note'), subagents: of('expedition_subagent'), integrity: of('expedition_integrity'),
       steps: new Set(of('expedition_step').map(e => e.step))
     };
     s.reserveNote = s.notes.find(e => (e.kind || 'reserve') === 'reserve') || null;
