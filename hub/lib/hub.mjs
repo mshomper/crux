@@ -81,7 +81,7 @@ const PAUSE_TO_WORKERS = '[From the hub] {{Who}} paused work in this project. Fi
 const RESUME_TO_WORKERS = '[From the hub] {{Who}} resumed work in this project. Carry on with your task.';
 const PAUSE_TO_ORCH = '[From the hub] {{Who}} paused work in this project. Workers were told to stop at their next turn and every new permission request waits for {{who}}. Do not start new work or answer requests as a way of pausing it; wait for {{who}} to resume.';
 const RESUME_TO_ORCH = '[From the hub] {{Who}} resumed work in this project. Workers were told to carry on.';
-const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 60 * 1000;
+const OVERLAP_MS = 10 * 60 * 1000, HANDOFF_MS = 5 * 60 * 1000, ANSWER_MS = 3 * 60 * 1000, RETIRE_RESULT_WAIT_MS = 2 * 60 * 1000;
 // A rolling handoff draft (handoff_notes in post_summary) counts as fresh when it was written within this long of
 // the agent's last turn: then a handoff is published from it without waking the agent (a cold, cache-expired read).
 export const DRAFT_FRESH_MS = 60 * 60 * 1000;
@@ -2125,13 +2125,24 @@ export class Hub {
     if (a.state === 'retired') return `${name} has already retired.`;
     if (a.retiring) return `${name} is already handing off.`;
     if ([...this.approvals.values()].some(x => x.agent === a)) return `${name} is waiting on a permission card; answer or deny it first.`;
+    // An agent still in its turn (it posted its summary and the Lead retired it at once) has not logged its usage yet: that
+    // arrives with the turn's result. Closing it now loses the spend, so it retires when the result is in (or after a cap).
+    if (a.live && ['working', 'starting'].includes(a.state)) {
+      if (!a.finishWhenIdle) {
+        a.finishWhenIdle = { by, reason };
+        a.finishTimer = setTimeout(() => this.finishRetire(p, a), RETIRE_RESULT_WAIT_MS);
+        a.finishTimer.unref?.();
+      }
+      return `${name} is finishing its turn and retires as soon as it ends.`;
+    }
     this.finishRetire(p, a);
     this.notice(p, a.thread, `${by === 'you' ? 'You' : by} retired ${name} as finished${reason ? `: ${reason}` : ''}.`);
     return `${name} retired.`;
   }
 
   finishRetire(p, agent) {
-    clearTimeout(agent.retireTimer); clearTimeout(agent.overlapTimer);
+    clearTimeout(agent.retireTimer); clearTimeout(agent.overlapTimer); clearTimeout(agent.finishTimer);
+    agent.finishWhenIdle = null;
     if (agent.state === 'retired') return;
     agent.capture?.res('(Retired before answering.)');
     agent.capture = null;

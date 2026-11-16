@@ -18,7 +18,7 @@
 import { Expedition } from './expedition.mjs';
 import { HUB_STOPS } from './expedition-watchdog.mjs';
 import { ExpeditionDesk } from './expedition-desk.mjs';
-import { assembleReport, answerLine, proposalsOf, clipText } from './expedition-report.mjs';
+import { assembleReport, claimsStatus, answerLine, proposalsOf, clipText } from './expedition-report.mjs';
 
 export const END_WAIT_MS = 60 * 60 * 1000;   // a stop nobody finishes (no report_ready, no final turn) is ended by the hub after this long
 const firstLine = e => String(e?.message || e).split('\n').find(l => l.trim())?.trim().slice(0, 240) || 'unknown error';
@@ -154,7 +154,7 @@ export class ExpeditionEnd {
     const integrity = ex.checkFrozen('finish');
     const leadText = ex.read('REPORT.md');
     const verdict = ex.read('verify/VERDICT.md');
-    const claims = verdict && /^#{1,4}\s.*(claims?|corrections?)/im.test(verdict) ? 'checked' : 'not checked';
+    const claims = claimsStatus(verdict);
     const md = assembleReport({ leadText, events: p.log.events, id: ex.id, question, claims, hubStop });
     ex.write('REPORT.md', md);
     // BRIEF.md is the user's ask, hashed at the launch: if it is not what was launched (an agent's file tool under acceptEdits, a
