@@ -24,7 +24,7 @@ import { md } from './markdown.js';
 import { retiredView, RETIRED_RECENT_DAYS } from './retired-list.js';
 import { SideResizer } from './side-width.js';
 import { routeSwitch } from './route-switch.js';
-import { picturesButton, installPictures } from './pictures.js';
+import { picturesButton, installPictures, thumbGrid, summaryPictureItems } from './pictures.js';
 import { levelChip, LEVELS as LEVEL_INFO, SettingsCards } from './project-settings.js';
 import { ListsCard, listAddButtons, listAddBody } from './lists-card.js';
 import { GuardUI } from './guard.js';
@@ -364,7 +364,8 @@ function filledAnswers(ev, suggest = null) {
   return ev.open.map(q => { const k = draftKey(ev.id, q.i), text = boxText(k, suggest).trim(); return { index: q.i, text, ...(S.drafts[k] != null && text ? { own: true } : {}) }; }).filter(a => a.text);
 }
 function questionCard(ev, p = proj(), { suggest = null } = {}) {
-  const vis = (ev.visuals || []).map(id => p.events.find(e => e.type === 'visual' && e.visual === id)).filter(Boolean);
+  // The pictures its summary listed: thumbnails in a wrapping grid, tap for full size (the question is about them).
+  const pics = thumbGrid(summaryPictureItems(p.name, ev, p.events), `${ev.from} · ${ev.questions?.[0] || ''}`.slice(0, 90));
   const where = ev.thread === 'orchestrator' ? 'the orchestrator thread' : ev.thread;
   const filled = filledAnswers(ev, suggest).length;
   const rows = ev.open.map(q => {
@@ -378,7 +379,7 @@ function questionCard(ev, p = proj(), { suggest = null } = {}) {
   }).join('');
   return `<article class="card question" data-card="question:${esc(ev.id)}" tabindex="0">
     <div class="card-head">${icon('inbox')}<h3>${NM.nameHtml(ev.from, p.name)} asks</h3><span class="keys">Enter to answer</span><span class="time">${timeOf(ev.ts)}</span></div>
-    ${vis.map(v => visualEl(p, v, true)).join('')}
+    ${pics}
     <div class="qrows">${rows}</div>
     ${ev.byPicks ? `<p class="faint q-done">${ev.byPicks === 1 ? 'One more question was' : `${ev.byPicks} more questions were`} answered by your picks.</p>` : ''}
     <div class="row qfoot"><button class="btn primary" data-send-answers="${esc(ev.id)}" ${filled ? '' : 'disabled'} title="Send every filled answer to ${esc(ev.from)} as one message">${icon('send')}<span class="qcount">${sendLabel(filled, ev.open.length)}</span></button>

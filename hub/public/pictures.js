@@ -21,6 +21,39 @@ export function picturesButton(projectName, d) {
   return `<button type="button" class="btn ghost pics-btn" data-pictures="${esc(JSON.stringify(list))}" data-pictures-title="${esc(`D${String(d.id).padStart(4, '0')} · ${d.title || ''}`)}" title="${esc(label)}" aria-label="${esc(label)}">${icon('image')}<span class="pics-n">${list.length}</span></button>`;
 }
 
+// A question card's pictures (the ones its summary listed): a wrapping grid of thumbnails, two to a row on a phone,
+// never a sideways row. Tapping one opens the gallery at that picture. items: { src, caption } for a picture,
+// { href, caption } for a page (opens in its own tab). The sources are the hub's own: /att/, /media/ or /p/.
+export function thumbGrid(items, title = '') {
+  const pics = items.filter(i => i.src), list = JSON.stringify(pics.map(i => ({ src: i.src, caption: i.caption || '' })));
+  let n = -1;
+  const tiles = items.map(i => i.src
+    ? `<button type="button" class="qthumb" data-pic-i="${++n}" title="${esc(i.caption || 'Open larger')}" aria-label="${esc(`Open picture: ${i.caption || n + 1}`)}"><img src="${esc(i.src)}" alt="${esc(i.caption || '')}" loading="lazy"><span class="qcap">${esc(i.caption || '')}</span></button>`
+    : `<a class="qthumb page" href="${esc(i.href)}" target="_blank" rel="noopener" title="Open this page in a new tab">${icon('page')}<span class="qcap">${esc(i.caption || 'Page')}</span></a>`).join('');
+  return items.length ? `<div class="qpics" data-pictures="${esc(list)}" data-pictures-title="${esc(title)}">${tiles}</div>` : '';
+}
+
+// The thumbnails for the visuals a summary listed (post_visual ids), found among the project's events. An id with no
+// visual event still shows when it has the shape of a stored screenshot (32 hex digits and an image extension).
+// A picture its agent posted in the same round (same thread, after the thread's previous summary, before this one)
+// shows too, even when the summary forgot to list it: the question is about what was just shown.
+export function summaryPictureItems(projectName, summary, events) {
+  const base = encodeURIComponent(projectName), evs = events || [];
+  const at = evs.findIndex(e => e?.id && e.id === summary?.id);
+  let from = -1;
+  for (let i = at - 1; at > 0 && i >= 0; i--) if (evs[i]?.type === 'summary' && evs[i].thread === summary.thread) { from = i; break; }
+  const round = at > 0 ? evs.slice(from + 1, at).filter(e => e?.type === 'visual' && e.thread === summary.thread).map(e => e.visual) : [];
+  const ids = [...new Set([...(Array.isArray(summary?.visuals) ? summary.visuals : []), ...round])];
+  return ids.map(id => {
+    const v = (events || []).find(e => e?.type === 'visual' && e.visual === id);
+    const shot = v?.attachment?.id || (!v && /^[0-9a-f]{32}\.(png|jpg|gif|webp)$/.test(String(id)) ? id : '');
+    if (shot) return { src: `/att/${base}/${encodeURIComponent(shot)}`, caption: v?.caption || '' };
+    if (!v) return null;
+    const src = `/media/${base}/${encodeURIComponent(v.visual)}`;
+    return v.kind === 'page' ? { href: src, caption: v.caption || '' } : { src, caption: v.caption || '' };
+  }).filter(Boolean);
+}
+
 // The gallery: one dialog for the page, made on first use.
 export class Gallery {
   constructor(doc = document) { this.doc = doc; this.list = []; this.at = 0; this.el = null; }
@@ -92,10 +125,12 @@ export function installPictures(doc = document) {
   doc.addEventListener('click', e => {
     const b = e.target.closest?.('[data-pictures]');
     if (!b) return;
+    const tile = e.target.closest('[data-pic-i]');   // a question card's thumbnail: open at that one
+    if (b.classList.contains('qpics') && !tile) return;   // the gaps and page links do nothing here
     e.preventDefault();
     let list = [];
     try { list = JSON.parse(b.dataset.pictures); } catch { }
-    gallery.open(list.filter(p => typeof p?.src === 'string' && p.src.startsWith('/p/')), b.dataset.picturesTitle || '', 0, b);
+    gallery.open(list.filter(p => typeof p?.src === 'string' && /^\/(p|att|media)\//.test(p.src)), b.dataset.picturesTitle || '', Number(tile?.dataset.picI) || 0, tile || b);
   });
   return gallery;
 }
