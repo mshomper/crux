@@ -134,7 +134,7 @@ export function problems(d, ctx = {}) {
   if (!d.question.trim()) out.push({ id: 'question', level: 'block', text: 'Write the question first.' });
   if (fam(d.roles.verifier.model) && fam(d.roles.verifier.model) === fam(d.roles.builder.model)) out.push({ id: 'same', level: 'block', text: 'The Verifier and the Builder run on the same model. The Verifier must be a different model from the Builder: change one of them.' });
   const items = d.success.filter(t => t.text.trim());
-  if (!items.length) out.push({ id: 'test', level: 'block', text: 'Add at least one item to the success test: without it nothing can say the work is done.' });
+  if (!items.length) out.push({ id: 'test', level: 'warn', text: 'No success test written: the team will judge the work by whether the question is answered in the report, with its evidence.' });
   const noJudge = items.filter(t => t.judge === 'command' && !t.command.trim()).length;
   if (noJudge) out.push({ id: 'nojudge', level: 'warn', text: `${noJudge === 1 ? 'One item is' : `${noJudge} items are`} set to a command with no command written. Without one nothing judges ${noJudge === 1 ? 'it' : 'them'}.` });
   if (ctx.check && ctx.check !== 'on') out.push({ id: 'check', level: 'warn', text: 'The permission check is off in this project: anything the hub cannot settle by itself is parked, never asked.' });
@@ -147,14 +147,11 @@ export function problems(d, ctx = {}) {
 }
 
 // The brief the hub writes to BRIEF.md: the question, how the work is judged, and what the team may use without asking.
-export function briefText(d) {
-  const items = d.success.filter(t => t.text.trim());
-  const how = { checklist: 'checklist', command: 'command', outside: 'not run here' };
-  const lines = [`# Question\n\n${d.question.trim()}\n`, `# Success test\n\n${items.map((t, i) => `${i + 1}. ${t.text.trim()} (${how[t.judge]}${t.judge === 'command' && t.command.trim() ? `: \`${t.command.trim()}\`` : ''})`).join('\n')}\n`,
-    `# Envelope\n\n${d.hours} hours, ${d.percent}% of the plan.\n`];
-  if (d.sites.length || d.packages.length) lines.push(`# Pre-approved\n\n${[...d.sites.map(s => `Site: ${s.host}`), ...d.packages.map(x => `Package (${x.eco}): ${x.name}`)].join('\n')}\n`);
-  return lines.join('\n');
-}
+// Matt (2026-11-16): the brief is one plain ask to the Lead, so it is the question alone. The test, limits and approvals
+// travel in their own fields.
+export const briefText = d => d.question.trim();
+// With no success items written, the team still has something to judge by: that the question is answered with its evidence.
+export const DEFAULT_ITEM = { text: 'The question is answered in the report, with the evidence and sources behind it', judge: 'checklist', command: '' };
 
 // What POST /api/expedition receives (the route is the backend's; this is the front end's side of it).
 export function launchBody(project, d, st = null) {
@@ -165,7 +162,7 @@ export function launchBody(project, d, st = null) {
     project,
     brief: briefText(d),
     question: d.question.trim(),
-    test: testFiles(d.success),
+    test: testFiles(d.success.some(t => t.text.trim()) ? d.success : [DEFAULT_ITEM]),
     envelope: { hours: d.hours, percent: d.percent, ...(dollars != null ? { dollars } : {}) },
     gatherers: d.gatherers,
     roles,

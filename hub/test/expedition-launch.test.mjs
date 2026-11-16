@@ -33,7 +33,8 @@ test('Launch is blocked, with a reason, for each refusal the hub makes; warnings
   assert.ok(ids(ready(), ctx({ level: 'standard' })).includes('ask'));
   assert.ok(ids(ready(), ctx({ running: true })).includes('running'));
   const empty = startDraft(ST);
-  assert.deepEqual(ids(empty, ctx()).sort(), ['question', 'test']);
+  assert.deepEqual(ids(empty, ctx()), ['question'], 'no success test is only a warning: the question alone is enough to start');
+  assert.ok(problems(empty, ctx()).some(p => p.id === 'test' && p.level === 'warn'));
   const same = ready(); same.roles.verifier.model = same.roles.builder.model;
   assert.ok(ids(same, ctx()).includes('same'), 'Verifier on the Builder\'s model');
   const warn = problems(ready(), ctx({ check: 'off', st: { ...ST, defaults: { ...ST.defaults, dollarsPerPercent: null }, budgetNote: 'Held by time only.' } }));
@@ -57,7 +58,9 @@ test('launchBody matches the hub\'s route: brief, question, test files, envelope
   const d = ready(); d.success.push({ text: 'Fast enough', judge: 'command', command: 'npm test' }); d.packages.push({ eco: 'npm', name: 'fastjson-demo' }); d.gatherers = 4;
   const b = launchBody('demo-app', d, ST);
   assert.equal(b.project, 'demo-app');
-  assert.match(b.brief, /# Question\n\nWhich is faster\?/);
+  assert.equal(b.brief, 'Which is faster?', 'the brief is the question alone');
+  const bare = launchBody('p', startDraft(ST, { question: 'Q?' }), ST);
+  assert.deepEqual(Object.keys(bare.test), ['CHECKLIST.md'], 'no items written: a default checklist item, so the hub has a test');
   assert.equal(b.question, 'Which is faster?');
   assert.deepEqual(Object.keys(b.test).sort(), ['CHECKLIST.md', 'run.json']);
   assert.deepEqual(b.envelope, { hours: 6, percent: 7, dollars: 18.9 });
