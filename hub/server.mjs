@@ -7,6 +7,7 @@ import { join, extname, resolve, normalize, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
+import { refreshExpeditionFiles } from './lib/starter-refresh.mjs';
 import { parseQuickPicks } from './lib/quick.mjs';
 import { checkRequest, checkAttachmentRead, extraHosts } from './lib/access.mjs';
 import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs';
@@ -84,6 +85,11 @@ const settings = new HubSettings({ initial: { ...hubCfg, retireAt } });
 // Decision 55: the Conductor keeps its log and handoffs in the hub's own state folder, next to settings.json.
 const hub = new Hub({ projects, defaults: hubCfg.defaults, settings, noAgents, conductorDir: join(dataDir(), 'conductor') });
 if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
+// The expedition agent files copied into ~/.claude/agents (or a project's) follow this hub's version when they were not edited.
+else {
+  try { refreshExpeditionFiles([join(homedir(), '.claude', 'agents'), ...projects.map(d => join(d, '.claude', 'agents'))]); }
+  catch (e) { console.warn('Could not refresh the expedition agent files:', e?.message || e); }
+}
 // Decision 54 B: the Claude Code the agents run. A clone's SDK finds its own; the desktop app's hub uses the copy the
 // setup screen downloaded, or one installed on the PC when that is missing.
 const claudeExp = claudeExpected();

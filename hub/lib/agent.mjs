@@ -419,6 +419,8 @@ export class Agent {
       }
       this.setState('idle');
       this.hub.onIdle(this.project, this);
+      // Retired by the Lead mid-turn: its usage is logged now, so it can close.
+      if (this.finishWhenIdle) this.hub.finishRetire(this.project, this);
     }
   }
 

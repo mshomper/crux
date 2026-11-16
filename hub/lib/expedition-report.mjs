@@ -146,11 +146,29 @@ export function generatedReport({ events, id, question = '', claims, hubStop, le
   out.push(howItRanMarkdown(r), '');
   return out.join('\n');
 }
+// Did the Verifier's VERDICT.md carry its claims pass? The standing instruction asks for "## Claims check"; any heading
+// (level 1 to 6, numbered or not) that names claims, corrections or a fact check is taken, so small differences pass.
+export function claimsStatus(verdictText) {
+  return /^#{1,6}\s.*\b(claims?|corrections?|fact[- ]?check\w*)\b/im.test(String(verdictText ?? '')) ? 'checked' : 'not checked';
+}
+
+// The Lead is told not to write "how it ran", but one that does (an empty placeholder, say) must not leave two: its section,
+// from that heading to the next heading of the same or a higher level, is dropped, and the hub's own is the one.
+export function dropLeadHowItRan(md) {
+  const lines = String(md ?? '').split(/\r?\n/), out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(#{1,6})\s+(\d+[.)]?\s*)?how it ran\b/i.exec(lines[i]);
+    if (!m) { out.push(lines[i]); continue; }
+    while (i + 1 < lines.length && !(/^(#{1,6})\s/.test(lines[i + 1]) && /^(#+)/.exec(lines[i + 1])[1].length <= m[1].length)) i++;
+  }
+  return out.join('\n');
+}
+
 // REPORT.md as the end leaves it: what the Lead wrote (without any earlier generated part) plus the hub's part.
 export function assembleReport({ leadText, ...rest }) {
   const lead = String(leadText ?? '');
   const cut = lead.indexOf(GENERATED_MARK);
-  const body = (cut >= 0 ? lead.slice(0, cut) : lead).trimEnd();
+  const body = dropLeadHowItRan(cut >= 0 ? lead.slice(0, cut) : lead).trimEnd();
   const leadWrote = !!body.trim();
   return `${leadWrote ? body : '# Report'}\n\n${generatedReport({ ...rest, leadWrote })}`;
 }
