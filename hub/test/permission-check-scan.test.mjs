@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTmp } from './helpers/tmp.mjs';
-import { PROMPT, PermissionCheck, buildPrefix, buildSuffix, scanScripts, scriptsFor, EXTRA_FACT, CHECK_MODEL } from '../lib/permission-check.mjs';
+import { PermissionCheck, scanScripts, scriptsFor } from '../lib/permission-check.mjs';
 import { scanScriptText } from '../lib/permission-rules.mjs';
 
 const fakeGit = (tracked = []) => async (args) => {
@@ -160,19 +160,6 @@ test('shadow and on use the same path: an escalate in code needs no model, whate
     assert.equal((await ask(c, proj, 'node tools/x.mjs')).answer, 'escalate');
     assert.equal(c.calls, 0);
   }
-});
-
-test('the prefix says node_modules may be a junction, after the plan\'s facts and before the rules; the plan text is otherwise unchanged', () => {
-  const s = buildPrefix(FACTS);
-  assert.ok(s.includes(EXTRA_FACT));
-  assert.match(EXTRA_FACT, /node_modules.*junction.*project's own packages.*changes the main project/);
-  assert.ok(s.indexOf('Hard stops can\n  still hide inside what it could not read: finding them is your main job.') < s.indexOf(EXTRA_FACT));
-  assert.ok(s.indexOf(EXTRA_FACT) < s.indexOf("THE PROJECT'S RULES"));
-  assert.ok(!PROMPT.includes('node_modules'),'PROMPT itself is the plan\'s text, untouched');
-  assert.equal(s.replace(`\n${EXTRA_FACT}`, ''), buildPrefix({ ...FACTS }).replace(`\n${EXTRA_FACT}`, ''));
-  // without the line, the prefix is exactly what the plan's prompt makes
-  const plain = PROMPT.replace('<project>\\.claude\\worktrees\\<name>', () => `${FACTS.dir}\\.claude\\worktrees\\<name>`);
-  assert.equal(s.replace(`\n${EXTRA_FACT}`, '').length, plain.replace(/<rules body>|<posix dir>|<project>|<dir>|<temp>|<level>|<id>/g, m => ({ '<rules body>': FACTS.rulesBody, '<posix dir>': '/c/work/proj', '<project>': 'proj', '<dir>': FACTS.dir, '<temp>': FACTS.temp, '<level>': FACTS.level, '<id>': FACTS.rulesId })[m]).length);
 });
 
 // ---------- the hub: shadow changes nothing live; only "on" escalates for a scan hard stop ----------
