@@ -50,7 +50,8 @@ test('a card answered before the push goes out is not sent', () => {
   assert.ok(stillOpen(d20, { approvals, decisionOpen, events }));
   assert.ok(!stillOpen(d20, { approvals, decisionOpen: () => false, events }));
   assert.ok(stillOpen(q, { approvals, decisionOpen, events: [...events, { type: 'message', thread: 'w1', from: 'w1', text: 'more' }] }));
-  assert.ok(!stillOpen(q, { approvals, decisionOpen, events: [...events, { type: 'message', thread: 'w1', from: 'orchestrator-1', text: 'Use 4747' }] }));
+  assert.ok(stillOpen(q, { approvals, decisionOpen, events: [...events, { type: 'message', thread: 'w1', from: 'orchestrator-1', text: 'Use 4747' }] }), 'the orchestrator replying does not answer it');
+  assert.ok(!stillOpen(q, { approvals, decisionOpen, events: [...events, { type: 'message', thread: 'w1', from: 'you', text: 'Use 4747' }] }), 'your reply does');
 });
 
 function harness() {

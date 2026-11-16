@@ -502,7 +502,12 @@ export class Hub {
       .filter(a => a.answer && Number.isInteger(a.index) && a.index >= 0 && a.index < ev.questions.length);
     if (!items.length) throw new Error('Type an answer first.');
     const pairs = items.map(a => ({ question: ev.questions[a.index], answer: a.answer }));
-    this.fromYou(p, ev.thread, answerMessage(pairs), [], { answers: items.map(a => ({ question: id, index: a.index })) });
+    // A question stays on Needs you after its asker retires (Matt, 2026-11-16), so you can still answer it. A retired
+    // agent has no box to read it: the answer goes to the orchestrator thread, naming who asked.
+    const asker = ev.thread === 'orchestrator' ? null : p.agents.get(ev.thread);
+    const askerGone = ev.thread !== 'orchestrator' && (!asker || asker.state === 'retired');
+    const text = askerGone ? `[Answers to ${ev.from}'s questions; ${ev.from} has retired, so they come to you]\n\n${answerMessage(pairs)}` : answerMessage(pairs);
+    this.fromYou(p, askerGone ? 'orchestrator' : ev.thread, text, [], { answers: items.map(a => ({ question: id, index: a.index })) });
     // Decision 64: your yes on a merge question's card pre-approves that merge, only when the page marks the answer as
     // your own words (own: true). Missing means no pass: the Conductor's suggestion (Take all, or its pre-filled box
     // sent as it was), or an older page.
@@ -510,11 +515,11 @@ export class Hub {
     // A worker's questions: one line in the orchestrator thread, and a note the orchestrator reads with its next
     // message, so it knows they are answered and does not ask again. It is not woken just for this. The
     // orchestrator's own questions skip this: the answer already goes to its thread.
-    if (p.agents.get(ev.from)?.role === 'worker') {
+    if (!askerGone && p.agents.get(ev.from)?.role === 'worker') {
       this.notice(p, 'orchestrator', answerNote('You', ev.from, pairs));
       p.orchestrator()?.noteForNextTurn(`[Hub note] ${answerNote('{{Who}}', ev.from, pairs)}. ${ev.from} has the answers; these questions are settled, so don't ask them again.`);
     }
-    return { ok: true, thread: ev.thread, answered: items.map(a => a.index) };
+    return { ok: true, thread: askerGone ? 'orchestrator' : ev.thread, answered: items.map(a => a.index) };
   }
 
   // Decision 64, part 3: your own answer to question i of summary ev, from its card. A plain yes to a question asking

@@ -72,12 +72,12 @@ test('only open cards hold repeats: never a question you settled in an earlier r
   assert.deepEqual(openQuestions([w, dis, o]).map(c => c.from), ['orchestrator-1']);
   // Asked while w1's card was open, then you answered w1: your answer covers it.
   assert.deepEqual(openQuestions([w, o, ans]), []);
-  // The orchestrator already answered w1's card: that stale card never comes back, and never hides the re-ask.
+  // The orchestrator writing in w1's thread does not close w1's card (only you do), so it still holds the repeat.
   const relay = ev('message', { thread: 'w1', from: 'orchestrator-1', text: 'Hold on, I am asking Matt.' });
-  assert.deepEqual(openQuestions([w, relay, o]).map(c => [c.from, c.open.length]), [['orchestrator-1', 1]]);
+  assert.deepEqual(openQuestions([w, relay, o]).map(c => [c.from, c.open.length]), [['w1', 1]]);
 });
 
-test('a re-ask after the worker card closed shows, but no second notice when the worker card\'s already went', async () => {
+test('a re-ask while the worker card still waits (the orchestrator writing to w1 does not close it) gets no second notice', async () => {
   const Q = 'Should the preview update live while dragging, or only once the drag is released?';
   const w = ask('w1', [Q]);
   const relay = ev('message', { thread: 'w1', from: 'orchestrator-1', text: 'Hold on, I am asking Matt.' });
@@ -93,14 +93,8 @@ test('a re-ask after the worker card closed shows, but no second notice when the
   h.push.handle({ ...o, project: 'alpha' }, ctx);
   h.timers.queue.shift().fn();
   await settle();
-  assert.equal(h.pushed.length, 1, 'the re-ask shows, with no second notice');
-  assert.ok(h.logged.some(s => new RegExp(`asked before in question:${w.id}, whose notice already went`).test(s)));
-  // Had w1's notice not gone (you were looking at it), the re-ask notifies.
-  const g = pushHarness();
-  g.push.handle({ ...o, project: 'alpha' }, ctx);
-  g.timers.queue.shift().fn();
-  await settle();
-  assert.deepEqual(g.pushed.map(p => p.card), [`question:${o.id}`]);
+  assert.equal(h.pushed.length, 1, 'the re-ask is hidden behind w1\'s open card: no second notice');
+  assert.deepEqual(openQuestions(evs).map(c => c.from), ['w1'], 'and w1\'s card is still waiting');
 });
 
 test('a question is hidden behind a decision only when it asks nothing more, the decision is open, and (for notices) notified', async () => {

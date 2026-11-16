@@ -1,5 +1,6 @@
-// Stale question cards (M010): questions leave Needs you when answered, dismissed, when the agent that asked
-// retires, or when every decision a question names is picked. One rule for the page, the map and phone pushes.
+// Question cards (M010): questions leave Needs you only when you answer or dismiss them, or when every decision a
+// question names is picked (2026-11-16: not when the asker retires, the orchestrator replies, or a newer summary
+// comes). One rule for the page, the map and phone pushes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
@@ -56,20 +57,38 @@ test('the ux-review case: three questions on decisions 31 to 33, all picked, lea
   assert.deepEqual(openQuestions([s], { decisionStatus: () => 'decided' }), [], 'all picked: the card goes');
 });
 
-test('replies, dismissals and retirement close a question; the asker talking on does not', () => {
+test('only you close a question: your reply or a dismissal; the orchestrator, a retirement or a newer summary never do', () => {
   const s = ask('w1', ['Which port?']);
   assert.equal(openQuestions([s]).length, 1);
   assert.equal(openQuestions([s, ev('message', { thread: 'w1', from: 'w1', text: 'still waiting' })]).length, 1, 'its own message');
   assert.equal(openQuestions([s, ev('message', { thread: 'w1', from: 'you', text: '4752' })]).length, 0, 'you replied');
-  assert.equal(openQuestions([s, ev('message', { thread: 'w1', from: 'orchestrator-1', text: '4752' })]).length, 0, 'the orchestrator replied');
+  // Cause 1 (2026-11-16): the orchestrator writing into the worker's thread used to close the card.
+  assert.equal(openQuestions([s, ev('message', { thread: 'w1', from: 'orchestrator-1', text: '4752' })]).length, 1, 'the orchestrator replied: still waits on you');
+  // Cause 2: the asker retiring used to close the card.
+  assert.equal(openQuestions([s, ev('agent_retired', { agent: 'w1', thread: 'w1' })]).length, 1, 'the asker retired: still waits on you');
   assert.equal(openQuestions([s, ev('question_dismissed', { question: s.id, by: 'you' })]).length, 0, 'dismissed');
-  assert.equal(openQuestions([s, ev('agent_retired', { agent: 'w1', thread: 'w1' })]).length, 0, 'the asker retired');
-  assert.equal(openQuestions([s, ev('agent_retired', { agent: 'w2', thread: 'w2' })]).length, 1, 'someone else retiring changes nothing');
   assert.equal(openQuestions([s, ev('question_dismissed', { question: 'other' })]).length, 1);
-  // A newer question in the same thread is a fresh card, even after the old one was dismissed.
-  const s2 = ask('w1', ['And the host?']);
-  assert.deepEqual(openQuestions([s, ev('question_dismissed', { question: s.id }), s2]).map(q => q.id), [s2.id]);
+  // A successor orchestrator writing into the shared thread never closes its predecessor's question.
+  const o = ask('orchestrator-8', ['After the restart, will you set the check to Shadow?'], { thread: 'orchestrator' });
+  const succ = ev('message', { thread: 'orchestrator', from: 'orchestrator-9', text: 'Hello, I took over.' });
+  assert.equal(openQuestions([o, ev('agent_retired', { agent: 'orchestrator-8', thread: 'orchestrator' }), succ]).length, 1);
   assert.ok(questionOpen([s], s.id) && !questionOpen([s], 'nope'));
+});
+
+test('cause 3: a newer summary from the same agent never closes an older card; a repeat of the same words is one card', () => {
+  const s = ask('w1', ['Which port should the test hub use, 4752 or 4760?', 'Go ahead with the strip?']);
+  const s2 = ask('w1', ['And the host?']);
+  assert.deepEqual(openQuestions([s, s2]).map(q => q.id), [s.id, s2.id], 'both cards wait');
+  assert.deepEqual(openQuestions([s, ev('question_dismissed', { question: s.id }), s2]).map(q => q.id), [s2.id], 'dismissing the old one is yours to do');
+  // The same question asked again in the newer summary: the newer card holds it, the older keeps the other one.
+  const again = ask('w1', ['Which port should the test hub use, 4752 or 4760?']);
+  const cards = openQuestions([s, again]);
+  assert.deepEqual(cards.map(c => [c.id, c.open.map(q => q.i)]), [[s.id, [1]], [again.id, [0]]]);
+  // You answer the older card's other question: it stays one by one, the newer card is untouched.
+  const ans = ev('message', { thread: 'w1', from: 'you', text: 'x', answers: [{ question: s.id, index: 1 }] });
+  assert.deepEqual(openQuestions([s, again, ans]).map(c => c.id), [again.id]);
+  // A newer summary with no questions asks nothing new and closes nothing.
+  assert.equal(openQuestions([s, ev('summary', { thread: 'w1', from: 'w1', questions: [], done: ['x'] })]).length, 1);
 });
 
 test('the page reads decision status from its board snapshot', () => {
@@ -80,13 +99,13 @@ test('the page reads decision status from its board snapshot', () => {
   assert.equal(pageStatus(null)(1), undefined);
 });
 
-test('a phone notification for a question is not sent once it is dismissed, its asker retired, or picks answered it', () => {
+test('a phone notification for a question is not sent once it is dismissed or picks answered it; the asker retiring does not cancel it', () => {
   const s = { ...ask('w1', ['Colours (decision 31)?']), project: 'crux' };
   const [card] = cardsFor(s);
   const base = { approvals: new Map(), decisionOpen: () => true, decisionStatus: () => 'open' };
   assert.ok(stillOpen(card, { ...base, events: [s] }));
   assert.ok(!stillOpen(card, { ...base, events: [s, ev('question_dismissed', { question: s.id })] }));
-  assert.ok(!stillOpen(card, { ...base, events: [s, ev('agent_retired', { agent: 'w1' })] }));
+  assert.ok(stillOpen(card, { ...base, events: [s, ev('agent_retired', { agent: 'w1' })] }), 'the asker retired: still waiting on you');
   assert.ok(!stillOpen(card, { ...base, decisionStatus: () => 'decided', events: [s] }));
 });
 
@@ -166,9 +185,18 @@ test('Dismiss logs one event with no thread; an unknown question is refused', ()
   assert.equal(openQuestions(p.log.events).length, 0);
   assert.throws(() => hub.dismissQuestion(p, 'not-a-question'), /no longer here/);
 
-  // Retiring the worker takes its next question out too.
+  // Retiring the worker leaves its question on Needs you (Matt, 2026-11-16); you can still answer it, and the answer
+  // goes to the orchestrator thread because the retired agent has no box to read it.
   hub.postSummary(p, w, { done: [], changed: [], questions: ['One more?'], decisions_needed: [], blocked_on: [], next_step: '' });
   assert.equal(openQuestions(p.log.events).length, 1);
   hub.retireFinished(p, 'w1');
-  assert.equal(openQuestions(p.log.events).length, 0);
+  assert.equal(openQuestions(p.log.events).length, 1, 'retired: the question still waits');
+  const q = p.log.ofType('summary').at(-1);
+  const r = hub.answerQuestions(p, q.id, [{ index: 0, text: 'Yes' }]);
+  assert.equal(r.thread, 'orchestrator');
+  const m = p.log.ofType('message').at(-1);
+  assert.deepEqual([m.thread, m.from], ['orchestrator', 'you']);
+  assert.match(m.text, /w1 has retired/);
+  assert.match(m.text, /> One more\?\nYes/);
+  assert.equal(openQuestions(p.log.events).length, 0, 'answered by you: it leaves');
 });

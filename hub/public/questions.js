@@ -4,9 +4,11 @@
 // A round summary's questions wait, each on its own, until:
 // - you answer it from Needs you (a message of yours whose `answers` names it), or dismiss it;
 // - every decision it names (decision 31, D0031, decisions 31 to 33) is picked.
-// The whole card goes when someone other than the asker writes a plain message in its thread (you, or the
-// orchestrator answering for you), when you dismiss the card, or when the agent that asked retires.
-// Only the latest summary that asked something counts in each thread.
+// The whole card goes when you write a plain message in its thread (the latest asking summary there), or when you
+// dismiss the card. Only YOU close a question (Matt, 2026-11-16: "stop disappearing"): the orchestrator writing into the
+// thread, the asker retiring or being handed off, and a newer summary from the same agent never close an older card.
+// Every summary that asked something keeps its own card; a newer one in the same thread hides only the questions it
+// repeats (the same words), so a re-ask is one card, not two.
 
 const SETTLED = s => !!s && !['open', 'found'].includes(s);
 
@@ -48,7 +50,7 @@ export function openQuestions(events, opts) { const r = readCards(events, opts);
 // (asked: { ev, at, pos }), and every question you yourself settled, in any summary (settled: { id, i, at, thread,
 // from, text, when }): answered, dismissed, or answered by your picks; `when` is the settling event's place in the log.
 function readCards(events, { decisionStatus = () => undefined } = {}) {
-  const dismissed = new Map(), retired = new Set();
+  const dismissed = new Map();
   const gone = new Map();   // summary id -> Map of question place -> where you answered or dismissed it one by one
   const mark = (id, i, pos) => { if (!gone.has(id)) gone.set(id, new Map()); gone.get(id).set(Number(i), pos); };
   const last = new Map();   // thread -> { ev, answered, byYou, when }
@@ -59,18 +61,17 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
     pos++;
     if (e.type === 'pick') picked.set(Number(e.decision), pos);
     if (e.type === 'question_dismissed') { e.index == null ? dismissed.set(e.question, pos) : mark(e.question, e.index, pos); continue; }
-    if (e.type === 'agent_retired') retired.add(e.agent);
     if (!e.thread) continue;
     // at: its place among the asking summaries, so "earlier" never ties (two summaries can share a millisecond);
     // pos: its place in the whole log
     if (e.type === 'summary' && e.questions?.length) { const s = { ev: e, at: asked.length, pos, answered: false, byYou: false }; last.set(e.thread, s); asked.push(s); }
     else if (e.type === 'message') {
       if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index, pos); continue; }
-      // A Conductor brief (decision 55) logged in a project's thread is never an answer: only you (or the orchestrator
-      // answering its worker) can settle a question that waits on you.
-      if (e.conductor) continue;
+      // Only your own plain message settles a card. The orchestrator (or a successor agent) writing in the thread, and a
+      // Conductor brief (decision 55), are never an answer: the question still waits on you until you answer or dismiss it.
+      if (e.conductor || e.from !== 'you') continue;
       const q = last.get(e.thread);
-      if (q && e.from !== q.ev.from && !q.answered) { q.answered = true; q.byYou = e.from === 'you'; q.when = pos; }
+      if (q && !q.answered) { q.answered = true; q.byYou = true; q.when = pos; }
     }
   }
   const settled = [];
@@ -83,14 +84,16 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
     });
   }
   const cards = [];
-  for (const { ev, at, pos, answered } of last.values()) {
-    if (answered || dismissed.has(ev.id) || retired.has(ev.from)) continue;
+  for (const { ev, at, pos, answered } of asked) {
+    if (answered || dismissed.has(ev.id)) continue;
     const done = gone.get(ev.id) || new Map();
     let byPicks = 0;
     const open = [];
     ev.questions.forEach((text, i) => {
       if (done.has(i)) return;
       if (answeredByPicks(text, decisionStatus)) { byPicks++; return; }
+      // The same agent asked it again in a newer summary: that card holds it (so a re-ask is one card, not two).
+      if (asked.some(n => n.at > at && n.ev.thread === ev.thread && n.ev.questions.some(t => isRepeat(text, t)))) return;
       open.push({ i, text });
     });
     if (open.length) cards.push({ ...ev, open, byPicks, repeats: [], at, pos });
