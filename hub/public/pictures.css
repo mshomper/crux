@@ -34,3 +34,13 @@
   .gal-nav.prev{justify-self:start;margin-left:8px}
   .gal-nav.next{justify-self:end;margin-right:8px}
 }
+
+/* A question card's pictures: a wrapping grid, never a sideways row. Two to a row on a phone. */
+.qpics{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:2px 0 12px}
+.qthumb{display:flex;flex-direction:column;gap:5px;min-width:0;padding:5px;border:1px solid var(--hud-line,var(--line));border-radius:6px;background:var(--bg);color:var(--muted);font:inherit;cursor:zoom-in;text-decoration:none;text-align:left}
+.qthumb img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:4px}
+.qthumb.page{cursor:pointer;justify-content:center;align-items:center;min-height:70px;text-align:center}
+.qthumb.page .icon{width:22px;height:22px;color:var(--hud-cyan,var(--accent))}
+.qcap{display:block;min-width:0;font-size:12px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.qthumb:hover,.qthumb:focus-visible{border-color:var(--hud-cyan,var(--accent));box-shadow:0 0 14px rgba(111,227,255,.22);outline:none}
+@media (max-width:520px){.qpics{grid-template-columns:repeat(2,minmax(0,1fr))}.qthumb{min-height:44px}}
