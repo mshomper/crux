@@ -2,6 +2,7 @@
 // No drawing here: stations, what needs you, the telemetry feed, and which pulses an event fires.
 import { openQuestions, pageAsk } from './questions.js';
 import { pendingApprovals } from './all-projects.js';
+import { expeditionCluster } from './expedition-map.js';
 
 const MAX_FEED = 16;
 
@@ -67,6 +68,18 @@ export class MapModel {
   activityOf(agent) {
     const x = this.activity.get(agent);
     return x && Date.now() - x.ts < 20000 ? x.text : '';
+  }
+
+  // The running expedition as one cluster (expedition-map.js), or null. Its agents are not in workers().
+  cluster(now = Date.now()) {
+    return this.project ? expeditionCluster(this.project, now, n => this.activityOf(n)) : null;
+  }
+
+  // The Lead an expedition agent reports to: where its pulses go (null for the Lead itself or when none is shown).
+  leadOf(agentName) {
+    const a = this.agent(agentName);
+    if (!a?.expedition || a.expeditionRole === 'lead') return null;
+    return this.project.agents.findLast(x => x.expedition === a.expedition && x.expeditionRole === 'lead' && x.state !== 'retired')?.name || null;
   }
 
   // ---------- what needs you ----------
@@ -195,6 +208,7 @@ export class MapModel {
         if (ev.from === 'you') return [{ from: 'you', to: thread(ev.thread), tone: 'you' }];
         const src = id(ev.from);
         if (!src) return [];
+        if (this.agent(ev.from)?.expedition) return [];   // an expedition talks inside its own cluster, not to you
         // A successor asking its predecessor writes into the predecessor's thread.
         const owner = this.project?.agents.find(a => a.thread === ev.thread && a.name !== ev.from && a.role === 'worker');
         if (owner && this.agent(ev.from)?.predecessor === owner.name) return [{ from: src, to: owner.name, tone: 'handoff' }];
@@ -204,6 +218,8 @@ export class MapModel {
       case 'summary': {
         const src = id(ev.from);
         if (!src) return [];
+        // an expedition member reports to its Lead, never to the orchestrator (the Lead's own mid-run summaries go nowhere)
+        if (this.agent(ev.from)?.expedition) { const lead = this.leadOf(ev.from); return lead ? [{ from: src, to: lead, tone: 'summary' }] : []; }
         return src === 'core' ? [{ from: 'core', to: 'you', tone: 'summary' }] : [{ from: src, to: 'core', tone: 'summary' }];
       }
       case 'entry': { const src = id(ev.from); return src ? [{ from: src, to: 'board', tone: ev.kind === 'handoff' ? 'handoff' : 'entry' }] : []; }
@@ -218,6 +234,8 @@ export class MapModel {
       case 'agent_created':
         // a successor: the predecessor hands over to it (a worker) or to the core (the orchestrator role)
         if (ev.predecessor) return [{ from: ev.predecessor, to: ev.role === 'worker' ? ev.agent : 'core', tone: 'handoff', delay: 450 }];
+        // an expedition's Lead is started by the orchestrator; the Lead starts the rest
+        if (ev.expedition && ev.expeditionRole !== 'lead') { const lead = this.leadOf(ev.agent); return lead ? [{ from: lead, to: ev.agent, tone: 'spawn', delay: 450 }] : []; }
         return ev.role === 'worker' ? [{ from: 'core', to: ev.agent, tone: 'spawn', delay: 450 }] : [];
       default: return [];
     }
@@ -248,6 +266,14 @@ export class MapModel {
         return L('created', ev.agent, ev.predecessor ? `takes over from ${ev.predecessor}` : 'joined as a worker', ev.predecessor ? 'handoff' : 'spawn');
       case 'agent_retired': return L('retired', ev.agent, 'retired', /^orchestrator-/.test(ev.agent) ? 'core' : 'activity');
       case 'activity': return L('activity', ev.agent, short(ev.text), 'activity');
+      // The Expedition module: only the lines worth reading. Other expedition event kinds stay out of the feed.
+      case 'expedition_started': return L('expedition', 'expedition', 'started', 'spawn');
+      case 'expedition_gate': return L('expedition', 'expedition', 'plan gate closed, the test is frozen', 'entry');
+      case 'expedition_decision': return L('expedition', ev.maker || 'expedition', `logged decision ${ev.number}: ${short(ev.text)}`, 'entry');
+      case 'expedition_parked': return ev.kind === 'lesson' ? null : L('expedition', ev.maker || 'expedition', `parked: ${short(ev.text)}`, 'pick');
+      case 'expedition_loop': return L('expedition', 'expedition', `build loop ${ev.number}: ${ev.passing} passing${ev.progress ? '' : ', no progress'}`, 'summary');
+      case 'expedition_subagent': return L('expedition', 'lead', ev.phase === 'started' ? 'a gatherer started' : 'a gatherer finished', 'spawn');
+      case 'expedition_stopped': return L('expedition', 'expedition', `stopped: ${ev.reason}`, 'summary');
       default: return null;
     }
   }

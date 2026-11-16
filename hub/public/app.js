@@ -1,5 +1,6 @@
 // Crux hub interface: plain ES module, no build step.
 import { LiveMap } from './map.js';
+import { expeditionCluster, clusterLine, liveMembers } from './expedition-map.js';
 import { initPhone } from './phone.js';
 import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
@@ -74,7 +75,15 @@ new SideResizer({ app: $('#app'), grip: $('#side-grip'), canResize: matchMedia('
 const map = new LiveMap($('#hud'), {
   open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t),
   // a project on the All projects map (decision 57 C): its thread, in that project
-  openIn: (name, t) => { const p = S.projects.find(x => x.name === name); if (p) openThreadIn(p, t); }
+  openIn: (name, t) => { const p = S.projects.find(x => x.name === name); if (p) openThreadIn(p, t); },
+  // The Expedition module: Stop sends the expedition straight to its report (spec 5). Asks first; the hub's endpoint comes
+  // with the end sequence (phase 5), so until then a refusal is said plainly and nothing else changes.
+  stopExpedition: async id => {
+    const p = proj();
+    if (!p || !await hubConfirm({ k: 'Expedition', title: 'Stop this expedition and write it up?', body: 'The team stops where it is and the Lead writes the report from what exists. Nothing is merged.', ok: 'Stop and write up' })) return;
+    try { await api('/api/expedition/stop', { project: p.name, expedition: id }); }
+    catch (e) { toast(`The expedition was not stopped: ${e.message}`); }
+  }
 });
 
 // Decision 36: plan meters in the strip (not on the core) and the usage panel behind them.
@@ -432,7 +441,7 @@ function waitingIn(p, t) {
 }
 // The HUD frame's boot readout (decision 33), once, when the hub opens.
 function bootReadout() {
-  const p = proj(), live = p ? p.agents.filter(a => a.state !== 'retired') : [];
+  const p = proj(), live = p ? p.agents.filter(a => a.state !== 'retired' && !a.expedition) : [];   // an expedition is one cluster, not agents
   hudBoot({ project: p?.name, agents: live.length, working: live.filter(a => ['working', 'starting'].includes(a.state)).length, waiting: p ? needsCount(p) : 0 });
 }
 
@@ -536,13 +545,17 @@ function renderThreads() {
   if (!p) { const l = $('#threads'); l.innerHTML = ''; delete l.dataset.html; return; }
   const needs = needsCount(p);
   const orch = orchestrator(p);
-  const workers = p.agents.filter(a => a.role === 'worker');
+  const workers = p.agents.filter(a => a.role === 'worker' && !a.expedition);   // an expedition's agents are one row below
   const active = workers.filter(a => a.state !== 'retired');
+  const exp = expeditionCluster(p);
+  const expLead = exp && p.agents.find(a => a.name === exp.lead.id);
   // A thread on screen in a column is being read: no unread dot for it.
   const dot = (a, t) => `<span class="dot ${!cols.visible(t) && unread(p, t) ? 'unread' : a?.state || ''}"></span>`;
   let html = threadButton({ id: 'needs', name: 'Needs you', ava: 'inbox', avaClass: needs ? 'needs' : '', last: needs ? `${needs} waiting for your call` : 'Nothing waiting', right: needs ? `<span class="badge">${needs}</span>` : '' });
   // The orchestrator by its project, with its holder number as a small chip (crux v6)
   html += threadButton({ id: 'orchestrator', name: orch ? NM.nameText(orch.name, p.name) : p.name, nameHtml: orch ? NM.nameHtml(orch.name, p.name) : null, ava: 'orch', avaClass: 'orch', last: lastLine(p, 'orchestrator') || 'Starts when you send a message', right: dot(orch, 'orchestrator'), agent: orch });
+  // One row for the whole expedition (the Lead's thread); its members are on the map and in the Lead's thread, not here.
+  if (expLead) html += threadButton({ id: expLead.thread, name: `Expedition: ${exp.name}`, ava: 'agent', last: clusterLine(exp), right: `<span class="exp-r"><span class="dot ${expLead.state || ''}" title="${esc(clusterLine(exp))}"></span><span class="exp-n" title="${liveMembers(p, exp.id)} agents in this expedition">${liveMembers(p, exp.id)}</span></span>`, agent: expLead });
   if (active.length) html += `<div class="side-label">Agents</div>` + active.map(a => threadButton({ id: a.thread, name: a.name, ava: 'agent', last: lastLine(p, a.thread) || goalOf(a), right: dot(a, a.thread), agent: a })).join('');
   html += retiredSection(p, workers);
   // Redrawn on every update (an agent's state, its activity): only the rows that changed are swapped, so the list

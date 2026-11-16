@@ -69,7 +69,9 @@ const busy = a => ['working', 'starting'].includes(a.state);
 export function rosterOf(p, pending) {
   const live = p.agents.filter(a => a.state !== 'retired');
   const rank = a => (threadWaiting(p, a.thread, pending) > 0 ? 0 : busy(a) ? 1 : 2);
-  const workers = live.filter(a => a.role === 'worker').map((a, i) => ({ a, i })).sort((x, y) => rank(x.a) - rank(y.a) || x.i - y.i).map(x => x.a);
+  // An expedition's agents (the Expedition module) are one cluster of the project's map, not workers: left out here, so
+  // neither the list nor any "working" count in All projects counts them.
+  const workers = live.filter(a => a.role === 'worker' && !a.expedition).map((a, i) => ({ a, i })).sort((x, y) => rank(x.a) - rank(y.a) || x.i - y.i).map(x => x.a);
   return [...live.filter(a => a.role === 'orchestrator'), ...workers];
 }
 

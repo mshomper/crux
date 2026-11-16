@@ -31,15 +31,18 @@ export function recordAgents() {
 // A test hub with one project, the seven expedition types installed as the hub's agent types (copied from the starter
 // folder, so the real files are what the stub uses), an orchestrator, and a recording notifier: the phone and the PC
 // both subscribe, and every notice either would show lands in `pushed` and `desk`.
-export function stubHub({ settings = {} } = {}) {
+// level: the project's permission level ('standard' = Ask, 'auto' or 'trusted'), set before anything is marked quiet.
+// conductor: also start the hub's Conductor (its own folder in the temp root), for tests of what it counts.
+export function stubHub({ settings = {}, level = 'standard', conductor = false } = {}) {
   const root = makeTmp('crux-expedition-');
   const dir = join(root, 'proj');
   const home = join(root, 'agents-home');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   mkdirSync(join(home, '.claude', 'agents'), { recursive: true });
   for (const f of readdirSync(STARTER).filter(f => /^expedition-.*\.md$/.test(f))) copyFileSync(join(STARTER, f), join(home, '.claude', 'agents', f));
-  const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), agentHome: home, noAgents: true, settings: new HubSettings({ file: null, initial: settings }) });
+  const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), agentHome: home, noAgents: true, settings: new HubSettings({ file: null, initial: settings }), ...(conductor ? { conductorDir: join(root, 'conductor') } : {}) });
   const p = hub.project('proj');
+  if (level !== 'standard') hub.setPermissionMode(p, level, 'you');
   const orch = hub.ensureOrchestrator(p);
   const pushed = [], desk = [];
   const sender = { generateVAPIDKeys: () => ({ publicKey: 'pub', privateKey: 'priv' }), sendNotification: async (_s, body) => { pushed.push(JSON.parse(body)); } };
@@ -91,9 +94,15 @@ export class StubExpedition {
     this.question = question;
   }
 
-  // Start a hub agent for a role, as the Lead's start_worker would (the orchestrator starts the Lead).
+  // Start a hub agent for a role, as the Lead's start_worker would (the orchestrator starts the Lead). Phase 2: the five
+  // hub roles go through the real scoped path, hub.leadStart (once the expedition has started and a Lead exists).
   startRole(role, by) {
     const r = ROLES[role];
+    if (role !== 'lead' && this.agents.lead && this.ex.state().started) {
+      const w = this.hub.leadStart(this.p, this.agents.lead, { type: r.type, goal: `${r.label} of ${this.id}`, task: `Your role: ${r.label}. Expedition ${this.id}.` });
+      this.agents[role] = w;
+      return w;
+    }
     const w = this.hub.startWorker(this.p, `exp-${role}`, `Your role: ${r.label}. Expedition ${this.id}.`, by, `${r.label} of ${this.id}`, { type: r.type, expedition: this.id, expeditionRole: role });
     this.agents[role] = w;
     return w;
@@ -132,11 +141,13 @@ export class StubExpedition {
     ex.decide({ text: 'Keep item 3 in the test', reason: 'the reference ties the numbers down', maker: this.agents.advisor.name });
     this.usage('advisor', { cost: 0.4 });
     // Gatherers are subagents inside the Lead: three run in parallel, one note file each, no hub agent of their own.
-    for (const n of [1, 2, 3]) { ex.subagent({ phase: 'started', subagentType: ROLES.gatherer.type, taskId: `t${n}` }); ex.write(`notes-${n}.md`, `# Notes ${n}\n- claim | source | link (opened)\nGaps: none\n`); }
-    for (const n of [1, 2, 3]) ex.subagent({ phase: 'ended', subagentType: ROLES.gatherer.type, taskId: `t${n}`, tokens: 1200 * n });
+    // Phase 2: they arrive as the SDK's task messages, through the Lead's real Agent.onTask.
+    for (const n of [1, 2, 3]) { lead.onTask({ type: 'system', subtype: 'task_started', task_id: `t${n}`, subagent_type: ROLES.gatherer.type, task_type: 'local_agent' }); ex.write(`notes-${n}.md`, `# Notes ${n}\n- claim | source | link (opened)\nGaps: none\n`); }
+    for (const n of [1, 2, 3]) lead.onTask({ type: 'system', subtype: 'task_notification', task_id: `t${n}`, status: 'completed', usage: { total_tokens: 1200 * n } });
     this.usage('lead', { cost: 0.3 });
     // Builder starts once the approach is fixed; Synthesizer and Skeptic follow the notes.
     this.startRole('builder', lead.name);
+    this.requests();
     this.startRole('synthesizer', lead.name);
     ex.write('synthesis.md', '# Synthesis\nSuperseded by REPORT.md where they differ.\n');
     this.usage('synthesizer', { cost: 0.2 });
@@ -152,6 +163,8 @@ export class StubExpedition {
     }
     hub.proposeLesson(p, this.agents.builder, 'core', 'Always say which result came from a software GPU.');
     hub.postSummary(p, lead, summary({ done: ['A round of the plan'], questions: ['Matt: is 1 MB fine?'], decisions_needed: [8] }));
+    // Phase 2: the Lead talks to its team through the scoped tool, and retires one member the same way.
+    hub.leadMessage(p, lead, this.agents.builder.name, 'Build against the frozen test.');
     // Build-verify loops: the second makes progress; the test passes.
     ex.loop({ number: 1, passing: 1, progress: true });
     ex.write('verify/VERDICT.md', '# Verdict\n1 PASS, 2 PARTIAL, 3 PASS\n');
@@ -166,6 +179,20 @@ export class StubExpedition {
     ex.write('REPORT.md', `# Report\n\n${howItRanMarkdown(howItRan(p.log.events, this.id))}\n`);
     for (const step of ['report', 'commit', 'push', 'pr', 'card']) ex.step(step, step === 'card' ? { title: `Expedition finished: ${this.question}` } : {});
     return this;
+  }
+
+  // Phase 2: requests that would have been cards (decision 71). A hard stop, a request a gatherer inside the Lead made
+  // that Auto cannot settle, and a write to a settings file: all denied or parked, none a card. A read is simply allowed.
+  // The answers are kept in `this.answers` (promises: the hub settles them on the spot, except where the check runs).
+  requests() {
+    const { hub, p } = this, { lead, builder } = this.agents;
+    this.answers ||= [];
+    const ask = (agent, tool, input, opts) => this.answers.push(hub.requestApproval(p, agent, tool, input, opts));
+    lead.noteSubagent({ tool_use_id: 'tu-1', agent_id: 'agent-1', agent_type: ROLES.gatherer.type });
+    ask(builder, 'Bash', { command: 'git push --force origin main' });
+    ask(lead, 'WebFetch', { url: 'https://example.org/benchmarks', prompt: 'the numbers' }, { toolUseID: 'tu-1', agentID: 'agent-1' });
+    ask(builder, 'Write', { file_path: join(p.dir, '.claude', 'settings.local.json'), content: '{}' });
+    ask(builder, 'Bash', { command: 'git status' });
   }
 
   // The Lead's one post_summary to the orchestrator, once the card step is logged.

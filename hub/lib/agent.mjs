@@ -6,8 +6,9 @@ import { cruxTools, cruxToolNames } from './tools.mjs';
 import { orchestratorPrompt, workerPrompt } from './prompts.mjs';
 import { rulesEntry, CONNECTOR_SERVERS } from './permission-rules.mjs';
 import { UsageLedger, baselineFor } from './usage.mjs';
-import { EFFORTS, EffortCeilings, modelLabel } from './agent-types.mjs';
+import { EFFORTS, EffortCeilings, modelLabel, modelId, effortLevel } from './agent-types.mjs';
 import { isNoOutputNudge } from './conductor.mjs';
+import { Expedition, ROLES as EXPEDITION_ROLES, DISALLOWED_TOOLS as EXPEDITION_DISALLOWED } from './expedition.mjs';
 
 // meta: what the hub wants to know about a message once Claude Code takes it in (onYield): a Conductor brief's request
 // id (decision 62), so a reminder goes only for a brief really delivered.
@@ -110,6 +111,25 @@ export class Agent {
   }
   cwdFor(toolUseID) { return (toolUseID && this.toolCwds?.get(toolUseID)) || null; }
 
+  // The Expedition module (plan 2b item 4): a gatherer's tool request arrives through its Lead's own permission callback,
+  // so it carries the Lead's name and tag. The hook sees which subagent made the call (agent_id, agent_type; absent on the
+  // Lead's own calls). Kept for the last 64 calls, by the SDK's tool call id. Changes no decision: it only lets the log say
+  // "a gatherer asked for this".
+  noteSubagent(input) {
+    if (!this.expedition || typeof input?.tool_use_id !== 'string' || typeof input.agent_id !== 'string' || !input.agent_id) return;
+    (this.toolSubagents ||= new Map()).set(input.tool_use_id, { id: input.agent_id, type: typeof input.agent_type === 'string' ? input.agent_type : null });
+    if (this.toolSubagents.size > 64) this.toolSubagents.delete(this.toolSubagents.keys().next().value);
+  }
+  // { id, type } of the subagent behind a permission request, or null when the Lead asked itself. agentID: the SDK's
+  // canUseTool field; the type comes from the hook (by tool call id), else from a task the hub counted for that id.
+  subagentFor(toolUseID, agentID = null) {
+    const seen = (toolUseID && this.toolSubagents?.get(toolUseID)) || null;
+    const id = agentID || seen?.id || null;
+    if (!id) return null;
+    const task = [...(this.subagents?.values() || [])].find(t => t.agent === id || t.taskId === id);
+    return { id, type: seen?.type || task?.type || null };
+  }
+
   // Decision 62: a Conductor brief reached Claude Code as input for this agent. Logged with the agent's name, so a
   // successor is never reminded of a brief it never had.
   noteDelivered(meta) {
@@ -130,6 +150,27 @@ export class Agent {
   userMessage(textMsg, attachments = []) {
     const text = this.hub.memory.personalize(textMsg || '');
     return { type: 'user', message: { role: 'user', content: userContent(text, attachments, this.project.attachments) }, parent_tool_use_id: null };
+  }
+
+  // The Lead's gatherer definition for the query's `agents` option (decision 68 C): the expedition-gatherer type file, with
+  // the model and effort the launch screen picked for the gatherers (hub.json defaults and the file otherwise). The Lead
+  // calls it with the Agent tool; the limit of 4 at once and one second round is in its file and brief. null for anyone else.
+  expeditionAgents() {
+    if (this.expeditionRole !== 'lead' || !this.expedition) return null;
+    const p = this.project;
+    const type = this.hub.agentTypes(p).get(EXPEDITION_ROLES.gatherer.type);
+    if (!type) return null;
+    const pick = new Expedition(p, this.expedition).state().started?.roles?.gatherer || {};
+    const model = modelId(pick.model) || type.model, effort = effortLevel(pick.effort) || type.effort;
+    return {
+      [type.name]: {
+        description: type.description || 'Answers one expedition sub-question with notes and sources',
+        prompt: type.prompt,
+        ...(type.tools?.length ? { tools: type.tools.filter(t => !t.startsWith('mcp__')) } : {}),
+        disallowedTools: EXPEDITION_DISALLOWED,
+        ...(model ? { model } : {}), ...(effort ? { effort } : {})
+      }
+    };
   }
 
   // The query options for this agent's next start. Kept apart from start() so tests can check them.
@@ -158,12 +199,13 @@ export class Agent {
       settingSources: ['user', 'project', 'local'],
       mcpServers: { crux: cruxTools(this.hub, p, this) },
       allowedTools: cruxToolNames(this),
-      disallowedTools: [...(this.role === 'orchestrator' ? ['NotebookEdit'] : []), ...(connectors ? [] : CONNECTOR_SERVERS)],
+      disallowedTools: [...(this.role === 'orchestrator' ? ['NotebookEdit'] : []), ...(this.expedition ? EXPEDITION_DISALLOWED : []), ...(connectors ? [] : CONNECTOR_SERVERS)],
+      ...(this.expeditionRole === 'lead' && this.expeditionAgents() ? { agents: this.expeditionAgents() } : {}),
       ...(connectors ? {} : { settings: { disableClaudeAiConnectors: true } }),
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
       // Only notes where the call runs (noteCwd); it never allows, denies or changes anything.
-      hooks: { PreToolUse: [{ hooks: [async input => { this.noteCwd(input); return {}; }] }] },
+      hooks: { PreToolUse: [{ hooks: [async input => { this.noteCwd(input); this.noteSubagent(input); return {}; }] }] },
       ...(builtIn?.length ? { tools: builtIn } : {}),
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
@@ -296,6 +338,8 @@ export class Agent {
         this.sessionId = m.session_id;
         this.project.log.append('agent_session', { agent: this.name, sessionId: m.session_id, model: m.model, effort: this.effort, agentType: this.type });
       }
+    } else if (m.type === 'system' && /^task_(started|progress|notification)$/.test(m.subtype) && this.expeditionRole === 'lead') {
+      this.onTask(m);
     } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
       // Decision 62: when this turn started (its first output since the last result), so the reminder knows which
       // briefs were delivered before it.
@@ -328,9 +372,46 @@ export class Agent {
     }
   }
 
+  // The Expedition module (decision 68 C, plan 2b item 5): the Lead's gatherers are Claude Code subagents inside its query.
+  // The SDK says when one starts, how far it has got, and how it ended; the hub counts them (the map's badge) and logs each
+  // as an expedition_subagent event. It does not cap them: the limit of 4 at once and one second round is in the Lead's
+  // file and brief. Background and housekeeping tasks (a shell, a watcher) are not gatherers and are left out.
+  onTask(m) {
+    if (m.ambient || m.skip_transcript || (m.task_type && m.task_type !== 'local_agent')) return;
+    const id = String(m.task_id || '');
+    if (!id) return;
+    const ex = new Expedition(this.project, this.expedition);
+    const live = (this.subagents ||= new Map());
+    if (m.subtype === 'task_started') {
+      if (live.has(id)) return;
+      const type = m.subagent_type || 'subagent';
+      live.set(id, { taskId: id, type, tokens: 0, startedAt: Date.now(), agent: null });
+      ex.subagent({ phase: 'started', subagentType: type, taskId: id });
+    } else if (m.subtype === 'task_progress') {
+      const t = live.get(id);
+      if (t && Number.isFinite(m.usage?.total_tokens)) t.tokens = m.usage.total_tokens;   // the watchdog's estimate between results (phase 3)
+    } else {
+      const t = live.get(id);
+      if (!t) return;   // not one the hub saw start (a restart in between): nothing to close
+      live.delete(id);
+      const tokens = Number.isFinite(m.usage?.total_tokens) ? m.usage.total_tokens : t.tokens;
+      ex.subagent({ phase: 'ended', subagentType: t.type, taskId: id, tokens, status: m.status || null });
+    }
+  }
+
+  // A new query cannot have the old one's subagents: any the log still shows as running ended with it.
+  closeOpenSubagents() {
+    const ex = new Expedition(this.project, this.expedition);
+    const open = new Map();
+    for (const e of ex.state().subagents) { if (e.phase === 'started') open.set(e.taskId, e); else open.delete(e.taskId); }
+    for (const e of open.values()) ex.subagent({ phase: 'ended', subagentType: e.subagentType, taskId: e.taskId, status: 'stopped' });
+    this.subagents = new Map();
+  }
+
   // A new query starts: its running totals start over, and the session it resumes (if any) is remembered, since
   // that session's first result already carries its earlier turns (decision 36).
   beginRun() {
+    if (this.expeditionRole === 'lead') this.closeOpenSubagents();
     this.ledger = new UsageLedger();
     this.sessionAtStart = this.sessionId;
   }

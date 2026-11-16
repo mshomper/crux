@@ -33,6 +33,7 @@ export class HudPainter {
     c.clearRect(0, 0, this.w, this.h);
     c.lineCap = 'round';
     this.edges(f);
+    this.expedition(f);
     this.aura(f);
     this.glass(f);
     this.rings(f);
@@ -45,7 +46,7 @@ export class HudPainter {
     const ringR = core.r * 1.62;
     for (const [id, s] of L.at) {
       const st = info.get(id);
-      if (!st) continue;
+      if (!st || st.cluster) continue;   // an expedition's spokes run from its Lead (expedition())
       const fade = st.fade ?? 1;
       const cp = bend(core, s, 0.17, L.bendMax);
       const len = Math.hypot(s.x - core.x, s.y - core.y) || 1;
@@ -90,6 +91,71 @@ export class HudPainter {
         c.setLineDash([]);
       }
     }
+  }
+
+  // The Expedition module: the Lead's spokes to its five stations, two arcs for the envelope (time outside, budget
+  // inside, clockwise from the top) and a mark at 90%, where the last tenth is kept for the report. Amber from 90%,
+  // never red (decision 31). exp: the cluster (expedition-map.js), L.cluster: where it sits (map-layout.js).
+  expedition({ L, t, exp, info }) {
+    const g = L.cluster;
+    if (!g || !exp) return;
+    const c = this.c, lead = L.at.get(g.leadId);
+    const amber = rgb(COLORS.amber, 1);
+    const k = clamp(g.k, 0, 1);
+    // spokes
+    if (lead) {
+      for (const id of g.ids) {
+        const s = L.at.get(id), st = info.get(id);
+        if (!s || !st || s.r < 4) continue;
+        const len = Math.hypot(s.x - lead.x, s.y - lead.y) || 1;
+        const u0 = (lead.r + 8) / len, u1 = 1 - (s.r + 6) / len;
+        if (u1 <= u0) continue;
+        const ax = lead.x + (s.x - lead.x) * u0, ay = lead.y + (s.y - lead.y) * u0, bx = lead.x + (s.x - lead.x) * u1, by = lead.y + (s.y - lead.y) * u1;
+        c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by);
+        c.setLineDash([]);
+        c.strokeStyle = rgb(COLORS.cyan, st.state === 'asleep' ? 0.1 : 0.2);
+        c.lineWidth = st.state === 'asleep' ? 0.9 : 1.6;
+        c.stroke();
+        if (st.state === 'working' || st.state === 'starting') {
+          c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by);
+          c.setLineDash([2, 9]); c.lineDashOffset = -t * 26;
+          c.strokeStyle = rgb(COLORS.cyan, 0.6); c.lineWidth = 1.4; c.stroke();
+          c.setLineDash([]);
+        }
+      }
+      // two short arcs and a dotted ring round the Lead
+      const R = lead.r * 1.55;
+      c.strokeStyle = rgb(COLORS.cyan, 0.4 * k); c.lineWidth = 2;
+      for (const a0 of [-0.95, Math.PI - 0.95]) { c.beginPath(); c.arc(lead.x, lead.y, R, a0, a0 + 1.9); c.stroke(); }
+      c.setLineDash([1, 5]); c.lineDashOffset = t * 6; c.lineWidth = 1;
+      c.strokeStyle = rgb(COLORS.accent, 0.3 * k);
+      c.beginPath(); c.arc(lead.x, lead.y, lead.r * 2.2, 0, TAU); c.stroke();
+      c.setLineDash([]);
+    }
+    if (g.Ro < 8) return;
+    // the envelope: a faint track for each, then how much is used
+    const start = -Math.PI / 2;
+    const ring = (R, pct, { width, dash, warm }) => {
+      c.setLineDash([]);
+      c.strokeStyle = rgb(COLORS.cyan, 0.12 * k); c.lineWidth = 1;
+      c.beginPath(); c.arc(g.x, g.y, R, 0, TAU); c.stroke();
+      if (pct == null || pct <= 0) return;
+      const col = pct >= 0.9 ? COLORS.amber : warm;
+      c.save();
+      c.lineCap = 'butt';
+      c.shadowColor = rgb(col, 0.8); c.shadowBlur = dash ? 4 : 10;
+      c.strokeStyle = rgb(col, 0.95 * k); c.lineWidth = width;
+      if (dash) c.setLineDash(dash);
+      c.beginPath(); c.arc(g.x, g.y, R, start, start + TAU * Math.min(1, pct)); c.stroke();
+      c.restore();
+    };
+    ring(g.Ro, exp.time.pct, { width: 3, warm: COLORS.cyan });
+    ring(g.Rb, exp.budget.pct, { width: 2, dash: [5, 4], warm: COLORS.white });
+    // the 90% mark across both rings
+    const a90 = start + TAU * 0.9;
+    c.strokeStyle = amber; c.globalAlpha = 0.85 * k; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(g.x + Math.cos(a90) * (g.Rb - 5), g.y + Math.sin(a90) * (g.Rb - 5)); c.lineTo(g.x + Math.cos(a90) * (g.Ro + 7), g.y + Math.sin(a90) * (g.Ro + 7)); c.stroke();
+    c.globalAlpha = 1;
   }
 
   rings({ L, e, t, boot, core: info }) {
@@ -164,7 +230,7 @@ export class HudPainter {
     const c = this.c;
     for (const [id, s] of L.at) {
       const st = info.get(id);
-      if (!st) continue;
+      if (!st || (st.cluster && s.r < 4)) continue;   // an expedition station still waiting on its Lead in the lane
       const fade = st.fade ?? 1;
       // A worker's ring is its model's hue (decision 20), also while it waits on you: only You turns red
       // (decision 31; a worker shows a red count badge instead). Errors are amber, a handoff gold.

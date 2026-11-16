@@ -20,6 +20,11 @@ export const ROLES = {
 };
 export const HUB_ROLES = Object.keys(ROLES).filter(r => ROLES[r].runs === 'hub');
 export const roleOfType = type => Object.keys(ROLES).find(r => ROLES[r].type === type) || null;
+// Spec lesson 9: a subagent once created a stray scheduled task. No expedition agent (the Lead, the five hub roles, and
+// the gatherers inside the Lead) gets scheduling or trigger tools; settings files are denied on write (hub.mjs).
+export const DISALLOWED_TOOLS = ['CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger', 'ScheduleWakeup'];
+// Gatherers at once, and rounds: enforced in expedition-lead.md and the Lead's brief; the hub counts and logs them.
+export const GATHERER_LIMIT = 4;
 export const defaultRoles = () => Object.fromEntries(Object.entries(ROLES).map(([r, x]) => [r, { type: x.type, model: x.model, effort: x.effort }]));
 
 // Spec 4.4: 6 hours and 7% of the plan, by default. dollars: the cap the watchdog enforces (null until Matt confirms the
@@ -188,9 +193,10 @@ export class Expedition {
   }
 
   // A subagent (gatherer) started or ended inside the Lead (phase 2 writes these from the SDK's task messages).
-  subagent({ phase, subagentType, taskId, tokens = null }) {
+  // status (ended only): how the task ended, as the SDK says it: completed, failed or stopped. agent: the SDK's id for it when known.
+  subagent({ phase, subagentType, taskId, tokens = null, status = null, agent = null }) {
     if (!['started', 'ended'].includes(phase)) throw new Error('A subagent event is started or ended.');
-    return this.record('expedition_subagent', { phase, subagentType: text(subagentType, 'The subagent type'), taskId: text(taskId, 'The task id'), ...(tokens != null ? { tokens } : {}) });
+    return this.record('expedition_subagent', { phase, subagentType: text(subagentType, 'The subagent type'), taskId: text(taskId, 'The task id'), ...(tokens != null ? { tokens } : {}), ...(status ? { status } : {}), ...(agent ? { agent } : {}) });
   }
 
   // ---------- state, rebuilt from the log ----------

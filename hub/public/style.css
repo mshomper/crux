@@ -119,6 +119,9 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .thread .last{grid-column:2/4;font-size:12.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .thread .badge{font-size:11px;font-weight:700;min-width:20px;height:20px;border-radius:999px;display:grid;place-items:center;padding:0 6px;background:var(--bad);color:#2a0609;box-shadow:0 0 10px -2px rgba(242,114,122,.7)}
 .thread .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+/* the Expedition module's one row: a calm count of its live agents (never the red of a card waiting on you) */
+.thread .exp-r{display:inline-flex;align-items:center;gap:6px}
+.thread .exp-n{font-size:11px;font-weight:600;min-width:18px;height:18px;border-radius:999px;display:grid;place-items:center;padding:0 5px;color:var(--faint);border:1px solid var(--line2)}
 .dot.working,.dot.starting{background:var(--hud-cyan);box-shadow:0 0 0 3px rgba(111,227,255,.14),0 0 8px rgba(111,227,255,.6)}
 .dot.idle{background:var(--good)}
 .dot.error{background:var(--bad)}

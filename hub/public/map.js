@@ -25,8 +25,14 @@ import { robot, robotKey, conductorBot } from './robots.js';
 import { nameHtml, nameText, namesInHtml, namesInText, vchip } from './agent-name.js';
 import { hubLayout, hubBays, hubFeed } from './map-hub.js';
 import { SectorView, conductorCore } from './map-sectors.js';
+import { clusterCaption, PARKED_TIP } from './expedition-map.js';
 
 const ICON = {
+  // the Expedition module: its Lead (a hexagon), a role not started yet (a dashed circle), the gatherer search mark, a drawn Stop
+  hex: '<path d="M12 3.2l7.6 4.4v8.8L12 20.8l-7.6-4.4V7.6z"/>',
+  slot: '<circle cx="12" cy="12" r="6.5" stroke-dasharray="2 3"/>',
+  search: '<circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15l5 5"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="1.5"/>',
   agent: '<rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 4v3M9.5 12h.01M14.5 12h.01"/>',
   you: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c1.2-3.6 4-5.5 7-5.5s5.8 1.9 7 5.5"/>',
   board: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15M14.5 4.5v15"/>',
@@ -41,9 +47,11 @@ const DUR = 0.62;           // seconds for the zoom
 const GLYPHS = '█▓▒░<>/\\|=+*#01';
 
 export class LiveMap {
-  constructor(slot, { open, openIn } = {}) {
+  constructor(slot, { open, openIn, stopExpedition } = {}) {
     this.slot = slot;
     this.openThread = open || (() => {});
+    this.stopExpedition = stopExpedition || (() => {});   // (expedition id): the app asks first, then tells the hub
+    this.cluster = null;                                   // the running expedition (expedition-map.js), or null
     this.openIn = openIn || (() => {});   // (project name, thread): a project on the All projects map
     this.hubMode = false;
     this.places = [];
@@ -102,6 +110,11 @@ export class LiveMap {
         <canvas class="hud-lines" aria-hidden="true"></canvas>
         <canvas class="hud-glow" aria-hidden="true"></canvas>
         <div class="hud-stations"></div>
+        <div class="hud-exp" hidden>
+          <b class="ex-t"></b><span class="ex-s"></span>
+          <button type="button" class="ex-stop" data-exp-stop>${svg('stop')}</button>
+        </div>
+        <button type="button" class="ex-warn" data-exp-warn hidden>${svg('alert')}</button>
         <div class="hud-read hud-read-l">
           <span class="k">Latest</span>
           <span class="hud-ticker" data-r="ticker" aria-live="off"></span>
@@ -128,6 +141,8 @@ export class LiveMap {
     this.glCanvas = q('.hud-glow');
     this.lineCanvas = q('.hud-lines');
     this.stationsEl = q('.hud-stations');
+    this.expEl = q('.hud-exp');
+    this.warnEl = q('.ex-warn');
     this.feedEl = q('.tele-feed ol');
     this.holderEl = q('.tele-holder');
     this.r = Object.fromEntries([...this.slot.querySelectorAll('[data-r]')].map(el => [el.dataset.r, el]));
@@ -138,6 +153,9 @@ export class LiveMap {
       // decision 57 C: ALL goes up to every project; a project's bay, sector, label or telemetry line opens its
       // orchestrator; "+N more" closes the map onto the All projects column (already the one in focus), where they are
       if (e.target.closest('[data-up]')) { this.needsPop.hide(); this.readout.hide(); return this.go('all'); }
+      // the Expedition module: Stop asks the app (which confirms first); the warning mark only explains itself
+      if (e.target.closest('[data-exp-stop]')) { if (this.cluster) this.stopExpedition(this.cluster.id); return; }
+      if (e.target.closest('[data-exp-warn]')) return;
       const pj = e.target.closest('[data-pj]');
       if (pj) { this.needsPop.hide(); this.readout.hide(); return this.goProject(pj.dataset.pj); }
       if (e.target.closest('[data-open-all]')) return this.go('all');
@@ -257,6 +275,7 @@ export class LiveMap {
     this.info.set('you', { id: 'you', kind: 'you', name: 'You', thread: this.multi ? 'all' : 'needs', state: you ? 'needs' : 'idle', needs: you > 0, traffic: 0.5, sub: you ? `${you} waiting` : 'all clear' });
     // the Board belongs to one project: the hub map leaves it out
     if (!hubMode) this.info.set('board', { id: 'board', kind: 'board', name: 'Board', thread: 'board', state: 'idle', needs: false, traffic: 0.35, sub: `${board.decisions} decision${board.decisions === 1 ? '' : 's'} · ${board.entries} entr${board.entries === 1 ? 'y' : 'ies'}` });
+    this.applyCluster(hubMode ? null : this.model.cluster());
     this.syncStations();
     if (hubMode) this.sectors.set(this.places);
     this.syncUp();
@@ -266,6 +285,43 @@ export class LiveMap {
     this.syncText(core, needs);
     this.syncFeed();
     if (this.reduced) this.drawStatic();
+  }
+
+  // The Expedition module: the running expedition's Lead and role stations join the station list (marked cluster, so the
+  // orchestrator's spokes and streams skip them), and the caption and warning mark under it are written.
+  applyCluster(cl) {
+    for (const [id, s] of this.info) if (s.cluster) this.info.delete(id);
+    this.cluster = cl;
+    if (cl) {
+      const mk = (s, extra = {}) => ({
+        id: s.id, kind: s.id.startsWith('slot:') ? 'slot' : 'worker', cluster: true, role: s.role, name: s.role, thread: s.thread, state: s.state, sub: s.sub,
+        model: s.model, effort: s.effort, ctx: s.ctx, activity: s.activity, goal: s.sub, needs: false, traffic: 0.4, ...extra
+      });
+      this.info.set(cl.lead.id, mk(cl.lead, { lead: true, name: cl.name, sub: cl.phase, gatherers: cl.gatherers, summary: `${cl.name}: ${cl.phase}` }));
+      for (const s of cl.stations) this.info.set(s.id, mk(s));
+    }
+    this.syncCluster();
+  }
+
+  // The words under the cluster, its Stop control and the amber mark for parked items.
+  syncCluster() {
+    const cl = this.cluster;
+    this.panel.classList.toggle('has-exp', !!cl);
+    this.expEl.hidden = !cl;
+    this.warnEl.hidden = !cl || !cl.parked;
+    if (!cl) return;
+    const cap = clusterCaption(cl);
+    const html = `${esc(cap.title)}|${esc(cap.time)}|${esc(cap.budget)}|${cl.amber}`;
+    if (this.expEl.dataset.html !== html) {
+      this.expEl.dataset.html = html;
+      this.expEl.querySelector('.ex-t').textContent = cap.title;
+      this.expEl.querySelector('.ex-s').innerHTML = `<span>${esc(cap.time)}</span><span>${esc(cap.budget)}</span>`;
+      this.expEl.classList.toggle('amber', cl.amber);
+      const stop = this.expEl.querySelector('.ex-stop');
+      stop.title = 'Stop the expedition and write it up';
+      stop.setAttribute('aria-label', 'Stop the expedition and write it up');
+    }
+    if (cl.parked) { const tip = PARKED_TIP(cl.parked); if (this.warnEl.title !== tip) { this.warnEl.title = tip; this.warnEl.setAttribute('aria-label', tip); } }
   }
 
   // The ALL button (decision 57 C): in a project's own map while the hub runs more than one project. The Conductor's
@@ -321,20 +377,25 @@ export class LiveMap {
         el = document.createElement('button');
         el.type = 'button';
         el.dataset.id = s.id;
-        el.innerHTML = `<span class="hs-body">${svg(s.kind === 'worker' ? 'agent' : s.kind)}<span class="hs-badge" hidden></span></span><span class="hs-label"><b></b><i></i></span>`;
+        const icon = s.lead ? 'hex' : s.kind === 'slot' ? 'slot' : s.kind === 'worker' ? 'agent' : s.kind;
+        // the Lead: a hexagon with LEAD in it, and a pink pill counting the gatherers running inside it
+        const lead = s.lead ? `<b class="lead-t">LEAD</b>` : '';
+        const pill = s.lead ? `<span class="hs-gath" hidden>${svg('search', 'hud-i')}<span class="g-x">×</span><b></b><span class="g-w"> gatherers</span></span>` : '';
+        el.innerHTML = `<span class="hs-body">${svg(icon)}${lead}<span class="hs-badge" hidden></span></span><span class="hs-label"><b></b><i></i></span>${pill}`;
         this.stationsEl.append(el);
         this.stationEls.set(s.id, el);
       }
       const sub = s.kind === 'ghost' ? 'handing over'
+        : s.cluster ? s.sub
         : s.kind === 'worker' ? (s.needs ? 'needs you' : s.handoff === 'writing' ? 'writing handoff' : s.handoff === 'overlap' ? 'handing over' : s.activity || s.state) : s.sub;
       // Decision 31 and M008 8: only You turns fully red. A worker that is waiting on you keeps its model hue
       // and wears a red badge with how many things wait.
       const asking = s.kind === 'worker' && s.needs;
-      const cls = `hs ${s.kind} ${s.state || ''} ${s.handoff ? 'handoff' : ''} ${s.needs ? (asking ? 'asks' : 'needs') : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}`;
+      const cls = `hs ${s.kind} ${s.state || ''} ${s.handoff ? 'handoff' : ''} ${s.needs ? (asking ? 'asks' : 'needs') : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}${s.cluster ? ' cl' : ''}${s.lead ? ' lead' : ''}`;
       // The station body takes its model's hue too (decision 20).
       const hue = s.kind === 'worker' ? hueOf(s.model) : null;
       const full = hue && !s.handoff && s.state !== 'error' ? `${cls} mh` : cls;   // handoff gold and the error amber win
-      if (s.kind === 'worker') {   // its model family's robot (M015), redrawn only when its look changes
+      if (s.kind === 'worker' && !s.lead) {   // its model family's robot (M015), redrawn only when its look changes
         const key = robotKey(s, asking);
         if (el.dataset.bot !== key) { el.dataset.bot = key; el.querySelector('.hs-body > svg').outerHTML = robot(s, { size: 28, needs: asking, cls: 'hud-i' }); }
       }
@@ -343,13 +404,22 @@ export class LiveMap {
       if (badge && badge.textContent !== String(n || '')) { badge.textContent = n ? String(n) : ''; badge.hidden = !n; }
       if (el.className !== full) el.className = full;
       if ((el.style.getPropertyValue('--mh') || null) !== hue) hue ? el.style.setProperty('--mh', hue) : el.style.removeProperty('--mh');
-      el.dataset.thread = s.thread;
+      if (s.thread) el.dataset.thread = s.thread; else delete el.dataset.thread;
       // an outgoing orchestrator (ghost) by its project and holder number, "atlas v5"; workers by their own names
-      const label = s.kind === 'ghost' ? nameText(s.name, this.model.project?.name) : s.kind === 'worker' ? s.name : s.name.toUpperCase();
-      const b = el.querySelector('b'), i = el.querySelector('i');
+      // (an expedition's Lead in the lane: "expedition name", with the gatherer count)
+      const label = s.kind === 'ghost' ? nameText(s.name, this.model.project?.name) : s.lead ? `${s.name}${s.gatherers ? ` · ${s.gatherers}` : ''}` : s.kind === 'worker' || s.kind === 'slot' ? s.name : s.name.toUpperCase();
+      const b = el.querySelector('.hs-label b'), i = el.querySelector('i');
       if (b.textContent !== label) b.textContent = label;
       if (i.dataset.text !== sub) this.decode(i, sub);
-      const tip = s.kind === 'worker' ? `${s.name} (${describe(s)}): ${s.goal || s.state}` : s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? (s.needs ? 'Point here to see and answer what is waiting' : 'Nothing waiting') : 'Open the memory board';
+      if (s.lead) {
+        const pill = el.querySelector('.hs-gath');
+        const n = String(s.gatherers || '');
+        pill.hidden = !s.gatherers;
+        if (pill.querySelector('b').textContent !== n) pill.querySelector('b').textContent = n;
+        const ptip = `${s.gatherers} gatherer${s.gatherers === 1 ? '' : 's'} running inside the Lead`;
+        if (pill.title !== ptip) pill.title = ptip;
+      }
+      const tip = s.lead ? `Lead of the expedition ${s.name} (${describe(s)}): ${s.phase || s.sub}. Opens its thread` : s.kind === 'slot' ? `${s.name}: not started yet` : s.cluster ? `${s.name} (${describe(s)}): ${s.sub}` : s.kind === 'worker' ? `${s.name} (${describe(s)}): ${s.goal || s.state}` : s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? (s.needs ? 'Point here to see and answer what is waiting' : 'Nothing waiting') : 'Open the memory board';
       if (el.title !== tip) { el.title = tip; el.setAttribute('aria-label', `${label}, ${sub}`); }
     }
     for (const [id, el] of this.stationEls) if (!seen.has(id)) { el.remove(); this.stationEls.delete(id); }
@@ -478,8 +548,9 @@ export class LiveMap {
     } else {
       // the ALL button takes the strip's left end; You and the workers move over for it
       const lead = this.panel.classList.contains('up') ? (this.phone ? 36 : 52) : 0;
-      A = stripLayout(lead ? { ...slot, left: slot.left + lead, width: slot.width - lead } : slot, this.workers, this.phone);
-      B = radialLayout(tgt, this.workers, this.phone);
+      const cl = this.cluster ? { lead: { id: this.cluster.lead.id }, stations: this.cluster.stations.map(s => ({ id: s.id })) } : null;
+      A = stripLayout(lead ? { ...slot, left: slot.left + lead, width: slot.width - lead } : slot, this.workers, this.phone, cl);
+      B = radialLayout(tgt, this.workers, this.phone, cl);
       L = blendLayouts(A, B, E, origin);
       this.H = null;
       this.sectors.hide();
@@ -492,7 +563,17 @@ export class LiveMap {
     this.panel.style.setProperty('--cy', L.core.y.toFixed(1) + 'px');
     this.L = L;
     this.size = { w, h };
+    this.placeCluster(L);
     return L;
+  }
+
+  // The caption, Stop and the warning mark sit under and beside the cluster's arcs; they show once the map is open.
+  placeCluster(L) {
+    const g = L.cluster;
+    if (!g || !this.cluster) return;
+    const w = Math.round(g.caption.w);
+    Object.assign(this.expEl.style, { width: w + 'px', transform: `translate(${(g.caption.x - w / 2).toFixed(1)}px,${g.caption.y.toFixed(1)}px)` });
+    this.warnEl.style.transform = `translate(${(g.warn.x - 13).toFixed(1)}px,${(g.warn.y - 13).toFixed(1)}px)`;
   }
 
   // When a station joins or leaves, the others glide to their new places instead of jumping.
@@ -532,7 +613,10 @@ export class LiveMap {
       el.style.transform = `translate3d(${s.x.toFixed(1)}px,${s.y.toFixed(1)}px,0)`;
       el.style.setProperty('--r', s.r.toFixed(1) + 'px');
       const f = info.get(id)?.fade;
-      el.style.opacity = f == null ? '' : String(clamp(f, 0, 1));
+      // an expedition's role stations wait on their Lead in the lane (radius 0): nothing of them shows until the map opens
+      const folded = !!info.get(id)?.cluster && !info.get(id)?.lead && s.r < 6;
+      el.style.opacity = f == null && !folded ? '' : String(folded ? 0 : clamp(f, 0, 1));
+      el.style.pointerEvents = folded ? 'none' : '';
     }
   }
 
@@ -565,13 +649,13 @@ export class LiveMap {
     o = this.streams(o, L, info);
     try { this.renderer.draw(this.buf, o, zooming ? 0.35 : lerp(0.72, 0.6, E)); }
     catch (err) { console.warn('Live map renderer stopped:', err); this.renderer = null; this.setMotion(); return; }
-    this.hud.paint({ L, e: E, t: now / 1000, boot: this.boot, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: this.fx.pings, now });
+    this.hud.paint({ L, e: E, t: now / 1000, boot: this.boot, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: this.fx.pings, now, exp: this.cluster });
     if (this.H) this.sectors.draw(this.hud.c, { L, H: this.H, e: E, t: now / 1000, still: false, now, size: this.size });
     this.positionStations(L, info);
     if (now - (this.lastText || 0) > 1000) {
       this.lastText = now;
       // activity lines expire after a while; refresh the words without waiting for the next event
-      if (this.model.project) { this.workers = this.workers.map(w => ({ ...w, activity: this.model.activityOf(w.id) })); for (const w of this.workers) this.info.set(w.id, w); this.syncStations(); this.syncFeed(); }
+      if (this.model.project) { this.workers = this.workers.map(w => ({ ...w, activity: this.model.activityOf(w.id) })); for (const w of this.workers) this.info.set(w.id, w); if (!this.hubMode) this.applyCluster(this.model.cluster()); this.syncStations(); this.syncFeed(); }
     }
     requestAnimationFrame(t => this.frame(t));
   }
@@ -596,7 +680,7 @@ export class LiveMap {
     }
     for (const [id, s] of L.at) {
       const st = info.get(id);
-      if (!st || st.kind !== 'worker' || !['working', 'starting'].includes(st.state) || k >= 12) continue;
+      if (!st || st.kind !== 'worker' || st.cluster || !['working', 'starting'].includes(st.state) || k >= 12) continue;
       const len = Math.hypot(s.x - L.core.x, s.y - L.core.y) || 1;
       o = stream(this.buf, o, L.core, bend(L.core, s, 0.17, L.bendMax), s, this.core.t, hue, {
         u0: Math.min(0.5, (L.core.r * 1.12) / len), u1: 1 - (s.r + 4) / len, n: L.core.r < 20 ? 5 : 9,
@@ -613,7 +697,7 @@ export class LiveMap {
     const info = this.withTransitions(L, performance.now());
     this.renderer?.clear?.();
     this.core.settle();   // the still shows the sphere at its level, with no motion
-    this.hud.paint({ L, e: this.e, t: 0, boot: 1, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: [], now: 0, staticCore: true });
+    this.hud.paint({ L, e: this.e, t: 0, boot: 1, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: [], now: 0, staticCore: true, exp: this.cluster });
     if (this.H) this.sectors.draw(this.hud.c, { L, H: this.H, e: this.e, t: 0, still: true, now: 0, size: this.size });
     this.positionStations(L, info);
   }

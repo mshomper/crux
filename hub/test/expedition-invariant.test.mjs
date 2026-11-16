@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { recordAgents, stubHub, StubExpedition, quietMark, quietProblems } from './helpers/expedition-stub.mjs';
 
 const sent = recordAgents();
-const fresh = () => { sent.length = 0; const env = stubHub(); const mark = quietMark(env); return { env, mark, ex: new StubExpedition(env) }; };
+// Phase 2 reruns it at Auto, where requests are judged and can be parked (at Ask they would all wait for an orchestrator).
+const fresh = () => { sent.length = 0; const env = stubHub({ level: 'auto' }); const mark = quietMark(env); return { env, mark, ex: new StubExpedition(env) }; };
 const summary = (over = {}) => ({ done: [], changed: [], questions: [], decisions_needed: [], blocked_on: [], next_step: '', visuals: [], approvals: [], open_questions: [], ...over });
 
 test('a whole expedition life sends the orchestrator nothing, opens no card and notifies nobody', async () => {
@@ -30,6 +31,20 @@ test('a whole expedition life sends the orchestrator nothing, opens no card and 
   assert.equal(env.hub.pendingLessons(env.p).length, 0);
   // The Lead's own mid-run summary stayed in its thread.
   assert.equal(sent.filter(([name]) => name === env.orch.name).length, 0);
+  // Phase 2: a hard stop, a gatherer's unclear request and a settings-file write were refused or parked, never a card;
+  // a read went through. The Lead's message to its builder reached the builder only.
+  const answers = await Promise.all(ex.answers);
+  assert.deepEqual(answers.map(a => a.behavior), ['deny', 'deny', 'deny', 'allow']);
+  assert.match(answers[0].message, /^Parked, not allowed:/);
+  assert.match(answers[2].message, /^Not allowed: .*settings file/);
+  const parked = env.p.log.ofType('expedition_parked').filter(e => e.kind === 'request');
+  assert.equal(parked.length, 2, 'the hard stop and the web fetch; the settings write is denied, not parked');
+  assert.deepEqual(parked.find(e => e.tool === 'WebFetch').subagent, { id: 'agent-1', type: 'expedition-gatherer' });
+  assert.equal(env.hub.approvals.size, 0);
+  assert.equal(env.p.log.ofType('permission_answer').filter(e => e.thread === 'orchestrator').length, 0);
+  assert.deepEqual(sent.filter(([name, t]) => name === ex.agents.builder.name && t.startsWith('[From the Lead')).map(([, t]) => t.split('\n')[1]), ['Build against the frozen test.']);
+  // The gatherers came in as the SDK's task messages and are all counted as ended.
+  assert.deepEqual([ex.ex.runningSubagents(), env.p.log.ofType('expedition_subagent').length], [0, 6]);
 });
 
 test('after the final summary the orchestrator gets exactly one message, once, and still no card', async () => {
