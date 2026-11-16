@@ -2,6 +2,7 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES } from './expedition.mjs';
+import { howItRan } from './expedition-report.mjs';
 
 const text = s => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 const list = z.array(z.string()).optional().default([]);
@@ -190,7 +191,35 @@ export function cruxTools(hub, project, agent) {
           goal: z.string().max(120).optional().describe('One plain line, under 80 characters: what this agent is for.'),
           task: z.string().describe('The full task as its briefing.')
         },
-        attempt('Not started', ({ type, goal, task }) => { const w = hub.leadStart(project, agent, { type, goal, task }); return `Started ${w.name} (${hub.describeSettings(w)}).`; }))
+        attempt('Not started', ({ type, goal, task }) => { const w = hub.leadStart(project, agent, { type, goal, task }); return `Started ${w.name} (${hub.describeSettings(w)}).`; })),
+
+      // The structured tools (plan section 2, item 9): the Lead puts the events and DECISIONS.md lines in the log through the
+      // hub, rather than writing JSON lines itself. Each is the Expedition class's own method, for this Lead's expedition only.
+      tool('expedition_decide', 'Log one decision you made on the user\'s behalf, inside the brief: it becomes the next numbered line of DECISIONS.md and an event the report lists. Say what, why, and who made it (you, or the Advisor).',
+        { text: z.string().describe('The decision, in one plain sentence.'), reason: z.string().describe('Why.'), maker: z.string().optional().describe('Who made it: leave out for yourself, or give the Advisor\'s name.') },
+        attempt('Not logged', ({ text: what, reason, maker }) => { const ev = hub.expeditionOf(project, agent).decide({ text: what, reason, maker: maker || agent.name }); return `Logged as decision ${ev.number}.`; })),
+
+      tool('expedition_park', 'Park a line of work that is outside the brief, with the reason. It is never guessed at: it goes in the report as a proposed next expedition.',
+        { text: z.string().describe('What was parked, in one plain sentence.'), reason: z.string().describe('Why it is outside the brief.') },
+        attempt('Not parked', ({ text: what, reason }) => { hub.expeditionOf(project, agent).park({ text: what, reason, maker: agent.name }); return 'Parked; it is listed in the report.'; })),
+
+      tool('expedition_close_gate', 'Close the plan gate, once: after the Advisor has reviewed the plan and you have amended test/ as needed. The hub hashes test/ and logs the Advisor\'s verdict and your amendments; after this nobody changes test/.',
+        { verdict: z.string().describe('The Advisor\'s verdict in a line, e.g. "approve with changes".'), amendments: z.array(z.string()).optional().default([]).describe('The amendments made to the test at the gate, one line each. Empty if none.') },
+        attempt('Gate not closed', ({ verdict, amendments }) => `Gate closed. The success test is frozen (hash ${hub.expeditionOf(project, agent).gate({ verdict, amendments }).testHash.slice(0, 12)}); building and verifying can start.`)),
+
+      tool('expedition_loop_result', 'Log the end of one build-verify loop: how many success-test items pass now. The hub numbers the loop and decides whether it made progress (more items passing than any earlier loop). Two loops in a row with no progress end the expedition.',
+        { passing: z.number().int().min(0).describe('Items passing after this loop.') },
+        attempt('Not logged', ({ passing }) => {
+          const ex = hub.expeditionOf(project, agent), loops = ex.state().loops;
+          const progress = passing > Math.max(0, ...loops.map(l => l.passing));
+          const ev = ex.loop({ number: loops.length + 1, passing, progress });
+          const stuck = !progress && loops.length > 0 && !loops.at(-1).progress;
+          return `Loop ${ev.number}: ${passing} passing, ${progress ? 'progress' : 'no progress'}.${stuck ? ' Two loops in a row made no progress: call expedition_finish with reason no-progress and write the report.' : ''}`;
+        })),
+
+      tool('expedition_finish', 'End the expedition from your side: the success test passes (passed), or two loops made no progress (no-progress). The hub then retires the others and runs the end (report copied, branch pushed, draft PR). Then write REPORT.md; send your one summary only when the hub tells you the end is done. Time and budget stops come from the hub, not from you.',
+        { reason: z.enum(['passed', 'no-progress']) },
+        attempt('Not finished', ({ reason }) => { const ex = hub.expeditionOf(project, agent); ex.stop({ reason, totals: howItRan(project.log.events, ex.id).totals }); return `Stopped (${reason}). Write the report now.`; }))
     );
   }
 
@@ -236,6 +265,6 @@ export function cruxToolNames(agent) {
   if (agent.predecessor) names.push('ask_predecessor');
   if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'handoff_worker', 'answer_permission', 'mark_entry_done');
   if (agent.role === 'orchestrator') names.push('restart_hub', 'reply_to_conductor');   // decisions 47 and 62
-  if (agent.expeditionRole === 'lead') names.push('list_agents', 'message_agent', 'retire_worker', 'start_worker');   // decision 68 C: scoped to its expedition (hub.leadAgents and the like)
+  if (agent.expeditionRole === 'lead') names.push('list_agents', 'message_agent', 'retire_worker', 'start_worker', 'expedition_decide', 'expedition_park', 'expedition_close_gate', 'expedition_loop_result', 'expedition_finish');   // decision 68 C: scoped to its expedition (hub.leadAgents and the like)
   return names.map(n => `mcp__crux__${n}`);
 }
