@@ -9,13 +9,10 @@ html[data-hud]{--hud-edge:rgba(111,227,255,.22);--hud-edge2:rgba(111,227,255,.4)
   --hud-plate:rgba(18,26,37,.82);--hud-plate-red:rgba(30,16,22,.78);--hud-deep:rgba(10,16,24,.85);--br:14px;--cut:12px}
 @property --br{syntax:"<length>";inherits:true;initial-value:14px}
 
-/* ---------- the shell: hairlines, a faint grid, glass ---------- */
+/* ---------- the shell: hairlines, glass ---------- */
 html[data-hud] .side{border-right-color:var(--hud-line);background:linear-gradient(180deg,#0d131b,#0a0e14)}
 html[data-hud] .side-foot{border-top-color:var(--hud-line)}
-html[data-hud] .main{background:
-  linear-gradient(rgba(111,227,255,.028) 1px,transparent 1px) 0 0/28px 28px,
-  linear-gradient(90deg,rgba(111,227,255,.028) 1px,transparent 1px) 0 0/28px 28px,
-  radial-gradient(ellipse at 50% 0,rgba(60,120,255,.07),transparent 60%)}
+/* the page backdrop (glows, contours, glass) lives in hud-background.css; the old square grid is gone */
 html[data-hud] .main-head{border-bottom-color:var(--hud-line);position:relative;background:linear-gradient(180deg,rgba(14,22,34,.6),rgba(8,12,18,.2))}
 html[data-hud] .main-head::after{content:"";position:absolute;left:0;bottom:-1px;width:min(260px,40%);height:1px;background:linear-gradient(90deg,var(--hud-cyan),transparent);opacity:.7;pointer-events:none}
 html[data-hud] .title-block h1{font:600 13px/1.3 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--hud-ice)}

@@ -1,0 +1,32 @@
+/* Crux hub page backdrop (Matt's pick, 2026-11-16: frosted glass with topographic contours, a little muted).
+   Replaces the old square grids. One backdrop layer sits behind the whole app: soft blurred colour glows that drift
+   very slowly, with a faint contour image (hud-background/topo.svg) inside them. The side panel, header, message
+   plates and input are frosted glass over it; text stays on dark plates. Cyan, violet and blue only: no red
+   (decision 31). Reduced motion freezes the glows. Loaded after hud.css and map.css; all of it hangs off
+   html[data-hud], so removing that attribute returns the plain app. */
+html[data-hud] .app{position:relative;isolation:isolate;background:#070b11}
+html[data-hud] .app::before,html[data-hud] .app::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none}
+html[data-hud] .app::before{background:
+  radial-gradient(520px 420px at 78% 24%,rgba(111,227,255,.14),transparent 70%),
+  radial-gradient(640px 520px at 40% 78%,rgba(142,100,255,.12),transparent 72%),
+  radial-gradient(520px 460px at 8% 14%,rgba(60,120,255,.14),transparent 70%),
+  radial-gradient(circle at 52% 43%,rgba(111,227,255,.2),transparent 110px),
+  radial-gradient(circle at 34% 31%,rgba(160,120,255,.17),transparent 100px),
+  radial-gradient(ellipse 120% 100% at 50% 40%,transparent 50%,rgba(0,0,0,.35) 100%),
+  #070b11;animation:hud-bg-drift 120s ease-in-out infinite alternate}
+html[data-hud] .app::after{opacity:.07;background:url("hud-background/topo.svg") center/cover no-repeat;
+  -webkit-mask-image:radial-gradient(ellipse 80% 75% at 60% 45%,#000 20%,transparent 100%);mask-image:radial-gradient(ellipse 80% 75% at 60% 45%,#000 20%,transparent 100%)}
+@keyframes hud-bg-drift{from{transform:translate3d(-1.5%,-1%,0) scale(1.04)}to{transform:translate3d(1.5%,1%,0) scale(1.04)}}
+@media (prefers-reduced-motion:reduce){html[data-hud] .app::before{animation:none}}
+
+html[data-hud] .side{background:linear-gradient(180deg,rgba(18,28,42,.5),rgba(10,15,24,.6));
+  -webkit-backdrop-filter:blur(20px) saturate(1.3);backdrop-filter:blur(20px) saturate(1.3);
+  box-shadow:inset -1px 0 0 rgba(255,255,255,.05),inset 0 1px 0 rgba(255,255,255,.07)}
+html[data-hud] .main-head{background:linear-gradient(180deg,rgba(22,34,52,.5),rgba(10,16,26,.4));
+  -webkit-backdrop-filter:blur(14px) saturate(1.3);backdrop-filter:blur(14px) saturate(1.3);box-shadow:inset 0 1px 0 rgba(255,255,255,.07)}
+html[data-hud] .msg .bubble{background:linear-gradient(160deg,rgba(26,40,60,.6),rgba(12,20,32,.68));
+  -webkit-backdrop-filter:blur(12px) saturate(1.3);backdrop-filter:blur(12px) saturate(1.3);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),inset 0 0 0 1px rgba(255,255,255,.03),0 10px 30px -14px rgba(0,0,0,.6)}
+html[data-hud] .msg.you .bubble{background:linear-gradient(160deg,rgba(50,120,160,.26),rgba(14,28,44,.64))}
+html[data-hud] .composer textarea{background:rgba(10,16,26,.6);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+html[data-hud] .thread.on{background:linear-gradient(90deg,rgba(111,227,255,.12),rgba(111,227,255,.03) 70%)}
