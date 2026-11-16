@@ -33,14 +33,15 @@ export function recordAgents() {
 // both subscribe, and every notice either would show lands in `pushed` and `desk`.
 // level: the project's permission level ('standard' = Ask, 'auto' or 'trusted'), set before anything is marked quiet.
 // conductor: also start the hub's Conductor (its own folder in the temp root), for tests of what it counts.
-export function stubHub({ settings = {}, level = 'standard', conductor = false } = {}) {
+// watch: the expedition watchdog's options ({ now, timers, checkMs, stopWaitMs }): phase 3's tests give it a clock.
+export function stubHub({ settings = {}, level = 'standard', conductor = false, watch = {} } = {}) {
   const root = makeTmp('crux-expedition-');
   const dir = join(root, 'proj');
   const home = join(root, 'agents-home');
   mkdirSync(join(dir, '.crux'), { recursive: true });
   mkdirSync(join(home, '.claude', 'agents'), { recursive: true });
   for (const f of readdirSync(STARTER).filter(f => /^expedition-.*\.md$/.test(f))) copyFileSync(join(STARTER, f), join(home, '.claude', 'agents', f));
-  const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), agentHome: home, noAgents: true, settings: new HubSettings({ file: null, initial: settings }), ...(conductor ? { conductorDir: join(root, 'conductor') } : {}) });
+  const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), agentHome: home, noAgents: true, settings: new HubSettings({ file: null, initial: settings }), expeditionWatch: watch, ...(conductor ? { conductorDir: join(root, 'conductor') } : {}) });
   const p = hub.project('proj');
   if (level !== 'standard') hub.setPermissionMode(p, level, 'you');
   const orch = hub.ensureOrchestrator(p);
@@ -123,7 +124,9 @@ export class StubExpedition {
   // The whole life up to the point where the final summary is due. Returns nothing; the log, the files and the agents
   // hold the result. mid: a Lead round summary and member summaries with questions, decisions and a core lesson, all
   // of which must stay out of the orchestrator's and the user's hands.
-  run() {
+  // stop: false (phase 3): the life is played up to the point where something must end it, and the caller ends it: the
+  // watchdog at a limit, or the Lead's tool. finish() then does what follows a stop (retire the members, write the report).
+  run({ stop = true } = {}) {
     const { hub, p, ex, orch } = this;
     // Launch: the brief and the success test (checklist and a runnable command), then the start event and the Lead.
     ex.write('BRIEF.md', `# ${this.question}\nEnvelope: 6 h, 7%.\n`);
@@ -173,9 +176,16 @@ export class StubExpedition {
     ex.note('90%', { atPct: 90 });
     ex.park({ text: 'Compare a third library', reason: 'outside the brief', maker: lead.name });
     this.usage('lead', { cost: 0.2 });
-    // Stop (the watchdog does this in phase 3), retire everyone but the Lead, then the end steps up to the card.
+    if (!stop) return this;
+    // Stop (the Lead's expedition_finish: passed), retire everyone but the Lead, then the end steps up to the card.
     ex.stop({ reason: 'passed', totals: { costUSD: this.expected.costUSD } });
-    for (const role of ['advisor', 'synthesizer', 'skeptic', 'builder', 'verifier']) hub.retireFinished(p, this.agents[role].name, 'hub', 'expedition ended');
+    return this.finish({ retire: true });
+  }
+
+  // After a stop: members retired (unless the watchdog's sequence did it already), the report, the steps up to the card.
+  finish({ retire = false } = {}) {
+    const { hub, p, ex } = this;
+    if (retire) for (const role of ['advisor', 'synthesizer', 'skeptic', 'builder', 'verifier']) hub.retireFinished(p, this.agents[role].name, 'hub', 'expedition ended');
     ex.write('REPORT.md', `# Report\n\n${howItRanMarkdown(howItRan(p.log.events, this.id))}\n`);
     for (const step of ['report', 'commit', 'push', 'pr', 'card']) ex.step(step, step === 'card' ? { title: `Expedition finished: ${this.question}` } : {});
     return this;

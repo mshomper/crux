@@ -114,7 +114,7 @@ test('start_worker: only the five hub types, the expedition and role stamped by 
   const lead3 = ex3.startRole('lead', env2.orch.name);
   assert.throws(() => env2.hub.leadStart(env2.p, lead3, { type: 'expedition-skeptic', task: 'x' }), /not started: no new agents/);
   ex3.ex.write('BRIEF.md', 'q'); ex3.ex.write('test/CHECKLIST.md', '1'); ex3.ex.start();
-  ex3.ex.stop({ reason: 'Matt' });
+  ex3.ex.stop({ reason: 'passed' });   // a hub stop (time, budget, Matt) offers no Verifier at all: see expedition-watchdog.test.mjs
   assert.throws(() => env2.hub.leadStart(env2.p, lead3, { type: 'expedition-skeptic', task: 'x' }), /is stopped: only a Verifier can be started now/);
   assert.throws(() => env2.hub.leadStart(env2.p, lead3, { type: 'expedition-builder', task: 'x' }), /only a Verifier can be started now/);
   // The Verifier checks the report after the stop (spec 4.8): that one role may start.

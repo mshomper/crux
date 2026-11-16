@@ -178,9 +178,11 @@ export class Expedition {
     return this.record('expedition_stopped', { reason, totals });
   }
 
-  // The 90% note (phase 3): logged, so a restart does not send it twice.
+  // The watchdog's two notes (phase 3), logged before they are sent, so a restart never sends one twice:
+  // kind 'reserve' (the 90% note: stop building, check claims, write up) and kind 'final' (the Lead's final turn after a
+  // time, budget or user stop). A note with no kind is the reserve note (the phase 1 stub wrote it that way).
   note(note, data = {}) {
-    this.need('running');
+    this.need('planning', 'running', 'stopped');
     return this.record('expedition_note', { note: text(note, 'The note'), ...data });
   }
 
@@ -212,6 +214,8 @@ export class Expedition {
       decisions: of('expedition_decision'), parked: of('expedition_parked'), loops: of('expedition_loop'), notes: of('expedition_note'), subagents: of('expedition_subagent'),
       steps: new Set(of('expedition_step').map(e => e.step))
     };
+    s.reserveNote = s.notes.find(e => (e.kind || 'reserve') === 'reserve') || null;
+    s.finalNote = s.notes.find(e => e.kind === 'final') || null;
     s.phase = !s.started ? 'new' : s.steps.has('summary') ? 'ended' : s.stopped ? 'stopped' : s.gate ? 'running' : 'planning';
     this.cache = { n: events.length, s };
     return s;
