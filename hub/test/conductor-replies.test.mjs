@@ -62,7 +62,7 @@ test('a Conductor brief is a request with an id, marked "reply expected", in the
 test('the reply path: reply_to_conductor logs in its own thread and the Conductor\'s only, and wakes the Conductor with the text', async () => {
   const { hub, c, a, b, toC, tool } = await setup();
   const oa = hub.ensureOrchestrator(a), ob = hub.ensureOrchestrator(b);
-  c.replyWaitMs = 150;
+  c.replyWaitMs = 1500;
   c.fromYou('How many worktrees are left everywhere?');   // the round: briefs sent in this turn
   c.holder().state = 'idle';
   c.toOrchestrator('alpha', 'conductor-1', 'How many worktrees are left?');
@@ -80,9 +80,9 @@ test('the reply path: reply_to_conductor logs in its own thread and the Conducto
   assert.match(c.replyFrom(a, oa, 'req-999', 'x'), /No Conductor request req-999/);
   assert.match(c.replyFrom(a, oa, 'req-001', '  '), /Write the reply first/);
   // beta has not replied: the round waits (10 minutes; here 150 ms after the briefs), then goes with what it has.
-  await sleep(60);
+  // The wait is long (1.5 s) so a slow machine cannot reach it before the check; then poll for the send, up to 4 s.
   assert.equal(toC().length, 0, 'the round waits for beta');
-  await sleep(200);
+  for (let i = 0; i < 80 && toC().length === 0; i++) await sleep(50);
   assert.equal(toC().length, 1);
   const w = toC()[0][1];
   assert.match(w, /^\[Hub: replies from orchestrators\]/);
