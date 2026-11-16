@@ -1,7 +1,7 @@
 // Which scripts a worker's command runs, and whether each is "committed and unchanged from main" (decision 67's Auto gate in
 // hub.mjs). The gate's routing is all this serves (decision 73): a command whose scripts are all committed, with everything
 // they load and start, stays allowed at Auto at once; any other goes to the permission check (On) or is shadow-read (Shadow).
-// A script the hub cannot resolve to a file and read in full makes the command "unread". The model is not sent the script text.
+// A script the hub cannot resolve to a file makes the command "unread". The model is not sent any script text.
 //
 // It FAILS CLOSED. A command counts as read only when every part of it is a shape this file positively recognises and
 // has resolved. A program it does not know that carries an interpreter or a script file anywhere in its words is
@@ -13,9 +13,7 @@ import { existsSync, statSync, readFileSync, readdirSync, lstatSync, realpathSyn
 import { dirname, basename, resolve, join, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 
-export const SCRIPT_LIMIT = 16 * 1024;               // plan B2: attach a script in full up to about 16 KB
-export const SCRIPTS_TOTAL = 48 * 1024;              // and no more than this much script text in one call
-export const MAX_SCRIPTS = 8;
+export const MAX_SCRIPTS = 8;                        // more scripts than this in one command: not listed, so never allowed at once
 const MAX_NEST = 4;                                  // a command inside a command inside a package script ...
 const MAX_FILES = 60, MAX_FILE_BYTES = 1024 * 1024;  // following imports of a committed script
 
@@ -671,18 +669,19 @@ function findPackageJson(from, projectDir) {
   return null;
 }
 
-// What the check is told about each script the command runs. Each entry:
-//   { path, kind: 'committed' }                              project script, committed (and everything it loads): nothing attached
-//   { path, kind: 'attached', text, bytes, cutOff, loads }    the text (up to SCRIPT_LIMIT) and what could not be seen
-//   { path, kind: 'missing' | 'unreadable' | 'unknown', note } never allowed
-// `unread` is true when any script is not fully seen: the answer may not be allow (enforced in applyRules).
-// Reads every shell string, $(...) and package script the command starts, down to MAX_NEST levels.
+// What the Auto gate (hub.mjs gateScript) learns about each script the command runs. Nothing is sent to the check. Each entry:
+//   { path, kind: 'committed' }                              project script, committed and unchanged (and everything it loads)
+//   { path, kind: 'uncommitted' }                            a file that exists but is not, or loads one that is not: the check judges it
+//   { path, kind: 'missing' | 'unreadable' | 'unknown', note } a script the hub could not resolve to a file
+// `unread` is true when a script could not be resolved to a file, or inline code loads one the hub has not seen. The gate lets a
+// command through at once only when `unread` is false and every entry is 'committed'.
+// Follows every shell string, $(...) and package script the command starts, down to MAX_NEST levels.
 // shell: 'bash' (the Bash tool) or 'powershell' (the PowerShell tool): how the text is split into words.
 export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainRefs, shell = 'bash' } = {}) {
   const base = cwd || projectDir || process.cwd();
   const cache = new Map(), opts = { projectDir, git, mainRefs, cache };
   const out = [], inlineLoads = [], seenPaths = new Set();
-  let attachedBytes = 0, sawWrite = false, sawRun = false;
+  let sawWrite = false, sawRun = false;
   const queue = [{ cmd: String(cmd || ''), cwd: base, depth: 0, shell }], seenCmds = new Set();
   const items = [];
   const npmScriptShell = process.platform === 'win32' ? 'cmd' : 'bash';
@@ -732,21 +731,11 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     let st;
     try { st = statSync(it.path); } catch { out.push({ path: it.path, kind: 'missing', note: 'the file does not exist' }); continue; }
     if (!st.isFile()) { out.push({ path: it.path, kind: 'unreadable', note: 'not a file' }); continue; }
-    if (await isProjectScript(it.path, opts)) { out.push({ path: it.path, kind: 'committed' }); continue; }
-    let buf;
-    try { buf = readFileSync(it.path); } catch { out.push({ path: it.path, kind: 'unreadable', note: 'could not be read' }); continue; }
-    if (buf.subarray(0, 4096).includes(0)) { out.push({ path: it.path, kind: 'unreadable', note: 'binary, not text' }); continue; }
-    const room = Math.max(0, Math.min(SCRIPT_LIMIT, SCRIPTS_TOTAL - attachedBytes));
-    const cutOff = buf.length > room;
-    const text = buf.subarray(0, room).toString('utf8');
-    attachedBytes += Buffer.byteLength(text);
-    const py = /\.py$/i.test(it.path);
-    // package.json is data: the commands in it are read in turn (above), so they are not "loaded" from here.
-    const data = /^package\.json$/i.test(basename(it.path));
-    out.push({ path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) });
+    // A script that is not committed and unchanged from main (or loads one that is not): the gate sends the command to the check.
+    out.push({ path: it.path, kind: (await isProjectScript(it.path, opts)) ? 'committed' : 'uncommitted' });
   }
   // Text run as a command (iex, eval) is never a file the hub could read, wherever it sits in the command.
   if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|(?:^|[;&|(\s])eval\s/i.test(String(cmd || '')) && !inlineLoads.includes('evals text')) inlineLoads.push('evals text');
-  const unread = out.some(s => s.kind !== 'committed' && (s.kind !== 'attached' || s.cutOff || s.loads.length)) || inlineLoads.length > 0;
+  const unread = out.some(s => s.kind !== 'committed' && s.kind !== 'uncommitted') || inlineLoads.length > 0;
   return { scripts: out, inlineLoads, unread };
 }

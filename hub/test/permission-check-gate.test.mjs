@@ -125,9 +125,28 @@ test('on: escalate works as for any request; a script that loads another file is
   assert.equal(sent.length, 0, 'the orchestrator is not asked');
 });
 
+test('at Trusted the gate holds as at Auto: a committed script goes at once, any other goes to the check (and shadow reads it)', async () => {
+  const all = ['x.mjs', 'x.sh', 'x.ps1', 'package.json'];
+  for (const [cmd, tool] of SCRIPTS) {
+    const clean = setup({ level: 'trusted', tracked: all });
+    assert.equal(clean.hub.permissionMode(clean.p), 'trusted');
+    assert.equal((await ask(clean.hub, clean.p, clean.w, cmd, tool)).behavior, 'allow', `${cmd}: committed, at once`);
+    assert.equal(clean.calls.length, 0, `${cmd}: the check was not asked`);
+    const { hub, p, w, calls } = setup({ level: 'trusted', tracked: [], replies: [{ answer: 'deny', reason: 'writes outside the project' }] });
+    const r = await ask(hub, p, w, cmd, tool);
+    assert.equal(r.behavior, 'deny', `${cmd}: not committed, the check judged it`);
+    assert.equal(calls.length, 1, cmd);
+    assert.equal(last(p, 'permission_answer').by, CHECK_NAME);
+    const sh = setup({ level: 'trusted', mode: 'shadow', tracked: [], replies: [{ answer: 'deny', reason: 'writes outside the project' }] });
+    assert.equal((await ask(sh.hub, sh.p, sh.w, cmd, tool)).behavior, 'allow', `${cmd}: shadow allows as today`);
+    await settle();
+    assert.equal(last(sh.p, 'check_shadow').answer, 'deny', `${cmd}: and the check reads it beside`);
+  }
+});
+
 test('on: the 5 minutes run from the request, not from the end of the script look-up', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
-  const { hub, p, w } = setup({ tracked: [], replies: [{ answer: 'consult', reason: 'needs the goal' }] });
+  const { hub, p, w } = setup({ tracked: [], replies: [{ answer: 'maybe', reason: 'not one of the three answers' }] });   // no valid answer: the request waits as before
   const pending = ask(hub, p, w, 'node scripts/x.mjs');
   await settle();
   t.mock.timers.tick(299_000);

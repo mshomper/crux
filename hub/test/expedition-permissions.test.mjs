@@ -18,6 +18,7 @@ import { HubSettings } from '../lib/settings.mjs';
 import { PermissionLists, normalizeOverlay, ListsError } from '../lib/permission-lists.mjs';
 import { classify } from '../lib/permission-rules.mjs';
 import { Expedition } from '../lib/expedition.mjs';
+import { CHECK_NAME } from '../lib/permission-check.mjs';
 
 const sent = recordAgents();
 const settled = pr => Promise.race([pr, new Promise(r => setTimeout(() => r('waiting'), 30))]);
@@ -231,6 +232,48 @@ test('a merge pass or a push to a protected branch never lets an expedition agen
   assert.deepEqual(quietProblems(env, mark, sent), []);
   // Control, last (a pass-allowed merge is logged in the orchestrator's thread): the same pass does let a plain worker's merge through.
   assert.equal((await hub.requestApproval(p, plain, 'Bash', { command: 'gh pr merge 12 --squash' })).behavior, 'allow');
+});
+
+// ---------- Auto's script gate for an expedition's agents (decision 67, kept by decision 73) ----------
+test('an expedition agent at Auto: a script that is not committed goes to the check on the spot with no card (On), and is read beside, tagged with the expedition, at Shadow', async () => {
+  const { hub, p, builder, env } = world({ gate: true });
+  writeFileSync(join(p.dir, 'bench.mjs'), 'console.log("bench")');
+  writeFileSync(join(p.dir, 'done.mjs'), 'console.log("done")');
+  hub.checkGit = async (args) => {   // done.mjs is tracked and clean; bench.mjs is not tracked
+    const name = args.at(-1);
+    if (args[0] === 'ls-files') return { code: name === 'done.mjs' ? 0 : 1, out: '' };
+    if (args[0] === 'status') return { code: 0, out: '' };
+    if (args[0] === 'merge-base') return { code: 0, out: 'abc\n' };
+    if (args[0] === 'diff') return { code: 0, out: '' };
+    return { code: 1, out: '' };
+  };
+  const asked = [];
+  hub.checkerMade = { run: async req => { asked.push(req.tool); return { valid: true, answer: 'deny', reason: 'it writes outside the project', model: 'claude-sonnet-5-5' }; } };
+  const mark = quietMark(env);
+  hub.settings.setProject(p.dir, { permissionCheck: 'on' });
+  const r = await hub.requestApproval(p, builder, 'Bash', { command: 'node bench.mjs' });
+  assert.equal(r.behavior, 'deny', 'the check judged it');
+  assert.match(r.message, /permission check declined: it writes outside the project/);
+  assert.equal(asked.length, 1);
+  const line = p.log.ofType('permission_answer').at(-1);
+  assert.deepEqual([line.by, line.answer, line.thread, line.expedition === builder.expedition], [CHECK_NAME, 'deny', builder.thread, true], 'in the agent\'s own thread, tagged');
+  assert.equal(p.log.ofType('approval').length, 0, 'no card, no waiting entry');
+  // a committed, unchanged script goes at once, the check not asked
+  assert.equal((await hub.requestApproval(p, builder, 'Bash', { command: 'node done.mjs' })).behavior, 'allow');
+  assert.equal(asked.length, 1);
+  assert.deepEqual(quietProblems(env, mark, sent), []);
+  // Shadow: allowed at once as today, the check reads it beside and writes check_shadow (no thread, tagged with the expedition)
+  hub.settings.setProject(p.dir, { permissionCheck: 'shadow' });
+  const s = await hub.requestApproval(p, builder, 'Bash', { command: 'node bench.mjs' });
+  assert.equal(s.behavior, 'allow');
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(asked.length, 2, 'the check ran beside');
+  const real = p.log.ofType('permission_answer').at(-1);
+  assert.deepEqual([real.by, real.answer, real.thread, real.expedition === builder.expedition], ['hub', 'allow', builder.thread, true], 'the real answer is in the agent\'s thread, never the orchestrator\'s');
+  const shadow = p.log.ofType('check_shadow').at(-1);
+  assert.equal(shadow.answer, 'deny');
+  assert.deepEqual([shadow.thread, shadow.expedition === builder.expedition], [undefined, true], 'the shadow line is in no thread (never the orchestrator\'s), tagged with the expedition');
+  assert.deepEqual(quietProblems(env, mark, sent), []);
 });
 
 // ---------- pause ----------

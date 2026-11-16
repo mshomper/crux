@@ -26,7 +26,7 @@ function tree(files) {
 const BASE = { 'evil': 'echo evil', 'evil.mjs': 'console.log("evil")', 'a.mjs': 'console.log("a")', 'tools/a.mjs': 'console.log(1)',
   'package.json': JSON.stringify({ scripts: { test: 'node --test a.mjs', build: 'node build.mjs', x: 'echo x', pretest: 'echo pre' } }), 'build.mjs': 'console.log(1)' };
 const run = (proj, cmd, opts = {}) => scriptsFor(cmd, { cwd: proj, projectDir: proj, git: fakeGit(opts.git), shell: opts.shell || 'bash' });
-const why = r => JSON.stringify([r.scripts.map(s => [s.path.split(/[\\/]/).pop(), s.kind, s.note || (s.loads || []).join('+')]), r.inlineLoads]);
+const why = r => JSON.stringify([r.scripts.map(s => [s.path.split(/[\\/]/).pop(), s.kind, s.note || '']), r.inlineLoads]);
 
 test('round 3: the four reviewer cases are unread', async () => {
   const proj = tree(BASE);
@@ -57,7 +57,7 @@ test('round 3: an unknown program is marked, and pathy when a word is a path or 
 test('round 3: a word that names a program is not read as the program it looks like (./node is the project\'s file)', async () => {
   const proj = tree({ ...BASE, node: 'echo not node' });
   const r = await run(proj, './node a.mjs');
-  assert.ok(r.scripts.some(s => s.path.endsWith('node') && s.kind === 'attached'), why(r));   // the project file, attached whole
+  assert.ok(r.scripts.some(s => s.path.endsWith('node') && s.kind === 'uncommitted'), why(r));   // the project file, found
   assert.equal((await run(proj, './tools/mytool --x')).unread, true);                          // not there
   assert.equal((await run(proj, './node_modules/.bin/vitest tools/evil.test.mjs')).unread, true);   // a dependency's bin can run any file
 });
@@ -70,9 +70,9 @@ test('round 3: absolute path to a system program that is not on the list is unre
   assert.equal((await run(proj, `${sysDir}/${known} foo`)).unread, false);
   const t = await run(proj, `${sysDir}/${other} -I ./evil -cf o.tar a.mjs`);
   if (existsSync(`${sysDir}/${other}`)) assert.equal(t.unread, true, why(t));   // this machine has it: a program the hub does not read
-  // absolute path to node: read as node, so the script it runs is attached
+  // absolute path to node: read as node, so the script it runs is found
   const n = await run(proj, `"${process.execPath.replace(/\\/g, '/')}" evil.mjs`);
-  assert.ok(n.scripts.some(s => s.path.endsWith('evil.mjs') && s.kind === 'attached'), why(n));
+  assert.ok(n.scripts.some(s => s.path.endsWith('evil.mjs') && s.kind === 'uncommitted'), why(n));
 });
 
 test('round 3: git reads only allowlisted subcommands and options', async () => {
@@ -100,7 +100,7 @@ test('round 3: PowerShell call operator or dot followed by ( or $ is unread; pla
   for (const cmd of ["&('no'+'de') evil.mjs", '& $cmd', '.($x) a', '& (Get-Command node) a.mjs', 'Invoke-Expression "node evil.mjs"', 'iex "node evil.mjs"', '[scriptblock]::Create("node evil.mjs").Invoke()', '$x = "node"; & $x evil.mjs'])
     assert.equal((await run(proj, cmd, { shell: 'powershell' })).unread, true, cmd);
   const r = await run(proj, '& .\\evil.ps1', { shell: 'powershell' });
-  assert.ok(r.scripts.some(s => s.path.endsWith('evil.ps1') && s.kind === 'attached'), why(r));
+  assert.ok(r.scripts.some(s => s.path.endsWith('evil.ps1') && s.kind === 'uncommitted'), why(r));
   assert.equal(r.unread, false);
   assert.equal((await run(proj, 'Get-ChildItem tools | Select-Object -First 3; Write-Host done', { shell: 'powershell' })).unread, false);
 });
@@ -110,7 +110,7 @@ test('round 3: redirects like 2>&1 are not new commands; if/then/for are read fo
   assert.deepEqual(lex('node a.mjs 2>&1 | head', 'bash').segs.map(s => s.join(' ')), ['node a.mjs 2>&1', 'head']);
   assert.deepEqual(lex('node a.mjs &>out.log', 'bash').segs.map(s => s.join(' ')), ['node a.mjs &>out.log']);
   assert.equal((await run(proj, 'if [ -f a.mjs ]; then node a.mjs; fi')).unread, false);
-  assert.equal((await run(proj, 'if [ -f a.mjs ]; then node evil.mjs; fi')).scripts.some(s => s.path.endsWith('evil.mjs') && s.kind === 'attached'), true);
+  assert.equal((await run(proj, 'if [ -f a.mjs ]; then node evil.mjs; fi')).scripts.some(s => s.path.endsWith('evil.mjs') && s.kind === 'uncommitted'), true);
   assert.equal((await run(proj, 'if [ -f a.mjs ]; then tar -I ./evil x; fi')).unread, true);
 });
 
