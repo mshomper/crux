@@ -227,7 +227,7 @@ test('an expedition request that would be a card is parked or denied; the one-sh
   assert.equal(p.log.ofType('approval').length, 1);
   assert.equal(hub.approvals.size, 1);
 
-  // With the check on: allow and deny settle on the spot; escalate, consult and a failure are parked. Still no card.
+  // With the check on: allow and deny settle on the spot; escalate and a failure are parked. Still no card.
   sent.length = 0;
   const env2 = stubHub({ level: 'auto' });
   const w2 = world2(env2);
@@ -243,7 +243,7 @@ test('an expedition request that would be a card is parked or denied; the one-sh
   answer = { valid: true, answer: 'deny', reason: 'not a page the brief names', model: 'claude-sonnet-5-5' };
   const denied = await q();
   assert.match(denied.message, /^The permission check declined/);
-  for (const a of [{ valid: true, answer: 'escalate', reason: 'a licence question' }, { valid: true, answer: 'consult', reason: 'unsure' }, { valid: false, error: 'no answer' }]) {
+  for (const a of [{ valid: true, answer: 'escalate', reason: 'a licence question' }, { valid: false, error: 'no answer' }]) {
     answer = a;
     const r = await q();
     assert.equal(r.behavior, 'deny');
@@ -251,7 +251,7 @@ test('an expedition request that would be a card is parked or denied; the one-sh
   }
   assert.equal(env2.hub.approvals.size, 0);
   assert.deepEqual(quietProblems(env2, mark2, sent), []);
-  assert.equal(env2.p.log.ofType('expedition_parked').filter(e => e.kind === 'request').length, 3, 'one parked line per distinct request: the three that were parked');
+  assert.equal(env2.p.log.ofType('expedition_parked').filter(e => e.kind === 'request').length, 2, 'one parked line per distinct request: the two that were parked');
   assert.ok(env2.p.log.ofType('expedition_parked').filter(e => e.kind === 'request').every(e => e.subagent?.id === 'agent-9'));
 });
 
@@ -478,18 +478,17 @@ test('a merge pass never lets an expedition agent merge: parked, no allow, no wa
   void env;
 });
 
-test('check on: a worker-written script is judged by the check and allowed by it, with no waiting entry or approval event', async () => {
+test('check on: an unclear request is judged by the check and allowed by it, with no waiting entry or approval event', async () => {
   sent.length = 0;
   const env = stubHub({ level: 'auto' });
   const ex = world2(env), { hub, p } = env;
-  writeFileSync(join(p.dir, 'build.mjs'), 'console.log(1)\n');
   hub.settings.setProject(p.dir, { permissionCheck: 'on' });
   const calls = [];
-  hub.checkerMade = { run: async req => { calls.push(req.tool); return { valid: true, answer: 'allow', reason: 'a small script of its own', model: 'claude-sonnet-5-5' }; } };
+  hub.checkerMade = { run: async req => { calls.push(req.tool); return { valid: true, answer: 'allow', reason: 'a public page, read only', model: 'claude-sonnet-5-5' }; } };
   const mark = quietMark(env);
-  const r = await hub.requestApproval(p, ex.lead, 'Bash', { command: 'node build.mjs' });
+  const r = await hub.requestApproval(p, ex.lead, 'WebFetch', { url: 'http://example.org/page', prompt: 'p' });
   assert.equal(r.behavior, 'allow');
-  assert.deepEqual(calls, ['Bash'], 'the check was asked once');
+  assert.deepEqual(calls, ['WebFetch'], 'the check was asked once');
   assert.equal(hub.approvals.size, 0);
   assert.equal(p.log.ofType('approval').length, 0);
   const a = p.log.ofType('permission_answer').at(-1);
@@ -497,20 +496,15 @@ test('check on: a worker-written script is judged by the check and allowed by it
   assert.deepEqual(quietProblems(env, mark, sent), []);
 });
 
-test('shadow check: an expedition agent\'s line and the check\'s usage carry the expedition and stay out of the orchestrator\'s thread', async () => {
+test('check on: the check\'s usage for an expedition\'s request carries the expedition, so its spend counts against the budget', async () => {
   sent.length = 0;
   const env = stubHub({ level: 'auto' });
   const ex = world2(env), { hub, p } = env;
-  writeFileSync(join(p.dir, 'build.mjs'), 'console.log(1)\n');
-  hub.settings.setProject(p.dir, { permissionCheck: 'shadow' });
+  hub.settings.setProject(p.dir, { permissionCheck: 'on' });
   hub.checkerMade = { run: async () => ({ valid: true, answer: 'allow', reason: 'fine', model: 'claude-sonnet-5-5', modelUsage: { 'claude-sonnet-5-5': { inputTokens: 100, outputTokens: 20, costUSD: 0.01 } } }) };
   const mark = quietMark(env);
-  const r = await hub.requestApproval(p, ex.lead, 'Bash', { command: 'node build.mjs' });
-  assert.equal(r.behavior, 'allow', 'shadow mode allows as Auto does');
-  for (let i = 0; i < 20 && !p.log.ofType('check_shadow').length; i++) await new Promise(res => setImmediate(res));
-  const line = p.log.ofType('permission_answer').at(-1);
-  assert.deepEqual([line.thread, line.expedition], [ex.lead.thread, ex.id]);
-  assert.equal(p.log.ofType('check_shadow').at(-1).expedition, ex.id);
+  const r = await hub.requestApproval(p, ex.lead, 'WebFetch', { url: 'http://example.org/page', prompt: 'p' });
+  assert.equal(r.behavior, 'allow');
   const usage = p.log.ofType('usage').filter(e => e.agentType === 'check');
   assert.equal(usage.length, 1);
   assert.equal(usage[0].expedition, ex.id, 'its spend counts against the expedition');
