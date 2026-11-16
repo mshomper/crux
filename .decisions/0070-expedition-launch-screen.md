@@ -24,6 +24,19 @@ Matt (2026-11-16): launching an expedition is defining a project scope and assem
 ### A: One panel, plus the draft card in the thread (recommended)
 
 Scope and Team side by side in one panel (one column on the phone), reached from a New expedition button or from the Edit on the orchestrator's draft card, which can also launch at once.
+
+![A: one panel, Scope left and Team right](images/0070-a-one-panel-scope-left-and-team-right.png)
+
+*A: one panel, Scope left and Team right*
+
+![A's other way in: the orchestrator's draft card with Launch and Edit](images/0070-as-other-way-in-the-orchestrators-draft.png)
+
+*A's other way in: the orchestrator's draft card with Launch and Edit*
+
+![A on the phone: one column](images/0070-a-on-the-phone-one-column.png)
+
+*A on the phone: one column*
+
 - Pro: Everything visible at once; quickest path when the draft is right; closest to the hub's New agent dialog
 - Con: A dense panel on a phone (one long column)
 - Effort: Medium
@@ -31,6 +44,11 @@ Scope and Team side by side in one panel (one column on the phone), reached from
 ### B: Two steps, with a crew picture
 
 Step 1 Scope; step 2 'Assemble the team': the roles drawn around the Lead as on the map; tap one to change its model and effort.
+
+![B: step 2, the team around the Lead](images/0070-b-step-2-the-team-around-the-lead.png)
+
+*B: step 2, the team around the Lead*
+
 - Pro: The nicest look; teaches the cluster shape
 - Con: Two steps; repeats what the map shows; more to build
 - Effort: Medium to large

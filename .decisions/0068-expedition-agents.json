@@ -84,7 +84,7 @@
  ],
  "images": [
   {
-   "from": ".crux/scratch/expedition/png/map-cluster-desktop.png",
+   "from": "C:/Users/mshom/Documents/GitHub/crux/.crux/scratch/expedition/png/map-cluster-desktop.png",
    "caption": "An expedition on the live map: the Lead with its team around it, two thin arcs for time and budget",
    "option": "A",
    "kind": "mockup",

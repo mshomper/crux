@@ -63,32 +63,28 @@
  "settles": [],
  "images": [
   {
-   "from": ".crux/scratch/expedition/png/f-A-desktop.png",
+   "file": "images/0070-a-one-panel-scope-left-and-team-right.png",
    "caption": "A: one panel, Scope left and Team right",
    "option": "A",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   },
   {
-   "from": ".crux/scratch/expedition/png/f-C-desktop.png",
+   "file": "images/0070-as-other-way-in-the-orchestrators-draft.png",
    "caption": "A's other way in: the orchestrator's draft card with Launch and Edit",
    "option": "A",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   },
   {
-   "from": ".crux/scratch/expedition/png/f-A-phone.png",
+   "file": "images/0070-a-on-the-phone-one-column.png",
    "caption": "A on the phone: one column",
    "option": "A",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   },
   {
-   "from": ".crux/scratch/expedition/png/f-B-desktop.png",
+   "file": "images/0070-b-step-2-the-team-around-the-lead.png",
    "caption": "B: step 2, the team around the Lead",
    "option": "B",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   }
  ]
 }
