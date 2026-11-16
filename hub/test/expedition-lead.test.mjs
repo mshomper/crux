@@ -343,6 +343,37 @@ test('the Lead\'s query carries the gatherer definition and the Agent tool; ever
   assert.equal(env.orch.options().agents, undefined);
 });
 
+// The first real expedition (f13ld.mesh, 2026-11-16): all six gatherers said their session had only Read and Write. The Lead's
+// own tools list (Agent, Read, Grep, Glob, Write, Edit) is the base set of its session and a subagent gets only what that has,
+// so the gatherer file's WebSearch and WebFetch never reached them.
+test('the Lead\'s session carries every tool its gatherers need (web search and fetch), but the Lead may not use the borrowed ones itself', async () => {
+  const { A, hub, p } = world();
+  const lead = A.agents.lead;
+  const o = lead.options();
+  const g = o.agents['expedition-gatherer'];
+  for (const t of g.tools) assert.ok(o.tools.includes(t), `${t}: a gatherer's tool must be in the Lead's session, or the gatherer does not get it`);
+  assert.ok(o.tools.includes('WebSearch') && o.tools.includes('WebFetch'));
+  for (const t of ['Agent', 'Read', 'Grep', 'Glob', 'Write', 'Edit']) assert.ok(o.tools.includes(t), `${t} stays the Lead's`);
+  assert.equal(new Set(o.tools).size, o.tools.length, 'no tool is listed twice');
+  // The hook: a gatherer's own WebSearch is let through; the Lead's own is refused with a pointer to its gatherers.
+  const hook = o.hooks.PreToolUse[0].hooks[0];
+  const web = { tool_name: 'WebSearch', tool_input: { query: 'gpu marching cubes webgpu' }, tool_use_id: 'tu-w' };
+  assert.deepEqual(await hook({ ...web, agent_id: 'agent-1', agent_type: 'expedition-gatherer' }), {});
+  const own = await hook(web);
+  assert.equal(own.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(own.hookSpecificOutput.permissionDecisionReason, /gatherers/);
+  assert.deepEqual(await hook({ tool_name: 'Read', tool_input: { file_path: join(p.dir, 'README.md') }, tool_use_id: 'tu-r' }), {});
+  // The permission path, for a gatherer's WebSearch during the running expedition: allowed, no card, nothing parked.
+  lead.noteSubagent({ tool_use_id: 'tu-s', agent_id: 'agent-1', agent_type: 'expedition-gatherer' });
+  const r = await hub.requestApproval(p, lead, 'WebSearch', { query: 'gpu marching cubes webgpu' }, { toolUseID: 'tu-s', agentID: 'agent-1' });
+  assert.equal(r.behavior, 'allow');
+  assert.equal(p.log.ofType('expedition_parked').filter(e => e.tool === 'WebSearch').length, 0);
+  assert.equal(hub.approvals.size, 0);
+  // Only tools the Lead lacks are borrowed (a tool it already has is not listed twice or taken from it).
+  const bash = lead.leadTools(['Read', 'Write'], { x: { tools: ['Bash', 'Read'] }, y: { tools: ['Bash', 'WebFetch'] } });
+  assert.deepEqual(bash, { all: ['Read', 'Write', 'Bash', 'WebFetch'], borrowed: ['Bash', 'WebFetch'] });
+});
+
 test('a gatherer\'s request is tagged with the subagent behind it (hook agent_id and type, or the SDK\'s agentID); the Lead\'s own is not', () => {
   const { A, plain } = world();
   const lead = A.agents.lead;
