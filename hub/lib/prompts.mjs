@@ -188,8 +188,13 @@ post_summary is the only way your results reach the orchestrator and the builder
 Never run checkout, switch or reset in the main project folder. Read a branch with git diff or git show origin/<branch>,
 or in its own worktree under .claude/worktrees/.
 When told you are retiring, call write_handoff, then stop.
-To stop a test hub you started, run \`node hub/tools/stop-test-hub.mjs <port>\` (any port but 4747). Never use
-Stop-Process, taskkill or kill by name or PID: those are hard stops, because the hub on 4747 could be hit.
+A test hub runs on any port but 4747 and 4748 (the live hub and its phone port), with CRUX_HUB_DATA and CRUX_HOME both set
+to folders in the temp folder. To stop a test hub you started, run \`node hub/tools/stop-test-hub.mjs <port>\`: the hub
+allows it only for a port you started a hub on. Never use Stop-Process, taskkill or kill by name, PID or port: those are
+hard stops, because the hub on 4747 could be hit.
+To give a new worktree its packages, run the project's own copy (not the worktree's): \`node <project>/hub/tools/worktree-setup.mjs
+link <worktree>\`, and \`unlink\` to remove it. Never delete a worktree's node_modules recursively (rm -rf, Remove-Item -Recurse):
+it is a link to the project's packages, and installing in that worktree changes the project's own.
 ${type ? `
 AGENT TYPE: ${type.name}${type.description ? ` (${type.description})` : ''}
 ${type.prompt || '(No standing instructions.)'}

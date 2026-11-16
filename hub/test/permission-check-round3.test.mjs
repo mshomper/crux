@@ -49,6 +49,11 @@ test('round 3: a program that is not on the short list is unread, whatever its w
     assert.equal((await run(proj, cmd)).unread, false, `${cmd} should be read`);
 });
 
+test('round 3: an unknown program is marked, and pathy when a word is a path or script (what decision 67\'s gate looks at)', () => {
+  const t = parseCommand('tar -I ./evil -cf o.tar a.mjs').unread[0], d = parseCommand('docker ps').unread[0], g = parseCommand('gh pr view 12').unread[0];
+  assert.deepEqual([t.prog, t.pathy, d.prog, d.pathy, g.prog, g.pathy], [true, true, true, false, true, false]);
+});
+
 test('round 3: a word that names a program is not read as the program it looks like (./node is the project\'s file)', async () => {
   const proj = tree({ ...BASE, node: 'echo not node' });
   const r = await run(proj, './node a.mjs');

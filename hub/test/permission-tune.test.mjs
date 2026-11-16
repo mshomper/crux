@@ -22,7 +22,7 @@ const allow = r => assert.equal(r.route, 'allow', why(r));
 
 test('PowerShell variables set in the command are filled in before paths are judged', () => {
   allow(ps(String.raw`$o='C:\Users\mshom\AppData\Local\Temp\crux-usage-shots'; node "$o\shot.mjs" 'http://127.0.0.1:4755/' "$o\desk-calm.png" 1440 900`));
-  allow(ps(String.raw`$env:CRUX_HUB_DATA = 'C:\Users\mshom\AppData\Local\Temp\x\data'; node server.mjs --port 4755 --no-agents C:\Users\mshom\AppData\Local\Temp\x\demo`));
+  allow(ps(String.raw`$env:CRUX_HUB_DATA = 'C:\Users\mshom\AppData\Local\Temp\x\data'; $env:CRUX_HOME = 'C:\Users\mshom\AppData\Local\Temp\x\home'; node server.mjs --port 4755 --no-agents C:\Users\mshom\AppData\Local\Temp\x\demo`));
   allow(ps(String.raw`$t = "$env:TEMP\crux-x"; $f = "$t\a.txt"; Get-Content $f`));
 });
 

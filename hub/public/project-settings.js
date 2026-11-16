@@ -142,6 +142,8 @@ export function projectCard(p, hub, d) {
       <div class="ps-conn" data-ps-check>${segN(d.check, 'check', CHECK_CHOICES)}<p>${esc(CHECK_TIP[d.check] || CHECK_TIP.off)}</p></div></section>
     <section class="ps-sec"><h3 class="ps-sec-head">Pause work in this project ${help('Every new permission request waits for you as a card, and agents are told to stop at their next turn. Switch back to Running to let them carry on.')}</h3>
       <div class="ps-conn" data-ps-pause>${seg(d.paused, 'paused', ['Running', 'Paused'])}<p>${d.paused ? `${ic('pause')} Paused: new requests wait for you.` : 'Running: nothing is held.'}</p></div></section>
+    <section class="ps-sec"><h3 class="ps-sec-head">Trusted sites and packages ${help('The sites agents may read or download from and the packages they may install without asking you, each added by you. They are kept on this computer and apply in every project unless narrowed to one.')}</h3>
+      <button type="button" class="ps-lists-link" data-ps-lists title="See, add and remove the sites and packages agents may use without asking">${ic('globe')}<span>Sites and packages agents may use without asking</span>${ic('chev', 'ps-chev')}</button></section>
     <section class="ps-sec"><h3 class="ps-sec-head">When the orchestrator hands off</h3>
       <div class="ps-nums">${NUMBERS.map(f => numRow(f, d.nums[f.k], hub[f.k], d.errors?.[f.k], 'p')).join('')}</div></section>
     <section class="ps-sec ps-last"><h3 class="ps-sec-head">Connectors</h3>
@@ -257,6 +259,8 @@ export class SettingsCards {
     if (e.target === this.el) { const out = this.downOutside; this.downOutside = false; return out ? this.close() : undefined; }   // the backdrop
     if (e.target.closest('[data-ps-close]')) return this.close();
     if (e.target.closest('[data-ps-done]')) return this.done();
+    if (e.target.closest('[data-ps-lists]')) return void this.host.openLists?.(this.p);   // plan v3 A10 (lists-card.js): opens over this card
+
     const lv = e.target.closest('[data-ps-level]');
     if (lv && this.d.level !== lv.dataset.psLevel) { this.d.level = lv.dataset.psLevel; this.render(); this.el.querySelector('.ps-lv.on')?.focus({ preventScroll: true }); return; }
     const sg = e.target.closest('[data-ps-seg]');

@@ -47,6 +47,9 @@ export class HubSettings {
     this.projects = saved.projects && typeof saved.projects === 'object' ? saved.projects : {};
     // Routing guide 9.1: the effort levels each model was seen to accept, filled from the SDK's first refusal (lib/agent-types.mjs).
     this.effortCeilings = saved.effortCeilings && typeof saved.effortCeilings === 'object' ? saved.effortCeilings : {};
+    // Plan v3 A10: Matt's trusted sites and approved packages (lib/permission-lists.mjs). Here, never in a repo file;
+    // null until the first start seeds it.
+    this.lists = saved.lists && typeof saved.lists === 'object' ? saved.lists : null;
     // Decision 64 A: a timeout under 5 minutes saved before it is raised once (see TIMEOUT_RAISED).
     // timeoutRaisedFrom: the old value, so the hub can say so once in each orchestrator thread (hub.mjs). A failed
     // write never stops the hub from starting: the raise then simply holds for this run.
@@ -97,6 +100,7 @@ export class HubSettings {
     this.save({ projects: this.projects });
     return this.projects[k];
   }
+  setLists(lists) { this.lists = lists; this.save({ lists }); }
   // Every file this version writes carries timeoutRaised, so only a timeout saved before decision 64 A is raised.
   save(c) {
     if (!this.file) return;

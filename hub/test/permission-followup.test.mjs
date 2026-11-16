@@ -96,7 +96,7 @@ test('the everyday list still passes at Auto', () => {
     `CRUX_HUB_DATA=${T}/data curl -s localhost:4791/api/state`, 'wget -qO- http://localhost:4791/api/state',
     { ps: 'irm http://localhost:4747/api/state' },
     { ps: `iwr http://localhost:4791/api/settings -Method Post -Headers @{ 'Origin' = 'http://localhost:4791' } -ContentType 'application/json' -Body '{}' -UseBasicParsing` },
-    `CRUX_HUB_DATA=${T}/data node server.mjs --port 4791 ${T}/proj`, 'node hub/tools/stop-test-hub.mjs 4791',
+    `CRUX_HUB_DATA=${T}/data CRUX_HOME=${T}/home node server.mjs --port 4791 ${T}/proj`,
     `"/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" --headless=new --disable-gpu --user-data-dir="${T}/edge" --window-size=1280,720 --screenshot="${T}/a.png" "http://localhost:4791/"`,
     'git status', 'git log --oneline -5', 'git diff', 'npm test', 'node --test test/project-settings.test.mjs', 'grep -rn TODO hub/lib', 'ls -la'
   ];
@@ -104,6 +104,12 @@ test('the everyday list still passes at Auto', () => {
     const r = c.ps ? at('auto', 'PowerShell', c.ps) : at('auto', 'Bash', c);
     assert.equal(r.route, 'allow', `${JSON.stringify(c)}: ${r.reasons.join('; ')} ${r.unsure.join('; ')}`);
   }
-  // Unchanged from main: a command substitution goes to the orchestrator, as it always has.
-  assert.equal(route('auto', `echo "page: $(curl -s -o /dev/null -w '%{http_code}' localhost:4792/)"`), 'unsure');
+  // A7: stopping a test hub is for the port this agent started it on (the hub keeps the list)
+  const stop = hubs => classify({ tool: 'Bash', input: { command: 'node hub/tools/stop-test-hub.mjs 4791' }, projectDir: PROJ, tmp: TEMP, home: HOME, level: 'auto', hubs }).route;
+  assert.equal(stop([4791]), 'allow');
+  assert.equal(stop([]), 'unsure');
+  // A1: a GET of a test hub inside a substitution only reads; a POST, or the live hub, does not count as a read.
+  assert.equal(route('auto', `echo "page: $(curl -s -o /dev/null -w '%{http_code}' localhost:4792/)"`), 'allow');
+  assert.equal(route('auto', `echo "page: $(curl -s -X POST -d x localhost:4792/)"`), 'unsure');
+  assert.equal(route('auto', `echo "page: $(curl -s localhost:4747/api/state)"`), 'unsure');
 });

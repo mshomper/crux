@@ -8,7 +8,7 @@
   "architecture",
   "research and product"
  ],
- "status": "decided",
+ "status": "superseded",
  "lead": "Pick how much the new Conductor agent does. I recommend A: it reads every project and passes your requests to the right orchestrator, but it never edits, merges or answers permissions, and it sleeps until you or a project's update wakes it. Confidence: medium.",
  "for_you": [
   "One thread in All projects you can ask \"what's waiting on me?\" or \"start X in another project\", and it routes the request",
@@ -82,7 +82,7 @@
  "chosen": "A",
  "reason": "",
  "decided_on": "2026-11-14",
- "superseded_by": null,
+ "superseded_by": 60,
  "challenge": null,
  "settles": [
   {

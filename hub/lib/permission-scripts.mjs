@@ -258,7 +258,10 @@ export function parseCommand(cmd, { shell = 'bash', cwd = '' } = {}) {
       if (bad) out.unread.push({ head, why: `an option the hub does not read (${bad}), which could name a program to run` });
       else if (WRITERS.has(head) || (DOWNLOADERS.has(head) && rest.some(x => WRITES_FILE.test(x)))) out.mutates = true;
     } else if (!KEYWORDS.has(head)) {
-      out.unread.push({ head, why: 'a program that is not on the hub\'s short list of programs that only read, write or report' });
+      // prog: only "not on the list". pathy: one of its words is a path or script, or names a file here (tar -I ./evil): that
+      // is the shape decision 67's gate looks at under Auto; a bare `docker ps` is not (the check still cannot allow it).
+      const pathy = rest.some(x => /[\\/]/.test(x) || SCRIPT_EXT.test(x) || (cwd && (() => { try { return existsSync(resolve(cwd, at || '', x)); } catch { return false; } })()));
+      out.unread.push({ head, why: 'a program that is not on the hub\'s short list of programs that only read, write or report', prog: true, pathy });
     }
   }
   tagNew();
