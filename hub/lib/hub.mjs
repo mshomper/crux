@@ -465,7 +465,7 @@ export class Hub {
     if (!agent?.expedition) return null;
     const actor = typeof by === 'string' ? p.agents.get(by) : by;
     if (actor?.role !== 'orchestrator') return null;
-    return `${agent.name} belongs to expedition ${agent.expedition}: its Lead runs it and the orchestrator stays out until the one summary at the end. The user can stop the expedition from the map.`;
+    return `${agent.name} belongs to expedition ${agent.expedition}: its Lead runs it and the orchestrator stays out until the one summary at the end.`;
   }
 
   // The Lead's own expedition (and a refusal for anyone who is not a Lead).
@@ -549,8 +549,12 @@ export class Hub {
     }
     const problem = Expedition.rolesProblem(merged);
     if (problem) throw new Error(problem);
+    // The test files are plain names (no folders, no .., not BRIEF.md): checked before anything is written.
+    for (const name of Object.keys(test || {})) {
+      if (!/^[A-Za-z0-9][\w.-]*$/.test(name) || name.includes('..') || /^BRIEF\.md$/i.test(name)) throw new Error(`"${name}" is not a name for a success-test file: use a plain file name such as CHECKLIST.md or run.json.`);
+    }
     const dir = join(p.dir, '.crux', 'expeditions');
-    const taken = [...Expedition.all(p).map(x => x.id), ...(existsSync(dir) ? readdirSync(dir) : [])];
+    const taken =[...Expedition.all(p).map(x => x.id), ...(existsSync(dir) ? readdirSync(dir) : [])];
     const id = Expedition.makeId(question || text.split('\n')[0], { taken });
     const ex = new Expedition(p, id).init();
     ex.write('BRIEF.md', `${text}\n`);
@@ -1101,7 +1105,7 @@ export class Hub {
       // have escalated without a call), so the study sees what the model says on exactly the dangerous cases.
       try { res = await this.checker.run({ ...(await this.checkRequest(a)), shadow: true }); }
       catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
-      try { this.logCheckUsage(a.p, id, res, true); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
+      try { this.logCheckUsage(a.p, id, res, true, a.agent.expedition || null); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
       const i = a.input || {};
       // No thread: it is a log line for the study tool, not a message, so it never counts as unread in any thread.
       // answer: what the check ends up saying (an allow on an unread script is a consult); rawAnswer: what the model said.
@@ -1109,7 +1113,7 @@ export class Hub {
         approval: id, worker: a.agent.name, tool: a.toolName,
         command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400),
         valid: !!res.valid, answer: res.valid ? res.answer : null, rawAnswer: res.valid ? (res.raw === undefined ? res.answer : res.raw) : null, reason: res.valid ? res.reason : res.error,
-        model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}),
+        model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}), ...(a.agent.expedition ? { expedition: a.agent.expedition } : {}),
         ...(res.scan?.stops?.length ? { scanStops: res.scan.stops.slice(0, 5) } : {}), ...(res.scan?.doubts?.length ? { scanDoubts: res.scan.doubts.slice(0, 5) } : {}), ...(res.scan?.notes?.length ? { scanNotes: res.scan.notes.slice(0, 8) } : {}), ms: res.ms ?? null
       });
     } catch (e) { console.warn('Shadow check failed:', e?.message || e); }
@@ -1242,7 +1246,8 @@ export class Hub {
       // Allowed as today. The check reads it beside, and the allow is logged under the same request id so the study can compare.
       const id = randomUUID();
       const i = input || {};
-      p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || '').slice(0, 400), answer: 'allow', reason: 'Auto mode: it runs a script inside the project (the check reads it in shadow mode only)', by: 'hub' });
+      // An expedition agent's line is filed in its own thread and tagged, never in the orchestrator's (decision 71).
+      p.log.append('permission_answer', { thread: agent.expedition ? agent.thread : 'orchestrator', approval: id, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || '').slice(0, 400), answer: 'allow', reason: 'Auto mode: it runs a script inside the project (the check reads it in shadow mode only)', by: 'hub', ...(agent.expedition ? { expedition: agent.expedition, ...(subagent ? { subagent } : {}) } : {}) });
       this.runShadow(id, { p, agent, toolName, input, route: { unsure, cwd: g.cwd, rules: g.rules, scripts } });
       noteStarts();
       return { behavior: 'allow', updatedInput: input };

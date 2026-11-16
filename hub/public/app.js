@@ -72,13 +72,14 @@ const fineMq = matchMedia('(pointer: fine)');
 const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches && el && !el.disabled && !el.closest('[hidden]')) el.focus(); };
 // The seam between the list and the conversation widens the list on a desk with a mouse (side-width.js).
 new SideResizer({ app: $('#app'), grip: $('#side-grip'), canResize: matchMedia('(min-width: 721px) and (pointer: fine)'), onResize: () => placeModelMenu() });
+const EXPEDITION_STOP_READY = false;   // phase 5 adds POST /api/expedition/stop
 const map = new LiveMap($('#hud'), {
   open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t),
   // a project on the All projects map (decision 57 C): its thread, in that project
   openIn: (name, t) => { const p = S.projects.find(x => x.name === name); if (p) openThreadIn(p, t); },
-  // The Expedition module: Stop sends the expedition straight to its report (spec 5). Asks first; the hub's endpoint comes
-  // with the end sequence (phase 5), so until then a refusal is said plainly and nothing else changes.
-  stopExpedition: async id => {
+  // The Expedition module: Stop sends the expedition straight to its report (spec 5). Asks first. The hub's endpoint comes
+  // with the end sequence (phase 5): until then there is no Stop button (set EXPEDITION_STOP_READY when it lands).
+  stopExpedition: !EXPEDITION_STOP_READY ? null : async id => {
     const p = proj();
     if (!p || !await hubConfirm({ k: 'Expedition', title: 'Stop this expedition and write it up?', body: 'The team stops where it is and the Lead writes the report from what exists. Nothing is merged.', ok: 'Stop and write up' })) return;
     try { await api('/api/expedition/stop', { project: p.name, expedition: id }); }

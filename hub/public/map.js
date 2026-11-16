@@ -50,7 +50,7 @@ export class LiveMap {
   constructor(slot, { open, openIn, stopExpedition } = {}) {
     this.slot = slot;
     this.openThread = open || (() => {});
-    this.stopExpedition = stopExpedition || (() => {});   // (expedition id): the app asks first, then tells the hub
+    this.stopExpedition = stopExpedition || null;   // (expedition id): the app asks first, then tells the hub; none = no Stop button
     this.cluster = null;                                   // the running expedition (expedition-map.js), or null
     this.openIn = openIn || (() => {});   // (project name, thread): a project on the All projects map
     this.hubMode = false;
@@ -112,7 +112,7 @@ export class LiveMap {
         <div class="hud-stations"></div>
         <div class="hud-exp" hidden>
           <b class="ex-t"></b><span class="ex-s"></span>
-          <button type="button" class="ex-stop" data-exp-stop>${svg('stop')}</button>
+          <button type="button" class="ex-stop" data-exp-stop hidden>${svg('stop')}</button>
         </div>
         <button type="button" class="ex-warn" data-exp-warn hidden>${svg('alert')}</button>
         <div class="hud-read hud-read-l">
@@ -154,7 +154,7 @@ export class LiveMap {
       // orchestrator; "+N more" closes the map onto the All projects column (already the one in focus), where they are
       if (e.target.closest('[data-up]')) { this.needsPop.hide(); this.readout.hide(); return this.go('all'); }
       // the Expedition module: Stop asks the app (which confirms first); the warning mark only explains itself
-      if (e.target.closest('[data-exp-stop]')) { if (this.cluster) this.stopExpedition(this.cluster.id); return; }
+      if (e.target.closest('[data-exp-stop]')) { if (this.cluster && this.stopExpedition) this.stopExpedition(this.cluster.id); return; }
       if (e.target.closest('[data-exp-warn]')) return;
       const pj = e.target.closest('[data-pj]');
       if (pj) { this.needsPop.hide(); this.readout.hide(); return this.goProject(pj.dataset.pj); }
@@ -321,6 +321,7 @@ export class LiveMap {
       stop.title = 'Stop the expedition and write it up';
       stop.setAttribute('aria-label', 'Stop the expedition and write it up');
     }
+    this.expEl.querySelector('.ex-stop').hidden = !this.stopExpedition;   // no Stop until the app has something to stop it with
     if (cl.parked) { const tip = PARKED_TIP(cl.parked); if (this.warnEl.title !== tip) { this.warnEl.title = tip; this.warnEl.setAttribute('aria-label', tip); } }
   }
 

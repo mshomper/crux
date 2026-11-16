@@ -154,6 +154,7 @@
 .hud.phone .ex-s{flex-direction:column;gap:2px}
 .ex-stop{pointer-events:auto;margin-top:4px;display:grid;place-items:center;width:36px;height:36px;padding:0;border-radius:8px;cursor:pointer;color:var(--hud-dim);background:rgba(8,14,22,.6);border:1px solid var(--hud-faint)}
 .ex-stop .hud-i{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ex-stop[hidden]{display:none}
 .ex-stop:hover{color:var(--hud-ice);border-color:var(--hud-dim)}
 .ex-warn{position:absolute;left:0;top:0;width:26px;height:26px;display:grid;place-items:center;padding:0;border:0;background:none;color:var(--hud-amber);cursor:help;
   opacity:clamp(0,calc((var(--e) - .6) * 2.5),1)}

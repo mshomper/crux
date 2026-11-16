@@ -4,7 +4,7 @@
 // the Lead cannot message or retire an agent outside its expedition.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { recordAgents, stubHub, StubExpedition, quietMark, quietProblems, MODEL } from './helpers/expedition-stub.mjs';
 import { cruxTools, cruxToolNames } from '../lib/tools.mjs';
@@ -367,4 +367,84 @@ test('the Conductor counts an expedition\'s agents as no workers and no one work
   const list = hub.conductor.agents(p);
   assert.deepEqual(list.map(a => a.name).sort(), [plain.name, hub.project(p.name).orchestrator().name, `expedition ${A.id}`, `expedition ${B.id}`].sort());
   assert.equal(list.find(a => a.role === 'expedition').state, 'planning');
+});
+
+// ---------- review follow-ups (#104) ----------
+test('launch checks the success-test file names before it writes anything', () => {
+  sent.length = 0;
+  const env = stubHub({ level: 'auto' });
+  const { hub, p } = env;
+  for (const name of ['../evil.md', 'sub/x.md', 'BRIEF.md', 'brief.md', '.hidden', 'a\b.md', '']) {
+    assert.throws(() => hub.launchExpedition(p, { brief: 'q', test: { 'CHECKLIST.md': '1', [name]: 'x' } }), /not a name for a success-test file/, name);
+  }
+  assert.equal(Expedition.all(p).length, 0);
+  assert.equal(existsSync(join(p.dir, '.crux', 'expeditions')), false, 'no folder, no BRIEF.md');
+  assert.equal(p.log.ofType('agent_created').filter(e => e.expedition).length, 0);
+});
+
+// A merge pass is a plain worker's: logged by a card answer, it lets that exact command through once.
+test('a merge pass never lets an expedition agent merge: parked, no allow, no waiting entry, the check never asked', async () => {
+  const { A, plain, hub, p, env } = world();
+  const builder = A.agents.builder;
+  let asked = 0;
+  hub.checkerMade = { run: async () => { asked++; return { valid: true, answer: 'allow', reason: 'x' }; } };
+  hub.settings.setProject(p.dir, { permissionCheck: 'on' });
+  const pass = (asker, n) => p.log.append('merge_pass', { pass: `pass-${asker}`, card: `question:${asker}`, asker, number: n, thread: asker });
+  pass(builder.name, 12); pass(plain.name, 12);
+  const cmd = { command: 'gh pr merge 12 --squash' };
+  // Control: the same pass lets a plain worker's merge through at once, logged as a pass.
+  const ok = await hub.requestApproval(p, plain, 'Bash', cmd);
+  assert.equal(ok.behavior, 'allow');
+  assert.ok(p.log.ofType('permission_answer').some(e => e.pass === `pass-${plain.name}` && e.answer === 'allow'));
+  const answersBefore = p.log.ofType('permission_answer').length, parkedBefore = p.log.ofType('expedition_parked').length;
+  // The Builder asks for that exact command with a pass of its own on the log.
+  const r = await hub.requestApproval(p, builder, 'Bash', cmd);
+  assert.equal(r.behavior, 'deny');
+  assert.match(r.message, /^Parked, not allowed/);
+  const mine = p.log.ofType('permission_answer').slice(answersBefore);
+  assert.deepEqual(mine.map(e => [e.answer, e.pass ?? null]), [['deny', null]], 'one deny, no allow, no pass used');
+  assert.equal(p.log.ofType('expedition_parked').length, parkedBefore + 1);
+  assert.equal(hub.approvals.size, 0);
+  assert.equal(p.log.ofType('approval').length, 0);
+  assert.equal(asked, 0, 'the check was never called');
+  void env;
+});
+
+test('check on: a worker-written script is judged by the check and allowed by it, with no waiting entry or approval event', async () => {
+  sent.length = 0;
+  const env = stubHub({ level: 'auto' });
+  const ex = world2(env), { hub, p } = env;
+  writeFileSync(join(p.dir, 'build.mjs'), 'console.log(1)\n');
+  hub.settings.setProject(p.dir, { permissionCheck: 'on' });
+  const calls = [];
+  hub.checkerMade = { run: async req => { calls.push(req.tool); return { valid: true, answer: 'allow', reason: 'a small script of its own', model: 'claude-sonnet-5-5' }; } };
+  const mark = quietMark(env);
+  const r = await hub.requestApproval(p, ex.lead, 'Bash', { command: 'node build.mjs' });
+  assert.equal(r.behavior, 'allow');
+  assert.deepEqual(calls, ['Bash'], 'the check was asked once');
+  assert.equal(hub.approvals.size, 0);
+  assert.equal(p.log.ofType('approval').length, 0);
+  const a = p.log.ofType('permission_answer').at(-1);
+  assert.deepEqual([a.answer, a.by, a.thread, a.expedition], ['allow', 'permission check', ex.lead.thread, ex.id]);
+  assert.deepEqual(quietProblems(env, mark, sent), []);
+});
+
+test('shadow check: an expedition agent\'s line and the check\'s usage carry the expedition and stay out of the orchestrator\'s thread', async () => {
+  sent.length = 0;
+  const env = stubHub({ level: 'auto' });
+  const ex = world2(env), { hub, p } = env;
+  writeFileSync(join(p.dir, 'build.mjs'), 'console.log(1)\n');
+  hub.settings.setProject(p.dir, { permissionCheck: 'shadow' });
+  hub.checkerMade = { run: async () => ({ valid: true, answer: 'allow', reason: 'fine', model: 'claude-sonnet-5-5', modelUsage: { 'claude-sonnet-5-5': { inputTokens: 100, outputTokens: 20, costUSD: 0.01 } } }) };
+  const mark = quietMark(env);
+  const r = await hub.requestApproval(p, ex.lead, 'Bash', { command: 'node build.mjs' });
+  assert.equal(r.behavior, 'allow', 'shadow mode allows as Auto does');
+  for (let i = 0; i < 20 && !p.log.ofType('check_shadow').length; i++) await new Promise(res => setImmediate(res));
+  const line = p.log.ofType('permission_answer').at(-1);
+  assert.deepEqual([line.thread, line.expedition], [ex.lead.thread, ex.id]);
+  assert.equal(p.log.ofType('check_shadow').at(-1).expedition, ex.id);
+  const usage = p.log.ofType('usage').filter(e => e.agentType === 'check');
+  assert.equal(usage.length, 1);
+  assert.equal(usage[0].expedition, ex.id, 'its spend counts against the expedition');
+  assert.deepEqual(quietProblems(env, mark, sent), []);
 });
