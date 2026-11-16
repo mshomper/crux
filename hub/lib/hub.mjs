@@ -17,7 +17,7 @@ import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './setting
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, EffortCeilings, modelId, effortLevel, modelLabel } from './agent-types.mjs';
-import { answerMessage, answerNote } from '../public/questions.js';
+import { answerMessage, answerNote, QUESTION_RULES } from '../public/questions.js';
 import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage, FABLE_NOTE } from './usage.mjs';
@@ -114,6 +114,7 @@ export class Hub {
     if (this.conductor) {
       const home = this.conductor.home;
       this.restore(home);
+      this.markQuestionRules(home);
       home.log.on(ev => this.emit({ ...ev, project: CONDUCTOR, logged: true }));
     }
     this.idleTimer = setInterval(() => { this.idleCheck(); this.auditChecks(); }, IDLE_CHECK_MS);
@@ -245,11 +246,19 @@ export class Hub {
     if (this.projects.has(p.name)) return this.projects.get(p.name);
     this.projects.set(p.name, p);
     this.restore(p);
+    this.markQuestionRules(p);
     p.log.on(ev => this.emit({ ...ev, project: p.name, logged: true }));
     p.desk.notice = text => this.notice(p, 'orchestrator', text);
     if (this.noAgents) p.desk.local = true;   // a test hub never pushes decision records to the real GitHub
     p.board.freshPages();   // decision 41: pages are local, so rebuild any a pull left missing or stale
     return p;
+  }
+
+  // One-time cutover for the question rules (public/questions.js): the first start with them logs this event, once per
+  // log. Questions asked before it keep the old closing rules (so the backlog stays closed); later ones wait for you.
+  // It lives in the log, so a restart and every device read the same moment.
+  markQuestionRules(p) {
+    if (!p.log.events.some(e => e.type === QUESTION_RULES)) p.log.append(QUESTION_RULES, { version: 2 });
   }
 
   project(name) {
@@ -502,7 +511,12 @@ export class Hub {
       .filter(a => a.answer && Number.isInteger(a.index) && a.index >= 0 && a.index < ev.questions.length);
     if (!items.length) throw new Error('Type an answer first.');
     const pairs = items.map(a => ({ question: ev.questions[a.index], answer: a.answer }));
-    this.fromYou(p, ev.thread, answerMessage(pairs), [], { answers: items.map(a => ({ question: id, index: a.index })) });
+    // A question stays on Needs you after its asker retires (Matt, 2026-11-16), so you can still answer it. A retired
+    // agent has no box to read it: the answer goes to the orchestrator thread, naming who asked.
+    const asker = ev.thread === 'orchestrator' ? null : p.agents.get(ev.thread);
+    const askerGone = ev.thread !== 'orchestrator' && (!asker || asker.state === 'retired');
+    const text = askerGone ? `[Answers to ${ev.from}'s questions; ${ev.from} has retired, so they come to you]\n\n${answerMessage(pairs)}` : answerMessage(pairs);
+    this.fromYou(p, askerGone ? 'orchestrator' : ev.thread, text, [], { answers: items.map(a => ({ question: id, index: a.index })) });
     // Decision 64: your yes on a merge question's card pre-approves that merge, only when the page marks the answer as
     // your own words (own: true). Missing means no pass: the Conductor's suggestion (Take all, or its pre-filled box
     // sent as it was), or an older page.
@@ -510,11 +524,11 @@ export class Hub {
     // A worker's questions: one line in the orchestrator thread, and a note the orchestrator reads with its next
     // message, so it knows they are answered and does not ask again. It is not woken just for this. The
     // orchestrator's own questions skip this: the answer already goes to its thread.
-    if (p.agents.get(ev.from)?.role === 'worker') {
+    if (!askerGone && p.agents.get(ev.from)?.role === 'worker') {
       this.notice(p, 'orchestrator', answerNote('You', ev.from, pairs));
       p.orchestrator()?.noteForNextTurn(`[Hub note] ${answerNote('{{Who}}', ev.from, pairs)}. ${ev.from} has the answers; these questions are settled, so don't ask them again.`);
     }
-    return { ok: true, thread: ev.thread, answered: items.map(a => a.index) };
+    return { ok: true, thread: askerGone ? 'orchestrator' : ev.thread, answered: items.map(a => a.index) };
   }
 
   // Decision 64, part 3: your own answer to question i of summary ev, from its card. A plain yes to a question asking

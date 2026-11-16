@@ -133,7 +133,7 @@ test('settled while you were away: those cards drop out of the digest; with none
   const y = s.ask(s.b, 'Use the cyan or the violet focus ring here?');
   await sleep(80);
   s.hub.dismissQuestion(s.a, x);
-  s.hub.fromYou(s.b, 'orchestrator', 'Cyan.');
+  s.hub.answerQuestions(s.b, y, [{ index: 0, text: 'Cyan.' }]);   // an explicit answer: a plain message no longer settles a card
   s.presence.here = true;
   s.c.presenceReport();
   assert.equal(s.cards().length, 0);

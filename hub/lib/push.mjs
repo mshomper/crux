@@ -103,7 +103,8 @@ export function isLooking(card, presences, now = Date.now()) {
 }
 
 // Is the card still waiting by the time we would send it? Questions follow the same rule as the Needs you list
-// (public/questions.js): answered, dismissed, asked by an agent that has retired, or answered by your picks.
+// (public/questions.js): answered or dismissed by you, or answered by your picks. An asker retiring, the orchestrator
+// writing in the thread, or a newer summary never settle it.
 // decisions: the project's decision records, and decisionNotified(id) (decision 64: an open decision card hides a
 // question that asks only what it asks, once that decision has been notified). A summary's grouped card (members)
 // waits while any of its cards does.

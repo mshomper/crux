@@ -199,6 +199,8 @@ test('a Conductor brief never counts as your answer: the orchestrator\'s questio
   c.toOrchestrator('alpha', 'conductor-1', 'Matt is away today.');
   assert.equal(open(), 1);
   hub.fromYou(a, 'orchestrator', 'Yes, merge it.');
+  assert.equal(open(), 1, 'a plain message is not an answer either');
+  hub.answerQuestions(a, a.log.events.findLast(e => e.type === 'summary').id, [{ index: 0, text: 'Yes, merge it.' }]);
   assert.equal(open(), 0);
 });
 
@@ -434,7 +436,7 @@ test('after a restart a brief the orchestrator never acted on is delivered again
   assert.deepEqual(hub.resumePlan(a), []);
 });
 
-test('a question lives in one card: a repeat is hidden while the first card is open, and comes back when it closes', async () => {
+test('a question lives in one card: a repeat is hidden while the first card is open, and the orchestrator writing to w1 does not close it', async () => {
   const { hub, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
   const w = hub.startWorker(a, 'w1', 'task');
@@ -447,10 +449,9 @@ test('a question lives in one card: a repeat is hidden while the first card is o
   assert.deepEqual(open(), [['w1', [Q]], ['orchestrator-1', ['Ship the lens picker on Friday or wait?']]]);
   const note = repeatsIn(a.log.events).get(a.log.events.findLast(e => e.type === 'summary').id);
   assert.deepEqual(note.map(r => [r.i, r.of]), [[0, 'w1']]);   // the "also in w1's card" note
-  // The worker's card closes without your answer (its orchestrator writes to it): the repeat shows again by itself
-  // (only open cards hold repeats; its notice is skipped when w1's already went: fewer-notices.test.mjs).
+  // Its orchestrator writes to the worker: that is not your answer, so w1's card stays and still holds the repeat.
   hub.orchestratorToWorker(a, orch, 'w1', 'Hold on, I am asking Matt.');
-  assert.deepEqual(open(), [['orchestrator-1', ['should the preview update while dragging or only on release ?', 'Ship the lens picker on Friday or wait?']]]);
+  assert.deepEqual(open(), [['w1', [Q]], ['orchestrator-1', ['Ship the lens picker on Friday or wait?']]]);
   assert.ok(w);
   // The Conductor's own summary is never hidden against a project's cards (its prompt keeps it from re-asking).
   const { hub: h2, c } = await setup();
@@ -461,7 +462,7 @@ test('a question lives in one card: a repeat is hidden while the first card is o
   assert.deepEqual(mine.decisions_needed, []);   // decisions are the projects' cards, never the Conductor's
 });
 
-test('once you answer or dismiss the first card, its repeat counts as answered; closed without you, it comes back', async () => {
+test('once you answer or dismiss the first card, its repeat counts as answered; nothing else closes it', async () => {
   const Q = 'Should the preview update while dragging, or only on release?';
   const askBoth = async () => {
     const s = await setup();
@@ -482,18 +483,18 @@ test('once you answer or dismiss the first card, its repeat counts as answered; 
   s = await askBoth();
   s.hub.dismissQuestion(s.a, s.workerCard.id);
   assert.deepEqual(openQuestions(s.a.log.events), []);
-  // You reply in w1's thread: the same.
+  // A plain reply in w1's thread is not an answer: it stays.
   s = await askBoth();
   s.hub.fromYou(s.a, 'w1', 'Only on release.');
-  assert.deepEqual(openQuestions(s.a.log.events), []);
-  // w1's card closes without you (a newer summary from w1 that asks nothing new): the repeat comes back.
+  assert.deepEqual(openQuestions(s.a.log.events).map(q => q.from), ['w1']);
+  // A newer summary from w1 that asks something else does not close w1's first card: both wait, the repeat stays hidden.
   s = await askBoth();
   s.hub.postSummary(s.a, s.w, summary({ questions: ['Which lens is the default?'] }));
-  assert.deepEqual(openQuestions(s.a.log.events).map(q => [q.from, q.open.map(x => x.text)]).sort(), [['orchestrator-1', [Q]], ['w1', ['Which lens is the default?']]]);
-  // w1 hands off without you: the repeat comes back too.
+  assert.deepEqual(openQuestions(s.a.log.events).map(q => [q.from, q.open.map(x => x.text)]), [['w1', ['Which lens is the default?']], ['w1', [Q]]]);   // newest first
+  // w1 hands off without you: its card still waits, and still holds the repeat.
   s = await askBoth();
   s.hub.finishRetire(s.a, s.w);
-  assert.deepEqual(openQuestions(s.a.log.events).map(q => q.from), ['orchestrator-1']);
+  assert.deepEqual(openQuestions(s.a.log.events).map(q => q.from), ['w1']);
 });
 
 test('only a real repeat is hidden: never the longer question, never a short exact one; a retired holder lets it back', async () => {
@@ -509,9 +510,9 @@ test('only a real repeat is hidden: never the longer question, never a short exa
   hub.postSummary(a, orch, summary({ questions: ['Should I merge PR #63 now, or wait for #64 and merge both?'] }));
   assert.equal(openQuestions(a.log.events).length, 2);   // the longer one is its own card
   hub.postSummary(a, orch, summary({ questions: ['Should I merge PR #63 now?'] }));
-  assert.equal(openQuestions(a.log.events).length, 1);   // the same one is hidden behind w1's card
-  hub.finishRetire(a, w);   // w1 retires unanswered: its card goes, the orchestrator's repeat shows
-  assert.deepEqual(openQuestions(a.log.events).map(q => q.from), ['orchestrator-1']);
+  assert.deepEqual(openQuestions(a.log.events).map(q => q.from), ['w1', 'orchestrator-1']);   // the same one is hidden behind w1's card; the longer one still waits
+  hub.finishRetire(a, w);   // w1 retires unanswered: its card keeps waiting (and holding the repeat)
+  assert.deepEqual(openQuestions(a.log.events).map(q => q.from), ['w1', 'orchestrator-1']);
 });
 
 test('All projects: Waiting starts folded, phone and desk alike (decision 60: the cards are in the chat); a tap opens it', () => {
@@ -582,7 +583,7 @@ test('no wake for cards you settled before it came: no turn, no reply; one still
   hub.approvals.set('ap7', { p: b });
   b.log.append('approval', { thread: 'w1', approval: 'ap7', agent: 'w1', tool: 'Bash', input: {}, routedTo: null });
   // Within the batching window you answer the question and the permission card.
-  hub.fromYou(a, 'orchestrator', 'Yes, merge it.');
+  hub.answerQuestions(a, a.log.events.findLast(e => e.type === 'summary').id, [{ index: 0, text: 'Yes, merge it.' }]);
   hub.approvals.delete('ap7');
   await sleep(80);
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);   // no turn at all
@@ -606,7 +607,7 @@ test('no wake for cards you settled before it came: no turn, no reply; one still
   assert.deepEqual(c.home.log.ofType('cards').flatMap(e => e.items.map(i => i.project)), ['beta']);   // nor in its chat
 });
 
-test('a worker question its orchestrator answers within the window wakes nothing either', async () => {
+test('a worker question you answer within the window wakes nothing; the orchestrator answering does not count', async () => {
   const { hub, c, a } = await setup();
   const orch = hub.ensureOrchestrator(a);
   const w = hub.startWorker(a, 'w1', 'task');
@@ -614,6 +615,10 @@ test('a worker question its orchestrator answers within the window wakes nothing
   hub.postSummary(a, w, summary({ questions: ['Use the cyan or the violet focus ring?'] }));
   assert.equal(c.pending.length, 1);
   a.log.append('message', { thread: w.thread, from: orch.name, text: 'Cyan.' });
+  assert.equal(c.pending.length, 1, 'the orchestrator answering does not settle it: still waiting on you');
+  a.log.append('message', { thread: w.thread, from: 'you', text: 'Cyan.' });
+  assert.equal(c.pending.length, 1, 'your plain message is not an answer either');
+  hub.answerQuestions(a, a.log.events.findLast(e => e.type === 'summary').id, [{ index: 0, text: 'Cyan.' }]);
   await sleep(80);
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);
   assert.equal(c.pending.length, 0);
