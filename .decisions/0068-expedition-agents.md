@@ -1,7 +1,7 @@
 # 0068 Where does an expedition's team run: as hub agents under a Lead, or inside one agent?
 
-- Status: open
-- Date: 2026-11-16
+- Status: decided
+- Date: 2026-11-16, decided 2026-11-16
 - Lenses: architecture
 - Builds on: 0020, 0065, 0066
 - Settles: multi-agent job structure = a long-running team job runs each role as a visible hub agent under a lead with tools scoped to its own team
@@ -16,6 +16,10 @@ For you:
 - Time, tokens and cost per role in the report come from the log, so the budget stop and the figures are real
 - The orchestrator stays out of it until the one summary at the end
 - Setup: Nothing to set up; the seven role files ship with the hub's starter types
+
+## Decision
+
+**C: Mixed.** Hub agents for Builder, Verifier, Skeptic and Advisor; gatherers as helpers inside the Lead.
 
 ## Context
 
@@ -42,7 +46,7 @@ One hub agent, the Lead, runs every role as a Claude Code subagent, as in the re
 - Con: Roles invisible on the map; cost per role can't be measured; every permission request lands on the Lead
 - Effort: Small
 
-### C: Mixed
+### C: Mixed (chosen)
 
 Hub agents for Builder, Verifier, Skeptic and Advisor; gatherers as helpers inside the Lead.
 - Pro: Fewer threads

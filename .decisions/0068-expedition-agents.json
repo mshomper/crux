@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should each expedition role run as its own hub agent, started by a Lead with a few scoped tools, rather than as hidden helpers inside one agent? I recommend hub agents, as your spec does: you see the whole team on the map and the report's figures are measured, not guessed.",
  "for_you": [
   "Each running expedition shows as one cluster on the live map and one folded row in the thread list; you can open any member",
@@ -71,9 +71,9 @@
  "recommendation": "A, as the spec recommends: it is the only option that keeps the budget stop and the per-role figures honest.",
  "confidence": "firm",
  "change_mind": "If the phase 2 build turns out far larger than planned, a short B spike could come first, but not as the version you rely on.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "C",
+ "reason": "",
+ "decided_on": "2026-11-16",
  "superseded_by": null,
  "challenge": null,
  "settles": [
