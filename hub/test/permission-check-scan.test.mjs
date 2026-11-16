@@ -125,3 +125,75 @@ test('the prefix says node_modules may be a junction, after the plan\'s facts an
   const plain = PROMPT.replace('<project>\\.claude\\worktrees\\<name>', () => `${FACTS.dir}\\.claude\\worktrees\\<name>`);
   assert.equal(s.replace(`\n${EXTRA_FACT}`, '').length, plain.replace(/<rules body>|<posix dir>|<project>|<dir>|<temp>|<level>|<id>/g, m => ({ '<rules body>': FACTS.rulesBody, '<posix dir>': '/c/work/proj', '<project>': 'proj', '<dir>': FACTS.dir, '<temp>': FACTS.temp, '<level>': FACTS.level, '<id>': FACTS.rulesId })[m]).length);
 });
+
+// ---------- the hub: shadow changes nothing live; only "on" escalates for a scan hard stop ----------
+import { Agent } from '../lib/agent.mjs';
+import { Hub } from '../lib/hub.mjs';
+import { Memory } from '../lib/memory.mjs';
+import { HubSettings } from '../lib/settings.mjs';
+const sent = [];
+Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'working'; };
+Agent.prototype.close = function () { this.q = null; };
+const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(r => setImmediate(r)); };
+
+function hubWith(mode, scriptText) {
+  sent.length = 0;
+  const root = makeTmp('crux-check-scanhub-');
+  const dir = join(root, 'proj');
+  mkdirSync(join(dir, '.crux'), { recursive: true });
+  mkdirSync(join(dir, 'tools'), { recursive: true });
+  writeFileSync(join(dir, 'tools', 'x.mjs'), scriptText);
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'node tools/x.mjs' } }));
+  const calls = [];
+  const checker = new PermissionCheck({ call: async arg => { calls.push(arg); return { text: '{"answer":"allow","reason":"fine"}', via: 'sdk', tokens: { input: 1, output: 1, cacheRead: 0, cacheCreation: 0 }, modelUsage: {} }; } });
+  const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }), checker });
+  hub.checkGit = async () => ({ code: 1, out: '' });
+  const p = hub.project('proj');
+  p.board.addEntry({ kind: 'requirement', title: 'Orchestrator permission rules (test)', summary: 'rules', body: 'The orchestrator may ALLOW project work.', from: 'you' });
+  const orch = hub.ensureOrchestrator(p); orch.q = {};
+  const w = hub.startWorker(p, 'builder', 'Build it', 'you', 'Build it');
+  w.q = {};
+  hub.setCheckMode(p, mode);
+  sent.length = 0;
+  return { hub, p, orch, w, calls };
+}
+const PUSH = "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['push', 'origin', 'HEAD:main']);\n";
+
+test('shadow: a scan hard stop goes to the orchestrator as today, shown in its request text, and is only logged in check_shadow', async () => {
+  const { hub, p, orch, w, calls } = hubWith('shadow', PUSH);
+  hub.requestApproval(p, w, 'Bash', { command: 'npm run build', description: 'a step' });
+  await settle();
+  const ap = p.log.ofType('approval').at(-1);
+  assert.equal(ap.routedTo, orch.name, 'with the orchestrator, as today');
+  assert.equal(sent.length >= 1, true);
+  const msg = sent.find(([n]) => n === orch.name)[1];
+  assert.match(msg, /hub's own scan of the text of a script this runs found: HARD STOP: x\.mjs: it contains "git push/);
+  assert.match(msg, /only in shadow mode here/);
+  const a = [...hub.approvals.values()].at(-1);
+  assert.equal(a.escalated, false, 'nothing was escalated to you');
+  assert.equal(a.routedTo, orch.name);
+  assert.equal(p.log.ofType('permission_answer').filter(e => e.by === 'permission check').length, 0, 'the check answered nothing');
+  assert.equal(calls.length, 0, 'and the model was not asked (the hard stop is found in code)');
+  const sh = p.log.ofType('check_shadow').at(-1);
+  assert.equal(sh.answer, 'escalate');
+  assert.ok(sh.scanStops.some(s => /git push/.test(s)), 'the finding is in the log line');
+});
+
+test('shadow: a clean script adds nothing to the request text; the shadow run still logs', async () => {
+  const { hub, p, orch, w, calls } = hubWith('shadow', "console.log('hello')\n");
+  hub.requestApproval(p, w, 'Bash', { command: 'npm run build', description: 'a step' });
+  await settle();
+  assert.doesNotMatch(sent.find(([n]) => n === orch.name)[1], /own scan/);
+  assert.equal(calls.length, 1);
+  assert.equal(p.log.ofType('check_shadow').at(-1).answer, 'allow');
+});
+
+test('on: the same scan hard stop escalates to you in code, with no model call and no orchestrator message', async () => {
+  const { hub, p, orch, w, calls } = hubWith('on', PUSH);
+  hub.requestApproval(p, w, 'Bash', { command: 'npm run build', description: 'a step' });
+  await settle();
+  const a = [...hub.approvals.values()].at(-1);
+  assert.equal(a.escalated, true, 'a card for you');
+  assert.equal(calls.length, 0);
+  assert.equal(sent.filter(([n]) => n === orch.name).length, 0, 'the orchestrator was not asked');
+});

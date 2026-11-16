@@ -245,7 +245,7 @@ export class PermissionCheck {
     const scan = scanScripts(req.scripts);
     if (scan.stops.length) {
       const reason = `A script it runs has a hard stop in its text (${scan.stops[0]}${scan.stops.length > 1 ? `; ${scan.stops.length - 1} more` : ''}), so it goes to you without asking the model.`.slice(0, 300);
-      return { valid: true, answer: 'escalate', raw: 'escalate', reason, downgraded: false, scanned: true, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
+      return { valid: true, answer: 'escalate', raw: 'escalate', reason, downgraded: false, scanned: true, scan, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
     }
     const doubts = scan.doubts;
     const system = buildPrefix(req), user = buildSuffix(doubts.length ? { ...req, scripts: { ...req.scripts, scanDoubts: doubts } } : req);
@@ -264,7 +264,7 @@ export class PermissionCheck {
       got = await Promise.race([work, timeout]);
     } catch (e) { error = e?.message || String(e); }
     finally { clearTimeout(timer); }
-    const base = { model: this.model, ms: Date.now() - started, unread, via: got?.via || null, tokens: got?.tokens || null, costUSD: got?.costUSD ?? null, listUSD: got?.tokens ? listCost(this.model, got.tokens) : null, modelUsage: got?.modelUsage || null };
+    const base = { scan, model: this.model, ms: Date.now() - started, unread, via: got?.via || null, tokens: got?.tokens || null, costUSD: got?.costUSD ?? null, listUSD: got?.tokens ? listCost(this.model, got.tokens) : null, modelUsage: got?.modelUsage || null };
     if (error) return { valid: false, error, ...base };
     const parsed = parseAnswer(got?.text);
     if (!parsed) return { valid: false, error: 'the reply was not {answer, reason}', ...base };
