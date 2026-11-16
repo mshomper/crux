@@ -15,7 +15,10 @@ import { tmpdir } from 'node:os';
 
 export const SCRIPT_LIMIT = 16 * 1024;               // plan B2: attach a script in full up to about 16 KB
 export const SCRIPTS_TOTAL = 48 * 1024;              // and no more than this much script text in one call
-export const MAX_SCRIPTS = 8;
+export const MAX_SCRIPTS = 8;                        // scripts that have to be read (changed or new); committed ones are only named
+export const MAX_ITEMS = 60;                         // scripts of any kind one command may name (a test glob names many)
+export const OWN_TEST_LIMIT = 64 * 1024;             // M051: a worker's own test file is attached in full up to this (the biggest in hub/test is 88 KB)
+export const OWN_TESTS_TOTAL = 192 * 1024;           // and no more than this much of them in one call
 const MAX_NEST = 4;                                  // a command inside a command inside a package script ...
 const MAX_FILES = 60, MAX_FILE_BYTES = 1024 * 1024;  // following imports of a committed script
 
@@ -202,13 +205,17 @@ export function parseCommand(cmd, { shell = 'bash', cwd = '' } = {}) {
       break;
     }
     if (!w.length) continue;
-    const word0 = w[0], rest = w.slice(1);
+    // A redirect written as one word (2>&1, >/dev/null, 2>out.txt) is not an argument: `node --test x.mjs 2>&1` named a file "2>&1",
+    // which was "no such file" and held back nearly every test run (M051). Its writes are noted above (mutates). A lone ">" is kept.
+    const word0 = w[0], rest = w.slice(1).filter(x => !/^(?:\d*|&)>>?(?:&\d+|\S+)$/.test(x));
     const head = basename(word0.replace(/\\/g, '/')).replace(/\.exe$/i, '').toLowerCase();
     if (dynamic(word0)) { out.unread.push({ head: '(command)', why: 'what it runs is built at run time' }); continue; }
     if (/^(cd|chdir|pushd|set-location|sl)$/.test(head)) {
       const arg = rest.find(x => !/^\/d$/i.test(x) && !/^-(path|literalpath|l|p)$/i.test(x));
-      // a folder it cannot work out, or a cd inside a group or after ||, whose reach cannot be told from the text
-      if (!arg || arg === '-' || dynamic(arg) || /[(){}]/.test(String(cmd)) || String(cmd).includes('||')) out.unread.push({ head: 'cd', why: 'moves to a folder the hub cannot work out' });
+      // a folder it cannot work out, or a cd inside a group or after ||, whose reach cannot be told from the text. Brackets and
+      // || inside a quoted string (grep -E "^(a|b)", echo "x || y") are text, not structure (M051: 66 of 187 held-back lines).
+      const bare = String(cmd).replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, '""');
+      if (!arg || arg === '-' || dynamic(arg) || /[(){}]/.test(bare) || bare.includes('||')) out.unread.push({ head: 'cd', why: 'moves to a folder the hub cannot work out' });
       else at = isAbsolute(arg) ? arg : join(at || '.', arg);
       continue;
     }
@@ -492,6 +499,17 @@ export function defaultGit(args, cwd) {
 const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 const within = (p, root) => norm(p) === norm(root) || norm(p).startsWith(norm(root) + '/');
 
+// The commit this checkout shares with main (the merge-base of HEAD and main), '' when git cannot tell. Cached per folder.
+async function baseSha(dir, { git, mainRefs, cache }) {
+  let sha = cache.get(`b:${norm(dir)}`);
+  if (sha === undefined) {
+    sha = '';
+    for (const ref of mainRefs) { const b = await git(['merge-base', 'HEAD', ref], dir); if (b.code === 0 && b.out.trim()) { sha = b.out.trim(); break; } }
+    cache.set(`b:${norm(dir)}`, sha);
+  }
+  return sha;
+}
+
 // One file: inside the project (or one of its worktrees), tracked by git, not ignored, not changed in the working tree
 // or index, not a link, and the same as at the merge-base with main (a worker's own committed edit is not main's).
 // Anything git cannot confirm is false. cache: a Map shared by one request, so each file and ref is asked about once.
@@ -506,12 +524,7 @@ export async function isCommittedFile(file, { projectDir, git = defaultGit, main
       if ((await git(['ls-files', '--error-unmatch', '--', name], dir)).code !== 0) return false;
       const st = await git(['status', '--porcelain', '--ignored', '--', name], dir);
       if (st.code !== 0 || st.out.trim()) return false;
-      let sha = cache.get(`b:${norm(dir)}`);
-      if (sha === undefined) {
-        sha = '';
-        for (const ref of mainRefs) { const b = await git(['merge-base', 'HEAD', ref], dir); if (b.code === 0 && b.out.trim()) { sha = b.out.trim(); break; } }
-        cache.set(`b:${norm(dir)}`, sha);
-      }
+      const sha = await baseSha(dir, { git, mainRefs, cache });
       if (!sha) return false;
       return (await git(['diff', '--quiet', '--no-ext-diff', '--no-textconv', sha, '--', name], dir)).code === 0;
     })();
@@ -586,7 +599,9 @@ export async function isProjectScript(file, opts = {}) {
     let text;
     try { if (statSync(f).size > MAX_FILE_BYTES) return false; text = readFileSync(f, 'utf8'); } catch { return false; }
     const { specs, unresolvable } = importsOf(text, f);
-    if (unresolvable) return false;
+    // A hub rule module, committed and unchanged from main (checked above), is main's reviewed code: its words about eval, import(
+    // and spawn are patterns it matches on, not calls it makes. Its own imports are still followed.
+    if (unresolvable && !isHubRuleModule(f, opts.projectDir)) return false;
     for (const s of specs) {
       const r = resolveImport(s, /\.py$/i.test(f));
       if (!r) return false;
@@ -606,6 +621,95 @@ export function isProjectTest(file, projectDir) {
     if (!real.startsWith(root + '/')) return false;
     return /^(?:\.claude\/worktrees\/[^/]+\/)?hub\/test\//i.test(real.slice(root.length + 1));
   } catch { return false; }
+}
+
+// The hub's own permission rule modules. They hold the hard-stop words as data (pattern lists and regexes: "gh pr merge", "git push",
+// "pip"), so a scan that reads their whole text sees a hard stop in every one of them (M051: 10 of 14 stricter answers).
+// Only these files, by name and place: the project's or one of its worktrees' hub/lib/.
+const HUB_RULE_FILES = /^(?:\.claude\/worktrees\/[^/]+\/)?hub\/lib\/(?:permission-rules|permission-lists|permission-scripts|permission-check|permissions)\.mjs$/i;
+export function isHubRuleModule(file, projectDir) {
+  try {
+    if (!projectDir) return false;
+    const real = norm(realpathSync(file)), root = norm(realpathSync(projectDir));
+    return real.startsWith(root + '/') && HUB_RULE_FILES.test(real.slice(root.length + 1));
+  } catch { return false; }
+}
+// What the worker changed in a file since the commit it shares with main: the added lines (git diff -U0 against the merge-base,
+// working tree included), as text. What is unchanged from main is main's reviewed code and is left out; what the worker added
+// is read in full, so a rule module that really runs a push or a merge is still caught. null: git cannot say (the file is not
+// tracked, or not found at the base), and the whole file is read as before.
+export async function addedVsMain(file, { git = defaultGit, mainRefs = ['origin/main', 'main'], cache = new Map() } = {}) {
+  try {
+    const dir = dirname(file), name = basename(file);
+    if ((await git(['ls-files', '--error-unmatch', '--', name], dir)).code !== 0) return null;
+    const sha = await baseSha(dir, { git, mainRefs, cache });
+    if (!sha) return null;
+    // the file as it was at the base must exist (a new file is not main's)
+    const at = await git(['cat-file', '-e', `${sha}:${(await git(['ls-files', '--full-name', '--', name], dir)).out.trim().split('\n')[0] || name}`], dir);
+    if (at.code !== 0) return null;
+    const d = await git(['diff', '--no-ext-diff', '--no-textconv', '-U0', sha, '--', name], dir);
+    if (d.code !== 0) return null;
+    return d.out.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1)).join('\n');
+  } catch { return null; }
+}
+
+// The worker's own folder: its worktree (<project>/.claude/worktrees/<name>) when it runs in one, else the project folder.
+function ownRootOf(cwd, projectDir) {
+  try {
+    const c = realpathSync(cwd), p = realpathSync(projectDir);
+    const m = new RegExp('^' + norm(p).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/\\.claude/worktrees/[^/]+(?=/|$)', 'i').exec(norm(c));
+    return m ? c.slice(0, m[0].length) : p;
+  } catch { return projectDir; }
+}
+// A test of the worker's own: under hub/test/ (isProjectTest) and inside the worker's own folder (its worktree, or the project
+// when it works there). Another worker's worktree is not "own".
+export function isOwnTest(file, cwd, projectDir) {
+  try {
+    if (!isProjectTest(file, projectDir)) return false;
+    return within(realpathSync(file), ownRootOf(cwd || projectDir, projectDir));
+  } catch { return false; }
+}
+
+// What a worker's own test file still loads or starts that the hub has not seen, after the files it imports have been followed.
+// `t.loads` is what loadsUnseen said of the whole text. Only the reasons that are about imports and starting a process are looked at
+// again; any other reason (a file named at run time, eval, another script run by name) stays, and the test stays unread.
+//   - the test is attached in full, so the check reads all of it;
+//   - every file it imports (or starts by a script name in its text) is a file the hub reached and read: committed and unchanged
+//     from main, or the worker's own file inside its own folder that the hub scanned in code and that starts nothing but git or gh;
+//   - a spawn it cannot name (spawn(process.execPath, [x]), execSync(cmd)) keeps it unread (importsOf says unresolvable).
+// So a worker-written test that spawns a program the hub cannot see, or loads an unreadable file, is still held back.
+const CLEAR_TEST = new Set(['imports another file', 'requires another file', 'starts another program or script, which is not attached',
+  'can start other programs (it loads the process module), and what it starts is not attached']);
+const CLEAR_LIB = new Set(['imports another file', 'requires another file', 'can start other programs (it loads the process module), and what it starts is not attached']);
+function ownTestLoads(t, impInfo, { projectDir, base }) {
+  try {
+    if (t.loads.some(r => !CLEAR_TEST.has(r)) || !/\.(mjs|cjs|js)$/i.test(t.path)) return t.loads;
+    const root = ownRootOf(base, projectDir);
+    const seen = new Set([norm(t.path)]), todo = [{ path: t.path, text: t.text }];
+    while (todo.length) {
+      const cur = todo.pop();
+      const ii = importsOf(cur.text, cur.path);
+      if (ii.unresolvable && !isHubRuleModule(cur.path, projectDir)) return t.loads;   // a rule module's own words are judged on what the worker added (below)
+      for (const sp of ii.specs) {
+        const r = resolveImport(sp, false);
+        if (!r) { if (isHubRuleModule(cur.path, projectDir)) continue; return t.loads; }   // a file it names that is not there (in a rule module: a word in a pattern, not an import)
+        if (/\.json$/i.test(r)) continue;
+        const k = norm(r);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const info = impInfo.get(k);
+        if (!info) return t.loads;                               // the hub did not reach it
+        let judged = info.text;
+        if (!info.committed) {
+          if (!within(realpathSync(r), root)) return t.loads;   // not the worker's own
+          judged = isHubRuleModule(r, projectDir) ? info.scanText : info.text;   // what the worker added; the rest is main's
+          if (loadsUnseen(judged, { dir: dirname(r) }).some(x => !CLEAR_LIB.has(x)) || spawns(judged) || importsOf(judged, r).unresolvable) return t.loads;
+        }
+        if (/\.(mjs|cjs|js|jsx|ts|tsx)$/i.test(r)) todo.push({ path: r, text: info.text });
+      }
+    }
+    return [];
+  } catch { return t.loads; }
 }
 
 function expandGlob(path) {
@@ -694,7 +798,7 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
   const base = cwd || projectDir || process.cwd();
   const cache = new Map(), opts = { projectDir, git, mainRefs, cache };
   const out = [], inlineLoads = [], inlineCode = [], seenPaths = new Set();
-  let attachedBytes = 0, sawWrite = false, sawRun = false;
+  let attachedBytes = 0, ownBytes = 0, sawWrite = false, sawRun = false;
   const queue = [{ cmd: String(cmd || ''), cwd: base, depth: 0, shell }], seenCmds = new Set();
   const items = [];
   const npmScriptShell = process.platform === 'win32' ? 'cmd' : 'bash';
@@ -733,10 +837,23 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
   const unique = new Map();   // the same file named twice is one script
   for (const it of items) unique.set(it.kind ? `${it.kind}\u0000${it.path}` : norm(it.path), it);
   items.length = 0; items.push(...unique.values());
-  if (items.length > MAX_SCRIPTS) {   // more than can be told about: the rest are not seen, so it cannot be allowed
-    out.push({ path: `${items.length - MAX_SCRIPTS} more scripts`, kind: 'unreadable', note: `more than ${MAX_SCRIPTS} scripts run, the rest are not listed` });
-    items.length = MAX_SCRIPTS;
+  // A test run over a glob names many files, most of them committed and unchanged (listed by name only, nothing attached): only the
+  // ones that have to be read count toward MAX_SCRIPTS. More than MAX_ITEMS files is more than can be told about.
+  if (items.length > MAX_ITEMS) {
+    out.push({ path: `${items.length - MAX_ITEMS} more scripts`, kind: 'unreadable', note: `more than ${MAX_ITEMS} scripts run, the rest are not listed` });
+    items.length = MAX_ITEMS;
   }
+  // Which of them are committed and unchanged from main (a few git questions each: asked a few at a time)
+  const committedAt = new Map();
+  const toAsk = [];
+  for (const it of items) {
+    if (it.kind) continue;
+    let ok = false; try { ok = statSync(it.path).isFile(); } catch { /* missing: reported below */ }
+    if (ok && !committedAt.has(norm(it.path))) { committedAt.set(norm(it.path), null); toAsk.push(it.path); }
+  }
+  for (let i = 0; i < toAsk.length; i += 6) await Promise.all(toAsk.slice(i, i + 6).map(async f => committedAt.set(norm(f), await isProjectScript(f, opts))));
+  const ownTests = [];   // the attached scripts that are the worker's own tests (their loads are looked at again below)
+  let needRead = 0;
   for (const it of items) {
     if (it.kind) { out.push(it); continue; }
     const pk = norm(it.path);
@@ -745,40 +862,61 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     let st;
     try { st = statSync(it.path); } catch { out.push({ path: it.path, kind: 'missing', note: 'the file does not exist' }); continue; }
     if (!st.isFile()) { out.push({ path: it.path, kind: 'unreadable', note: 'not a file' }); continue; }
-    if (await isProjectScript(it.path, opts)) { out.push({ path: it.path, kind: 'committed' }); continue; }
+    if (committedAt.get(pk)) { out.push({ path: it.path, kind: 'committed' }); continue; }
+    if (++needRead > MAX_SCRIPTS) {   // more to read than can be told about: the rest are not seen, so it cannot be allowed
+      if (needRead === MAX_SCRIPTS + 1) out.push({ path: 'more scripts', kind: 'unreadable', note: `more than ${MAX_SCRIPTS} scripts to read, the rest are not listed` });
+      continue;
+    }
     let buf;
     try { buf = readFileSync(it.path); } catch { out.push({ path: it.path, kind: 'unreadable', note: 'could not be read' }); continue; }
     if (buf.subarray(0, 4096).includes(0)) { out.push({ path: it.path, kind: 'unreadable', note: 'binary, not text' }); continue; }
-    const room = Math.max(0, Math.min(SCRIPT_LIMIT, SCRIPTS_TOTAL - attachedBytes));
+    // The worker's own tests (hub/test/ in its own worktree) are attached in full up to OWN_TEST_LIMIT, so the check reads the whole
+    // file; any other script is attached up to SCRIPT_LIMIT. A file over its limit is cut off, and cut off is never allowed.
+    const own = isOwnTest(it.path, base, projectDir);
+    const room = own ? Math.max(0, Math.min(OWN_TEST_LIMIT, OWN_TESTS_TOTAL - ownBytes)) : Math.max(0, Math.min(SCRIPT_LIMIT, SCRIPTS_TOTAL - attachedBytes));
     const cutOff = buf.length > room;
     const text = buf.subarray(0, room).toString('utf8');
-    attachedBytes += Buffer.byteLength(text);
+    if (own) ownBytes += Buffer.byteLength(text); else attachedBytes += Buffer.byteLength(text);
     const py = /\.py$/i.test(it.path);
     // package.json is data: the commands in it are read in turn (above), so they are not "loaded" from here.
     const data = /^package\.json$/i.test(basename(it.path));
     // scanText: more of a long script than the model is sent (up to 256 KB), so the hard-stop scan in code reads past the cut
-    out.push({ path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, test: isProjectTest(it.path, projectDir), ...(cutOff ? { scanText: buf.subarray(0, 256 * 1024).toString('utf8') } : {}), loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) });
+    const entry = { path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, test: isProjectTest(it.path, projectDir), ...(own ? { own: true } : {}), ...(cutOff ? { scanText: buf.subarray(0, 256 * 1024).toString('utf8') } : {}), loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) };
+    out.push(entry);
+    if (own && !cutOff && entry.loads.length) ownTests.push(entry);
   }
   // The files an attached script imports by relative path (importsOf resolves them), read for the hub's own text scan: up to
   // 12 files and 256 KB each. Committed, unchanged files are the project's reviewed code and are followed but not scanned.
   // The model is not sent them (the script "imports another file", so it may not be allowed anyway).
   const imports = [], seenImp = new Set(out.filter(s => s.kind === 'attached').map(s => norm(s.path)));
   const todo = out.filter(s => s.kind === 'attached' && /\.(mjs|cjs|js|jsx|ts|tsx|py)$/i.test(s.path)).map(s => ({ path: s.path, text: s.scanText ?? s.text }));
-  for (let n = 0; todo.length && n < 24; n++) {
+  const impInfo = new Map();   // every file reached: { committed, text, own } (what the worker's own tests are judged on, below)
+  let truncated = false;
+  let n = 0;
+  for (; todo.length && n < 24; n++) {
     const cur = todo.shift();
     let specs = [];
     try { specs = importsOf(cur.text, cur.path).specs; } catch { /* unreadable: nothing to follow */ }
     for (const sp of specs) {
-      if (imports.length >= 12) break;
       const r = resolveImport(sp, /\.py$/i.test(cur.path));
       if (!r || /\.json$/i.test(r) || seenImp.has(norm(r))) continue;
+      if (imports.length >= 12) { truncated = true; continue; }
       seenImp.add(norm(r));
       let text;
       try { const b = readFileSync(r); if (b.subarray(0, 4096).includes(0)) continue; text = b.subarray(0, 256 * 1024).toString('utf8'); } catch { continue; }
-      if (!(await isCommittedFile(r, opts))) imports.push({ path: r, text, test: isProjectTest(r, projectDir) });
+      const committed = await isCommittedFile(r, opts);
+      // A hub rule module the worker changed is scanned on what the worker added (the rest is main's, and holds the hard-stop words as data)
+      let scanText = text;
+      if (!committed && isHubRuleModule(r, projectDir)) { const added = await addedVsMain(r, opts); if (added !== null) scanText = added; }
+      impInfo.set(norm(r), { committed, text, scanText, path: r });
+      if (!committed) imports.push({ path: r, text: scanText, test: isProjectTest(r, projectDir) });
       if (/\.(mjs|cjs|js|jsx|ts|tsx|py)$/i.test(r)) todo.push({ path: r, text });
     }
   }
+  if (todo.length) truncated = true;
+  // The worker's own tests (attached in full) count as seen when everything they load or start is a file the hub has followed:
+  // committed and unchanged, or the worker's own file that the hub read in code (above) and that starts nothing unseen itself.
+  if (!truncated) for (const t of ownTests) t.loads = ownTestLoads(t, impInfo, { projectDir, base });
   // Text run as a command (iex, eval) is never a file the hub could read, wherever it sits in the command.
   if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|(?:^|[;&|(\s])eval\s/i.test(String(cmd || '')) && !inlineLoads.includes('evals text')) inlineLoads.push('evals text');
   const unread = out.some(s => s.kind !== 'committed' && (s.kind !== 'attached' || s.cutOff || s.loads.length)) || inlineLoads.length > 0;

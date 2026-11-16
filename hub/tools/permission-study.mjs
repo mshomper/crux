@@ -507,7 +507,44 @@ export function compareShadow(events, { sinceMs = -Infinity } = {}) {
   return out;
 }
 
-export function checkSection(name, events, { sinceMs = -Infinity } = {}) {
+// ---------- what the M051 fixes would change, replayed offline ----------
+// No model is asked: each logged shadow line keeps what the model said then (rawAnswer), and the hub's own rules are re-applied
+// to the logged command text. It cannot see the files (the workers' worktrees are gone), so it takes the stated shape of each fix:
+//   1. a `node --test` run of test files (and nothing else that is unread) is no longer held back: the model's allow stands;
+//   2. a hard stop that came only from the hub's rule modules (imported) is gone: the line falls back to what the model said;
+//   3. a command that names another hub project's folder is an escalate.
+// The model's own consults stay consults (they may fall once it is sent whole test files; that needs a live replay).
+export function replayShadow(events, { parseCommand, otherDirs = [], sinceMs = -Infinity } = {}) {
+  const roots = otherDirs.map(d => String(d).toLowerCase().replace(/[\\/]+/g, '/').replace(/\/+$/, '')).filter(Boolean);
+  const names = text => { const t = String(text).toLowerCase().replace(/[\\/]+/g, '/').replace(/(^|[^a-z0-9])\/([a-z])\//g, '$1$2:/'); return roots.some(r => { for (let i = t.indexOf(r); i >= 0; i = t.indexOf(r, i + 1)) if (!/[a-z0-9]/.test(t[i - 1] || '') && !/[\w.-]/.test(t[i + r.length] || '')) return true; return false; }); };
+  // Would today's reader hold this command back? Only a command whose text was logged in full can be judged (the log keeps 400
+  // characters; a longer one is cut mid-word and reads as "a quote that is never closed", so it stays held back here).
+  const seen = (cmd, tool) => {
+    try {
+      if (String(cmd).length >= 399) return false;
+      const p = parseCommand(cmd, { shell: /PowerShell/i.test(tool) ? 'powershell' : 'bash' });
+      return !p.unread.length && !p.inline.length && !p.runners.length && p.files.every(f => /\.test\.(m|c)?js$/i.test(f.path));
+    } catch { return false; }
+  };
+  const testRun = seen;
+  const out = { total: 0, before: { consult: 0, allow: 0, escalate: 0, deny: 0 }, after: { consult: 0, allow: 0, escalate: 0, deny: 0 }, testRuns: 0, ruleModuleStops: 0, otherProject: 0 };
+  for (const e of events) {
+    if (e.type !== 'check_shadow' || !e.valid || Date.parse(e.ts) < sinceMs) continue;
+    out.total++;
+    out.before[e.answer]++;
+    const raw = e.rawAnswer || e.answer;
+    let now = e.answer;
+    if (e.scanStops?.length && e.scanStops.every(s => /^permission-(rules|lists|scripts|check)\.mjs \(imported\)/.test(s))) {
+      out.ruleModuleStops++;
+      now = raw === 'allow' && e.unread && !testRun(e.command, e.tool) ? 'consult' : raw;
+    } else if (e.downgraded && raw === 'allow' && testRun(e.command, e.tool)) { out.testRuns++; now = 'allow'; }
+    if (names(e.command) && !(e.scanStops?.length)) { if (now !== 'escalate') out.otherProject++; now = 'escalate'; }
+    out.after[now]++;
+  }
+  return out;
+}
+
+export function checkSection(name, events, { sinceMs = -Infinity, replay = null } = {}) {
   const c = compareShadow(events, { sinceMs });
   const lines = [`## ${name}: the permission check in shadow mode`, ''];
   if (!c.total) return lines.concat('No `check_shadow` lines yet. Put the project in shadow mode on its settings card (Permission check: Shadow) and run this again after a few days.', '').join('\n');
@@ -524,6 +561,20 @@ export function checkSection(name, events, { sinceMs = -Infinity } = {}) {
   lines.push(`| Real answer not in yet | ${c.pending} |`);
   if (c.usage.calls) lines.push(`| Cost of the check's calls | ${usd(c.usage.list)} at list price over ${c.usage.calls} calls (${usd(c.usage.list / c.usage.calls)} each); ${pct(c.usage.cacheRead, c.usage.cacheRead + c.usage.input)} of input read from cache |`);
   lines.push('', 'Agreement is not evidence of safety on its own (a check that always allows agrees with an orchestrator that allows 97%). Read every disagreement below, and the weekly list of allows both sides gave.', '');
+  if (replay) {
+    const r = replayShadow(events, { ...replay, sinceMs });
+    const share = x => `${x.consult} (${pct(x.consult, r.total)})`;
+    lines.push('### What the three fixes would change (offline replay, no model asked)', '',
+      'The model\'s logged answers are kept as they were; only the hub\'s own rules are re-applied to the logged command text. A floor, not a forecast: the model\'s own consults may fall once it is sent whole test files, which only a live replay can show.', '',
+      '| | Before | After the fixes |', '|---|---|---|',
+      `| Consult | ${share(r.before)} | ${share(r.after)} |`,
+      `| Allow | ${r.before.allow} | ${r.after.allow} |`,
+      `| Escalate | ${r.before.escalate} | ${r.after.escalate} |`,
+      `| Deny | ${r.before.deny} | ${r.after.deny} |`, '',
+      `- Held-back lines now read as seen (test files only, or no script at all) so the model's allow stands: ${r.testRuns}`,
+      `- Escalations caused only by the hub's own rule modules, now back to what the model said: ${r.ruleModuleStops}`,
+      `- Commands naming another hub project's folder, now escalated: ${r.otherProject}`, '');
+  }
   if (c.disagree.length) {
     lines.push('### Every disagreement, in full', '');
     for (const d of c.disagree.sort((a, b) => Number(b.allowedByCheckOnly) - Number(a.allowedByCheckOnly) || String(a.ts).localeCompare(b.ts))) {
@@ -578,7 +629,8 @@ export async function main(argv = process.argv.slice(2), log = console.log, deps
       log(`Re-checked ${rc.total} requests with today's rules (${rc.level})`);
     }
     if (opts.check) {
-      text += '\n' + checkSection(basename(dir), events, { sinceMs });
+      const { parseCommand } = deps.parseCommand ? deps : await import('../lib/permission-scripts.mjs');
+      text += '\n' + checkSection(basename(dir), events, { sinceMs, replay: { parseCommand, otherDirs: dirs.map(x => resolve(x)).filter(x => x !== dir) } });
       const c = compareShadow(events, { sinceMs });
       log(`Permission check (shadow): ${c.total} read, ${c.disagree.length} disagreements, ${c.consult} consults`);
     }

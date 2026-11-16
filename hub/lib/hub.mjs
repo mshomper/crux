@@ -11,7 +11,7 @@ import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
-import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite, expeditionFolderWrite } from './permission-rules.mjs';
+import { classify, otherProjectTouched, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite, expeditionFolderWrite } from './permission-rules.mjs';
 import { normalizeOverlay, parseHttpsUrl } from './permission-lists.mjs';
 import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
 import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './settings.mjs';
@@ -1053,6 +1053,9 @@ export class Hub {
     const file = norm(input.file_path || input.path || input.notebook_path);
     const privateNotes = norm(join(this.memory.profileDir, 'private.md'));
     const readsPrivate = (file && file === privateNotes) || /private\.md/i.test(String(input.command || input.pattern || ''));
+    // M051: another hub project's data is never answered on the spot, not even a plain read: it goes on to the rules (a hard stop).
+    const readsOther = this.otherProjectDirs(p).length > 0 && !!otherProjectTouched(toolName, input, { projectDir: p.dir, cwd, otherProjects: this.otherProjectDirs(p) });
+    if (readsOther) return null;
     if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input, cwd)) return { behavior: 'allow', updatedInput: input };
     // Decision 35: the orchestrator writes records in the decisions worktree, never in the main folder's .decisions.
     const records = p.desk.usable() ? p.desk.decisionsDir : join(p.dir, '.decisions');
@@ -1270,6 +1273,12 @@ export class Hub {
     return on;
   }
 
+  // The folders of the other projects this hub lists (never the asking agent's own): another project's data is a hard stop
+  // for the rules and for the check (M051). Read from the hub's own list, never from a request.
+  otherProjectDirs(p) {
+    try { return p.hubWide ? [] : [...this.projects.values()].filter(x => !x.hubWide).map(x => x.dir).filter(d => d && d !== p.dir); } catch { return []; }
+  }
+
   // What the check is sent for one waiting request (see permission-check.mjs buildPrefix / buildSuffix).
   async checkRequest(a) {
     const { p, agent, toolName, input, route } = a;
@@ -1280,7 +1289,7 @@ export class Hub {
       project: p.name, dir: p.dir, temp: tmpdir(), level: { standard: 'Ask', auto: 'Auto', trusted: 'Trusted' }[this.permissionMode(p)],
       rulesId: rules?.entryId, rulesBody: rules?.body, worker: agent.name,
       goal: agent.goal || String(agent.task || '').split('\n')[0].slice(0, 200),
-      tool: toolName, input, cwd, doubts: route.unsure || [],
+      tool: toolName, input, cwd, doubts: route.unsure || [], otherProjects: this.otherProjectDirs(p),
       testPorts: [...(agent.testHubs || [])],   // plan A7: the test hubs this agent started, the hub's own record
       // shell: how its text is split into words (Git Bash for Bash, PowerShell for PowerShell)
       scripts: route.scripts !== undefined ? route.scripts : isShell ? await scriptsFor(String(input?.command || ''), { cwd, projectDir: p.dir, shell: toolName === 'PowerShell' ? 'powershell' : 'bash', ...(this.checkGit ? { git: this.checkGit } : {}) }) : null
@@ -1444,7 +1453,7 @@ export class Hub {
     const known = new Set([...downloadsFrom(p.log.events), ...marks]);
     // Phase 4: an expedition agent's classify also gets its frozen folders, and its launch's pre-approvals as an overlay on
     // Matt's lists (never saved into them). Both come from the hub's own record of the agent's expedition.
-    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir, this.expeditionOverlay(p, agent)), frozen: this.frozenDirs(p, agent), expeditionRoot: agent.expedition ? this.expeditionOf(p, agent).root : null });
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir, this.expeditionOverlay(p, agent)), frozen: this.frozenDirs(p, agent), expeditionRoot: agent.expedition ? this.expeditionOf(p, agent).root : null, otherProjects: this.otherProjectDirs(p) });
     if (c.frozen) return { denied: c.reasons[0] };
     for (const d of c.downloaded || []) if (!known.has(d)) p.log.append('download', { path: d, agent: agent.name, thread: agent.thread, ...(c.downloads?.find(x => x.path.toLowerCase().replace(/\\/g, '/') === d) || {}) });
     const { route, tempMade } = c;
@@ -1541,7 +1550,7 @@ export class Hub {
   pausedRoute(p, agent, toolName, input, toolUseID = null) {
     const stops = [this.memory.personalize(PAUSE_STOP)];
     try {
-      const c = classify({ tool: toolName, input, projectDir: p.dir, cwd: agent.cwdFor?.(toolUseID) || null, agent: agent.name, madeTemp: new Set(agent.tempDirs || []), downloaded: new Set(agent.downloads || []), level: this.permissionMode(p) });
+      const c = classify({ tool: toolName, input, projectDir: p.dir, cwd: agent.cwdFor?.(toolUseID) || null, agent: agent.name, madeTemp: new Set(agent.tempDirs || []), downloaded: new Set(agent.downloads || []), level: this.permissionMode(p), otherProjects: this.otherProjectDirs(p) });
       if (c.route === 'human') stops.push(...c.reasons.map(s => this.memory.personalize(s)));
     } catch { /* the pause alone is reason enough for the card */ }
     return { to: null, stops, rules: this.rulesFor(p)?.entryId || null };

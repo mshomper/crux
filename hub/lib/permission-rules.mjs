@@ -71,6 +71,52 @@ export function longPath(p) {
 }
 const under = (p, root) => { const a = norm(p), r = norm(root); return a === r || a.startsWith(r + '/'); };
 
+// ---------- other hub projects' data (Matt, 2026-11-16, M051) ----------
+// Text as a path is compared: lower case, every run of slashes (and the doubled backslashes of a JSON or JS string) as one "/",
+// Git Bash's /c/Users as c:/Users.
+const pathText = s => String(s ?? '').toLowerCase().replace(/[\\/]+/g, '/').replace(/(^|[^a-z0-9])\/([a-z])\//g, '$1$2:/');
+// The folders of the other projects, ready to look for in text. A folder that holds this project (or is it) is not "another".
+export function otherProjectRoots(dirs, own) {
+  const mine = pathText(own).replace(/\/+$/, '');
+  return [...new Set((dirs || []).map(d => pathText(d).replace(/\/+$/, '')).filter(d => d && d !== mine && !(mine + '/').startsWith(d + '/')))];
+}
+// The other project's folder that this text names (as a whole path part: ".../AcuLoad" or ".../AcuLoad/.crux/events.jsonl", not
+// ".../AcuLoad2"), or null. For commands and for the paths in a file tool's input.
+export function namesOtherProject(text, roots) {
+  if (!roots?.length) return null;
+  const t = pathText(text);
+  for (const r of roots) {
+    for (let i = t.indexOf(r); i >= 0; i = t.indexOf(r, i + 1)) {
+      if (/[a-z0-9]/.test(t[i - 1] || '')) continue;
+      if (/[\w.-]/.test(t[i + r.length] || '')) continue;
+      return r;
+    }
+  }
+  return null;
+}
+const OTHER_WHY = d => `Reads another project's data (${d}): its event log and files are not this project's to read`;
+// Does this request name another hub project's folder? -> the folder (as text), or null. Used by classify (a hard stop) and by the
+// hub's own read shortcuts (a plain Read or `cat` is no longer answered on the spot when it reaches another project).
+// The whole command is read for the folder's path (either slash, Git Bash's /c/ form, ~ and $HOME written out); a word that climbs
+// out of the worker's folder (../../AcuLoad/.crux/events.jsonl) is resolved from where the command runs.
+export function otherProjectTouched(tool, input = {}, { projectDir, cwd = null, home = homedir(), otherProjects = [] } = {}) {
+  const roots = otherProjectRoots(otherProjects, projectDir);
+  if (!roots.length) return null;
+  const shell = /^(Bash|PowerShell)$/.test(tool);
+  const words = shell ? [String(input.command || '')] : [input.file_path, input.path, input.notebook_path, input.pattern, input.glob].filter(x => typeof x === 'string');
+  const text = words.join('\n').replace(/(~|\$\{?HOME\}?|\$env:USERPROFILE|%USERPROFILE%)(?=[\\/])/gi, () => String(home).replace(/\\/g, '/'));
+  const hit = namesOtherProject(text, roots);
+  if (hit) return hit;
+  const base = cwd || projectDir;
+  for (const w of shell ? text.match(/[^\s"'`|;&<>()=]+/g) || [] : words) {
+    if (!/(^|[\\/])\.\.([\\/]|$)/.test(w)) continue;
+    let a; try { a = resolve(String(base), w); } catch { continue; }
+    const h = namesOtherProject(a, roots);
+    if (h) return h;
+  }
+  return null;
+}
+
 const SAFE = new Set(['ls', 'dir', 'pwd', 'cat', 'head', 'tail', 'wc', 'echo', 'printf', 'which', 'where', 'file', 'stat', 'tree',
   'grep', 'rg', 'egrep', 'fgrep', 'sort', 'uniq', 'cut', 'tr', 'basename', 'dirname', 'realpath', 'readlink', 'date', 'whoami', 'true',
   'false', 'du', 'df', 'diff', 'cmp', 'mkdir', 'touch', 'cp', 'mv', 'sed', 'awk', 'test', '[', 'sleep', 'tee', 'jq', 'column', 'nl',
@@ -405,13 +451,18 @@ export function mergeNeedsOwner({ level = 'auto', into = null } = {}) {   // esl
 // hub turns it into a refusal for an expedition agent (it has no card to send it to). See frozenWrite for how narrow it is.
 // expeditionRoot (phase 5): the asking agent's own expedition folder, .crux/expeditions/<id>/. Writes there are not "the hub's
 // own log" stops (see Check.inExpeditionFolder); the rest of .crux still is.
-export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], hubs = [], level = 'auto', lists = null, frozen = [], expeditionRoot = null }) {
+// otherProjects: the folders of the other projects this hub lists (the asking agent's own project is never in it). Anything that
+// names one of them (a path, a .crux event log, a file in it) is a hard stop, never an allow: another project's data is not this
+// project's to read (Matt, 2026-11-16, M051). It is plain, with no exception for a task that names the other project: the card is
+// the place to say yes.
+export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], hubs = [], level = 'auto', lists = null, frozen = [], expeditionRoot = null, otherProjects = [] }) {
   if (frozen?.length) {
     let why = null;
     try { why = frozenWrite(tool, input, { dirs: frozen, cwd, projectDir, home }); } catch { why = null; }   // a first line only: if it cannot read a request, the hash check is still there
     if (why) return { route: 'human', reasons: [why], unsure: [], frozen: true, tempMade: [], downloaded: [], hubsStarted: [] };
   }
   const c = new Check(projectDir, tmp, home, cwd);
+  c.others = otherProjectRoots(otherProjects, c.projectDir);
   c.startedHubs = new Set([...hubs].map(Number));
   c.hubsNow = new Set();
   c.level = level;
@@ -437,6 +488,11 @@ function classifyWith(c, tool, input) {
   const cmd = String(input.command || '');
   if (/^(Bash|PowerShell)$/.test(tool)) c.command(cmd, tool === 'PowerShell');
   else c.tool(tool, input);
+  // Another project's folder named anywhere in the command, or in a file tool's path, search folder or pattern.
+  if (c.others.length) {
+    const other = otherProjectTouched(tool, input, { projectDir: c.projectDir, cwd: c.cwd0, home: c.home, otherProjects: c.others });
+    if (other) c.stop(OTHER_WHY(other));
+  }
   // Something the hub could not read that also names a hard-stop action is not left to judgment. Decision 64 A: only
   // the text the hub could not read counts (riskyText), without commit messages, quoted text and here-strings.
   const text = c.riskyText(cmd);
@@ -949,6 +1005,8 @@ class Check {
     if (w === 'outside' && write) this.stop(`Writes outside the project folder: ${p}`);
     if (w === 'tmp' && write) this.noteTemp(p, cwd);
     if (this.secretAt(p, cwd)) this.stop(`Touches secrets or credentials: ${p}`);
+    // A path that reaches another hub project (also by a relative path: ..\..\..\AcuLoad\.crux\events.jsonl)
+    if (this.others?.length) { const a = this.abs(p, cwd); const other = typeof a === 'string' && namesOtherProject(a, this.others); if (other) this.stop(OTHER_WHY(other)); }
     // Any repo's settings or hooks, nested or in temp (git init sub && ... > sub/.git/config): git runs what they
     // name (core.fsmonitor, hooks), so a later read-only git there would run it (review round 1).
     if (write && w !== 'null' && /(^|\/)\.git\/(config|hooks)(\/|$)/.test(norm(this.abs(p, cwd)))) this.stop(`Writes a git repo's settings or hooks (${p})`);

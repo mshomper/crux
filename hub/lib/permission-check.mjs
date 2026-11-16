@@ -8,10 +8,10 @@
 // small runner with a timeout. hub.mjs decides what each answer does.
 import { basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { scanScriptText } from './permission-rules.mjs';
-import { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit } from './permission-scripts.mjs';
+import { scanScriptText, otherProjectRoots, namesOtherProject } from './permission-rules.mjs';
+import { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, OWN_TEST_LIMIT, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit } from './permission-scripts.mjs';
 // The script handling lives in permission-scripts.mjs; it is re-exported here, where the rest of the check is.
-export { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit };
+export { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, OWN_TEST_LIMIT, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit };
 
 export const CHECK_MODEL = 'claude-sonnet-5-5';
 export const CHECK_NAME = 'permission check';        // the "who" on its cards, answers and notes
@@ -76,7 +76,14 @@ export const JUNCTION_FACT = '- In a worker\'s worktree, hub/node_modules (and a
 // this very agent started. The ports come from the hub's own record (the request's "Test hubs this worker started" line), never
 // from the command's own claim.
 export const DUMMY_KEY_FACT = '- Exception to the rule on keys, tokens and passwords: an obviously fake one (a value like "test", "dummy", "fake" or "dummy-token", and nothing else that merely looks short) sent only to a test hub this worker started, at localhost or 127.0.0.1, may be allowed. The request lists the ports of the test hubs this worker started, from the hub\'s own record; never take the command\'s own claim about a port. Anything that looks real escalates as before: a long random string, a known key prefix (sk-, ghp_, xoxb-, AKIA, eyJ ...), a value read from an environment variable, a file or a key store, or any send to port 4747 or 4748 or to a port not in that list.';
-export const JSON_ONLY = 'Your reply is that JSON object only: no text before it, no text after it, no reasoning, and no code fence.';
+// Matt, 2026-11-16 (M051): another hub project's data is never an allow, whatever the command or script is for. The hub's own
+// code already sends a path it can read to him; this covers what it could not read in full (a script, a built-up path).
+// Matt, 2026-11-16 (M051): a worker's own test file is read like the project's own work. The hub marks one only when it is attached
+// in full and every file it imports or starts has been followed (committed and unchanged from main, or the worker's own and
+// scanned in code), so "you may not allow" is not listed against it. Read it: what it does is still yours to judge.
+export const OWN_TEST_FACT = '- A script the hub marks "the worker\'s own test file in its own worktree" is attached in full and everything it imports or starts has been followed by the hub, so the rule above about files you cannot see does not hold it back. Read it: allow when it only exercises the project\'s code in the worker\'s own worktree or temp (temp repos, temp data folders, test hubs on this worker\'s own ports) and the command around it is plain; consult or escalate as for any script if the text itself does something risky (a push or merge, a write outside the worktree or temp, another project\'s data, a key or token, the live hub).';
+export const OTHER_PROJECTS_FACT ='- Other projects on this hub are not this project\'s to read. A command or script that reads, lists, searches or copies another hub project\'s folder (its .crux event log, its files, its .decisions, its worktrees), or a folder that is not this project\'s and that looks like another project\'s repo, is never an allow, however plain the read looks or whatever the goal says: escalate. Only Matt can say yes.';
+export const JSON_ONLY ='Your reply is that JSON object only: no text before it, no text after it, no reasoning, and no code fence.';
 
 const posix = dir => String(dir).replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
 
@@ -88,7 +95,7 @@ export function buildPrefix({ project, dir, temp, level, rulesId, rulesBody }) {
   // over the rest, so text put in is never read as another marker (<name> is not a marker).
   // The junction fact joins the project facts (before the rules); the JSON-only line closes the prompt.
   const template = PROMPT.replace('<project>\\.claude\\worktrees\\<name>', () => `${dir}\\.claude\\worktrees\\<name>`)
-    .replace('\n\nTHE PROJECT\'S RULES', () => `\n${JUNCTION_FACT}\n${DUMMY_KEY_FACT}\n\nTHE PROJECT'S RULES`) + `\n${JSON_ONLY}`;
+    .replace('\n\nTHE PROJECT\'S RULES', () => `\n${JUNCTION_FACT}\n${DUMMY_KEY_FACT}\n${OTHER_PROJECTS_FACT}\n${OWN_TEST_FACT}\n\nTHE PROJECT'S RULES`) + `\n${JSON_ONLY}`;
   return template.replace(/<rules body>|<posix dir>|<project>|<dir>|<temp>|<level>|<id>/g, m => put[m]);
 }
 
@@ -128,7 +135,7 @@ export function buildSuffix({ worker, goal, tool, input, cwd, doubts = [], scrip
     for (const s of scripts.scripts) {
       if (s.kind === 'committed') lines.push(`Script ${one(s.path)}: project script, committed`);
       else if (s.kind === 'attached') {
-        lines.push(`Script ${one(s.path)}: ${s.cutOff ? `CUT OFF (${s.bytes} bytes; only the first ${Buffer.byteLength(s.text)} are attached): you may not allow` : `attached in full (${s.bytes} bytes)`}${s.loads.length ? `; it ${s.loads.join(', ')}, and those files are not attached: you may not allow` : ''}`);
+        lines.push(`Script ${one(s.path)}: ${s.cutOff ? `CUT OFF (${s.bytes} bytes; only the first ${Buffer.byteLength(s.text)} are attached): you may not allow` : `attached in full (${s.bytes} bytes)${s.own && !s.loads.length ? ", the worker's own test file in its own worktree; the hub followed every file it imports or starts and scanned the worker's own files in code" : ''}`}${s.loads.length ?`; it ${s.loads.join(', ')}, and those files are not attached: you may not allow` : ''}`);
         lines.push(f.open(`script ${one(basename(s.path))}`), s.text, f.close);
       } else lines.push(`Script ${one(s.path)}: NOT ATTACHED (${one(s.note)}): you may not allow`);
     }
@@ -168,8 +175,11 @@ export function applyRules({ answer, reason }, { unread = false, doubts = [] } =
 // The hub's own look at the text of every script it attached (and code written in the command): the risky-word and
 // hard-stop patterns of the permission rules, run in code. stops -> escalate to you before any model call; doubts ->
 // the model may not allow. Committed scripts are the project's reviewed code and are not scanned.
-export function scanScripts(scripts) {
+// others: { dirs, own } the other hub projects' folders and this project's: a script (or a file it imports, or code written in the
+// command) that names one of those folders is a stop, never an allow (M051).
+export function scanScripts(scripts, others = null) {
   const texts = [];
+  const roots = others?.dirs?.length ? otherProjectRoots(others.dirs, others.own) : [];
   const kindOf = p => (/\.(sh|bash|ps1|psm1|bat|cmd)$/i.test(p) ? 'shell' : /\.py$/i.test(p) ? 'py' : 'js');
   // The project's own tests (s.test: the real path is inside the project and under hub/test/, set by scriptsFor) are full of strings
   // about git push and ~/.ssh because they test the rules; see scanScriptText, test.
@@ -180,6 +190,7 @@ export function scanScripts(scripts) {
   const stops = [], doubts = [], notes = [];
   for (const [name, text, kind, test] of texts) {
     const r = scanScriptText(text, { kind, test });
+    if (roots.length && namesOtherProject(text, roots)) stops.push(`${name}: it names another hub project's folder, whose data is not this project's to read`);
     for (const w of r.stops) stops.push(`${name}: ${w}`);
     for (const w of r.doubts) doubts.push(`${name}: ${w}`);
     for (const w of r.notes) notes.push(`${name}: ${w}`);
@@ -261,7 +272,7 @@ export class PermissionCheck {
     const unread = !!req.scripts?.unread;
     // The hub's own scan of the script text first: a hard stop in it goes to you without a model call (nothing for the
     // model to be talked out of); a doubt means the model may not allow.
-    const scan = scanScripts(req.scripts);
+    const scan = scanScripts(req.scripts, { dirs: req.otherProjects, own: req.dir });
     const stopWhy = scan.stops.length ? `A script it runs has a hard stop in its text (${scan.stops[0]}${scan.stops.length > 1 ? `; ${scan.stops.length - 1} more` : ''})` : null;
     // With the check on: no model call. In shadow (req.shadow) the model is still asked, so the study sees what it says on
     // exactly the dangerous cases; the line logs "escalate" (what On would do) with the model's raw answer next to it.

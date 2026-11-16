@@ -14,7 +14,7 @@ import { HubSettings } from '../lib/settings.mjs';
 import { settingsNeed, stepUpNeed } from '../lib/guard.mjs';
 import { cardsFor } from '../lib/push.mjs';
 import {
-  PROMPT, JUNCTION_FACT, DUMMY_KEY_FACT, JSON_ONLY, CHECK_MODEL, CHECK_NAME, SCRIPT_LIMIT, PermissionCheck, buildPrefix, buildSuffix, parseAnswer, applyRules,
+  PROMPT, JUNCTION_FACT, DUMMY_KEY_FACT, OTHER_PROJECTS_FACT, OWN_TEST_FACT, JSON_ONLY, CHECK_MODEL, CHECK_NAME, SCRIPT_LIMIT, PermissionCheck, buildPrefix, buildSuffix, parseAnswer, applyRules,
   scriptPaths, scriptsFor, loadsUnseen, isProjectScript, sdkCall, apiCall, listCost
 } from '../lib/permission-check.mjs';
 
@@ -45,7 +45,7 @@ test('the prefix states the node_modules junction plainly, after the plan\'s fac
   assert.match(JSON_ONLY, /JSON object only: no text before it, no text after it/);
   // the plan's appendix is otherwise untouched: take the two additions out and it is the plan's text with the markers filled
   assert.ok(!PROMPT.includes('junction to the main') && !PROMPT.includes(JSON_ONLY), 'PROMPT itself is the plan\'s text');
-  const back = s.replace(`\n${JUNCTION_FACT}`, '').replace(`\n${DUMMY_KEY_FACT}`, '').replace(`\n${JSON_ONLY}`, '');
+  const back = s.replace(`\n${JUNCTION_FACT}`, '').replace(`\n${DUMMY_KEY_FACT}`, '').replace(`\n${OTHER_PROJECTS_FACT}`, '').replace(`\n${OWN_TEST_FACT}`, '').replace(`\n${JSON_ONLY}`, '');
   assert.ok(back.startsWith('You answer one permission request from a worker agent in the Crux Hub project "proj"') && back.endsWith('"reason": "<one plain line, at most 25 words>"}'));
   assert.equal(back.split('\n').length, PROMPT.split('\n').length);
   assert.ok(buildPrefix({ ...FACTS, rulesBody: 'the junction rule $& stays as written' }).includes('the junction rule $& stays as written'));
