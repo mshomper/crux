@@ -2142,8 +2142,11 @@ export class Hub {
 
   finishRetire(p, agent) {
     clearTimeout(agent.retireTimer); clearTimeout(agent.overlapTimer); clearTimeout(agent.finishTimer);
+    const deferred = agent.finishWhenIdle;
     agent.finishWhenIdle = null;
     if (agent.state === 'retired') return;
+    // A retire that waited for the turn's result says what the direct path says, now that it has happened.
+    if (deferred) this.notice(p, agent.thread, `${deferred.by === 'you' ? 'You' : deferred.by} retired ${agent.name} as finished${deferred.reason ? `: ${deferred.reason}` : ''}.`);
     agent.capture?.res('(Retired before answering.)');
     agent.capture = null;
     agent.retiring = false;

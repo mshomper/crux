@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { recordAgents, stubHub, StubExpedition, MODEL } from './helpers/expedition-stub.mjs';
 import { howItRan, assembleReport, claimsStatus } from '../lib/expedition-report.mjs';
 import { parseAgentFile } from '../lib/agent-types.mjs';
+import { refreshExpeditionFiles, hashOf } from '../lib/starter-refresh.mjs';
+import { mkdirSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
+import { makeTmp } from './helpers/tmp.mjs';
 
 recordAgents();
 const STARTER = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent-types', 'starter');
@@ -39,15 +42,28 @@ test('bug 1: a member the Lead retires mid-turn keeps its usage: it closes when 
   assert.ok(Math.abs(env.hub.expeditionWatch.trackOf(env.p, se.id).settledUSD - u[0].costUSD) < 1e-9);
 });
 
-test('bug 1: a member whose result never comes is still closed after a cap', async () => {
+test('bug 1: a retire that waited for the result still posts the "retired as finished" line in the thread', async () => {
+  const env = stubHub(), se = new StubExpedition(env);
+  se.ex.write('BRIEF.md', 'q'); se.ex.start({});
+  const lead = se.startRole('lead', env.orch.name), syn = se.startRole('synthesizer', lead.name);
+  syn.q = { getContextUsage: async () => ({ percentage: 5 }) }; syn.state = 'working';
+  const said = () => env.p.log.ofType('notice').filter(e => e.thread === syn.thread && /retired .* as finished: done/.test(e.text));
+  env.hub.leadRetire(env.p, lead, syn.name, 'done');
+  assert.equal(said().length, 0, 'not before it happens');
+  await syn.onMessage(resultOf(0.1), syn.q);
+  assert.equal(said().length, 1);
+});
+
+test('a member whose result never comes is still closed after a cap, with the same line', async () => {
   const env = stubHub(), se = new StubExpedition(env);
   se.ex.write('BRIEF.md', 'q'); se.ex.start({});
   const lead = se.startRole('lead', env.orch.name), syn = se.startRole('synthesizer', lead.name);
   syn.q = {}; syn.state = 'working';
-  env.hub.leadRetire(env.p, lead, syn.name);
+  env.hub.leadRetire(env.p, lead, syn.name, 'enough');
   assert.ok(syn.finishTimer, 'a fallback timer is set');
   env.hub.finishRetire(env.p, syn);   // what the timer does
   assert.equal(syn.state, 'retired');
+  assert.equal(env.p.log.ofType('notice').filter(e => /retired .* as finished: enough/.test(e.text)).length, 1);
   assert.equal(syn.finishWhenIdle, null);
 });
 
@@ -76,4 +92,31 @@ test('bug 3: one "How it ran": the Lead is told not to write it, and a placehold
   assert.ok(!md.includes('placeholder') && !md.includes('a sub-part'));
   assert.ok(md.includes('## 8. Sources') && md.includes('## 6. Parked') && md.indexOf('## 8. Sources') < md.indexOf('## How it ran'));
   assert.match(md, /\| Lead \(incl\. gatherers\) \|/, 'the hub\'s table is there');
+});
+
+// ---------- the installed copies follow the hub ----------
+test('start-up refresh: an unedited older copy is replaced, an edited one is kept with one line, a missing one is not added', () => {
+  const prev = JSON.parse(readFileSync(join(STARTER, 'previous-hashes.json'), 'utf8'));
+  const dir = join(makeTmp('crux-refresh-'), 'agents'); mkdirSync(dir, { recursive: true });
+  const current = f => readFileSync(join(STARTER, f), 'utf8');
+  // Stand-ins for the shipped older versions: the real hashes cannot be reproduced from text here, so a fake starter is used.
+  const starter = join(dir, '..', 'starter'); mkdirSync(starter);
+  writeFileSync(join(starter, 'expedition-lead.md'), 'NEW lead\n');
+  writeFileSync(join(starter, 'expedition-verifier.md'), 'NEW verifier\n');
+  writeFileSync(join(starter, 'expedition-skeptic.md'), 'NEW skeptic\n');
+  writeFileSync(join(starter, 'previous-hashes.json'), JSON.stringify({ 'expedition-lead.md': [hashOf('OLD lead\n')], 'expedition-verifier.md': [hashOf('OLD verifier\n')] }));
+  writeFileSync(join(dir, 'expedition-lead.md'), 'OLD lead\r\n');          // unedited (CRLF is not an edit)
+  writeFileSync(join(dir, 'expedition-verifier.md'), 'OLD verifier\nplus my own line\n');   // edited
+  const lines = [];
+  const r = refreshExpeditionFiles([dir], { starter, log: l => lines.push(l) });
+  assert.equal(readFileSync(join(dir, 'expedition-lead.md'), 'utf8'), 'NEW lead\n');
+  assert.equal(readFileSync(join(dir, 'expedition-verifier.md'), 'utf8'), 'OLD verifier\nplus my own line\n');
+  assert.ok(!existsSync(join(dir, 'expedition-skeptic.md')), 'not installed, not added');
+  assert.equal(r.refreshed.length, 1); assert.equal(r.kept.length, 1);
+  assert.equal(lines.filter(l => /was edited/.test(l)).length, 1);
+  // Run again: nothing left to do.
+  assert.deepEqual(refreshExpeditionFiles([dir], { starter, log: () => { } }).refreshed, []);
+  // The shipped history really lists the previous Lead and Verifier (what Matt's installed copies are).
+  assert.ok(prev['expedition-lead.md'].length && prev['expedition-verifier.md'].length);
+  assert.ok(!prev['expedition-lead.md'].includes(hashOf(current('expedition-lead.md'))), 'the current file is not its own history');
 });
