@@ -1,7 +1,7 @@
 # 0072 When part of the test can only run on Matt's machine, how do those results get into the report?
 
-- Status: open
-- Date: 2026-11-16
+- Status: decided
+- Date: 2026-11-16, decided 2026-11-16
 - Lenses: research and product
 - Builds on: 0068
 
@@ -14,6 +14,10 @@ For you:
 - The report lists what to run yourself (often one small local page) with a results block to copy
 - Paste the block into the thread or use 'Paste results' on the finished card; a few minutes later the PR carries the real result
 - The follow-up has its own small budget, separate from the expedition's
+
+## Decision
+
+**B: Short follow-up job after you paste.** One small verifier job reads your pasted results and the report, updates the build status and how-it-ran sections, and pushes to the same draft PR.
 
 ## Context
 
@@ -28,7 +32,7 @@ The report lists what to run; what you do with the result is up to you.
 - Con: The report stays wrong on exactly the items it couldn't run
 - Effort: None
 
-### B: Short follow-up job after you paste (recommended)
+### B: Short follow-up job after you paste (chosen) (recommended)
 
 One small verifier job reads your pasted results and the report, updates the build status and how-it-ran sections, and pushes to the same draft PR.
 - Pro: The expedition never waits; the report ends up right

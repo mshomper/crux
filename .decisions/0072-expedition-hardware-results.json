@@ -7,7 +7,7 @@
  "lenses": [
   "research and product"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the expedition finish as usual and, when you paste back the results from your machine, a short follow-up job update the report and its pull request? I recommend that: the expedition never waits on you, and the report still ends up with the real-hardware numbers.",
  "for_you": [
   "The report lists what to run yourself (often one small local page) with a results block to copy",
@@ -65,9 +65,9 @@
  "recommendation": "B: the report gets the real numbers without holding the expedition open.",
  "confidence": "firm",
  "change_mind": "If you rarely paste results back, A is enough.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "B",
+ "reason": "",
+ "decided_on": "2026-11-16",
  "superseded_by": null,
  "challenge": null,
  "settles": [],
