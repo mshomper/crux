@@ -239,8 +239,14 @@ function cleanSite({ host, access = 'pages', pin = null, subdomains } = {}) {
   return { host: h, access, pin: p, subdomains: p ? false : subdomains === false ? false : !open };
 }
 // One package, checked the way Matt's own add checks it (addPackage): -> { eco, name, baseMajor, baseMinor[, revision] }.
-function cleanPackage({ eco, name, baseMajor = null, baseMinor = null, revision = null } = {}) {
+// The launch panel (phase 5, M049 8) may send the baseline version as numbers, numeric strings, or the version the user saw
+// ("3.4.1"); all three become baseMajor and baseMinor. Anything else is null (no baseline: a fresh project's first install).
+const wholeNumber = v => { const n = typeof v === 'string' && /^\d{1,6}$/.test(v.trim()) ? Number(v) : v; return Number.isInteger(n) && n >= 0 ? n : null; };
+function cleanPackage({ eco, name, baseMajor = null, baseMinor = null, version = null, revision = null } = {}) {
   if (!ECOSYSTEMS[eco]) throw new ListsError('npm, pip or Hugging Face.');
+  const ver = /^v?(\d{1,6})(?:\.(\d{1,6}))?/.exec(String(version ?? '').trim());
+  baseMajor = wholeNumber(baseMajor) ?? (ver ? Number(ver[1]) : null);
+  baseMinor = wholeNumber(baseMinor) ?? (ver && ver[2] != null ? Number(ver[2]) : null);
   const n = eco === 'pip' ? pipName(String(name ?? '').trim()) : String(name ?? '').trim();
   if (!validPackage(eco, n)) throw new ListsError(eco === 'huggingface' ? 'A Hugging Face model looks like organisation/name.' : 'That is not a plain package name (no versions, paths, addresses or spaces).');
   const rev = eco === 'huggingface' ? String(revision ?? '').trim().toLowerCase() : null;

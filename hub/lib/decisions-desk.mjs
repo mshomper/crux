@@ -25,7 +25,7 @@ function findGh() {
 export const runGh = (args, cwd) => new Promise((res, rej) =>
   execFile(findGh(), args, { cwd, timeout: 60000, windowsHide: true }, (e, out, err) => e ? rej(new Error(String(err || e.message).trim())) : res(String(out))));
 
-const gitAsync = (args, cwd) => new Promise((res, rej) =>
+export const gitAsync = (args, cwd) => new Promise((res, rej) =>
   execFile('git', args, { cwd, timeout: 120000, windowsHide: true }, (e, out, err) => e ? rej(new Error(String(err || e.message).trim())) : res(String(out))));
 
 export class DecisionsDesk {

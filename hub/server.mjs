@@ -376,6 +376,19 @@ const routes = {
   'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.place(project), String(question || ''), answers),
   'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
+  // ---------- the Expedition module (decisions 69 to 72), phase 5 ----------
+  // Launch: { project, brief, question?, test: { 'CHECKLIST.md': '...', 'run.json': '...' }, envelope?: { hours, percent, dollars },
+  // roles?: { <role>: { model, effort } }, gatherers?, preApprovals?: { sites, packages }, draft?, proposal?: { expedition, parked } }.
+  // Every refusal is thrown before anything is written (400 with the reason). Behind the write guard like every POST; a launch that
+  // pre-approves sites or packages also needs the step-up (lib/guard.mjs). The launch is the OK for one branch push and a draft PR (D0071).
+  'POST /api/expedition': ({ project, ...input }) => {
+    const r = hub.launchExpedition(hub.project(String(project || '')), input, 'you');
+    return { ...r, started: r.expedition };
+  },
+  // Stop: straight to the report, reason "Matt" (spec 5). expedition: its id; left out, the one that is running.
+  'POST /api/expedition/stop': ({ project, expedition }) => ({ ok: true, ...hub.stopExpedition(hub.project(String(project || '')), expedition ? String(expedition) : null, 'Matt') }),
+  // Close a thread draft card without launching it.
+  'POST /api/expedition/dismiss': ({ project, draft }) => hub.dismissExpeditionDraft(hub.project(String(project || '')), String(draft || '')),
   // Change an agent's model, effort or type. Only the keys sent change; an empty value means the default.
   // project "~conductor": the Conductor's model and effort (decision 55: never a type, so never other tools).
   'POST /api/agent-settings': ({ project, agent, ...changes }) => {

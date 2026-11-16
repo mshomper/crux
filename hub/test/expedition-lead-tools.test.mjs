@@ -93,7 +93,7 @@ test('expedition_loop_result numbers the loop and judges progress itself; the se
   assert.equal(ex.ex.state().phase, 'running', 'one loop without progress does not stop it');
   assert.equal(p.log.ofType('expedition_stopped').length, 0);
   // The second in a row: the hub stops it itself, with its own totals; the Lead called nothing.
-  assert.match(await call('expedition_loop_result', { passing: 2 }), /^Loop 4: 2 passing, no progress\. Two loops in a row made no progress, so the hub has stopped the expedition \(no-progress\)\. Write the report now; the Verifier can still check it\.$/);
+  assert.match(await call('expedition_loop_result', { passing: 2 }), /^Loop 4: 2 passing, no progress\. Two loops in a row made no progress, so the hub has stopped the expedition \(no-progress\)\. Write the report now; the Verifier can still check it\. When it is written and corrected, call expedition_report_ready and end your turn\.$/);
   const s = p.log.ofType('expedition_stopped');
   assert.equal(s.length, 1);
   assert.deepEqual([s[0].reason, s[0].expedition, s[0].totals.costUSD], ['no-progress', ex.id, 0.75]);
@@ -122,7 +122,7 @@ test('expedition_finish takes no reason: passed, only while running and after at
   assert.match(await call('expedition_finish', {}), /^Not finished: No build-verify loop is logged yet/);
   assert.equal(p.log.ofType('expedition_stopped').length, 0);
   await call('expedition_loop_result', { passing: 2 });
-  assert.equal(await call('expedition_finish', {}), 'Stopped (passed). Write REPORT.md now and have the Verifier check it. The hub\'s own end step comes later.');
+  assert.match(await call('expedition_finish', {}), /^Stopped \(passed\)\. Write REPORT\.md now .*then call expedition_report_ready and end your turn\.$/);
   const s = p.log.ofType('expedition_stopped').at(-1);
   assert.deepEqual([s.reason, s.expedition, s.totals.costUSD], ['passed', ex.id, 0.75]);
   assert.equal(ex.ex.state().phase, 'stopped');

@@ -830,7 +830,9 @@ ${lines.join('\n')}`;
       name: a.name, role: a.role, state: a.state, goal: a.goal || '', context_pct: a.contextPct ?? null, runs_as: this.hub.describeSettings(a)
     }));
     // An expedition is one entry (its agents report to their Lead, not to anyone above it), not a worker per agent.
-    for (const x of Expedition.all(p).filter(x => x.phase !== 'ended')) list.push({ name: `expedition ${x.id}`, role: 'expedition', state: x.phase, goal: 'runs under its own Lead and reports once, at the end', context_pct: null, runs_as: 'expedition' });
+    // M049 1: one that has ended stays listed until every one of its agents has retired.
+    const liveOf = id => [...p.agents.values()].filter(a => a.expedition === id && a.state !== 'retired').length;
+    for (const x of Expedition.all(p).filter(x => x.phase !== 'ended' || liveOf(x.id) > 0)) list.push({ name: `expedition ${x.id}`, role: 'expedition', state: x.phase === 'ended' ? 'retiring' : x.phase, goal: 'runs under its own Lead and reports once, at the end', context_pct: null, runs_as: 'expedition' });
     return list;
   }
 

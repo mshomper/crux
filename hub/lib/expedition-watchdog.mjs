@@ -99,7 +99,7 @@ class Track {
     } else if (e.type === 'expedition_note') {
       if (e.kind === 'final') this.final = this.final || e;
       else if (e.kind === 'meter') { if (this.meter.baseline == null && Number.isFinite(Number(e.pct))) this.setBaseline(Number(e.pct), e.resetsAt || null); }
-      else this.reserve = this.reserve || e;
+      else if (!e.kind || e.kind === 'reserve') this.reserve = this.reserve || e;   // the end's notes (phase 5: report-ready, summary-go) are not the 90% note
     } else if (e.type === 'expedition_stopped') this.stopped = this.stopped || e;
     else if (e.type === 'expedition_loop') this.loops.push(e);
     else if (e.type === 'expedition_subagent') { if (e.phase === 'started') this.runningTasks.add(e.taskId); else this.runningTasks.delete(e.taskId); }
@@ -201,7 +201,7 @@ export function reserveText({ which, detail }) {
 }
 export function finalText({ reason, detail }) {
   const why = { time: `the time limit is used (${detail})`, budget: `the budget is used (${detail})`, Matt: 'the user pressed Stop' }[reason] || reason;
-  return `[From the hub] The expedition has stopped: ${why}. Everyone else on your team is retired and any gatherer still running was stopped, so no more results will come in, and no agent or gatherer can be started now. This is your final turn: write REPORT.md from what exists in the folder (the hub adds the generated "how it ran" section), say plainly what is unfinished, and state in the report that the claims were not checked. Do not send your post_summary yet: the hub tells you when the report, branch and card are done.`;
+  return `[From the hub] The expedition has stopped: ${why}. Everyone else on your team is retired and any gatherer still running was stopped, so no more results will come in, and no agent or gatherer can be started now. This is your final turn: write REPORT.md from what exists in the folder (the hub adds the generated "how it ran" section), say plainly what is unfinished, and state in the report that the claims were not checked. When REPORT.md is written, end your turn (calling expedition_report_ready is fine too): the hub then copies it onto the branch, pushes, opens a draft pull request and posts the card. Do not send your post_summary yet: the hub tells you when the report, branch and card are done.`;
 }
 
 const realTimers = { setTimeout: (...a) => setTimeout(...a), clearTimeout: x => clearTimeout(x), setInterval: (...a) => setInterval(...a), clearInterval: x => clearInterval(x) };
@@ -285,6 +285,9 @@ export class ExpeditionWatchdog {
     for (const p of this.hub.projects.values()) {
       const w = this.watch(p); w.ingest();
       for (const t of w.tracks.values()) { const x = this.checkTrack(w, t, now); if (x) did.push(x); }
+      // Phase 5: an expedition that has stopped gets its end (report, branch, pull request, card, summary) once the Lead's turn
+      // is over, and one that has ended retires its agents. The same pass finishes either after a restart. Not part of `did`.
+      try { this.hub.expeditionEnd?.sweep(p); } catch (e) { console.warn('Expedition end:', e?.message || e); }
     }
     return did;
   }
@@ -392,12 +395,17 @@ export class ExpeditionWatchdog {
       if (a.expeditionRole === 'lead') continue;
       try { hub.finishRetire(p, a); } catch (e) { console.warn(`Could not retire ${a.name}:`, e?.message || e); }
     }
-    // 4. A Lead that is writing its handoff when the stop comes hands over to a successor first: wait for it (the successor
-    // exists once the handoff is written; the fallback time bounds the wait), then the final turn goes to whoever holds the role.
+    // 4. A Lead that was writing its handoff when the stop came (its turn was interrupted above, so it will never finish
+    // writing one) is settled NOW, not after the handoff timer (M049 4): with a handoff already written the successor starts
+    // at once; without one the handoff is cancelled and the same Lead takes the final turn. Either way the final message goes
+    // to whoever holds the role below, and the old Lead never gets a message the successor would miss.
     const ex = hub.expeditionOf(p, t.id);
     if (ex.state().finalNote) return;
-    const writing = () => [...p.agents.values()].some(a => a.expedition === t.id && a.expeditionRole === 'lead' && a.state !== 'retired' && a.retiring === 'writing');
-    if (writing()) await this.waitUntil(() => !writing(), this.stopWaitMs);
+    for (const a of [...p.agents.values()]) {
+      if (a.expedition !== t.id || a.expeditionRole !== 'lead' || a.state === 'retired' || a.retiring !== 'writing') continue;
+      if (a.leftHandoff) hub.startSuccessor(p, a);
+      else { clearTimeout(a.retireTimer); a.retiring = false; hub.notice(p, a.thread, `The handoff was cancelled: the expedition has stopped, so ${a.name} writes the report itself.`); }
+    }
     // 5. The Lead's one final message: logged first, so it is never sent twice.
     if (ex.state().finalNote) return;
     const lead = hub.expeditionLead(p, t.id);

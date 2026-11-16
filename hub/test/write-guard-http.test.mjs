@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { request, createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeTmp, removeTmp } from './helpers/tmp.mjs';
@@ -102,8 +102,9 @@ test('every POST route refuses a request with no device cookie (one request per 
   // 31 with the desktop app's reports (decision 58): /api/desktop/presence and /api/desktop/failed.
   // 35 with voice (decision 61 A): /api/voice/switch, /setup, /listen and /say, paired like any change (decision 48).
   // 38 with Matt's trusted sites and approved packages (plan v3 A10): /api/lists/add, /access and /remove.
-  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 38, `38 routes need a paired device: ${routes.join(' ')}`);
-  for (const r of ['/api/voice/switch', '/api/voice/setup', '/api/voice/listen', '/api/voice/say', '/api/lists/add', '/api/lists/access', '/api/lists/remove']) assert.ok(routes.includes(r), `${r} is among the routes checked`);
+  // 41 with the Expedition module's launch, Stop and draft dismissal (phase 5): /api/expedition, /stop and /dismiss.
+  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 41, `41 routes need a paired device: ${routes.join(' ')}`);
+  for (const r of ['/api/voice/switch', '/api/voice/setup', '/api/voice/listen', '/api/voice/say', '/api/lists/add', '/api/lists/access', '/api/lists/remove', '/api/expedition', '/api/expedition/stop', '/api/expedition/dismiss']) assert.ok(routes.includes(r), `${r} is among the routes checked`);
   for (const path of routes.filter(r => !OPEN.includes(r))) {
     const r = await call('POST', path, { body: {} });
     assert.equal(r.status, 401, `${path} without a cookie: ${r.status} ${r.text}`);
@@ -137,6 +138,27 @@ test('the test device\'s cookie is accepted on every route; the big changes then
   const lower = await call('POST', '/api/settings', { body: { project: 'proj', permissionMode: 'standard' }, cookie: testCookie });
   assert.equal(lower.status, 200, 'lowering needs only the cookie');
   assert.equal((await call('POST', '/api/send', { body: { project: 'proj', thread: 'orchestrator', text: 'Hello from a paired device' }, cookie: testCookie })).status, 200);
+});
+
+test('the expedition routes answer in plain words over HTTP: refusals are 400 with the reason, nothing is written, and the state carries the expedition block', async () => {
+  const post = (path, body) => call('POST', path, { body, cookie: testCookie });
+  const empty = await post('/api/expedition', { project: 'proj' });
+  assert.equal(empty.status, 400);
+  assert.match(empty.json.error, /The ask is empty/);
+  const typeless = await post('/api/expedition', { project: 'proj', question: 'Which is faster?' });
+  assert.equal(typeless.status, 400, 'this test hub has no expedition agent types or Auto level: a plain refusal, not a crash');
+  assert.match(typeless.json.error, /project is at Ask|is not set up/);
+  assert.equal(existsSync(join(proj, '.crux', 'expeditions')), false, 'nothing was written');
+  const stop = await post('/api/expedition/stop', { project: 'proj' });
+  assert.equal(stop.status, 400);
+  assert.match(stop.json.error, /No expedition is running in proj/);
+  assert.equal((await post('/api/expedition/dismiss', { project: 'proj', draft: 'nope' })).status, 400);
+  const withPre = await post('/api/expedition', { project: 'proj', question: 'x', preApprovals: { sites: [{ host: 'docs.example-lib.org' }] } });
+  assert.equal(withPre.status, 403, 'a launch that pre-approves sites asks for the step-up');
+  assert.equal(withPre.json.stepUp.purpose, 'lists');
+  const state = (await call('GET', '/api/state')).json.projects.find(p => p.name === 'proj');
+  assert.deepEqual(Object.keys(state.expedition).sort(), ['budgetNote', 'current', 'defaults', 'drafts', 'launch', 'past', 'proposals']);
+  assert.equal(state.expedition.launch.ok, false);
 });
 
 const pcKey = new FakePasskey();

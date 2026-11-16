@@ -341,7 +341,7 @@ test('howItRan: per-role rows from the log, the Lead as "incl. gatherers", total
   assert.equal(lead.tokens.output, 1500);
   assert.equal(r.totals.turns, 8, 'three Lead results and one each for the other five');
   assert.equal(r.stopReason, 'passed');
-  assert.deepEqual(r.loops, [{ number: 1, passing: 1, progress: true }, { number: 2, passing: 3, progress: true }]);
+  assert.deepEqual(r.loops, [{ number: 1, passing: 1, progress: true, tampered: false }, { number: 2, passing: 3, progress: true, tampered: false }]);
   assert.equal(r.decisions, 2);
   assert.equal(r.parked, 3, 'the Lead\'s one parked item and the two requests parked in phase 2; the lesson is counted apart');
   assert.equal(r.lessons, 1);

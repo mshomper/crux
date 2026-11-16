@@ -151,7 +151,7 @@ test('launchExpedition refuses an empty brief, a second expedition, a project at
   sent.length = 0;
   const env = stubHub({ level: 'auto' });
   const { hub, p } = env;
-  assert.throws(() => hub.launchExpedition(p, { brief: '   ' }), /brief is empty/);
+  assert.throws(() => hub.launchExpedition(p, { brief: '   ' }), /The ask is empty/);   // phase 5: the ask (question or brief) is all a launch needs
   assert.throws(() => hub.launchExpedition(p, { brief: 'q', roles: { verifier: { model: 'sonnet' } } }), /Verifier and the Builder both run on/);
   assert.equal(Expedition.all(p).length, 0, 'a refusal writes nothing');
   assert.equal(p.log.ofType('agent_created').filter(e => e.expedition).length, 0);
@@ -179,7 +179,7 @@ test('launchExpedition refuses an empty brief, a second expedition, a project at
   ex.stop({ reason: 'passed' });
   assert.throws(() => hub.launchExpedition(p, { brief: 'another' }), /still writing up/);
   for (const s of ['report', 'commit', 'push', 'pr', 'card', 'summary']) ex.step(s);
-  const second = hub.launchExpedition(p, { question: 'Which of two JSON libraries is faster for X?', brief: 'again' });
+  const second = hub.launchExpedition(p, { question: 'Which of two JSON libraries is faster for X?', brief: 'again', test: { 'CHECKLIST.md': '1. a table\n' } });
   assert.match(second.id, /-2$/, 'a second one on the same day with the same slug gets -2');
 });
 

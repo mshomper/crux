@@ -318,11 +318,12 @@ test('spend 2 waits for a FRESH reading: one taken before the launch is no basel
 test('launchExpedition records the 7-day reading it will count from (null under an API key)', () => {
   const H = stubHub({ level: 'auto' });
   H.hub.usage.plan = { windows: { seven_day: { key: 'seven_day', pct: 12.5, resetsAt: WINDOW } }, models: [] }; H.hub.usage.available = true;
-  const a = H.hub.launchExpedition(H.p, { brief: 'Which is faster?', question: 'which is faster' });
+  const test = { 'CHECKLIST.md': '1. a table (read)\n' };
+  const a = H.hub.launchExpedition(H.p, { brief: 'Which is faster?', question: 'which is faster', test });
   assert.deepEqual(new Expedition(H.p, a.id).state().started.planStart, { sevenDayPct: 12.5, resetsAt: WINDOW });
   const I = stubHub({ level: 'auto' });
   I.hub.usage.plan = null; I.hub.usage.available = false;
-  const b = I.hub.launchExpedition(I.p, { brief: 'Which is faster?', question: 'which is faster' });
+  const b = I.hub.launchExpedition(I.p, { brief: 'Which is faster?', question: 'which is faster', test, envelope: { dollars: 5 } });   // under an API key only a dollar cap can hold (phase 5)
   assert.equal(new Expedition(I.p, b.id).state().started.planStart, null);
 });
 
@@ -673,33 +674,34 @@ test('M3: no handoff once the expedition has stopped, whatever the reason, so th
   }
 });
 
-test('M3: a Lead that is writing its handoff when the stop comes is waited for, and the final message goes to whoever holds the role afterwards', async () => {
+// M049 4 (phase 5): a Lead mid-handoff when a hub stop hits is settled at once, not after the handoff timer: the interrupt
+// ended its handoff turn, so it will not finish writing one. No handoff written yet: it is cancelled and the same Lead
+// takes the final turn. A handoff already written: the successor starts now and the final message goes to it.
+test('M049 4: a Lead writing its handoff when the stop comes has the handoff cancelled and takes the final message itself, at once', async () => {
   const S = setup();
   S.lead.retiring = 'writing';
+  S.lead.retireTimer = setTimeout(() => { }, 100000);
   S.wd.stopNow(S.p, S.id, 'Matt');
-  await new Promise(r => setImmediate(r));
-  await new Promise(r => setImmediate(r));
-  assert.equal(S.ex.state().finalNote, null, 'the final message is held back while the Lead is still writing its handoff');
-  assert.equal(sent.filter(([, t]) => t.startsWith('[From the hub] The expedition has stopped')).length, 0);
-  // The handoff is written: the successor exists, the predecessor answers it during the overlap.
-  S.lead.retiring = 'overlap';
-  const succ = S.hub.startWorker(S.p, 'exp-lead-2', 'Carry on.', 'hub', 'Lead', { type: 'expedition-lead', expedition: S.id, expeditionRole: 'lead' });
-  succ.state = 'idle';
   await S.wd.settled();
+  assert.equal(S.lead.retiring, false, 'the handoff is cancelled');
   const finals = sent.filter(([, t]) => t.startsWith('[From the hub] The expedition has stopped'));
-  assert.deepEqual(finals.map(([n]) => n), [succ.name], 'once, and to the successor');
-  assert.equal(S.ex.state().finalNote.lead, succ.name);
+  assert.deepEqual(finals.map(([n]) => n), [S.lead.name], 'once, to the Lead that is there');
+  assert.equal(S.timers.pending(STOP_WAIT_MS), false, 'no 60 s wait for a handoff that cannot finish');
+  clearTimeout(S.lead.retireTimer);
 });
 
-test('M3: if the handoff never finishes, the 60 s fallback sends the final message to the Lead that is there', async () => {
+test('M049 4: a Lead whose handoff was already written gets its successor at once, and the final message goes to the successor', async () => {
   const S = setup();
   S.lead.retiring = 'writing';
+  S.lead.leftHandoff = 'H001';
   S.wd.stopNow(S.p, S.id, 'time');
-  await new Promise(r => setImmediate(r));
-  assert.ok(S.timers.pending(STOP_WAIT_MS));
-  S.timers.fire(STOP_WAIT_MS);
   await S.wd.settled();
-  assert.deepEqual(sent.filter(([, t]) => t.startsWith('[From the hub] The expedition has stopped')).map(([n]) => n), [S.lead.name]);
+  const succ = [...S.p.agents.values()].find(a => a.expeditionRole === 'lead' && a !== S.lead);
+  assert.ok(succ, 'a successor was started');
+  const finals = sent.filter(([, t]) => t.startsWith('[From the hub] The expedition has stopped'));
+  assert.deepEqual(finals.map(([n]) => n), [succ.name], 'the final message went to the successor, not the Lead handing over');
+  assert.equal(S.ex.state().finalNote.lead, succ.name);
+  clearTimeout(S.lead.overlapTimer);   // startSuccessor's 10-minute overlap timer would keep this test process alive
 });
 
 test('L7: a live hub makes its first watchdog check only after resumeAll, never from the constructor; a failing check is logged, not thrown', async () => {

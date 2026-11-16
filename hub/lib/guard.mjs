@@ -452,6 +452,14 @@ export function stepUpNeed(route, body = {}, hub) {
   const need = needFor(route, body, hub);
   return need && { ...need, scope: cutScope(need.scope) };   // cut as challenge() cuts it, so a long path still matches
 }
+function expeditionNeed(body = {}, hub) {
+  let pre = body.preApprovals;
+  if (!pre && body.draft) {   // the thread card's Launch sends only the draft's id: its pre-approvals are in the draft
+    try { pre = hub.project(String(body.project || '')).log.events.find(e => e.type === 'expedition_draft' && e.id === String(body.draft))?.preApprovals; } catch { pre = null; }
+  }
+  const n = (Array.isArray(pre?.sites) ? pre.sites.length : 0) + (Array.isArray(pre?.packages) ? pre.packages.length : 0);
+  return n ? { purpose: 'lists', scope: `lists;expedition;${String(body.project || '').slice(0, 40)}`, why: 'Launch an expedition that may use these sites and packages without asking' } : null;
+}
 function needFor(route, body, hub) {
   switch (route) {
     case 'POST /api/settings': return settingsNeed(body, hub);
@@ -459,6 +467,9 @@ function needFor(route, body, hub) {
     // card, so it needs a fresh step-up made for exactly that entry. Removing one needs only the cookie.
     case 'POST /api/lists/add': return listsNeed(body);
     case 'POST /api/lists/access': return body.access === 'downloads' ? { purpose: 'lists', scope: `lists;downloads;${String(body.id || '').slice(0, 40)}`, why: 'Let agents download files from a trusted site' } : null;
+    // Phase 5: a launch that pre-approves sites or packages lets agents act without a card (scoped to that one expedition), so
+    // like Matt's own list adds it needs a fresh step-up for exactly this launch. A launch without them needs the cookie only.
+    case 'POST /api/expedition': return expeditionNeed(body, hub);
     case 'POST /api/push/subscribe': return { purpose: 'push', scope: 'push', why: 'Add this device to the hub\'s notifications' };
     case 'POST /api/pair/issue': return { purpose: 'pair', scope: 'pair', why: 'Pair another device' };
     case 'POST /api/devices/remove': return { purpose: 'unpair', scope: `device=${String(body.id || '').slice(0, 40)}`, why: 'Unpair a device and its passkey' };
