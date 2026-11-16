@@ -25,6 +25,7 @@ import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, parseCommand, sdk
 import { totalsOf, sumCost } from '../public/usage.js';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
+import { Expedition, ROLES as EXPEDITION_ROLES, ID_PATTERN as EXPEDITION_ID } from './expedition.mjs';
 
 export class Project {
   constructor(dir) {
@@ -38,7 +39,12 @@ export class Project {
     this.agents = new Map();
     this.generation = 0;
   }
-  workers() { return [...this.agents.values()].filter(a => a.role === 'worker' && a.state !== 'retired'); }
+  // Expedition agents (the Expedition module) report to their Lead, not to the orchestrator, so every list that
+  // feeds the orchestrator leaves them out. A caller that wants them asks: { expedition: id } for one expedition's
+  // agents, { all: true } for every worker (the pause reaches them too).
+  workers({ expedition = null, all = false } = {}) {
+    return [...this.agents.values()].filter(a => a.role === 'worker' && a.state !== 'retired' && (all || (expedition ? a.expedition === expedition : !a.expedition)));
+  }
   // The holder of the role. One that is writing its handoff still holds it; one in the overlap has passed it on.
   orchestrator() { return [...this.agents.values()].find(a => a.role === 'orchestrator' && a.state !== 'retired' && a.retiring !== 'overlap') || null; }
 }
@@ -274,7 +280,7 @@ export class Hub {
   restore(p) {
     for (const ev of p.log.events) {
       if (ev.type === 'agent_created') {
-        p.agents.set(ev.agent, new Agent(this, p, { name: ev.agent, role: ev.role, task: ev.task, goal: ev.goal, generation: ev.generation, predecessor: ev.predecessor, handoffEntry: ev.handoffEntry, type: ev.agentType || null, model: ev.model || null, effort: ev.effort || null }));
+        p.agents.set(ev.agent, new Agent(this, p, { name: ev.agent, role: ev.role, task: ev.task, goal: ev.goal, generation: ev.generation, predecessor: ev.predecessor, handoffEntry: ev.handoffEntry, type: ev.agentType || null, model: ev.model || null, effort: ev.effort || null, expedition: ev.expedition || null, expeditionRole: ev.expeditionRole || null }));
         if (ev.role !== 'worker') p.generation = Math.max(p.generation, ev.generation);
       } else if (ev.type === 'agent_session' && p.agents.has(ev.agent)) {
         const a = p.agents.get(ev.agent);
@@ -300,15 +306,19 @@ export class Hub {
   // ---------- agents ----------
   createAgent(p, { name, role, task = '', goal = '', predecessor = null, handoffEntry = null, settings = {} }) {
     const s = this.resolveSettings(p, role, settings);   // checked before anything is written
+    // The Expedition module: only hub code passes these (the orchestrator's and the Lead's start_worker do not), and the
+    // successor of an expedition agent inherits them. Checked before anything is written, like the settings.
+    const ex = settings.expedition ? { expedition: String(settings.expedition), expeditionRole: settings.expeditionRole || null } : {};
+    if (ex.expedition && (role !== 'worker' || !EXPEDITION_ID.test(ex.expedition) || !EXPEDITION_ROLES[ex.expeditionRole])) throw new Error(`Not an expedition agent: ${ex.expedition} / ${ex.expeditionRole}.`);
     // The orchestrator and the Conductor are roles: each holder is numbered (orchestrator-3, conductor-2).
     const generation = role !== 'worker' ? ++p.generation : 0;
     if (role !== 'worker') name = `${role}-${generation}`;
     let unique = name, n = 2;
     while (p.agents.has(unique)) unique = `${name}-${n++}`;
-    const a = new Agent(this, p, { name: unique, role, task, goal, generation, predecessor, handoffEntry, ...s });
+    const a = new Agent(this, p, { name: unique, role, task, goal, generation, predecessor, handoffEntry, ...s, ...ex });
     p.agents.set(unique, a);
     if (role === 'orchestrator' && this.usage?.fableSpell) a.noteForNextTurn(FABLE_NOTE);   // a successor during the spell
-    p.log.append('agent_created', { agent: unique, role, task, goal, generation, predecessor, handoffEntry, thread: a.thread, agentType: s.type, model: s.model, effort: s.effort });
+    p.log.append('agent_created', { agent: unique, role, task, goal, generation, predecessor, handoffEntry, thread: a.thread, agentType: s.type, model: s.model, effort: s.effort, ...ex });
     return a;
   }
 
@@ -413,6 +423,27 @@ export class Hub {
     return a;
   }
 
+  // ---------- who an agent reports to (the Expedition module, plan section 2a) ----------
+  // The one answer every upward route asks: where does this agent's output go? { to: 'orchestrator' } as it always has
+  // (every agent that is not in an expedition), { to: 'lead', agent } for an expedition's members, { to: 'none' } for
+  // the Lead until its one final summary is due, and for a member whose Lead is gone. No route tests agent.expedition
+  // itself, so a new route that asks this cannot leak.
+  upwardOf(p, agent) {
+    if (!agent?.expedition) return { to: 'orchestrator' };
+    if (agent.expeditionRole === 'lead') return this.expeditionOf(p, agent).summaryDue() ? { to: 'orchestrator' } : { to: 'none' };
+    const lead = this.expeditionLead(p, agent.expedition);
+    return lead ? { to: 'lead', agent: lead } : { to: 'none' };
+  }
+
+  expeditionOf(p, agentOrId) {
+    return new Expedition(p, typeof agentOrId === 'string' ? agentOrId : agentOrId.expedition);
+  }
+
+  // The Lead of an expedition: the newest one not retired and not answering its successor (a successor has a new name).
+  expeditionLead(p, id) {
+    return [...p.agents.values()].findLast(a => a.expedition === id && a.expeditionRole === 'lead' && a.state !== 'retired' && a.retiring !== 'overlap') || null;
+  }
+
   startWorker(p, name, task, by = 'you', goal = '', settings = {}) {
     if (!goal) goal = String(task).split('\n')[0].slice(0, 90);
     const w = this.createAgent(p, { name, role: 'worker', task, goal, settings });
@@ -469,18 +500,29 @@ export class Hub {
     // Routing guide 9.4: how the round went, optional; anything but done, partial or blocked is dropped.
     const { outcome, ...rest } = s;
     s = { ...rest, ...(OUTCOMES.includes(outcome) ? { outcome } : {}), questions: asked.filter(asks), decisions_needed: decisions, ...(notes.length ? { notes } : {}) };
-    p.log.append('summary', { thread: agent.thread, from: agent.name, ...s });
-    const result = { notes };
+    // The Expedition module: an expedition never raises a card (decision 71). Its questions and decisions are held out of
+    // the logged summary, so nothing reads them as a card or a notice, and go to the Lead as text instead (below).
+    const held = agent.expedition && (s.questions.length || s.decisions_needed.length) ? { questions: s.questions, decisions_needed: s.decisions_needed } : null;
+    if (agent.expedition) s = { ...s, questions: [], decisions_needed: [], ...(held ? { held } : {}) };
+    p.log.append('summary', { thread: agent.thread, from: agent.name, ...s, ...(agent.expedition ? { expedition: agent.expedition } : {}) });
+    const result = { notes, ...(held ? { held: true } : {}) };
     if (agent.role !== 'worker') return result;
-    const orch = p.orchestrator();
-    if (!orch && !s.questions.length && !s.decisions_needed.length) return result; // nothing to route; you see it in the thread
-    const lines = [`[Summary from worker ${agent.name}]`];
+    const up = this.upwardOf(p, agent);
+    if (up.to === 'none') return result;   // a Lead before its final summary, or a member whose Lead is gone: it shows in its own thread
+    // Nothing to route; you see it in the thread. (A Lead's final summary always goes: it starts an orchestrator if none runs.)
+    if (!agent.expedition && !p.orchestrator() && !s.questions.length && !s.decisions_needed.length) return result;
+    const lines = [`[Summary from ${agent.expedition ? `${EXPEDITION_ROLES[agent.expeditionRole]?.label.toLowerCase() || 'expedition member'}` : 'worker'} ${agent.name}]`];
     const sec = (label, xs) => xs?.length && lines.push(`${label}:\n${xs.map(x => '- ' + x).join('\n')}`);
-    sec('Done', s.done); sec('Changed', s.changed); sec('Questions', s.questions); sec('Notes', s.notes); sec('Blocked on', s.blocked_on);
-    if (s.decisions_needed.length) lines.push(`Decisions waiting on {{who}}: ${s.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
+    const asks2 = held?.questions || s.questions;
+    sec('Done', s.done); sec('Changed', s.changed); sec(held ? 'Questions (nobody is available to answer: decide in scope or park them)' : 'Questions', asks2); sec('Notes', s.notes); sec('Blocked on', s.blocked_on);
+    if (held?.decisions_needed.length) lines.push(`Decision numbers named (decide in scope or park): ${held.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
+    else if (s.decisions_needed.length) lines.push(`Decisions waiting on {{who}}: ${s.decisions_needed.map(n => 'D' + String(n).padStart(4, '0')).join(', ')}`);
     if (s.next_step) lines.push(`Proposed next step: ${s.next_step}`);
     if (s.outcome) lines.push(`Outcome: ${s.outcome}`);
+    if (up.to === 'lead') { up.agent.send(lines.join('\n')); return result; }
     this.ensureOrchestrator(p).send(lines.join('\n'));
+    // The Lead's one summary to the orchestrator is logged as the end's last step, so it goes only once.
+    if (agent.expedition) this.expeditionOf(p, agent).step('summary', { agent: agent.name });
     return result;
   }
 
@@ -549,6 +591,12 @@ export class Hub {
       const pack = this.memory.addProjectLesson(p.name, lesson, agent.name);
       p.log.append('lesson', { thread: agent.thread, from: agent.name, pack, text: lesson });
       return `Added to the ${pack} pack.`;
+    }
+    // An expedition raises no card (decision 71): a core lesson is held and listed in the report, where {{who}} promotes
+    // it. Unlike the summary routes this holds for the Lead after its final summary too (a lesson is never a card).
+    if (agent.expedition) {
+      this.expeditionOf(p, agent).park({ text: lesson, reason: 'a core lesson, held for the report', maker: agent.name, kind: 'lesson' });
+      return 'Held in the expedition report; {{who}} can promote it from there.';
     }
     p.log.append('lesson_proposed', { thread: agent.thread, from: agent.name, lesson: randomUUID(), text: lesson });
     return 'Queued for {{who}} to approve; it joins the core profile once they do.';
@@ -649,6 +697,13 @@ export class Hub {
     // card, whatever the level or the check would have said (workers are told to stop; a request already waiting
     // with the orchestrator or the check carries on).
     const paused = this.isPaused(p);
+    // The Expedition module (plan 2a, route 8): while paused an expedition's request is never a card (decision 71). It is
+    // denied with "wait", logged in the agent's own thread, and not parked.
+    if (paused && this.upwardOf(p, agent).to !== 'orchestrator') {
+      const i = input || {};
+      p.log.append('permission_answer', { thread: agent.thread, approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'deny', reason: 'paused, wait', by: 'hub', expedition: agent.expedition });
+      return Promise.resolve({ behavior: 'deny', message: 'Work in this project is paused: wait until it is resumed, then ask again. This is not parked.' });
+    }
     // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).
     const pass = paused ? null : findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
     if (pass) {
@@ -747,7 +802,7 @@ export class Hub {
       ? `${who} paused work in ${p.name}: every new permission request now comes to {{who}} as a card, and workers were told to stop at their next turn.`
       : `${who} resumed work in ${p.name}: permission requests are answered as before, and workers were told to carry on.`);
     const msg = on ? PAUSE_TO_WORKERS : RESUME_TO_WORKERS;
-    for (const w of p.workers()) {
+    for (const w of p.workers({ all: true })) {   // an expedition's members are workers: they are told to stop too
       if (!w.live && !this.noAgents) continue;   // asleep: it reads nothing until it is woken, and then by a real message
       try { w.send(msg); } catch { /* retiring or retired */ }
     }
@@ -882,6 +937,7 @@ export class Hub {
 
   // The orchestrator hears of the check's denials and escalations at its next turn (it does not wake for them).
   noteCheck(p, what, a, reason) {
+    if (this.upwardOf(p, a.agent).to !== 'orchestrator') return;   // an expedition's denials go to the agent that asked and to the log only
     const orch = p.orchestrator();
     if (!orch || (orch.notes?.length || 0) >= 40) return;
     const i = a.input || {};
@@ -1410,6 +1466,9 @@ export class Hub {
         const s = lastSummary(w);
         return `- ${w.name} (${w.state}): ${w.goal || w.task.slice(0, 80)}. ${s ? `Last summary (${when(s.ts)}): ${clip(s.next_step || toList(s.done)[0] || 'posted', 300)}` : 'No summary yet'}. ${lastInstruction(w, INSTRUCTION_MAX)}`;
       }) : ['- none']));
+      // An expedition is one line, not workers with summaries and cards: it reports to its Lead until its end.
+      const ex = Expedition.all(p).filter(x => x.phase !== 'ended');
+      if (ex.length) lines.push('Expeditions (run by their own Lead; they report here once, at the end):', ...ex.map(x => `- expedition ${x.id} ${{ new: 'not started', planning: 'planning', running: 'running', stopped: 'writing up' }[x.phase]}`));
     }
 
     lines.push(...gitLines(this.gitState(p), { summaries: summaries.filter(e => !orchNames.has(e.from)), events: evs, tagged }));
@@ -1475,7 +1534,8 @@ export class Hub {
     old.retiring = 'overlap';
     const entryId = old.leftHandoff;
     // The successor keeps its predecessor's type, model and effort.
-    const settings = { type: old.type || undefined, model: old.model, effort: old.effort, inherited: true };   // a worker with no type gets the default one
+    // An expedition agent's successor keeps its expedition and role too (the Lead's takes the final turn).
+    const settings = { type: old.type || undefined, model: old.model, effort: old.effort, inherited: true, ...(old.expedition ? { expedition: old.expedition, expeditionRole: old.expeditionRole } : {}) };   // a worker with no type gets the default one
     const succ = old.role !== 'worker'
       ? this.createAgent(p, { role: old.role, predecessor: old.name, handoffEntry: entryId, settings })
       : this.createAgent(p, { name: old.name.replace(/-\d+$/, ''), role: 'worker', task: old.task, goal: old.goal, predecessor: old.name, handoffEntry: entryId, settings });
@@ -1599,7 +1659,7 @@ export class Hub {
   state() {
     return [...this.projects.values()].map(p => ({
       name: p.name, dir: p.dir,
-      agents: [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor, type: a.type, model: a.model, effort: a.effort, modelSeen: a.modelSeen, restartPending: a.restartWhenIdle })),
+      agents: [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor, type: a.type, model: a.model, effort: a.effort, modelSeen: a.modelSeen, restartPending: a.restartWhenIdle, ...(a.expedition ? { expedition: a.expedition, expeditionRole: a.expeditionRole } : {}) })),
       types: this.agentTypes(p).list().map(({ name, description, model, effort, tools, source }) => ({ name, description, model, effort, tools, source })),
       events: p.log.events,
       board: p.board.snapshot(),

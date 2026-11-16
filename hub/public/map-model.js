@@ -46,7 +46,8 @@ export class MapModel {
   workers(max = 12) {
     const p = this.project;
     if (!p) return { list: [], hidden: 0 };
-    const all = p.agents.filter(a => a.state !== 'retired' && (a.role === 'worker' || a.retiring === 'overlap'));
+    // An expedition's agents (the Expedition module) are one cluster, drawn in phase 2, not stations of their own.
+    const all = p.agents.filter(a => a.state !== 'retired' && !a.expedition && (a.role === 'worker' || a.retiring === 'overlap'));
     const needs = this.needsByThread();
     const traffic = this.traffic();
     const score = a => (needs.has(a.thread) ? 1e15 : 0) + (['working', 'starting'].includes(a.state) ? 1e14 : 0) + (this.lastSeen.get(a.name) || 0);

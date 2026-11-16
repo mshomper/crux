@@ -53,8 +53,12 @@ function describeTool(block) {
 }
 
 export class Agent {
-  constructor(hub, project, { name, role, task = '', goal = '', generation = 0, sessionId = null, state = 'asleep', predecessor = null, handoffEntry = null, type = null, model = null, effort = null }) {
+  constructor(hub, project, { name, role, task = '', goal = '', generation = 0, sessionId = null, state = 'asleep', predecessor = null, handoffEntry = null, type = null, model = null, effort = null, expedition = null, expeditionRole = null }) {
     Object.assign(this, { hub, project, name, role, task, goal, generation, sessionId, state, predecessor, handoffEntry });
+    // The Expedition module: the expedition this agent belongs to (its id) and its role in it. Set only by the hub,
+    // saved in agent_created and carried on every usage event; permissions and routing key on these, never on anything
+    // the agent writes.
+    Object.assign(this, { expedition: expedition || null, expeditionRole: expedition ? expeditionRole || null : null });
     // Decision 20: the agent type it was started as, and its model and effort (null = Claude Code's default).
     // modelSeen is what Claude Code reported at start-up, so a default model still shows its name and colour.
     Object.assign(this, { type, model, effort, modelSeen: null, restartWhenIdle: false });
@@ -343,7 +347,7 @@ export class Agent {
     const r = this.ledger.record(usage, { baseline, fresh });
     if (!Object.keys(r.delta).length && !r.baseline) { this.hub.usage?.note(); return; }
     this.cost += r.costUSD;
-    p.log.append('usage', { agent: this.name, project: p.name, sessionId: this.sessionId, agentType: this.type, model: this.model || this.modelSeen || null, effort: this.effort, models: r.delta, costUSD: r.costUSD, totals: r.totals, ...(r.baseline ? { baseline: true } : {}), ...(r.reset ? { reset: true } : {}) });
+    p.log.append('usage', { agent: this.name, project: p.name, sessionId: this.sessionId, agentType: this.type, model: this.model || this.modelSeen || null, effort: this.effort, models: r.delta, costUSD: r.costUSD, totals: r.totals, ...(this.expedition ? { expedition: this.expedition, expeditionRole: this.expeditionRole } : {}), ...(r.baseline ? { baseline: true } : {}), ...(r.reset ? { reset: true } : {}) });
     this.hub.usage?.note();
   }
 
