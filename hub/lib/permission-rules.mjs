@@ -459,6 +459,43 @@ const EVALUATES = /(^|[\s;&|(){}\/\\])(eval|exec|iex|invoke-expression|invoke-co
 // Quoted text that is a script running other programs (node -e, python -c, perl -e): kept for the risky-word scan.
 const RUNS_TEXT = /child_process|\bexec(Sync|File|FileSync)?\s*\(|\bspawn(Sync)?\s*\(|\bfork\s*\(|subprocess|\bos\.(system|popen|exec\w*|spawn\w*)|\bPopen\b|\bsystem\s*\(|Start-Process|Invoke-Expression|\biex\b|ShellExecute|WScript\.Shell|Diagnostics\.Process|Process\]::Start|\beval\s*\(|new\s+Function\s*\(/i;
 
+// ---------- the text of a script the hub cannot vouch for (the permission check, plan B2) ----------
+// The model reads an attached script, but a hard stop inside it must not depend on the model noticing. scanScriptText runs the
+// same risky-word patterns on the script's text (with its quotes, brackets and "+" opened, so execFileSync('git', ['push', ...])
+// and 'git' + ' push' read as `git push`) plus the stops that only make sense in code: the home folder's .claude, ~/crux, the
+// live hub's ports. stops: the permission check escalates to Matt before any model call. doubts: the model may not allow.
+// Indexes into RISKY_PATTERNS that are only a doubt in code: a bare push / merge word, kill, and the secret-ish words.
+const SCRIPT_STOPS = RISKY_PATTERNS.filter((_, i) => ![2, 7, 10].includes(i));   // 2: bare push|merge, 7: kill, 10: .env .ssh ... and password words
+const SCRIPT_SECRET_PATH = /\.env\b|\.ssh\b|\.crux-hub\b|\bid_(rsa|ed25519)\b/i;
+const SCRIPT_HOME_CLAUDE = /(?:~[\\/]+|homedir\W|userprofile\W|\$HOME\W|%USERPROFILE%[\\/]*|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s'"`]+[\\/]+|\/(?:home|Users)\/[^\/\s'"`]+\/)[^;\n]{0,80}?\.claude(?:\.json|\b)/i;
+const SCRIPT_HOME_CRUX = /~[\\/]+crux\b/i;
+const SCRIPT_LIVE_HUB = /:(?:4747|4748)\b|(?:localhost|127\.0\.0\.1|::1|0\.0\.0\.0)[:\s'",]*(?:4747|4748)\b|\bport\W{0,12}(?:4747|4748)\b/i;
+const SCRIPT_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|copyFile(?:Sync)?|cp(?:Sync)?|mkdir(?:Sync)?|createWriteStream|symlink(?:Sync)?|truncate(?:Sync)?|rmtree|shutil|Remove-Item|Set-Content|Out-File|Copy-Item|Move-Item|New-Item)\b/;
+export function scanScriptText(text) {
+  const raw = String(text || '');
+  const open = psOpen(raw).replace(/[`\[\]{}+]/g, ' ');
+  const both = [raw, open];
+  const stops = [], doubts = [];
+  const seeIn = (re, list, why) => { if (both.some(t => re.test(t)) && !list.includes(why)) list.push(why); };
+  for (const re of SCRIPT_STOPS) { const m = both.map(t => re.exec(t)).find(Boolean); if (m) { const why = `it contains "${m[0].trim().replace(/\s+/g, ' ').slice(0, 60)}", a hard stop`; if (!stops.includes(why)) stops.push(why); } }
+  seeIn(SCRIPT_SECRET_PATH, stops, 'it names a secret or credential location (.env, .ssh, .crux-hub, a private key)');
+  seeIn(SCRIPT_HOME_CLAUDE, stops, 'it reaches into the home folder\'s .claude');
+  seeIn(SCRIPT_HOME_CRUX, stops, 'it reaches into ~/crux');
+  seeIn(SCRIPT_LIVE_HUB, stops, 'it names the live hub\'s port (4747 or 4748)');
+  seeIn(/(^|\s)(push|merge)(\s|$)/i, doubts, 'it has a bare "push" or "merge" word, which may be a git command built up');
+  seeIn(/(\b(stop-process|taskkill|killall|pkill)\b|(^|[\s;&|(])kill\s|process\.kill\s*\()/i, doubts, 'it stops processes');
+  seeIn(/\bcredentials?\b|\bpassword\b|\bsecret\b|api[_-]?key|\baccess[_-]?token\b|\bauth[_-]?token\b/i, doubts, 'it mentions a secret, a password or a key');
+  seeIn(/\b(?:fetch|XMLHttpRequest|WebSocket|http\.request|https\.request|https?\.get|net\.connect|axios|curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|urllib|requests\.(?:get|post|put|delete))\b/i, doubts, 'it uses the network');
+  seeIn(/\b(?:homedir|userprofile|process\.env\.HOME|\$HOME|%APPDATA%|appdata)\b/i, doubts, 'it works from the home folder');
+  seeIn(/\.claude[\\/]+(?:agents|settings|hooks|commands|skills)\b|settings\.local\.json/i, doubts, 'it names Claude Code settings, agents or hooks');
+  seeIn(/\batob\s*\(|fromCharCode|charCodeAt|Buffer\.from\([^)]*base64|base64|(?:\\x[0-9a-f]{2}){3,}|(?:\\u[0-9a-f]{4}){3,}|\.reverse\(\)\.join/i, doubts, 'it builds text in an obscured way (base64, character codes, escapes)');
+  if (both.some(t => SCRIPT_WRITE.test(t))) {
+    seeIn(/\.\.[\\/]|homedir|userprofile|\$HOME|%APPDATA%|[A-Za-z]:[\\/]|['"`]\/(?!tmp\b)[A-Za-z]/i, doubts, 'it writes or deletes with a path that leaves the folder it runs in');
+    seeIn(/node_modules/i, doubts, 'it writes or deletes near node_modules, which may be a link to the main project\'s packages');
+  }
+  return { stops, doubts };
+}
+
 class Check {
   constructor(projectDir, tmp, home, cwd = null) {
     // The roots in their long form (a temp folder given as C:\Users\FIRSTN~1\...), so paths compare alike (M039 2).

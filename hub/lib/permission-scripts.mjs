@@ -672,7 +672,7 @@ function findPackageJson(from, projectDir) {
 export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainRefs, shell = 'bash' } = {}) {
   const base = cwd || projectDir || process.cwd();
   const cache = new Map(), opts = { projectDir, git, mainRefs, cache };
-  const out = [], inlineLoads = [], seenPaths = new Set();
+  const out = [], inlineLoads = [], inlineCode = [], seenPaths = new Set();
   let attachedBytes = 0, sawWrite = false, sawRun = false;
   const queue = [{ cmd: String(cmd || ''), cwd: base, depth: 0, shell }], seenCmds = new Set();
   const items = [];
@@ -688,6 +688,7 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     if (p.files.length || p.runners.length || p.inline.length) sawRun = true;
     for (const u of p.unread) out.push({ path: `(${u.head})`, kind: 'unknown', note: u.why });
     for (const it of itemsFor(p.files, q.cwd, projectDir)) items.push(it);
+    for (const i of p.inline) if (String(i.code || '').trim() && inlineCode.length < 20) inlineCode.push(String(i.code).slice(0, SCRIPT_LIMIT));   // scanned in code by the check
     for (const i of p.inline) for (const r of loadsUnseen(i.code, { python: !!i.python, inline: true })) if (!inlineLoads.includes(r)) inlineLoads.push(r);
     for (const n of p.nested) queue.push({ cmd: n.cmd, cwd: n.at ? resolve(q.cwd, n.at) : q.cwd, depth: q.depth + 1, shell: n.shell || q.shell });
     for (const r of p.runners) {   // npm run x: the package's own script text is the command
@@ -734,10 +735,11 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     const py = /\.py$/i.test(it.path);
     // package.json is data: the commands in it are read in turn (above), so they are not "loaded" from here.
     const data = /^package\.json$/i.test(basename(it.path));
-    out.push({ path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) });
+    // scanText: more of a long script than the model is sent (up to 256 KB), so the hard-stop scan in code reads past the cut
+    out.push({ path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, ...(cutOff ? { scanText: buf.subarray(0, 256 * 1024).toString('utf8') } : {}), loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) });
   }
   // Text run as a command (iex, eval) is never a file the hub could read, wherever it sits in the command.
   if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|(?:^|[;&|(\s])eval\s/i.test(String(cmd || '')) && !inlineLoads.includes('evals text')) inlineLoads.push('evals text');
   const unread = out.some(s => s.kind !== 'committed' && (s.kind !== 'attached' || s.cutOff || s.loads.length)) || inlineLoads.length > 0;
-  return { scripts: out, inlineLoads, unread };
+  return { scripts: out, inlineLoads, inlineCode, unread };
 }

@@ -8,6 +8,7 @@
 // small runner with a timeout. hub.mjs decides what each answer does.
 import { basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { scanScriptText } from './permission-rules.mjs';
 import { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit } from './permission-scripts.mjs';
 // The script handling lives in permission-scripts.mjs; it is re-exported here, where the rest of the check is.
 export { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit };
@@ -67,6 +68,9 @@ HOW TO ANSWER
 Reply with one JSON object and nothing else:
 {"answer": "allow" | "deny" | "escalate" | "consult", "reason": "<one plain line, at most 25 words>"}`;
 
+// Added to the project facts in the cached prefix (not the plan's appendix text, which stays as written above).
+export const EXTRA_FACT = '- In a worktree, hub/node_modules (or any node_modules) may be a junction to the project\'s own packages, so writing or deleting inside it changes the main project.';
+
 const posix = dir => String(dir).replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
 
 // The cached part: the same for every request in a project until its rules or level change. Values are put in with a
@@ -75,7 +79,9 @@ export function buildPrefix({ project, dir, temp, level, rulesId, rulesBody }) {
   const put = { '<rules body>': rulesBody || '(none)', '<posix dir>': posix(dir), '<project>': project, '<dir>': dir, '<temp>': temp, '<level>': level, '<id>': rulesId || 'none' };
   // The template's "<project>\.claude\worktrees\<name>" means the project's folder: say it with the folder. Then one pass
   // over the rest, so text put in is never read as another marker (<name> is not a marker).
-  const template = PROMPT.replace('<project>\\.claude\\worktrees\\<name>', () => `${dir}\\.claude\\worktrees\\<name>`);
+  // One more project fact (after the plan's block, before the rules): a junction the worker may not see for what it is.
+  const template = PROMPT.replace('<project>\\.claude\\worktrees\\<name>', () => `${dir}\\.claude\\worktrees\\<name>`)
+    .replace('\n\nTHE PROJECT\'S RULES', () => `\n${EXTRA_FACT}\n\nTHE PROJECT'S RULES`);
   return template.replace(/<rules body>|<posix dir>|<project>|<dir>|<temp>|<level>|<id>/g, m => put[m]);
 }
 
@@ -115,6 +121,7 @@ export function buildSuffix({ worker, goal, tool, input, cwd, doubts = [], scrip
         lines.push(f.open(`script ${one(basename(s.path))}`), s.text, f.close);
       } else lines.push(`Script ${one(s.path)}: NOT ATTACHED (${one(s.note)}): you may not allow`);
     }
+    if (scripts.scanDoubts?.length) lines.push("The hub's own scan of the script text found the following, so you may not allow:", ...scripts.scanDoubts.map(d => `- ${one(d)}`));
     if (scripts.inlineLoads?.length) lines.push(`The command's own code ${scripts.inlineLoads.join(', ')}, and those files are not attached: you may not allow`);
   }
   return lines.join('\n');
@@ -139,9 +146,26 @@ export function parseAnswer(text) {
 
 // The rule the prompt states and the code enforces too: a script that was not fully seen is never allowed.
 // raw: what the model said before this rule (shadow mode logs both).
-export function applyRules({ answer, reason }, { unread = false } = {}) {
+export function applyRules({ answer, reason }, { unread = false, doubts = [] } = {}) {
   if (answer === 'allow' && unread) return { answer: 'consult', raw: answer, reason: `Not allowed on this check's word alone: a script it runs was not fully seen. (It said: ${reason})`.slice(0, 340), downgraded: true };
+  if (answer === 'allow' && doubts.length) return { answer: 'consult', raw: answer, reason: `Not allowed on this check's word alone: the hub's own scan of a script's text found a doubt (${doubts[0]}). (It said: ${reason})`.slice(0, 340), downgraded: true };
   return { answer, raw: answer, reason, downgraded: false };
+}
+
+// The hub's own look at the text of every script it attached (and code written in the command): the risky-word and
+// hard-stop patterns of the permission rules, run in code. stops -> escalate to you before any model call; doubts ->
+// the model may not allow. Committed scripts are the project's reviewed code and are not scanned.
+export function scanScripts(scripts) {
+  const texts = [];
+  for (const s of scripts?.scripts || []) if (s.kind === 'attached') texts.push([basename(s.path), s.scanText ?? s.text]);
+  for (const c of scripts?.inlineCode || []) texts.push(['the command\'s own code', c]);
+  const stops = [], doubts = [];
+  for (const [name, text] of texts) {
+    const r = scanScriptText(text);
+    for (const w of r.stops) stops.push(`${name}: ${w}`);
+    for (const w of r.doubts) doubts.push(`${name}: ${w}`);
+  }
+  return { stops, doubts };
 }
 
 // ---------- the call ----------
@@ -216,7 +240,15 @@ export class PermissionCheck {
   async run(req) {
     const started = Date.now();
     const unread = !!req.scripts?.unread;
-    const system = buildPrefix(req), user = buildSuffix(req);
+    // The hub's own scan of the script text first: a hard stop in it goes to you without a model call (nothing for the
+    // model to be talked out of); a doubt means the model may not allow.
+    const scan = scanScripts(req.scripts);
+    if (scan.stops.length) {
+      const reason = `A script it runs has a hard stop in its text (${scan.stops[0]}${scan.stops.length > 1 ? `; ${scan.stops.length - 1} more` : ''}), so it goes to you without asking the model.`.slice(0, 300);
+      return { valid: true, answer: 'escalate', raw: 'escalate', reason, downgraded: false, scanned: true, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
+    }
+    const doubts = scan.doubts;
+    const system = buildPrefix(req), user = buildSuffix(doubts.length ? { ...req, scripts: { ...req.scripts, scanDoubts: doubts } } : req);
     const ac = new AbortController();
     let timer, got = null, error = null;
     try {
@@ -236,6 +268,6 @@ export class PermissionCheck {
     if (error) return { valid: false, error, ...base };
     const parsed = parseAnswer(got?.text);
     if (!parsed) return { valid: false, error: 'the reply was not {answer, reason}', ...base };
-    return { valid: true, ...applyRules(parsed, { unread }), ...base };
+    return { valid: true, ...applyRules(parsed, { unread, doubts }), ...base };
   }
 }
