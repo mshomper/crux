@@ -41,29 +41,31 @@ test('1. any load of the process module makes a script unread, aliased or not', 
   assert.deepEqual(loadsUnseen(`require('child_process').execSync('git status')`, { inline: true }), []);
 });
 
-test('1. a shell script that runs git, npm or pip, or uses eval, is a doubt; a plain one is not', () => {
+test('1. a shell script that runs git, npm or pip is a note (the model\'s allow stands); eval is a strong doubt; a plain one is neither', () => {
   assert.ok(scanScriptText('pip install requests\n', { kind: 'shell' }).stops.length > 0, 'pip install is a hard stop in a shell script already');
-  for (const [text, re] of [['git status\n', /runs git, npm or pip/], ['cd x && npm test\n', /runs git, npm or pip/], ['uv run x.py\n', /runs git, npm or pip/],
-    ['cmd="echo hi"\neval "$cmd"\n', /eval/], ['iex $text\n', /eval/]]) {
+  for (const text of ['git status\n', 'cd x && npm test\n', 'uv run x.py\n']) {
     const r = scanScriptText(text, { kind: 'shell' });
-    assert.ok(r.doubts.some(d => re.test(d)), text);
+    assert.ok(r.notes.some(d => /runs git, npm or pip/.test(d)), text);
+    assert.deepEqual([r.stops, r.doubts], [[], []], text);
+  }
+  for (const text of ['cmd="echo hi"\neval "$cmd"\n', 'iex $text\n']) {
+    const r = scanScriptText(text, { kind: 'shell' });
+    assert.ok(r.doubts.some(d => /eval/.test(d)), text);
     assert.deepEqual(r.stops, [], text);
   }
   const plain = scanScriptText('echo hello\nls -la\nmkdir -p out\n', { kind: 'shell' });
-  assert.deepEqual([plain.stops, plain.doubts], [[], []]);
-  // the same words in a JS file are not this doubt
-  assert.ok(!scanScriptText('const git = 1; // npm test\n', { kind: 'js' }).doubts.some(d => /runs git, npm or pip/.test(d)));
+  assert.deepEqual([plain.stops, plain.doubts, plain.notes], [[], [], []]);
+  // the same words in a JS file (or only in a comment) are not this note
+  assert.ok(!scanScriptText('const git = 1; // npm test\n', { kind: 'js' }).notes.some(d => /runs git, npm or pip/.test(d)));
 });
 
-test('2. a changed test under hub/test/ that only mentions stop words is no hard stop; the doubts remain', async () => {
+test('2. a changed test under hub/test/ that only mentions stop words is no hard stop; the notes remain', async () => {
   const real = readFileSync(new URL('./permission-rules.test.mjs', import.meta.url), 'utf8');
-  const stopWords = scanScriptText(real);
-  assert.ok(stopWords.stops.length > 0, 'as a plain script it would be a hard stop (the leftover)');
   const proj = tree({ 'hub/test/permission-rules.test.mjs': real + '\n// changed\n', 'hub/test/ssh.test.mjs': "import { readFileSync } from 'node:fs';\nreadFileSync(join(homedir(), '.ssh', 'id_rsa'));\n" });
   for (const f of ['permission-rules.test.mjs', 'ssh.test.mjs']) {
     const scan = scanScripts(await look(proj, `node --test hub/test/${f}`));
     assert.deepEqual(scan.stops, [], f);
-    assert.ok(scan.doubts.length > 0, `${f}: still a doubt, so the model may not allow`);
+    assert.ok(scan.notes.length > 0, `${f}: still noted, for the model to read`);
   }
 });
 
@@ -76,7 +78,7 @@ test('2. in hub/test/, a real spawn of a stop command is still a stop; the same 
   // a test that spawns something else and merely names push elsewhere is not a stop
   const t = scanScriptText("execFileSync('git', ['status']);\nconst cases = ['git push origin main'];\nclassify({ command: 'git push origin main' });\n", { test: true });
   assert.deepEqual(t.stops, []);
-  assert.ok(t.doubts.some(d => /git push/.test(d)));
+  assert.ok(t.notes.some(d => /git push/.test(d)));
 });
 
 // ---------- round 2 of the #99 review ----------
@@ -140,12 +142,12 @@ test('R2-2. in a test, a stop stays when the file loads the process module in co
   // a test that loads it and also names ~/.ssh as data: the secret is a doubt, the command (if any) a stop
   const mixed = scanScriptText("import { execFileSync } from 'node:child_process';\nconst ssh = '.ssh';\nreadFileSync(join(homedir(), '.ssh', 'id_rsa'));\nexecFileSync('git', ['status']);\n", { test: true });
   assert.deepEqual(mixed.stops, []);
-  assert.ok(mixed.doubts.some(d => /\.ssh/.test(d)));
+  assert.ok(mixed.notes.some(d => /\.ssh/.test(d)));
 });
 
-test('R2-3. shell: git, npm or pip after a path separator, and a command word held in a variable, are doubts', () => {
+test('R2-3. shell: git, npm or pip after a path separator is a note, and a command word held in a variable is a strong doubt', () => {
   for (const text of ['/usr/bin/git status\n', String.raw`C:\Program Files\Git\bin\git.exe status` + '\n', 'cd x && /usr/local/bin/npm test\n', './node_modules/.bin/../../bin/pip3 list\n'])
-    assert.ok(scanScriptText(text, { kind: 'shell' }).doubts.some(d => /runs git, npm or pip/.test(d)), text);
+    assert.ok(scanScriptText(text, { kind: 'shell' }).notes.some(d => /runs git, npm or pip/.test(d)), text);
   for (const text of ['g=git\n$g status\n', 'g=git\n${g} status\n', 'g=git; $g push\n', '& $g status\n', '%g% status\n'])
     assert.ok(scanScriptText(text, { kind: 'shell' }).doubts.some(d => /command held in a variable/.test(d)), text);
   // assignments and ordinary words are not

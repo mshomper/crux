@@ -133,6 +133,8 @@ export function buildSuffix({ worker, goal, tool, input, cwd, doubts = [], scrip
       } else lines.push(`Script ${one(s.path)}: NOT ATTACHED (${one(s.note)}): you may not allow`);
     }
     if (scripts.scanDoubts?.length) lines.push("The hub's own scan of the script text found the following, so you may not allow:", ...scripts.scanDoubts.map(d => `- ${one(d)}`));
+    // words it noticed: no ruling, your own reading of the script decides (the plain-word cases of a harmless script)
+    if (scripts.scanNotes?.length) lines.push("The hub's own scan also noticed these words in the script text. They are notes, not findings: judge what the script does with them.", ...scripts.scanNotes.map(d => `- ${one(d)}`));
     if (scripts.inlineLoads?.length) lines.push(`The command's own code ${scripts.inlineLoads.join(', ')}, and those files are not attached: you may not allow`);
   }
   return lines.join('\n');
@@ -168,20 +170,21 @@ export function applyRules({ answer, reason }, { unread = false, doubts = [] } =
 // the model may not allow. Committed scripts are the project's reviewed code and are not scanned.
 export function scanScripts(scripts) {
   const texts = [];
-  const kindOf = p => (/\.(sh|bash|ps1|psm1|bat|cmd)$/i.test(p) ? 'shell' : 'js');
+  const kindOf = p => (/\.(sh|bash|ps1|psm1|bat|cmd)$/i.test(p) ? 'shell' : /\.py$/i.test(p) ? 'py' : 'js');
   // The project's own tests (s.test: the real path is inside the project and under hub/test/, set by scriptsFor) are full of strings
   // about git push and ~/.ssh because they test the rules; see scanScriptText, test.
   for (const s of scripts?.scripts || []) if (s.kind === 'attached') texts.push([basename(s.path), s.scanText ?? s.text, kindOf(s.path), !!s.test]);
   // the files an attached script imports (relative imports, followed; the model is not sent them, the scan reads them)
   for (const s of scripts?.imports || []) texts.push([`${basename(s.path)} (imported)`, s.text, kindOf(s.path), !!s.test]);
   for (const c of scripts?.inlineCode || []) texts.push(['the command\'s own code', c, 'js', false]);
-  const stops = [], doubts = [];
+  const stops = [], doubts = [], notes = [];
   for (const [name, text, kind, test] of texts) {
     const r = scanScriptText(text, { kind, test });
     for (const w of r.stops) stops.push(`${name}: ${w}`);
     for (const w of r.doubts) doubts.push(`${name}: ${w}`);
+    for (const w of r.notes) notes.push(`${name}: ${w}`);
   }
-  return { stops, doubts };
+  return { stops, doubts, notes };
 }
 
 // ---------- the call ----------
@@ -264,7 +267,7 @@ export class PermissionCheck {
     // exactly the dangerous cases; the line logs "escalate" (what On would do) with the model's raw answer next to it.
     if (stopWhy && !req.shadow) return { valid: true, answer: 'escalate', raw: 'escalate', reason: `${stopWhy}, so it goes to you without asking the model.`.slice(0, 300), downgraded: false, scanned: true, scan, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
     const doubts = stopWhy ? [...scan.stops, ...scan.doubts] : scan.doubts;
-    const system = buildPrefix(req), user = buildSuffix(doubts.length ? { ...req, scripts: { ...req.scripts, scanDoubts: doubts } } : req);
+    const system = buildPrefix(req), user = buildSuffix(doubts.length || scan.notes.length ? { ...req, scripts: { ...req.scripts, scanDoubts: doubts, scanNotes: scan.notes.slice(0, 12) } } : req);
     const ac = new AbortController();
     let timer, got = null, error = null;
     try {
