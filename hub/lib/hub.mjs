@@ -861,7 +861,7 @@ export class Hub {
         command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400),
         valid: !!res.valid, answer: res.valid ? res.answer : null, rawAnswer: res.valid ? (res.raw === undefined ? res.answer : res.raw) : null, reason: res.valid ? res.reason : res.error,
         model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}),
-        ...(res.scan?.stops?.length ? { scanStops: res.scan.stops.slice(0, 5) } : {}), ...(res.scan?.doubts?.length ? { scanDoubts: res.scan.doubts.slice(0, 5) } : {}), ms: res.ms ?? null
+        ...(res.scan?.stops?.length ? { scanStops: res.scan.stops.slice(0, 5) } : {}), ...(res.scan?.doubts?.length ? { scanDoubts: res.scan.doubts.slice(0, 5) } : {}), ...(res.scan?.notes?.length ? { scanNotes: res.scan.notes.slice(0, 8) } : {}), ms: res.ms ?? null
       });
     } catch (e) { console.warn('Shadow check failed:', e?.message || e); }
   }

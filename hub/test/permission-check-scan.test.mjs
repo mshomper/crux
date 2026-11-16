@@ -65,8 +65,10 @@ test('round 2 (#95 review): words are a hard stop only where they do something; 
     const r = scanScriptText(text);
     assert.deepEqual(r.stops, [], text);
   }
-  assert.ok(scanScriptText("const dir = join(homedir(), '.crux-hub');").doubts.length > 0, 'a doubt, so the model may not allow');
-  assert.ok(scanScriptText("const cases = ['git push origin main']").doubts.some(d => /git push/.test(d)));
+  // words are notes: shown to the model, its allow stands (the narrowing of #101); the strong doubts are in the other tests
+  assert.ok(scanScriptText("const dir = join(homedir(), '.crux-hub');").notes.length > 0, 'a note');
+  assert.deepEqual(scanScriptText("const dir = join(homedir(), '.crux-hub');").doubts, []);
+  assert.ok(scanScriptText("const cases = ['git push origin main']").notes.some(d => /git push/.test(d)));
   // where it does something
   for (const text of ["await fetch(`http://localhost:4747/api/x`, { method: 'POST' })", "execSync('git push origin main')", "readFileSync(join(homedir(), '.ssh', 'id_rsa'))", "rmSync(join(homedir(), '.claude', 'agents'), { recursive: true })"])
     assert.ok(scanScriptText(text).stops.length > 0, text);
@@ -117,20 +119,28 @@ test('code written in the command (node -e, a heredoc) is scanned too', async ()
   assert.equal(c.calls, 0);
 });
 
-test('a doubt-level finding means the model may not allow: an allow becomes consult, and the model is told', async () => {
-  const proj = tree({ 'tools/net.mjs': "const r = await fetch('https://example.com/data.json');\nconsole.log(await r.text());\n" });
+test('a strong doubt means the model may not allow: an allow becomes consult, and the model is told; a word note does not', async () => {
+  const proj = tree({ 'tools/obscured.mjs': "const w = 'pu' + 'sh';\nconsole.log(w);\n", 'tools/net.mjs': "const r = await fetch('https://example.com/data.json');\nconsole.log(await r.text());\n" });
   const c = checker('allow');
-  const r = await ask(c, proj, 'node tools/net.mjs');
+  const r = await ask(c, proj, 'node tools/obscured.mjs');
   assert.equal(c.calls, 1);
   assert.equal(r.answer, 'consult');
   assert.equal(r.downgraded, true);
   assert.equal(r.raw, 'allow');
   assert.match(r.reason, /scan of a script's text found a doubt/);
-  assert.match(c.users[0], /hub's own scan of the script text found the following/);
-  assert.match(c.users[0], /net\.mjs: it uses the network/);
+  assert.match(c.users[0], /hub's own scan of the script text found the following, so you may not allow/);
+  assert.match(c.users[0], /obscured\.mjs: it joins short pieces/);
   // a model that says deny or escalate keeps its word
   const d = checker('deny');
-  assert.equal((await ask(d, proj, 'node tools/net.mjs')).answer, 'deny');
+  assert.equal((await ask(d, proj, 'node tools/obscured.mjs')).answer, 'deny');
+  // a word (the network) is a note: shown to the model, and its allow stands
+  const n = checker('allow');
+  const a = await ask(n, proj, 'node tools/net.mjs');
+  assert.equal(a.answer, 'allow');
+  assert.equal(a.downgraded, false);
+  assert.match(n.users[0], /also noticed these words in the script text. They are notes, not findings/);
+  assert.match(n.users[0], /net\.mjs: it uses the network/);
+  assert.doesNotMatch(n.users[0], /so you may not allow/);
 });
 
 test('a clean attached script is still the model\'s to allow; a committed script is not scanned', async () => {
