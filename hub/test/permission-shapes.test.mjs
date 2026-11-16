@@ -82,10 +82,14 @@ test('a test hub with no data folder of its own would share the live hub\'s sett
     assert.match(r.unsure.join(' '), /no data folder of its own/);
   }
   unsure('PowerShell', String.raw`$env:CRUX_HOME = "$env:TEMP\x\home"; node server.mjs --port 4761`);
-  // with one: contained, as before; restart.mjs reuses how the hub was last started
-  allow('Bash', 'CRUX_HUB_DATA="$TEMP/x/data" node server.mjs --port 4791 --no-agents');
-  allow('Bash', 'export CRUX_HUB_DATA=/c/Users/mshom/AppData/Local/Temp/x/data; node hub/server.mjs --port 4750');
-  allow('Bash', 'node hub/restart.mjs --port 4752 --no-open');
+  // A7 (plan v3): both folders, and both in temp: a data folder alone shares the live profile; one in the project is for judgment
+  assert.match(unsure('Bash', 'CRUX_HUB_DATA="$TEMP/x/data" node server.mjs --port 4791 --no-agents').unsure.join(' '), /no profile folder of its own/);
+  assert.match(unsure('Bash', 'CRUX_HUB_DATA="$TEMP/x/data" CRUX_HOME=./home node server.mjs --port 4791').unsure.join(' '), /CRUX_HOME is not in the temp folder/);
+  assert.match(unsure('Bash', 'CRUX_HUB_DATA=./data CRUX_HOME="$TEMP/x/home" node server.mjs --port 4791').unsure.join(' '), /CRUX_HUB_DATA is not in the temp folder/);
+  // with both: contained, as before; restart.mjs reuses how the hub was last started
+  allow('Bash', 'CRUX_HUB_DATA="$TEMP/x/data" CRUX_HOME="$TEMP/x/home" node server.mjs --port 4791 --no-agents');
+  allow('Bash', 'export CRUX_HUB_DATA=/c/Users/mshom/AppData/Local/Temp/x/data CRUX_HOME=/c/Users/mshom/AppData/Local/Temp/x/home; node hub/server.mjs --port 4750');
+  assert.equal(classify({ tool: 'Bash', input: { command: 'node hub/restart.mjs --port 4752 --no-open' }, projectDir: CRUX, tmp: TEMP, home: HOME, agent: 'w9', hubs: [4752] }).route, 'allow');
   // near misses: still hard stops (npm start in hub/ is covered in permission-rules.test.mjs, with a fake project)
   human('Bash', 'node server.mjs');
   human('Bash', 'node server.mjs --port 4747 --no-agents');

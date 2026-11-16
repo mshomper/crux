@@ -78,6 +78,37 @@ test('B6: another worker or another orchestrator cannot answer a request routed 
   assert.equal((await pending).behavior, 'allow');
 });
 
+// Plan A7 (round 1 MEDIUM 5): a test hub is the agent's own, for stopping, only once the request that starts it is allowed.
+test('a test hub counts as the agent\'s only after the start is allowed', async () => {
+  const start = port => `CRUX_HUB_DATA=/tmp/crux-x/data CRUX_HOME=/tmp/crux-x/home node server.mjs --port ${port} --no-agents`;
+  const { hub, p, orch, w } = setup();
+  const first = ask(hub, p, w, start(4791));
+  assert.equal(last(p, 'approval').routedTo, orch.name, 'standard mode: through the orchestrator');
+  assert.equal(w.testHubs?.has(4791) ?? false, false, 'not while it waits');
+  hub.answerPermission(p, orch, last(p, 'approval').approval, 'deny', 'not now');
+  assert.equal((await first).behavior, 'deny');
+  assert.equal(w.testHubs?.has(4791) ?? false, false, 'not after a no');
+  const second = ask(hub, p, w, start(4792));
+  hub.answerPermission(p, orch, last(p, 'approval').approval, 'allow', 'a test hub in temp');
+  assert.equal((await second).behavior, 'allow');
+  assert.equal(w.testHubs.has(4792), true, 'after the allow');
+  assert.equal(w.testHubs.has(4791), false);
+  // and now it may stop that hub and no other
+  const stopped = ask(hub, p, w, 'node hub/tools/stop-test-hub.mjs 4792');
+  assert.ok(last(p, 'approval'), 'stopping is judged like any request: here it is the orchestrator\'s call');
+  hub.answerPermission(p, orch, last(p, 'approval').approval, 'allow', 'its own hub');
+  await stopped;
+  // a refused start (4748) is a card for the person, and notes nothing
+  ask(hub, p, w, start(4748));
+  assert.equal(last(p, 'approval').routedTo, null);
+  assert.equal(w.testHubs.has(4748), false);
+  // Auto mode: the hub allows it at once, and notes it at once
+  writeFileSync(join(p.dir, '.crux-hub.json'), '{ "permissions": "auto" }');
+  assert.equal((await ask(hub, p, w, start(4793))).behavior, 'allow');
+  assert.equal(w.testHubs.has(4793), true);
+  assert.equal((await ask(hub, p, w, 'node hub/tools/stop-test-hub.mjs 4793')).behavior, 'allow', 'its own: allowed in code');
+});
+
 test('the orchestrator denies: the worker sees the reason', async () => {
   const { hub, p, orch, w } = setup();
   const pending = ask(hub, p, w, 'node scripts/unrelated.mjs');
@@ -283,7 +314,7 @@ test('auto mode (decision 34): contained work is allowed at once, only unclear r
   writeFileSync(join(p.dir, '.crux-hub.json'), '{ "permissions": "auto" }');
   assert.equal(hub.permissionMode(p), 'auto');
   const before = p.log.events.length;
-  for (const c of ['npm run build', 'rm -rf hub/tmp', 'git commit -m "x"', 'git push -u origin feat/routing', 'CRUX_HUB_DATA=/tmp/crux-x/data node server.mjs --port 4748']) {
+  for (const c of ['npm run build', 'rm -rf hub/tmp', 'git commit -m "x"', 'git push -u origin feat/routing', 'CRUX_HUB_DATA=/tmp/crux-x/data CRUX_HOME=/tmp/crux-x/home node server.mjs --port 4750']) {
     assert.equal((await ask(hub, p, w, c)).behavior, 'allow', c);
   }
   assert.equal((await hub.requestApproval(p, w, 'Edit', { file_path: join(p.dir, 'hub', 'a.mjs') })).behavior, 'allow');
@@ -317,7 +348,9 @@ test('auto mode applies to the orchestrator too: its reads and contained work pa
   ]) assert.equal((await go(c)).behavior, 'allow', c);
   assert.equal(p.log.ofType('permission_answer').length, before, 'clear reads are not logged');
   // unclear, with no hard stop: allowed, and one line in its thread ($(git branch --show-current) is readable now)
-  assert.equal((await go('B=$(date +%s); echo $B')).behavior, 'allow');
+  assert.equal((await go('B=$(date +%s); echo $B')).behavior, 'allow');   // A1: a read-only substitution is an unknown value, text only here
+  assert.equal(p.log.ofType('permission_answer').length, before, 'a read-only substitution used as text is clear: not logged');
+  assert.equal((await go('B=$(mytool --sync); echo $B')).behavior, 'allow');
   const line = last(p, 'permission_answer');
   assert.equal(line.thread, 'orchestrator');
   assert.equal(line.by, 'hub');

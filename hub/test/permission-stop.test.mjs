@@ -34,11 +34,37 @@ test('contained: a filter on the agent\'s own temp folder or on a port other tha
   own(String.raw`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*$env:TEMP\crux-phone*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`);
   own(String.raw`Get-CimInstance Win32_Process -Filter "CommandLine like '%\Temp\crux-phone\%'" | ForEach-Object { taskkill /PID $_.ProcessId /T /F }`);
   own(`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*phone-agent-x*' } | ForEach-Object { Stop-Process -Id $_.ProcessId }`, {});   // the agent's name is in it
-  own('Get-NetTCPConnection -LocalPort 4752 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }', {});
-  own('Get-NetTCPConnection -LocalPort 4752,4753 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ }', {});
-  own(String.raw`node hub/tools/stop-test-hub.mjs 4752`, {});
-  assert.equal(sh('node hub/tools/stop-test-hub.mjs 4756').route, 'allow');
-  assert.equal(sh(`node -e "import('./hub/lib/relaunch.mjs').then(async m => { for (const p of await m.pidsOnPort(4752)) await m.stopTree(p) })"`).route, 'allow');
+  // A7 (plan v3): by port only when the hub has seen this agent start a test hub on that port
+  const started = { hubs: [4752, 4753, 4756] };
+  own('Get-NetTCPConnection -LocalPort 4752 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }', started);
+  own('Get-NetTCPConnection -LocalPort 4752,4753 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ }', started);
+  own(String.raw`node hub/tools/stop-test-hub.mjs 4752`, started);
+  assert.equal(sh('node hub/tools/stop-test-hub.mjs 4756', started).route, 'allow');
+  assert.equal(sh(`node -e "import('./hub/lib/relaunch.mjs').then(async m => { for (const p of await m.pidsOnPort(4752)) await m.stopTree(p) })"`, started).route, 'allow');
+});
+
+test('A7: stopping by port is for judgment unless this agent started a test hub on that port', () => {
+  const doubt = (t, c, x = {}) => { const r = at(t, c, x); assert.equal(r.route, 'unsure', `${c}\n${why(r)}`); return r; };
+  // no hub of this agent's on the port: "whatever listens there" may be somebody else's
+  for (const x of [{}, { hubs: [4753] }, { hubs: [4747] }, { hubs: [4748] }]) {
+    doubt('PowerShell', 'Get-NetTCPConnection -LocalPort 4752 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }', x);
+    doubt('PowerShell', 'Get-NetTCPConnection -LocalPort 4752,4753 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ }', x);
+    doubt('Bash', 'node hub/tools/stop-test-hub.mjs 4752', x);
+    doubt('Bash', `node -e "import('./hub/lib/relaunch.mjs').then(async m => { for (const p of await m.pidsOnPort(4752)) await m.stopTree(p) })"`, x);
+  }
+  // one port of two is not enough
+  doubt('PowerShell', 'Get-NetTCPConnection -LocalPort 4752,4753 | ForEach-Object { Stop-Process -Id $_.OwningProcess }', { hubs: [4752] });
+  // the live ports are never this agent's, however they got into the list
+  for (const p of [4747, 4748]) {
+    const r = at('Bash', `node hub/tools/stop-test-hub.mjs ${p}`, { hubs: [p] });
+    assert.equal(r.route, 'human', `port ${p}: ${why(r)}`);
+    assert.equal(at('PowerShell', `Get-NetTCPConnection -LocalPort ${p} | ForEach-Object { Stop-Process -Id $_.OwningProcess }`, { hubs: [p] }).route, 'human');
+  }
+  // a hub it starts in this very command does not vouch for the stop in the same command (round 1 HIGH 4); the hub is told what was started
+  const r = sh('CRUX_HUB_DATA="$TEMP/x/data" CRUX_HOME="$TEMP/x/home" node server.mjs --port 4761 --no-agents & sleep 2; node hub/tools/stop-test-hub.mjs 4761');
+  assert.equal(r.route, 'unsure', why(r));
+  assert.deepEqual(r.hubsStarted, [4761], 'the hub is told which port this request starts');
+  assert.equal(sh('CRUX_HUB_DATA="$TEMP/x/data" CRUX_HOME="$TEMP/x/home" node server.mjs --port 4761 --no-agents & sleep 2; node hub/tools/stop-test-hub.mjs 4762').route, 'unsure');
 });
 
 test('unsure: a filter that clearly excludes the hub but is not this agent\'s own temp folder', () => {
@@ -66,7 +92,7 @@ test('hard stops: unfiltered, by name, by PID, the hub\'s own port or folder', (
   ]) human('PowerShell', c);
   for (const c of ['kill 1234', 'kill -9 1234', 'killall node', 'pkill node', 'pkill -f server.mjs', 'taskkill /IM node.exe', 'node hub/tools/stop-test-hub.mjs 4747',
     'node hub/tools/stop-test-hub.mjs', 'node hub/restart.mjs', `node -e "import('./hub/lib/relaunch.mjs').then(async m => { for (const p of await m.pidsOnPort(4747)) await m.stopTree(p) })"`]) human('Bash', c);
-  assert.equal(sh('node hub/restart.mjs --port 4752 --no-open').route, 'allow', 'restarting a test hub is fine');
+  assert.equal(sh('node hub/restart.mjs --port 4752 --no-open', { hubs: [4752] }).route, 'allow', 'restarting a test hub this agent started is fine');
 });
 
 test('hub/tools/stop-test-hub.mjs stops only the port it is given and refuses 4747', async () => {

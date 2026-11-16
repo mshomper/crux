@@ -630,13 +630,18 @@ export class Hub {
       const i = input || {};
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
     }
-    if (route.allow) return Promise.resolve({ behavior: 'allow', updatedInput: input });   // auto mode, contained (decision 34)
+    // Test hubs this request starts (plan A7) count as this agent's only once the request is allowed, by the hub or by an answer.
+    const starts = this.startsOf?.agent === agent ? this.startsOf.ports : [];
+    this.startsOf = null;
+    const noteStarts = () => { agent.testHubs ||= new Set(); for (const port of starts) agent.testHubs.add(port); };
+    if (route.allow) { noteStarts(); return Promise.resolve({ behavior: 'allow', updatedInput: input }); }   // auto mode, contained (decision 34)
     return new Promise(resolvePromise => {
       const id = randomUUID();
       const always = CommandPolicy.alwaysRules(toolName, input, suggestions);
       const finish = (result, how) => {
         const a = this.approvals.get(id);
         if (!a) return;
+        if (result?.behavior === 'allow') noteStarts();
         clearTimeout(a.timer);
         this.approvals.delete(id);
         p.log.append('approval_result', { thread: agent.thread, approval: id, how });
@@ -667,13 +672,15 @@ export class Hub {
     const level = this.permissionMode(p);
     const cwd = agent.cwdFor?.(toolUseID) || null;
     agent.downloads ||= new Set();
+    agent.testHubs ||= new Set();   // plan A7: ports of the test hubs this agent started; it may stop only those
     // A10: the project's record of downloaded files (its event log) counts for every agent, across restarts; Matt's lists.
     // Everything inside a quarantine folder (any project's) counts as downloaded too: running it, or a copy of it, is a stop.
     const marks = quarantineMarks(tmpdir());
     const known = new Set([...downloadsFrom(p.log.events), ...marks]);
-    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], level, lists: this.lists?.forProject(p.dir) });
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir) });
     for (const d of c.downloaded || []) if (!known.has(d)) p.log.append('download', { path: d, agent: agent.name, thread: agent.thread, ...(c.downloads?.find(x => x.path.toLowerCase().replace(/\\/g, '/') === d) || {}) });
     const { route, tempMade } = c;
+    this.startsOf = { agent, ports: route === 'human' ? [] : c.hubsStarted || [] };   // noted in requestApproval, once the request is allowed
     const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
     // Files it downloads: running one in a later request is a stop too (review of decision 64 A). The newest 200.

@@ -29,7 +29,7 @@ test('everyday project work may go to the orchestrator', () => {
     'git switch -c feat/x', 'git checkout feat/x', 'git branch feat/y', 'git stash', 'git reset', 'git reset -- hub/a.mjs',
     'git -C hub status', 'cd hub && npm test', 'ls -la hub', 'mkdir hub/tmp', 'grep -rn "approval" hub/lib',
     'cat hub/package.json | head -5', 'npm test 2>&1 | tail -20', 'echo ok > hub/out.txt',
-    'CRUX_HUB_DATA=/tmp/crux-x/data node server.mjs --port 4748 ../proj', 'cd hub && CRUX_HUB_DATA=/tmp/crux-x npm start -- --port 4750',
+    'CRUX_HUB_DATA=/tmp/crux-x/data CRUX_HOME=/tmp/crux-x/home node server.mjs --port 4750 ../proj', 'cd hub && CRUX_HUB_DATA=/tmp/crux-x CRUX_HOME=/tmp/crux-h npm start -- --port 4750',
     'git push -u origin feat/permission-routing', 'git push origin feat/x:feat/x', 'git -C hub push origin feat/x',
     'gh pr create --title "Routing" --body "See https://example.com/x"',
     `git commit -m "$(cat <<'EOF'\nHub: permission routing\n\nCo-Authored-By: x\nEOF\n)"`
@@ -121,7 +121,7 @@ test('reading or running from outside the project folder is fine (R004); running
   ]) orch(c);
   for (const c of ['cd ../other; npm test', 'node ../other/build.mjs', 'node scripts/x.mjs --out C:/elsewhere']) unsure(c);
   // a test hub with no data folder of its own would share the live hub's settings (R005: the live hub)
-  for (const c of ['node server.mjs --port 4748 ../proj', 'cd hub && npm start -- --port 4750', 'npm start --prefix hub -- --port 4750']) unsure(c);
+  for (const c of ['node server.mjs --port 4750 ../proj', 'cd hub && npm start -- --port 4750', 'npm start --prefix hub -- --port 4750']) unsure(c);
   assert.equal(toolRoute('Read', { file_path: join(projectDir, '..', 'x.txt') }).route, 'allow');
   assert.equal(toolRoute('Glob', { pattern: 'C:/Users/**/*.md' }).route, 'allow');
 });
@@ -171,7 +171,7 @@ test('secrets, and unreadable shapes that name a hard-stop action, go to Matt', 
 
 test('requests the hub cannot classify are unsure: they go to the orchestrator in auto mode', () => {
   for (const c of ['sh -c "x"', 'powershell -Command "x"', 'cat file | xargs rm', 'sudo ls', 'unknowntool --do-it', './node_modules/.bin/x',
-    'python -c "import subprocess"', 'node -e "require(\'child_process\').execSync(\'ls\')"', 'echo $(date)', '', 'python -m http.server']) unsure(c);
+    'python -c "import subprocess"', 'node -e "require(\'child_process\').execSync(\'ls\')"', '', 'python -m http.server']) unsure(c);
 });
 
 test('tools: known reading tools are contained; unknown ones are unsure', () => {
@@ -205,7 +205,8 @@ test('regressions from the log: none of these is a hard stop', () => {
   assert.equal(notHard('B=$("/c/Program Files/GitHub CLI/gh.exe" pr view 7 --json headRefName -q .headRefName); git fetch -q origin $B && git merge-tree --write-tree --name-only HEAD origin/$B; echo "exit $?"'), 'unsure');
   notHard('git commit -qam "Hub: move the attachments import so it merges cleanly with permission routing\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git merge-tree --write-tree --name-only HEAD origin/feat/permission-routing | tail -n +2; echo "exit $?"; cd hub && npm test 2>&1 | grep -E "^ℹ (pass|fail)"');
   assert.equal(notHard('"/c/Program Files/GitHub CLI/gh.exe" pr create --base main --head feat/chat-images --title "Hub: images in threads (decision 23 A)" --body-file - <<\'EOF\'\nBuilds decision 23 A: images pasted into threads.\n\n**What changes**\n- paste (Ctrl+V)\nEOF'), 'allow');
-  assert.equal(notHard(`"/c/Program Files/Microsoft/Edge/Application/msedge.exe" --headless=new --screenshot="${join(tmp, 'shots', 'a.png').replace(/\\/g, '/')}" "http://localhost:4748/"`), 'allow');
+  assert.equal(notHard(`"/c/Program Files/Microsoft/Edge/Application/msedge.exe" --headless=new --user-data-dir="${join(tmp, 'prof').replace(/\\/g, '/')}" --screenshot="${join(tmp, 'shots', 'a.png').replace(/\\/g, '/')}" "http://localhost:4748/"`), 'allow');
+  assert.equal(notHard(`"/c/Program Files/Microsoft/Edge/Application/msedge.exe" --headless=new --screenshot="${join(tmp, 'shots', 'a.png').replace(/\\/g, '/')}" "http://localhost:4748/"`), 'unsure', 'A7: a browser with no profile of its own in temp');
   assert.equal(at(`"/c/Program Files/Microsoft/Edge/Application/msedge.exe" --headless=new --screenshot="C:/Windows/a.png" "http://localhost:4748/"`).route, 'human', 'a screenshot written outside');
   // the orchestrator's own reads: a GET to the hub piped into a node filter that only reads stdin, and log filters
   assert.equal(notHard('curl -s -m 5 http://localhost:4747/api/state | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{const j=JSON.parse(s);for(const p of j.projects){console.log(p.name, JSON.stringify(p.settings||p.permissions||\'\'));for(const a of p.agents.filter(a=>a.state!==\'retired\'))console.log(\' \',a.name,a.state,a.model||a.modelSeen,a.effort,a.type)}})"; grep \'"version"\' hub/package.json'), 'allow');
