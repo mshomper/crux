@@ -43,7 +43,7 @@ test('the prefix is the orchestrator\'s own answering instructions, with the pro
 test('the prefix states the two M051 facts plainly: a delete after a cd that can fail, and the node_modules link (decision 73)', () => {
   const s = buildPrefix(FACTS);
   assert.ok(s.includes(FAILED_CD_FACT) && s.includes(JUNCTION_FACT));
-  for (const bit of ['A delete, move or other change that follows a "cd" in the same command', 'runs in the wrong folder if the cd fails, possibly the main project folder or the real repo', 'Escalate unless the cd cannot fail or the command stops when it does (set -e, "|| exit 1"']) assert.ok(s.includes(bit), bit);
+  for (const bit of ['A delete or move that follows a "cd" in the same command', 'runs in the wrong folder if the cd fails, possibly the main project folder', 'Escalate unless the cd cannot fail or the command stops when it does (set -e, "|| exit 1"']) assert.ok(s.includes(bit), bit);
   for (const bit of ['hub/node_modules (and any node_modules or .venv there) is a link (junction) to the main project\'s own packages', 'A recursive delete, a move, a mirror or an overwrite that goes through it', 'rm -rf, robocopy /MIR, fs.rm', 'changes the main project, not the worktree', 'Only removing the link itself with rmdir (or an unlink that does not follow it) is safe.']) assert.ok(s.includes(bit), bit);
   assert.ok(s.indexOf(FAILED_CD_FACT) < s.indexOf('PERMISSION REQUESTS:') && s.indexOf(JUNCTION_FACT) < s.indexOf('THE PROJECT\'S RULES'), 'project facts, before the rules, not in the rules text');
   assert.ok(s.endsWith(`\n${JSON_ONLY}`), 'the last line');
