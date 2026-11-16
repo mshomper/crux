@@ -621,13 +621,18 @@ export class Hub {
       const i = input || {};
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
     }
-    if (route.allow) return Promise.resolve({ behavior: 'allow', updatedInput: input });   // auto mode, contained (decision 34)
+    // Test hubs this request starts (plan A7) count as this agent's only once the request is allowed, by the hub or by an answer.
+    const starts = this.startsOf?.agent === agent ? this.startsOf.ports : [];
+    this.startsOf = null;
+    const noteStarts = () => { agent.testHubs ||= new Set(); for (const port of starts) agent.testHubs.add(port); };
+    if (route.allow) { noteStarts(); return Promise.resolve({ behavior: 'allow', updatedInput: input }); }   // auto mode, contained (decision 34)
     return new Promise(resolvePromise => {
       const id = randomUUID();
       const always = CommandPolicy.alwaysRules(toolName, input, suggestions);
       const finish = (result, how) => {
         const a = this.approvals.get(id);
         if (!a) return;
+        if (result?.behavior === 'allow') noteStarts();
         clearTimeout(a.timer);
         this.approvals.delete(id);
         p.log.append('approval_result', { thread: agent.thread, approval: id, how });
@@ -658,8 +663,10 @@ export class Hub {
     const level = this.permissionMode(p);
     const cwd = agent.cwdFor?.(toolUseID) || null;
     agent.downloads ||= new Set();
-    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: agent.downloads, level });
+    agent.testHubs ||= new Set();   // plan A7: ports of the test hubs this agent started; it may stop only those
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: agent.downloads, hubs: agent.testHubs, level });
     const { route, tempMade } = c;
+    this.startsOf = { agent, ports: route === 'human' ? [] : c.hubsStarted || [] };   // noted in requestApproval, once the request is allowed
     const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
     for (const d of tempMade) agent.tempDirs.add(d);   // temp folders it makes are its own to delete later (R005)
     // Files it downloads: running one in a later request is a stop too (review of decision 64 A). The newest 200.
