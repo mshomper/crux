@@ -681,6 +681,8 @@ export class Hub {
         entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
         if (route.check) this.runCheck(id, entry);   // the 5 minutes above run from this request, whatever the check says
         else {
+          // Shadow mode changes nothing live: the request goes to the orchestrator at once, as today, with no note about the
+          // check. What the hub's own scan finds is only logged, in check_shadow (scanStops, scanDoubts).
           try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd)); }
           catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
           if (route.shadow) this.runShadow(id, entry);
@@ -830,7 +832,9 @@ export class Hub {
   async runShadow(id, a) {
     try {
       let res;
-      try { res = await this.checker.run(await this.checkRequest(a)); }
+      // shadow: true makes the check ask the model even when the hub's scan found a hard stop (with the check on it would
+      // have escalated without a call), so the study sees what the model says on exactly the dangerous cases.
+      try { res = await this.checker.run({ ...(await this.checkRequest(a)), shadow: true }); }
       catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
       try { this.logCheckUsage(a.p, id, res, true); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
       const i = a.input || {};
@@ -839,8 +843,9 @@ export class Hub {
       a.p.log.append('check_shadow', {
         approval: id, worker: a.agent.name, tool: a.toolName,
         command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400),
-        valid: !!res.valid, answer: res.valid ? res.answer : null, rawAnswer: res.valid ? (res.raw || res.answer) : null, reason: res.valid ? res.reason : res.error,
-        model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}), ms: res.ms ?? null
+        valid: !!res.valid, answer: res.valid ? res.answer : null, rawAnswer: res.valid ? (res.raw === undefined ? res.answer : res.raw) : null, reason: res.valid ? res.reason : res.error,
+        model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}),
+        ...(res.scan?.stops?.length ? { scanStops: res.scan.stops.slice(0, 5) } : {}), ...(res.scan?.doubts?.length ? { scanDoubts: res.scan.doubts.slice(0, 5) } : {}), ms: res.ms ?? null
       });
     } catch (e) { console.warn('Shadow check failed:', e?.message || e); }
   }

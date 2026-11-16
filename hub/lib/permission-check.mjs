@@ -8,6 +8,7 @@
 // small runner with a timeout. hub.mjs decides what each answer does.
 import { basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { scanScriptText } from './permission-rules.mjs';
 import { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit } from './permission-scripts.mjs';
 // The script handling lives in permission-scripts.mjs; it is re-exported here, where the rest of the check is.
 export { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit };
@@ -122,6 +123,7 @@ export function buildSuffix({ worker, goal, tool, input, cwd, doubts = [], scrip
         lines.push(f.open(`script ${one(basename(s.path))}`), s.text, f.close);
       } else lines.push(`Script ${one(s.path)}: NOT ATTACHED (${one(s.note)}): you may not allow`);
     }
+    if (scripts.scanDoubts?.length) lines.push("The hub's own scan of the script text found the following, so you may not allow:", ...scripts.scanDoubts.map(d => `- ${one(d)}`));
     if (scripts.inlineLoads?.length) lines.push(`The command's own code ${scripts.inlineLoads.join(', ')}, and those files are not attached: you may not allow`);
   }
   return lines.join('\n');
@@ -146,9 +148,29 @@ export function parseAnswer(text) {
 
 // The rule the prompt states and the code enforces too: a script that was not fully seen is never allowed.
 // raw: what the model said before this rule (shadow mode logs both).
-export function applyRules({ answer, reason }, { unread = false } = {}) {
+export function applyRules({ answer, reason }, { unread = false, doubts = [] } = {}) {
   if (answer === 'allow' && unread) return { answer: 'consult', raw: answer, reason: `Not allowed on this check's word alone: a script it runs was not fully seen. (It said: ${reason})`.slice(0, 340), downgraded: true };
+  if (answer === 'allow' && doubts.length) return { answer: 'consult', raw: answer, reason: `Not allowed on this check's word alone: the hub's own scan of a script's text found a doubt (${doubts[0]}). (It said: ${reason})`.slice(0, 340), downgraded: true };
   return { answer, raw: answer, reason, downgraded: false };
+}
+
+// The hub's own look at the text of every script it attached (and code written in the command): the risky-word and
+// hard-stop patterns of the permission rules, run in code. stops -> escalate to you before any model call; doubts ->
+// the model may not allow. Committed scripts are the project's reviewed code and are not scanned.
+export function scanScripts(scripts) {
+  const texts = [];
+  const kindOf = p => (/\.(sh|bash|ps1|psm1|bat|cmd)$/i.test(p) ? 'shell' : 'js');
+  for (const s of scripts?.scripts || []) if (s.kind === 'attached') texts.push([basename(s.path), s.scanText ?? s.text, kindOf(s.path)]);
+  // the files an attached script imports (relative imports, followed; the model is not sent them, the scan reads them)
+  for (const s of scripts?.imports || []) texts.push([`${basename(s.path)} (imported)`, s.text, kindOf(s.path)]);
+  for (const c of scripts?.inlineCode || []) texts.push(['the command\'s own code', c, 'js']);
+  const stops = [], doubts = [];
+  for (const [name, text, kind] of texts) {
+    const r = scanScriptText(text, { kind });
+    for (const w of r.stops) stops.push(`${name}: ${w}`);
+    for (const w of r.doubts) doubts.push(`${name}: ${w}`);
+  }
+  return { stops, doubts };
 }
 
 // ---------- the call ----------
@@ -223,7 +245,15 @@ export class PermissionCheck {
   async run(req) {
     const started = Date.now();
     const unread = !!req.scripts?.unread;
-    const system = buildPrefix(req), user = buildSuffix(req);
+    // The hub's own scan of the script text first: a hard stop in it goes to you without a model call (nothing for the
+    // model to be talked out of); a doubt means the model may not allow.
+    const scan = scanScripts(req.scripts);
+    const stopWhy = scan.stops.length ? `A script it runs has a hard stop in its text (${scan.stops[0]}${scan.stops.length > 1 ? `; ${scan.stops.length - 1} more` : ''})` : null;
+    // With the check on: no model call. In shadow (req.shadow) the model is still asked, so the study sees what it says on
+    // exactly the dangerous cases; the line logs "escalate" (what On would do) with the model's raw answer next to it.
+    if (stopWhy && !req.shadow) return { valid: true, answer: 'escalate', raw: 'escalate', reason: `${stopWhy}, so it goes to you without asking the model.`.slice(0, 300), downgraded: false, scanned: true, scan, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
+    const doubts = stopWhy ? [...scan.stops, ...scan.doubts] : scan.doubts;
+    const system = buildPrefix(req), user = buildSuffix(doubts.length ? { ...req, scripts: { ...req.scripts, scanDoubts: doubts } } : req);
     const ac = new AbortController();
     let timer, got = null, error = null;
     try {
@@ -239,10 +269,11 @@ export class PermissionCheck {
       got = await Promise.race([work, timeout]);
     } catch (e) { error = e?.message || String(e); }
     finally { clearTimeout(timer); }
-    const base = { model: this.model, ms: Date.now() - started, unread, via: got?.via || null, tokens: got?.tokens || null, costUSD: got?.costUSD ?? null, listUSD: got?.tokens ? listCost(this.model, got.tokens) : null, modelUsage: got?.modelUsage || null };
+    const base = { scan, model: this.model, ms: Date.now() - started, unread, via: got?.via || null, tokens: got?.tokens || null, costUSD: got?.costUSD ?? null, listUSD: got?.tokens ? listCost(this.model, got.tokens) : null, modelUsage: got?.modelUsage || null };
+    const parsed = error ? null : parseAnswer(got?.text);
+    if (stopWhy) return { valid: true, answer: 'escalate', raw: parsed?.answer ?? null, reason: `${stopWhy}. ${parsed ? `The model said ${parsed.answer}: ${parsed.reason}` : `The model gave no valid answer (${error || 'bad reply'})`}`.slice(0, 340), downgraded: false, scanned: true, ...base };
     if (error) return { valid: false, error, ...base };
-    const parsed = parseAnswer(got?.text);
     if (!parsed) return { valid: false, error: 'the reply was not {answer, reason}', ...base };
-    return { valid: true, ...applyRules(parsed, { unread }), ...base };
+    return { valid: true, ...applyRules(parsed, { unread, doubts }), ...base };
   }
 }
