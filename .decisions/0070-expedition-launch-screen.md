@@ -1,7 +1,7 @@
 # 0070 What does launching an expedition look like: setting the scope and assembling the team?
 
-- Status: open
-- Date: 2026-11-16
+- Status: decided
+- Date: 2026-11-16, decided 2026-11-16
 - Lenses: ui
 - Builds on: 0012, 0020, 0033, 0068
 
@@ -15,13 +15,17 @@ For you:
 - Edit, or the New expedition button, opens the same panel: question, success test, time and budget, pre-approved sites and packages, and the team with each role's model and effort
 - Team changes apply to that launch only; lasting changes go in the role files
 
+## Decision
+
+**A: One panel, plus the draft card in the thread.** Scope and Team side by side in one panel (one column on the phone), reached from a New expedition button or from the Edit on the orchestrator's draft card, which can also launch at once.
+
 ## Context
 
 Matt (2026-11-16): launching an expedition is defining a project scope and assembling the team. Spec sections 5 and 3 (memo M044). Mockups use fake, neutral data. The advisor checkpoint agreed with A plus C's entry.
 
 ## Options
 
-### A: One panel, plus the draft card in the thread (recommended)
+### A: One panel, plus the draft card in the thread (chosen) (recommended)
 
 Scope and Team side by side in one panel (one column on the phone), reached from a New expedition button or from the Edit on the orchestrator's draft card, which can also launch at once.
 

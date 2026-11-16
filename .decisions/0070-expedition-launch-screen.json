@@ -7,7 +7,7 @@
  "lenses": [
   "ui"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should launching be one panel, with Scope on the left and Team on the right, opened from a New expedition button or from the orchestrator's draft card? I recommend that: one form, two ways in, and a one-tap Launch when the draft is fine.",
  "for_you": [
   "Say 'run an expedition on X' in a thread: the orchestrator drafts the brief and test as one card with Launch and Edit",
@@ -55,9 +55,9 @@
  "recommendation": "A: one form, reached from the chat or a button; B's crew picture can be added inside the same panel later.",
  "confidence": "firm",
  "change_mind": "If you want the team step to feel like assembling a crew, take B; nothing else in the plan changes.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-16",
  "superseded_by": null,
  "challenge": null,
  "settles": [],
