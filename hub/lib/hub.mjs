@@ -12,7 +12,7 @@ import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite, expeditionFolderWrite } from './permission-rules.mjs';
-import { normalizeOverlay } from './permission-lists.mjs';
+import { normalizeOverlay, parseHttpsUrl } from './permission-lists.mjs';
 import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
 import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
@@ -1096,6 +1096,9 @@ export class Hub {
       p.log.append('permission_answer', { thread: agent.thread, approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'deny', reason: 'paused, wait', by: 'hub', expedition: agent.expedition });
       return Promise.resolve({ behavior: 'deny', message: 'Work in this project is paused: wait until it is resumed, then ask again. This is not parked.' });
     }
+    // Research is the point of an expedition: its gatherers, Skeptic and Verifier read ordinary web pages without a listed site.
+    const page = agent.expedition && toolName === 'WebFetch' ? this.expeditionPageRead(p, agent, input, subagent) : null;
+    if (page) return Promise.resolve({ behavior: 'allow', updatedInput: input });   // like a listed site: it just runs, no answer line
     // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).
     // (An expedition agent never has a merge pass: merging is blocked outright, spec 4.6.)
     const pass = paused || agent.expedition ? null : findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
@@ -1123,6 +1126,21 @@ export class Hub {
     // An expedition's request the check is to judge: asked on the spot, with no card and no waiting entry (decision 71).
     if (agent.expedition && route.check) return this.quietCheck(p, agent, toolName, input, route, { signal, noteStarts, subagent });
     return this.openApproval(p, agent, toolName, input, route, { signal, title, description, suggestions, noteStarts });
+  }
+
+  // A plain page read for an expedition agent (spec section 1 and decision 71: research is the point): why it is allowed, or
+  // null (then the usual rules judge it: Matt's trusted sites, the check, parking). Only while the expedition is planning or
+  // running (the Verifier's report pass after a stop too), by a gatherer, the Skeptic or the Verifier, never the Lead itself.
+  // The address must read as a strict https page: no http, port, IP address, user info or odd spelling (parseHttpsUrl), and not
+  // a machine-local name. Downloads (curl and the like), installs and anything that writes or sends are other tools, not this.
+  expeditionPageRead(p, agent, input, subagent) {
+    if (!subagent && !['skeptic', 'verifier'].includes(agent.expeditionRole)) return null;   // the Lead itself, the builder and the rest: usual rules
+    let phase;
+    try { phase = this.expeditionOf(p, agent).state().phase; } catch { return null; }
+    if (!(phase === 'planning' || phase === 'running' || (phase === 'stopped' && agent.expeditionRole === 'verifier'))) return null;
+    const u = parseHttpsUrl(input?.url);
+    if (!u.ok || /\.(local|localhost|internal|intranet|lan|home|corp|private|test|invalid|example)$/.test(u.host)) return null;
+    return `an ordinary https page (${u.host}): reading is the expedition's job`;
   }
 
   // ---------- an expedition's requests: no card, no orchestrator (decision 71; the full parking rules are phase 4) ----------

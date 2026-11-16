@@ -194,6 +194,16 @@ export class Agent {
     };
   }
 
+  // The built-in tools the Lead's own session needs so that its subagents can have theirs: a subagent gets only what the
+  // parent session has (the first real expedition: the Lead's list had no WebSearch or WebFetch, so every gatherer, whatever
+  // its own file said, ended up with only Read and Write and wrote from memory). Returns { all, borrowed }: the Lead's type
+  // tools plus the subagents' own, and the ones the Lead has only to pass on (it may not use those itself, see options()).
+  leadTools(builtIn, agents) {
+    const own = builtIn || [];
+    const borrowed = [...new Set(Object.values(agents || {}).flatMap(a => a.tools || []))].filter(t => !own.includes(t));
+    return { all: [...own, ...borrowed], borrowed };
+  }
+
   // The query options for this agent's next start. Kept apart from start() so tests can check them.
   options() {
     // The Conductor (decision 55) has its own prompt, tools and permission callback, and nothing from disk.
@@ -210,7 +220,9 @@ export class Agent {
       : workerPrompt({ project: p.name, name: this.name, task: this.task, handoff: this.handoffEntry ? p.board.read(this.handoffEntry) : null, type, ...mem }));
     // A type's tools are limits, as in Claude Code: they set which built-in tools it has. They do not skip
     // permission cards. The board tools are always there.
-    const builtIn = type?.tools?.filter(t => !t.startsWith('mcp__'));
+    const own = type?.tools?.filter(t => !t.startsWith('mcp__'));
+    const subagents = this.expeditionRole === 'lead' ? this.expeditionAgents() : null;
+    const { all: builtIn, borrowed } = subagents && own?.length ? this.leadTools(own, subagents) : { all: own, borrowed: [] };
     // Matt's claude.ai connectors (mail, calendar, drive) are off unless this project turns them on: they are neither
     // connected (disableClaudeAiConnectors) nor offered (the known connector servers are disallowed by name).
     const connectors = this.hub.connectorsOn ? this.hub.connectorsOn(p) : false;
@@ -221,7 +233,7 @@ export class Agent {
       mcpServers: { crux: cruxTools(this.hub, p, this) },
       allowedTools: cruxToolNames(this),
       disallowedTools: [...(this.role === 'orchestrator' ? ['NotebookEdit'] : []), ...(this.expedition ? EXPEDITION_DISALLOWED : []), ...(connectors ? [] : CONNECTOR_SERVERS)],
-      ...(this.expeditionRole === 'lead' && this.expeditionAgents() ? { agents: this.expeditionAgents() } : {}),
+      ...(subagents ? { agents: subagents } : {}),
       ...(connectors ? {} : { settings: { disableClaudeAiConnectors: true } }),
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
@@ -232,7 +244,9 @@ export class Agent {
       // working folder, so this is where it is seen). Everything else is left to the permission callback.
       hooks: { PreToolUse: [{ hooks: [async input => {
         this.noteCwd(input); this.noteSubagent(input);
-        const why = (input?.agent_id ? null : this.hub.expeditionToolBlock?.(p, this, input?.tool_name)) || this.hub.expeditionFrozenBlock?.(p, this, input);
+        // A tool the Lead has only to hand on to its gatherers is not the Lead's to use: research is theirs, in cheap contexts.
+        const borrowedUse = !input?.agent_id && borrowed.includes(input?.tool_name) ? `${input.tool_name} is for your gatherers: send one with the Agent tool` : null;
+        const why = borrowedUse || (input?.agent_id ? null : this.hub.expeditionToolBlock?.(p, this, input?.tool_name)) || this.hub.expeditionFrozenBlock?.(p, this, input);
         return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : {};
       }] }] },
       ...(builtIn?.length ? { tools: builtIn } : {}),
