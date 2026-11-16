@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should an expedition never reach you mid-run? Unclear requests would go to the permission check or be parked, destructive or outside-project ones denied, and at the end the hub pushes one branch and opens a draft PR. I recommend yes, as your spec describes; it makes exceptions to the older permission and push rules, for expeditions only.",
  "for_you": [
   "No cards or phone notices during a run; parked items show as a small amber count on the cluster and in the report",
@@ -60,9 +60,9 @@
  "recommendation": "A: Matt's spec.",
  "confidence": "firm",
  "change_mind": "If parked items keep hiding things Matt needed to know (such as licence questions), add a quiet line for a short named list.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-16",
  "superseded_by": null,
  "challenge": null,
  "settles": [
