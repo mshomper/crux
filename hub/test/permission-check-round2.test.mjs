@@ -181,7 +181,8 @@ test('a file that starts a process is committed only when everything it starts i
   assert.deepEqual(await kind('python tools/pyfree.py'), ['attached'], 'runs whatever it is given');
   // the same files, not committed (untracked), are attached and flagged
   const open = await run(proj, 'node tools/names.mjs', { git: { tracked: [] } });
-  assert.deepEqual(open.scripts[0].loads, ['starts another program or script, which is not attached']);
+  assert.ok(open.scripts[0].loads.includes('starts another program or script, which is not attached'));
+  assert.ok(open.scripts[0].loads.some(l => /loads the process module/.test(l)), 'and it loads the process module (review of #95)');
   assert.equal(open.unread, true);
   // the detector itself
   assert.equal(spawns("import { execFile } from 'node:child_process'; execFile('git', [])"), false);
