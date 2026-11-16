@@ -589,7 +589,7 @@ test('shadow: the orchestrator answers as before; the check only logs check_shad
   const pending = ask(hub, p, w, 'npm run build');
   const id = last(p, 'approval').approval;
   assert.equal(last(p, 'approval').routedTo, orch.name, 'the orchestrator has it');
-  assert.equal(sent.length, 1);
+  assert.equal(sent.length, 1, 'sent at once');
   await settle();
   assert.equal(calls.length, 1, 'the check read it too');
   const sh = last(p, 'check_shadow');
