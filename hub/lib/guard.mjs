@@ -483,6 +483,8 @@ export function settingsNeed(body = {}, hub) {
   if (p) {
     if (body.permissionMode === 'trusted' && hub.permissionMode(p) !== 'trusted') { parts.push('trusted'); why.push(`raise ${p.name} to Trusted`); }
     if (body.connectors === true && !hub.connectorsOn(p)) { parts.push('connectors'); why.push(`turn connectors on for ${p.name}`); }
+    // Decision 66: the permission check answering for the orchestrator. Shadow (log only) and off need only the cookie.
+    if (body.permissionCheck === 'on' && hub.checkMode(p) !== 'on') { parts.push('check'); why.push(`let the permission check answer requests for ${p.name}`); }
   }
   const cur = hub.settings.all();
   if (body.routePermissions === true && cur.routePermissions === false) { parts.push('routing'); why.push('let the orchestrator answer requests'); }

@@ -32,6 +32,9 @@ export const HANDOFF_NUMBERS = {
 };
 // Permission levels (decisions 34 and 45). 'standard' is shown as Ask. Trusted is set only from the hub page.
 export const LEVELS = ['standard', 'auto', 'trusted'];
+// The one-shot permission check per project (decision 66): off (the orchestrator answers, as before), shadow (it runs
+// beside the orchestrator and only logs), on (it answers; the orchestrator is consulted only when it says so).
+export const CHECK_MODES = ['off', 'shadow', 'on'];
 
 export class HubSettings {
   constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), initial = {}, file } = {}) {
@@ -81,6 +84,10 @@ export class HubSettings {
     let changed = false;
     if (LEVELS.includes(changes.permissionMode)) { cur.permissionMode = changes.permissionMode; changed = true; }
     if (typeof changes.connectors === 'boolean') { cur.connectors = changes.connectors; changed = true; }   // claude.ai connectors on or off
+    // Decision 66: the one-shot permission check (off, shadow, on) and the pause switch. Kept only here, in hub
+    // settings: never read from a file in the repo, so a cloned repo cannot turn the check on or off.
+    if (CHECK_MODES.includes(changes.permissionCheck)) { cur.permissionCheck = changes.permissionCheck; changed = true; }
+    if (typeof changes.paused === 'boolean') { cur.paused = changes.paused; changed = true; }
     for (const [n, range] of Object.entries(HANDOFF_NUMBERS)) {
       if (!(n in changes)) continue;
       const v = changes[n];

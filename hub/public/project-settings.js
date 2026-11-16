@@ -73,9 +73,9 @@ export function readNumber(text, f, { allowEmpty = true } = {}) {
 
 export function levelChip(p) {
   const k = levelOf(p), L = LEVELS[k];
-  const conn = p?.connectors ? ' Connectors are on.' : '';
+  const conn = (p?.connectors ? ' Connectors are on.' : '') + (p?.paused ? ' Work is paused.' : '');
   const tip = `${L.word}: ${L.sub}${conn} Click for this project's settings.`;
-  return `<button class="lvchip ${k}" data-settings-open aria-haspopup="dialog" title="${esc(tip)}" aria-label="${esc(tip)}">${ic(L.icon)}<span class="lv-w">${L.word}</span>${p?.connectors ? `<span class="lv-conn">${ic('plug')}</span>` : ''}</button>`;
+  return `<button class="lvchip ${k}" data-settings-open aria-haspopup="dialog" title="${esc(tip)}" aria-label="${esc(tip)}">${ic(L.icon)}<span class="lv-w">${L.word}</span>${p?.connectors ? `<span class="lv-conn">${ic('plug')}</span>` : ''}${p?.paused ? `<span class="lv-conn">${ic('pause')}</span>` : ''}</button>`;
 }
 
 const list = (items, cls, icon) => items.map(t => `<li class="${cls}">${ic(icon)}<span>${esc(t)}</span></li>`).join('');
@@ -116,6 +116,17 @@ const seg = (on, name, labels = ['Off', 'On']) => `<div class="ps-seg" role="rad
   <button type="button" role="radio" aria-checked="${!on}" class="${on ? '' : 'on'}" data-ps-seg="${name}" data-v="0">${labels[0]}</button>
   <button type="button" role="radio" aria-checked="${on}" class="${on ? 'on' : ''}" data-ps-seg="${name}" data-v="1">${labels[1]}</button></div>`;
 
+// A choice of more than two (decision 66: Permission check off / shadow / on). Same look as the two-way segment.
+export const CHECK_CHOICES = [['off', 'Off'], ['shadow', 'Shadow'], ['on', 'On']];
+const checkOf = p => (['shadow', 'on'].includes(p?.permissionCheck) ? p.permissionCheck : 'off');
+const segN = (cur, name, choices) => `<div class="ps-seg" role="radiogroup" aria-label="${esc(name)}">${choices.map(([v, l]) =>
+  `<button type="button" role="radio" aria-checked="${cur === v}" class="${cur === v ? 'on' : ''}" data-ps-seg="${esc(name)}" data-v="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
+const CHECK_TIP = {
+  off: 'Off: the orchestrator answers unclear requests first, as before.',
+  shadow: 'Shadow: a quick check reads each request beside the orchestrator and only writes down what it would have said. Nothing changes for the agents.',
+  on: 'On: a quick check answers unclear requests. It asks the orchestrator only when it cannot tell, and sends the risky ones to you. Turning it on needs Windows Hello or Face ID.'
+};
+
 const head = (iconId, title) => `<header class="ps-head">${ic(iconId)}<h2 id="ps-title">${esc(title)}</h2>
   <button type="button" class="ps-x" data-ps-close aria-label="Close without changing anything" title="Close without changing anything">${ic('x')}</button></header>`;
 const foot = note => `<footer class="ps-foot"><p class="ps-note">${note}</p><button type="button" class="btn primary ps-done" data-ps-done>${ic('check')}Done</button></footer>`;
@@ -127,6 +138,10 @@ export function projectCard(p, hub, d) {
     <section class="ps-sec"><h3 class="ps-sec-head">How much agents may do ${help('Pick one. The chosen level shows what runs on its own and what comes to you; hover the others for theirs.')}</h3>
       <div class="ps-levels" role="radiogroup" aria-label="How much agents may do">${LEVEL_ORDER.map(k => plate(k, d.level === k)).join('')}</div>
       ${always(d.alwaysOpen)}</section>
+    <section class="ps-sec"><h3 class="ps-sec-head">Permission check ${help('A quick one-shot model check for requests the hub could not settle by its own rules. It has no tools and no memory, and the risky ones still come to you.')}</h3>
+      <div class="ps-conn" data-ps-check>${segN(d.check, 'check', CHECK_CHOICES)}<p>${esc(CHECK_TIP[d.check] || CHECK_TIP.off)}</p></div></section>
+    <section class="ps-sec"><h3 class="ps-sec-head">Pause work in this project ${help('Every new permission request waits for you as a card, and agents are told to stop at their next turn. Switch back to Running to let them carry on.')}</h3>
+      <div class="ps-conn" data-ps-pause>${seg(d.paused, 'paused', ['Running', 'Paused'])}<p>${d.paused ? `${ic('pause')} Paused: new requests wait for you.` : 'Running: nothing is held.'}</p></div></section>
     <section class="ps-sec"><h3 class="ps-sec-head">Trusted sites and packages ${help('The sites agents may read or download from and the packages they may install without asking you, each added by you. They are kept on this computer and apply in every project unless narrowed to one.')}</h3>
       <button type="button" class="ps-lists-link" data-ps-lists title="See, add and remove the sites and packages agents may use without asking">${ic('globe')}<span>Sites and packages agents may use without asking</span>${ic('chev', 'ps-chev')}</button></section>
     <section class="ps-sec"><h3 class="ps-sec-head">When the orchestrator hands off</h3>
@@ -164,6 +179,8 @@ export function projectChanges(p, d) {
   const body = {};
   if (d.level !== levelOf(p)) body.permissionMode = d.level;
   if (d.connectors !== !!p.connectors) body.connectors = d.connectors;
+  if (d.check != null && d.check !== checkOf(p)) body.permissionCheck = d.check;
+  if (typeof d.paused === 'boolean' && d.paused !== !!p.paused) body.paused = d.paused;
   if (Object.keys(handoff).length) body.handoff = handoff;
   return { body, errors };
 }
@@ -203,7 +220,7 @@ export class SettingsCards {
     const s = this.host.hubSettings();
     this.hub = Object.fromEntries(NUMBERS.map(f => [f.k, s[f.k]]));   // the hub defaults, shown under each box
     const own = p.ownHandoff || {};
-    this.d = { level: levelOf(p), connectors: !!p.connectors, nums: Object.fromEntries(NUMBERS.map(f => [f.k, own[f.k] == null ? '' : String(own[f.k])])), errors: {}, alwaysOpen };
+    this.d = { level: levelOf(p), connectors: !!p.connectors, check: checkOf(p), paused: !!p.paused, nums: Object.fromEntries(NUMBERS.map(f => [f.k, own[f.k] == null ? '' : String(own[f.k])])), errors: {}, alwaysOpen };
     this.show();
   }
   openHub() {
@@ -247,7 +264,11 @@ export class SettingsCards {
     const lv = e.target.closest('[data-ps-level]');
     if (lv && this.d.level !== lv.dataset.psLevel) { this.d.level = lv.dataset.psLevel; this.render(); this.el.querySelector('.ps-lv.on')?.focus({ preventScroll: true }); return; }
     const sg = e.target.closest('[data-ps-seg]');
-    if (sg) { this.d[sg.dataset.psSeg === 'route' ? 'route' : 'connectors'] = sg.dataset.v === '1'; this.render(); this.el.querySelector(`[data-ps-seg="${sg.dataset.psSeg}"].on`)?.focus(); return; }
+    if (sg) {
+      const name = sg.dataset.psSeg;
+      if (name === 'check') this.d.check = CHECK_CHOICES.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'off';
+      else this.d[name === 'route' ? 'route' : name === 'paused' ? 'paused' : 'connectors'] = sg.dataset.v === '1';
+      this.render(); this.el.querySelector(`[data-ps-seg="${sg.dataset.psSeg}"].on`)?.focus(); return; }
     const rs = e.target.closest('[data-ps-reset]');
     if (rs) { this.d.nums[rs.dataset.psReset] = ''; delete this.d.errors[rs.dataset.psReset]; this.render(); this.el.querySelector(`[data-ps-num="${rs.dataset.psReset}"]`)?.focus(); }
   }
