@@ -38,7 +38,7 @@ test('the prefix is the appendix prompt, with the project facts, the level and t
 test('the prefix states the node_modules junction plainly, after the plan\'s facts and before the rules, and closes with JSON only (B7)', () => {
   const s = buildPrefix(FACTS);
   assert.ok(s.includes(JUNCTION_FACT));
-  for (const bit of ['hub/node_modules (and any node_modules or .venv there) is a junction to the main project\'s own packages', 'Deleting, moving, mirroring or overwriting it', 'rm, robocopy /MIR, fs.rm', 'changes the main project, not the worktree', 'Treat it as outside the worktree: escalate.']) assert.ok(s.includes(bit), bit);
+  for (const bit of ['hub/node_modules (and any node_modules or .venv there) is a junction to the main project\'s own packages', 'Writing, deleting, moving, mirroring or overwriting anything inside it, or the folder itself', 'rm, robocopy /MIR, fs.rm', 'changes the main project, not the worktree', 'Treat it as outside the worktree: escalate.', 'The one exception is removing the junction itself with rmdir, which leaves the packages untouched.']) assert.ok(s.includes(bit), bit);
   assert.ok(s.indexOf('finding them is your main job.') < s.indexOf(JUNCTION_FACT), 'in the project facts');
   assert.ok(s.indexOf(JUNCTION_FACT) < s.indexOf('THE PROJECT\'S RULES'), 'not in the rules text');
   assert.ok(s.endsWith(`\n${JSON_ONLY}`), 'the last line');

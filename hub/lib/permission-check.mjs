@@ -69,7 +69,7 @@ Reply with one JSON object and nothing else:
 
 // Added to the cached prefix, not to the plan's appendix text above (B7: the three bad allows were all node_modules junctions;
 // 24 of 513 replies were reasoning followed by the JSON, which parseAnswer rightly refuses).
-export const JUNCTION_FACT = '- In a worker\'s worktree, hub/node_modules (and any node_modules or .venv there) is a junction to the main project\'s own packages. Deleting, moving, mirroring or overwriting it (rm, robocopy /MIR, fs.rm, Remove-Item, mv, and the like) changes the main project, not the worktree. Treat it as outside the worktree: escalate.';
+export const JUNCTION_FACT = '- In a worker\'s worktree, hub/node_modules (and any node_modules or .venv there) is a junction to the main project\'s own packages. Writing, deleting, moving, mirroring or overwriting anything inside it, or the folder itself (rm, robocopy /MIR, fs.rm, Remove-Item, mv, and the like) changes the main project, not the worktree. Treat it as outside the worktree: escalate. The one exception is removing the junction itself with rmdir, which leaves the packages untouched.';
 export const JSON_ONLY = 'Your reply is that JSON object only: no text before it, no text after it, no reasoning, and no code fence.';
 
 const posix = dir => String(dir).replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
