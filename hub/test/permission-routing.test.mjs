@@ -342,8 +342,8 @@ test('auto mode applies to the orchestrator too: its reads and contained work pa
   const before = p.log.ofType('permission_answer').length;
   for (const c of [
     `cd ${p.dir.replace(/\\/g, '/')} && git status --short`,
-    'curl -s localhost:4747/api/state | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>console.log(JSON.parse(s).projects.length))"',
-    'tail -n 400 .crux/events.jsonl | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>console.log(s.split(\'\\n\').length))"',
+    'curl -s localhost:4747/api/state | jq ".projects | length"',   // a node -e filter is inline code now: a doubt, logged (fix/inline-code-doubt)
+    'tail -n 400 .crux/events.jsonl | wc -l',
     'grep -n "classify" hub/lib/permissions.mjs | head -30'
   ]) assert.equal((await go(c)).behavior, 'allow', c);
   assert.equal(p.log.ofType('permission_answer').length, before, 'clear reads are not logged');

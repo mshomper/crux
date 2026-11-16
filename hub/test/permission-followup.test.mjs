@@ -92,7 +92,7 @@ test('the everyday list still passes at Auto', () => {
     'curl -s localhost:4791/api/state', 'curl -s http://localhost:4747/api/state', 'curl -sS --max-time 5 http://127.0.0.1:4791/api/ping',
     "curl -s -o /dev/null -w '%{http_code}' localhost:4792/", 'curl -s --http1.1 http://localhost:4791/api/state',
     `curl -s -X POST -H "content-type: application/json" -H "origin: http://localhost:4791" -d '{"project":"p"}' localhost:4791/api/settings`,
-    'curl -s localhost:4791/api/state | node -e "let s=0;process.stdin.on(1,d=>s+=d)"', 'curl -s localhost:4791/api/state | jq .version',
+'curl -s localhost:4791/api/state | jq .version',
     `CRUX_HUB_DATA=${T}/data curl -s localhost:4791/api/state`, 'wget -qO- http://localhost:4791/api/state',
     { ps: 'irm http://localhost:4747/api/state' },
     { ps: `iwr http://localhost:4791/api/settings -Method Post -Headers @{ 'Origin' = 'http://localhost:4791' } -ContentType 'application/json' -Body '{}' -UseBasicParsing` },

@@ -150,7 +150,8 @@ test('6. near misses: a heredoc written outside, or one with commands inside', (
 });
 
 test('an inline script that deletes: its own temp folder is contained; anything it cannot name is unsure', () => {
-  allow('Bash', RMTEMP, 'crux-page');
+  // inline code is a doubt whatever it deletes (fix/inline-code-doubt); a delete outside is still a hard stop below
+  unsure('Bash', RMTEMP, 'crux-page');
   assert.equal(route('Bash', RMTEMP, 'someone-else'), 'unsure', 'a temp folder that is not its own');
   human('Bash', `node -e "require('fs').rmSync('C:/Users/mshom/Desktop/x',{recursive:true})"`);
   unsure('Bash', `node -e "const os=require('os'),p=require('path').join(os.tmpdir());require('fs').rmSync(p,{recursive:true})"`, 'crux-page');
