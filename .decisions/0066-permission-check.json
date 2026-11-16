@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "decided",
+ "status": "superseded",
  "lead": "Matt's permission plan (v3), built as written: the hub settles more harmless shapes itself (test hubs, package links in worktrees, read-only lookups, PowerShell words, trusted sites and approved packages), and what is left goes to a one-shot Sonnet check with no tools or memory, which allows, denies, sends it to Matt, or asks the orchestrator.",
  "for_you": [
   "Far fewer permission turns for the orchestrator: about $47 over four days today, about $4 expected",
@@ -56,7 +56,7 @@
  "chosen": "A",
  "reason": "Permission turns are 22% of the orchestrator's spend; Matt approved the plan after two Fable reviews and a blind rerun.",
  "decided_on": "2026-11-15",
- "superseded_by": null,
+ "superseded_by": 73,
  "challenge": null,
  "settles": [
   {

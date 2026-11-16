@@ -32,7 +32,7 @@ Decision 66 set up a one-shot model check, vetted by two Fable reviews. Decision
 Remove the unread-script hold-back, the script scan and the consult answer. The model gets the request as the orchestrator sees it plus R005 and two plain facts (failed folder change before a delete; linked packages folders). Hard stops stay in code. Shadow for a few days, then go live if it holds.
 - Pro: Back to the vetted design; about 1 in 10 comes up instead of 9 in 10
 - Pro: Simpler: less code to maintain and review
-- Con: Worker-written scripts are judged from what the request shows, not read in full (decision 67 is replaced)
+- Con: Worker-written scripts are judged from what the request shows, not read in full (decision 67's layers go; its routing stays: at Auto a worker-written script run still goes to the check)
 - Con: It can't know chat-only context like a pause; those cases rely on the hub's own pause handling
 - Effort: Small to medium
 

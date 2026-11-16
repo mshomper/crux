@@ -1,6 +1,6 @@
 # 0066 How do workers' permission requests get answered without costing an orchestrator turn each?
 
-- Status: decided
+- Status: superseded (replaced by 0073)
 - Date: 2026-11-15, decided 2026-11-15
 - Lenses: architecture
 - Builds on: 0021, 0022, 0034, 0045, 0048, 0065
@@ -17,12 +17,6 @@ For you:
 - A 'Permission check: off / shadow / on' control per project and a 'Pause work in this project' switch
 - Setup: Turning the check on needs Windows Hello or Face ID; it runs in shadow for one to two weeks first, and you read its disagreements
 - Hard to undo: The check can be set back to off at any time; nothing in the event log is rewritten
-
-## Decision
-
-**A: Matt's plan v3, in full.** Track A first, in code: test hubs on ports other than 4747 and 4748 with temp data and only self-started processes stopped (A7); node_modules junctions through a setup script, removed only with rmdir (A8); read-only $(...) as an unknown value, narrowly (A1); PowerShell try/catch/param bodies, Add-Type -AssemblyName System.*, temp variables (A2, A3); trusted sites (pages vs quarantined downloads, https only, strict host matching, literal URLs) and approved packages (exact name, default registry, 3-day age and major-version gates, --ignore-scripts, pip only via the project .venv, Hugging Face pinned safetensors), lockfile builds against the merge-base with main (A10); worktrees under .claude/worktrees (A5). Track B: a one-shot Sonnet 5.5 check in routeFor answering allow, deny, escalate or consult, consult to Matt when there is no live orchestrator, 5-minute timer from the original request, committed scripts treated as project code and others attached in full or not allowed; only the routed agent may answer a request; a Windows Hello guard to turn it on; off / shadow / on per project; a hub-level pause; weekly sample of 10 agreed allows; go-live after about 100 blind bad cases run 3 times with 0 allows, then 1-2 weeks of shadow.
-
-Reason: Permission turns are 22% of the orchestrator's spend; Matt approved the plan after two Fable reviews and a blind rerun.
 
 ## Context
 

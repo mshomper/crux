@@ -36,7 +36,7 @@
     "Simpler: less code to maintain and review"
    ],
    "cons": [
-    "Worker-written scripts are judged from what the request shows, not read in full (decision 67 is replaced)",
+    "Worker-written scripts are judged from what the request shows, not read in full (decision 67's layers go; its routing stays: at Auto a worker-written script run still goes to the check)",
     "It can't know chat-only context like a pause; those cases rely on the hub's own pause handling"
    ],
    "effort": "Small to medium",
