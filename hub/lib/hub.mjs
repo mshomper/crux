@@ -676,6 +676,12 @@ export class Hub {
       this.approvals.set(id, entry);
       p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input), routedTo: route.to, stops: route.stops, rules: route.rules, ...listable(toolName, input) });
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
+      // The orchestrator's own turn is blocked while a hard-stop card of its own waits for you, so it cannot read a worker's
+      // request: that one comes to you at once. Routing returns to normal when the orchestrator's card is answered.
+      if (route.to && [...this.approvals.values()].some(a => a !== entry && a.p === p && !a.routedTo && a.agent.name === route.to)) {
+        this.escalate(id, `${route.to} is waiting for you on a card of its own`, 'hub');
+        return;
+      }
       if (route.to) {
         entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), Math.max(0, this.settings.get('permissionTimeoutSec') * 1000 - waitedMs));
         entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
