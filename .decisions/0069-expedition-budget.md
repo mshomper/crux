@@ -12,14 +12,15 @@ Should the hub turn the budget percentage into dollars using one figure, dollars
 
 For you:
 
-- The launch screen reads like 'Budget 7% (about $19)'; the run stops at whichever trips first: that dollar figure, or your week's meter rising 7 points
+- The launch screen shows the budget as a percentage with its dollar figure beside it; the run stops at whichever trips first: that dollar figure, or your week's meter rising by that many points
+- Rough figures from Crux's own log: about $9 per point, so 7% is about $63; a full 6-hour run is estimated at $45 to $130 (judgement, not measured), so 7% may stop some runs early. Per-role costs get measured on the first small test run
 - Spend counts while turns are still running, and stopped agents' last turns are counted, so the stop isn't late
 - Setup: Once: keep or change the hub's estimate of dollars per 1% (one number in hub.json)
 - With an API key the meters hide, so the screen shows dollars only
 
 ## Context
 
-Spec section 12, question 1 (memo M044). The hub logs each turn's estimated list-price cost; the plan meter is polled every 5 minutes in tenths of a point and also moves with other work. This project's log gives about $2.7 per point, swinging from about $0 to $9.5 per stretch; the figure is being recomputed across all projects. The advisor checkpoint (2026-11-16) found that spend shows only at turn end and that stopped turns are never logged; the build fixes both (spend counted during the turn; agents interrupted, then retired).
+Spec section 12, question 1 (memo M044). The hub logs each turn's estimated list-price cost; the plan meter is polled every 5 minutes in tenths of a point and also moves with other work. Crux's own log gives a rough figure (first pass about $2.7 per point, second pass about $9, swinging widely per stretch); other projects' logs are not read. The advisor checkpoint (2026-11-16) found that spend shows only at turn end and that stopped turns are never logged; the build fixes both (spend counted during the turn; agents interrupted, then retired).
 
 ## Options
 

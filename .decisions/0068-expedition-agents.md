@@ -26,6 +26,11 @@ Matt's Expedition module spec (2026-11-15, memo M044) leaves this open (section 
 ### A: Hub agents under a Lead (recommended)
 
 The orchestrator starts the Lead; the Lead starts the other roles as normal hub agents with four tools limited to its own expedition (start, message, retire, list). Every role has a thread, logs its own usage and goes through the permission check.
+
+![An expedition on the live map: the Lead with its team around it, two thin arcs for time and budget](images/0068-an-expedition-on-the-live-map-the-lead.png)
+
+*An expedition on the live map: the Lead with its team around it, two thin arcs for time and budget*
+
 - Pro: Whole team visible on the map; measured cost per role; per-agent rules for the frozen test and no-merge
 - Con: The largest build (phase 2 of 6); 7 to 10 agents per run need folding in the thread list
 - Effort: Large: about two modules
