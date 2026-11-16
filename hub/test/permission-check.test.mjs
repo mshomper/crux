@@ -535,8 +535,8 @@ test('shadow: the orchestrator answers as before; the check only logs check_shad
   const pending = ask(hub, p, w, 'npm run build');
   const id = last(p, 'approval').approval;
   assert.equal(last(p, 'approval').routedTo, orch.name, 'the orchestrator has it');
+  await settle();   // the request text waits for the scan of the script (a few milliseconds, at most 2 seconds)
   assert.equal(sent.length, 1);
-  await settle();
   assert.equal(calls.length, 1, 'the check read it too');
   const sh = last(p, 'check_shadow');
   assert.deepEqual([sh.approval, sh.worker, sh.tool, sh.command, sh.answer, sh.reason, sh.valid, sh.model], [id, 'builder', 'Bash', 'npm run build', 'allow', 'builds the project', true, CHECK_MODEL]);
