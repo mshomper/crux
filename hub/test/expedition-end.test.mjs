@@ -432,6 +432,25 @@ test('secrets: the desk never commits a file that looks like one (it is unstaged
   await assert.rejects(desk.push(), /already committed/);
 });
 
+test('the secret check fails closed: with origin/<base> unreadable it uses the merge-base with the local base; with neither it refuses the push', async () => {
+  const { remote, dir } = repoWithRemote();
+  const p = { dir, name: 'proj', log: { events: [] } };
+  const ex = new Expedition(p, '20261116-failclosed').init();
+  ex.write('REPORT.md', REPORT);
+  const make = () => new ExpeditionDesk({ ex, gh: async () => '[]' });
+  await make().commit('first');
+  git(['update-ref', '-d', 'refs/remotes/origin/main'], dir);   // origin/main can no longer be read
+  // A secret committed on the branch is still found, through the local main.
+  writeFileSync(join(ex.worktree, '.npmrc'), '//registry:_authToken=x\n');
+  git(['add', '-f', '.npmrc'], ex.worktree); git(['commit', '-q', '-m', 'oops'], ex.worktree);
+  await assert.rejects(make().push(), /already committed on expedition\/.* \(\.npmrc\)/);
+  assert.throws(() => git(['rev-parse', `expedition/${ex.id}`], remote), 'nothing reached the remote');
+  // Neither base can be read: refused, in plain words, never "nothing to check".
+  const blind = make(); blind.base = 'no-such-branch';
+  await assert.rejects(blind.push(), /not pushed: the hub could not tell which commits are new on expedition\/.* \(neither origin\/no-such-branch nor no-such-branch can be read\), so it cannot check them for secrets\. Look at the branch, then push it yourself/);
+  assert.throws(() => git(['rev-parse', `expedition/${ex.id}`], remote));
+});
+
 test('the card says plainly what was left out as a secret, and a changed BRIEF.md', async () => {
   const W = world({ extra: { leftOut: ['.env', 'keys/server.pem'] } });
   writeFileSync(join(W.ex.root, 'BRIEF.md'), 'A different ask.\n');

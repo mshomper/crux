@@ -89,7 +89,13 @@ export class ExpeditionDesk {
   async push() {
     if (this.local) return { ok: false, local: true };
     const base = await this.findBase();
-    const seen = await this.tryGit(['-c', 'core.quotepath=off', 'log', '--name-only', '--pretty=format:', `${this.remote}/${base}..HEAD`]);
+    // Which commits are new on the branch: those after where it left the base. origin/<base> first; if that cannot be read, the
+    // merge-base with the local base branch; if neither can be found the hub cannot check what it would push, so it refuses
+    // (a failed lookup must never read as "nothing to check").
+    let from = null;
+    for (const ref of [`${this.remote}/${base}`, base]) { from = await this.tryGit(['merge-base', 'HEAD', ref]); if (from) break; }
+    const seen = from ? await this.tryGit(['-c', 'core.quotepath=off', 'log', '--name-only', '--pretty=format:', `${from}..HEAD`]) : null;
+    if (seen === null) throw new Error(`not pushed: the hub could not tell which commits are new on ${this.branch} (neither ${this.remote}/${base} nor ${base} can be read), so it cannot check them for secrets. Look at the branch, then push it yourself`);
     const hits = [...new Set(String(seen || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).filter(secretFileName))];
     if (hits.length) throw new Error(`not pushed: ${hits.length === 1 ? 'a file that looks' : 'files that look'} like ${hits.length === 1 ? 'a secret is' : 'secrets are'} already committed on ${this.branch} (${hits.slice(0, 5).join(', ')}). Remove ${hits.length === 1 ? 'it' : 'them'} from the branch, then push it yourself`);
     await this.git(['push', '-q', '-u', this.remote, this.branch], this.dir);
