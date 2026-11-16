@@ -612,7 +612,10 @@ export class Hub {
   // Decision 21 A: a worker's request goes to the orchestrator first, unless the hub's own matcher finds a hard stop
   // in the permission rules (or cannot read it), routing is off, there is no rules entry, or no orchestrator is
   // running. Then it is a card for you, as before. If the orchestrator escalates or does not answer in time, too.
-  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID } = {}) {
+  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, warmed } = {}) {
+    // A10: an install of approved packages waits (up to about 5 seconds) for the registry's answer before it is judged.
+    const warm = warmed ? null : this.lists?.warm(toolName, input, p.dir);
+    if (warm) return warm.then(() => signal?.aborted ? { behavior: 'deny', message: 'Cancelled' } : this.requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, warmed: true }));
     const auto = this.autoAnswer(p, agent, toolName, input, agent.cwdFor?.(toolUseID) || p.dir);
     if (auto) return Promise.resolve(auto);
     // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).

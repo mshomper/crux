@@ -288,7 +288,7 @@ test('packages: classification never waits for the registry; a miss starts a fet
   lists.cache.clear();
   const t0 = Date.now();
   const r = sh('npm install zod --ignore-scripts');
-  assert.ok(Date.now() - t0 < 500, 'no waiting');
+  assert.ok(Date.now() - t0 < 3000, 'no waiting for the registry (this is only git and the disk; the fetcher itself is not awaited)');
   assert.equal(r.route, 'human');
   assert.match(r.reasons.join(' '), /being looked up now/);
   await new Promise(r => setTimeout(r, 5));
@@ -494,6 +494,16 @@ test('adding and removing: validation, scope, duplicates, and the separate pages
 // ---------- builds that fetch only what is pinned ----------
 const git = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.org', '-c', 'commit.gpgsign=false', ...a], { cwd, stdio: 'ignore' });
 let n = 0;
+// A real origin (a bare repository), fetched the way git does it: origin/main then has a reflog entry saying so.
+function connect(dir) {
+  const remote = join(root, `remote-${++n}`);
+  mkdirSync(remote);
+  git(remote, 'init', '-q', '--bare', '-b', 'main');
+  git(dir, 'remote', 'add', 'origin', remote);
+  git(dir, 'push', '-q', 'origin', 'main');
+  git(dir, 'update-ref', '-d', 'refs/remotes/origin/main');
+  git(dir, 'fetch', '-q', 'origin');
+}
 function repo(files, { ignore = '' } = {}) {
   const dir = join(root, `repo${++n}`);
   mkdirSync(dir, { recursive: true });
@@ -501,7 +511,7 @@ function repo(files, { ignore = '' } = {}) {
   if (ignore) writeFileSync(join(dir, '.gitignore'), ignore);
   git(dir, 'init', '-q', '-b', 'main');
   git(dir, 'add', '-A'); git(dir, 'commit', '-q', '-m', 'base');
-  git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');   // the project's own origin/main, which is the only base the hub takes
+  connect(dir);   // the project's own origin/main, fetched from its origin: the only base the hub takes
   git(dir, 'switch', '-q', '-c', 'feat/x');
   return dir;
 }
@@ -510,7 +520,7 @@ const GOOD = { 'package.json': JSON.stringify({ name: 'a', dependencies: { zod: 
 // where it is, on a feature branch. Its venv stays untracked.
 writeFileSync(join(projectDir, '.gitignore'), '.venv/\n');
 git(projectDir, 'init', '-q', '-b', 'main'); git(projectDir, 'add', '-A'); git(projectDir, 'commit', '-q', '-m', 'base');
-git(projectDir, 'update-ref', 'refs/remotes/origin/main', 'HEAD'); git(projectDir, 'switch', '-q', '-c', 'feat/x');
+connect(projectDir); git(projectDir, 'switch', '-q', '-c', 'feat/x');
 const buildRaw = (dir, c, o = {}) => at('Bash', { command: c }, { projectDir: dir, lists: lists.forProject(dir), ...o });
 const build = (dir, c, o) => buildRaw(dir, /^npm ci( |$)/.test(c) && !/--ignore-scripts/.test(c) ? c.replace(/^npm ci/, 'npm ci --ignore-scripts') : c, o);   // npm ci needs --ignore-scripts too
 test('lockfile builds: allowed only when lockfile, manifests and registry config match main', () => {
@@ -779,7 +789,7 @@ test('round 2 HIGH 3: origin/main moved by a fetch is not enough: the local main
   git(d, 'update-ref', 'refs/remotes/origin/main', 'HEAD');   // what `git fetch . HEAD:refs/remotes/origin/main` does
   not(build(d, 'npm ci'), 'after the move: origin/main agrees, the local main still shows the change');
   const why = lockfileProblems(d, { projectDir: d, home });
-  assert.match(why.join(' '), /package-lock\.json changed since main/);
+  assert.match(why.join(' '), /last moved by something other than a fetch from origin/, 'origin/main moved by update-ref is no base either (round 3: its reflog says so)');
   // no local main at all: origin/main alone is the base
   d = repo(GOOD);
   git(d, 'branch', '-q', '-D', 'main');
@@ -794,8 +804,8 @@ test('round 2 MEDIUM 4: npm install checks the lockfile against main and the man
   const inst = (d, o) => buildRaw(d, `npm install zod --ignore-scripts ${BEFORE}`, o);
   let d = repo(GOOD);
   allows(inst(d), 'nothing changed');
-  edit(d, 'package.json', JSON.stringify({ name: 'a', dependencies: { zod: '^3.22.0', other: '^1.0.0' } }));
-  allows(inst(d), 'a manifest that only names registry packages may differ: the install is what changes it');
+  edit(d, 'package.json', JSON.stringify({ name: 'a', dependencies: { zod: '^3.22.0', jumper: '^3.1.0' }, devDependencies: { fresh: '^1.0.0' } }));
+  allows(inst(d), 'a manifest that only adds approved registry packages may differ: the install is what changes it');
   d = repo(GOOD);
   edit(d, 'package-lock.json', '{"lockfileVersion":3,"x":1}'); not(inst(d), 'lockfile changed, not committed');
   git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'lock'); not(inst(d), 'lockfile changed and COMMITTED on the branch');
@@ -811,6 +821,130 @@ test('round 2 MEDIUM 4: npm install checks the lockfile against main and the man
   not(inst(d, { cwd: join(d, 'node_modules', 'foo') }), 'npm install inside an ignored folder');
   const plain = join(root, 'not-a-repo-2'); mkdirSync(plain); writeFileSync(join(plain, 'package.json'), '{}');
   not(buildRaw(plain, `npm install zod --ignore-scripts ${BEFORE}`), 'not a repository');
+});
+test('round 3 HIGH 1: brace sequences, quoted paths with spaces, and globs behind a link to temp never leave the quarantine folder', () => {
+  writeFileSync(join(Q, 'x.js'), 'x');
+  const leaves = c => leavesQuarantine(c, projectDir, tmp);
+  const tail = QN.slice('crux-quarantine'.length);
+  for (const dir of [`/tmp/crux-quarantin{e..e}${tail}`, `/tmp/crux-quar{a..a}ntine${tail}`, `/tmp/crux-quarantine{${tail.slice(0, 2)}..${tail.slice(0, 2)}}`]) {
+    for (const c of [`cp ${dir}/x.js hub/test/x.test.mjs`, `node ${dir}/x.js`]) { assert.equal(leaves(c), true, c); not(sh(c), c); }
+  }
+  assert.equal(leaves('find . -name x -exec echo {} +'), false, 'an empty {} is find\'s, not a path');
+  // a folder with a space in its name, reached through a link (a junction standing for the temp folder)
+  const linkDir = join(root, 'Local Settings');
+  let linked = false;
+  try { symlinkSync(tmp, linkDir, 'junction'); linked = true; } catch { }
+  const ls = slashed(linkDir);
+  assert.equal(leaves(`cp '${slashed(tmp)}/${QN}/x.js' hub/test/x.test.mjs`), true, 'a quoted full path');
+  assert.equal(leaves(`cp "${slashed(Q)}/x.js" hub/test/x.test.mjs`), true);
+  if (linked) {
+    for (const c of [`cp '${ls}/crux-q'*/x.js hub/test/`, `cp "${ls}/crux-q"*/x.js hub/test/`, `cp ${ls.replace(/ /g, '\\ ')}/crux-q*/x.js hub/test/`, `cp '${ls}/${QN}/x.js' hub/test/x.test.mjs`, `cp '${ls}/'*/x.js hub/test/`, `cp '${ls}/crux-q'?*/x.js hub/test/`]) {
+      assert.equal(leaves(c), true, c);
+      not(sh(c), c);
+    }
+    assert.equal(leaves(`ls '${ls}/crux-q'*`), false, 'looking is fine');
+  }
+  // any glob whose folder is inside the real temp folder counts: what it expands to is not known
+  for (const c of [`cp ${slashed(tmp)}/other*/a.zip src/`, `cp ${slashed(tmp)}/*/a.zip src/`, `mv ${slashed(tmp)}/x?y src/`]) assert.equal(leaves(c), true, c);
+  assert.equal(leaves('cp src/*.js assets/'), false, 'a glob in the project');
+  assert.equal(leaves(`ls ${slashed(tmp)}/*.log`), false, 'looking at temp files is fine');
+});
+test('round 3 HIGH 2: a base moved by a fetch into it, update-ref, branch -f or a deleted reflog entry is no base', () => {
+  const edit = (dir, f, text) => writeFileSync(join(dir, f), text);
+  const why = d => lockfileProblems(d, { projectDir: d, home }).join(' ');
+  // the normal case: a real fetch from origin, and commits and merges on main
+  let d = repo(GOOD);
+  assert.deepEqual(lockfileProblems(d, { projectDir: d, home }), []);
+  // origin moves on, and a plain `git fetch origin` brings it: allowed
+  const other2 = join(root, `clone-${++n}`);
+  git(root, 'clone', '-q', execFileSync('git', ['config', 'remote.origin.url'], { cwd: d, encoding: 'utf8' }).trim(), other2);
+  writeFileSync(join(other2, 'README.md'), 'hi'); git(other2, 'add', '-A'); git(other2, 'commit', '-q', '-m', 'docs'); git(other2, 'push', '-q', 'origin', 'main');
+  git(d, 'fetch', '-q', 'origin');
+  assert.deepEqual(lockfileProblems(d, { projectDir: d, home }), [], 'origin/main moved by a plain fetch from origin');
+  git(d, 'fetch', '-q', '--prune', 'origin'); git(d, 'fetch', '-q', 'origin', 'main');
+  assert.deepEqual(lockfileProblems(d, { projectDir: d, home }), [], 'fetch with options and a branch name');
+  // `git fetch . HEAD:refs/remotes/origin/main`, with the local main moved the same way
+  d = repo(GOOD);
+  edit(d, 'package-lock.json', '{"lockfileVersion":3,"evil":true}'); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'evil');
+  git(d, 'fetch', '-q', '.', 'HEAD:refs/remotes/origin/main'); git(d, 'fetch', '-q', '.', 'HEAD:main');
+  assert.match(why(d), /refs\/remotes\/origin\/main was last moved by something other than a fetch from origin/);
+  not(build(d, 'npm ci'), 'both moved by fetch . HEAD:...');
+  // a fetch from origin that names a refspec into the tracking ref
+  d = repo(GOOD);
+  edit(d, 'package-lock.json', '{"lockfileVersion":3,"evil":true}'); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'evil');
+  git(d, 'update-ref', 'refs/remotes/origin/main', 'HEAD'); git(d, 'branch', '-q', '-f', 'main', 'HEAD');
+  assert.match(why(d), /last moved by something other than a fetch/);
+  not(build(d, 'npm ci'), 'update-ref and branch -f');
+  assert.match(why(repoWithMainReset()), /refs\/heads\/main was last moved by something other than a fetch from origin, a commit, a merge or a pull \(branch: Reset/);
+  // the newest reflog entry deleted so an older, honest one shows: the ref's value no longer matches it
+  d = repo(GOOD);
+  edit(d, 'package-lock.json', '{"lockfileVersion":3,"evil":true}'); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'evil');
+  git(d, 'update-ref', 'refs/remotes/origin/main', 'HEAD'); git(d, 'branch', '-q', '-f', 'main', 'HEAD');
+  git(d, 'reflog', 'delete', 'refs/remotes/origin/main@{0}'); git(d, 'reflog', 'delete', 'refs/heads/main@{0}');
+  not(build(d, 'npm ci'), 'the newest reflog entries deleted');
+  assert.match(why(d), /was last moved by something other than a fetch/);
+  // no reflog at all
+  d = repo(GOOD);
+  git(d, 'reflog', 'expire', '--expire=all', 'refs/remotes/origin/main');
+  assert.match(why(d), /no record of it/);
+  // a commit and a merge on main are fine
+  d = repo(GOOD);
+  git(d, 'switch', '-q', 'main'); edit(d, 'README.md', 'x'); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'docs'); git(d, 'switch', '-q', '-c', 'feat/y');
+  assert.deepEqual(lockfileProblems(d, { projectDir: d, home }), []);
+  function repoWithMainReset() { const r = repo(GOOD); writeFileSync(join(r, 'README.md'), 'x'); git(r, 'add', '-A'); git(r, 'commit', '-q', '-m', 'docs'); git(r, 'branch', '-q', '-f', 'main', 'HEAD'); return r; }
+});
+test('round 3 MEDIUM: every dependency a package.json adds or changes since main must be approved, not only the one being installed', () => {
+  const edit = (dir, f, text) => { mkdirSync(join(dir, f, '..'), { recursive: true }); writeFileSync(join(dir, f), text); };
+  const inst = (d, o) => buildRaw(d, `npm install zod --ignore-scripts ${BEFORE}`, o);
+  const pj = (deps, extra = {}) => JSON.stringify({ name: 'a', dependencies: deps, ...extra });
+  let d = repo(GOOD);
+  edit(d, 'package.json', pj({ zod: '^3.22.0', evil: '1.0.0' }));
+  not(inst(d), 'an unapproved dependency added, not committed');
+  assert.match(inst(d).reasons.concat(inst(d).unsure).join(' '), /adds or changes evil \(dependencies\), which is not on your approved packages/);
+  git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'dep'); not(inst(d), 'the same, committed on the branch');
+  d = repo(GOOD);
+  edit(d, 'package.json', pj({ zod: '^3.23.0' })); allows(inst(d), 'an approved dependency with a changed range');
+  edit(d, 'package.json', pj({ zod: '^3.22.0', jumper: '^3.1.0', tagged: '^1.0.0' })); allows(inst(d), 'approved dependencies added');
+  edit(d, 'package.json', pj({ zod: '^3.22.0' }, { devDependencies: { evil: '*' } })); not(inst(d), 'an unapproved dev dependency');
+  edit(d, 'package.json', pj({ zod: '^3.22.0' }, { optionalDependencies: { evil: '*' } })); not(inst(d), 'an unapproved optional dependency');
+  edit(d, 'package.json', pj({ zod: '^3.22.0' }, { peerDependencies: { evil: '*' } })); not(inst(d), 'an unapproved peer dependency');
+  edit(d, 'package.json', pj({ zod: '^3.22.0' }, { overrides: { zod: '3.0.0' } })); not(inst(d), 'overrides added');
+  d = repo(GOOD);
+  edit(d, 'package.json', pj({})); allows(inst(d), 'a dependency removed');
+  // a new manifest in a subfolder: all its dependencies are new
+  d = repo(GOOD);
+  edit(d, 'app/package.json', pj({ evil: '1.0.0' })); not(inst(d), 'a new package.json with an unapproved dependency');
+  edit(d, 'app/package.json', pj({ zod: '^3.22.0' })); allows(inst(d), 'a new package.json with approved ones only');
+});
+test('round 3 LOW: an install of approved packages waits for the registry (up to about 5 seconds) before it is judged', async () => {
+  let calls = 0;
+  const l = new PermissionLists({ settings: new HubSettings({ file: null }), fetcher: async () => { calls++; await new Promise(r => setTimeout(r, 40)); return REG['npm:zod']; }, now: () => NOW, home });
+  l.addPackage({ eco: 'npm', name: 'zod', baseMajor: 3 });
+  const cmd = { command: `npm install zod --ignore-scripts ${BEFORE}` };
+  const w = l.warm('Bash', cmd, projectDir);
+  assert.ok(w, 'a miss has something to wait for');
+  const t0 = Date.now();
+  await w;
+  assert.ok(Date.now() - t0 >= 30, 'it waited for the fetch');
+  assert.equal(calls, 1);
+  assert.ok(l.lookup('npm', 'zod'), 'the answer is remembered');
+  assert.equal(l.warm('Bash', cmd, projectDir), null, 'a fresh answer: nothing to wait for');
+  assert.equal(calls, 1);
+  // nothing to wait for unless every package in it is approved, and it is an install
+  assert.equal(l.warm('Bash', { command: 'npm install zod evil --ignore-scripts' }, projectDir), null);
+  assert.equal(l.warm('Bash', { command: 'npm test' }, projectDir), null);
+  assert.equal(l.warm('Bash', { command: 'npm install zod; rm -rf x' }, projectDir), null, 'an unreadable command');
+  assert.equal(l.warm('WebFetch', { url: 'https://fda.gov/' }, projectDir), null);
+  // a registry that never answers: the wait ends after the limit, and the request is judged as a miss
+  const never = new PermissionLists({ settings: new HubSettings({ file: null }), fetcher: () => new Promise(() => { }), now: () => NOW, home });
+  never.addPackage({ eco: 'npm', name: 'zod', baseMajor: 3 });
+  const t1 = Date.now();
+  await never.warm('Bash', cmd, projectDir, 60);
+  assert.ok(Date.now() - t1 < 1000 && Date.now() - t1 >= 50, 'about the limit');
+  // pip through the project's venv waits too
+  const pl = new PermissionLists({ settings: new HubSettings({ file: null }), fetcher: async () => { await new Promise(r => setTimeout(r, 10)); return REG['pip:requests']; }, now: () => NOW, home });
+  pl.addPackage({ eco: 'pip', name: 'requests', baseMajor: 2 });
+  assert.ok(pl.warm('Bash', { command: '.venv/Scripts/python -m pip install --isolated --only-binary=:all: requests' }, projectDir));
 });
 test('MEDIUM: one quarantine folder per project, and anything under any crux-quarantine folder counts as downloaded', () => {
   mkdirSync(join(tmp, QO), { recursive: true });

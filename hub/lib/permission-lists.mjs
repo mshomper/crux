@@ -255,6 +255,29 @@ export class PermissionLists {
     return p;
   }
 
+  // Before a request is classified (the hub's canUseTool is async): if it is an install of approved packages whose
+  // registry answer is missing or too old, ask the registry now and wait up to ms for it, so the install is settled in this
+  // one go instead of sending a card. -> a promise (always resolves), or null when there is nothing to wait for.
+  warm(tool, input, projectDir, ms = 5000) {
+    try {
+      if (!/^(Bash|PowerShell)$/.test(tool)) return null;
+      const words = readWords(input?.command, tool === 'PowerShell');
+      if (!words || /^\w+=/.test(words[0])) return null;
+      const head = programOf(words[0]), rest = words.slice(1);
+      let eco, specs;
+      if (head === 'npm' && ['install', 'i', 'add'].includes(rest[0] || '')) { eco = 'npm'; specs = parseNpmInstall(rest.slice(1), [], this.now()).specs; }
+      else if (/^(python3?|py)(\.exe)?$/i.test(basename(slash(words[0]))) && rest[0] === '-m' && rest[1] === 'pip' && rest[2] === 'install') { eco = 'pip'; specs = parsePipInstall(rest.slice(3), []).specs; }
+      else return null;
+      const key = projectKey(projectDir);
+      if (!specs.length || !specs.every(s => findPackage(this.data?.packages, eco, s.name, key))) return null;   // anything else stays as it was
+      const stale = specs.filter(s => { const h = this.cache.get(`${eco}:${s.name}`); return !h || this.now() - h.t > FRESH_MS; });
+      if (!stale.length) return null;
+      let timer;
+      const limit = new Promise(r => { timer = setTimeout(r, ms); timer.unref?.(); });
+      return Promise.race([Promise.all(stale.map(s => this.prime(eco, s.name))), limit]).then(() => { clearTimeout(timer); }, () => { clearTimeout(timer); });
+    } catch { return null; }
+  }
+
   // The snapshot classify() reads for one project.
   forProject(dir) {
     const key = projectKey(dir), d = this.data || { sites: [], packages: [] };
@@ -511,6 +534,23 @@ function spellings(text) {
   }
   return [...out];
 }
+// The words of a command, split on spaces and shell characters that are not inside quotes (so 'Local Settings/Temp'
+// stays one word); the quote marks are removed, and a backslash before a space keeps the space in the word.
+function shellWords(s) {
+  const out = [];
+  let cur = null, q = null;
+  const stop = () => { if (cur) out.push(cur); cur = null; };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) { if (c === q) q = null; else cur = (cur ?? '') + c; continue; }
+    if (c === "'" || c === '"') { q = c; cur ??= ''; continue; }
+    if (c === '\\' && s[i + 1] === ' ') { cur = (cur ?? '') + ' '; i++; continue; }
+    if (/[\s;&|()<>]/.test(c)) { stop(); continue; }
+    cur = (cur ?? '') + c;
+  }
+  stop();
+  return out;
+}
 export function leavesQuarantine(text, cwd, tmp, home = homedir()) {
   const t = String(text);
   const marks = quarantineMarks(tmp);
@@ -518,25 +558,33 @@ export function leavesQuarantine(text, cwd, tmp, home = homedir()) {
   let touched = forms === null || forms.some(inQuarantine) || (marks.length > 0 && marks.some(m => under(realish(cwd), m)));
   if (!touched && marks.length) {
     const toks = new Set();
-    for (const f of forms) for (const raw of f.split(/[\s;&|()<>]+/)) { const x = raw.replace(/^['"]+|['"]+$/g, ''); if (x) toks.add(x); }
+    for (const f of forms) for (const x of shellWords(f)) toks.add(x);
     if (toks.size > 600) touched = true;
+    const realTmp = realOrNull(tmp);
+    const tmps = [low(tmp), realTmp && low(realTmp)].filter(Boolean);
     for (const raw of touched ? [] : toks) {
       let tok = raw;
       if (/^-+[\w-]*=/.test(tok)) tok = tok.slice(tok.indexOf('=') + 1);
       else if (/^-[A-Za-z]./.test(tok)) tok = tok.slice(2);   // -o/tmp/x: a short option with its value hard against it
       else if (tok.startsWith('-')) continue;
       if (/\$|%[A-Za-z_]\w*%/.test(tok)) { touched = true; break; }   // a variable: where it leads is not known
+      if (/\{[^{}]+\}/.test(tok)) { touched = true; break; }          // a {a..a} sequence or any brace the lists above did not open
       const g = tok.search(/[*?[]/);
       if (g >= 0) {
-        // A glob may stand for the quarantine folder itself (/tmp/crux-q*/...) or for a folder on the way to it: match the
-        // path up to the glob's own folder name against the folders, cut to the same depth. A glob inside a folder is
-        // judged by the folder before it, like any path.
+        // A glob may stand for the quarantine folder itself (/tmp/crux-q*/...) or for a folder on the way to it. The
+        // folder before the glob's own part is opened to where it really leads (a link or junction to temp, an 8.3 name, ..)
+        // and the glob part is matched against the quarantine folders at the same depth. Any glob whose folder is inside
+        // the real temp folder counts as touching: what it expands to is not known.
         const segEnd = tok.slice(g).search(/[\\/]/), pre = segEnd < 0 ? tok : tok.slice(0, g + segEnd);
-        const re = new RegExp(`^${low(looseAbs(pre, cwd, tmp, home)).replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\[!/g, '[^')}$`);
-        const depth = low(looseAbs(pre, cwd, tmp, home)).split('/').length;
+        const cutAt = Math.max(pre.lastIndexOf('/', g), pre.lastIndexOf('\\', g));
+        const dirPart = cutAt > 0 ? pre.slice(0, cutAt) : cutAt === 0 ? pre.slice(0, 1) : '.';
+        const realDir = realish(looseAbs(dirPart, cwd, tmp, home));
+        if (tmps.some(t => under(realDir, t))) { touched = true; break; }
+        const full = `${realDir}/${low(pre.slice(cutAt + 1))}`;
+        const re = new RegExp(`^${full.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]').replace(/\[!/g, '[^')}$`);
+        const depth = full.split('/').length;
         try { if (marks.some(m => re.test(m.split('/').slice(0, depth).join('/')))) { touched = true; break; } } catch { touched = true; break; }
-        const h = tok.slice(0, g), cut = Math.max(h.lastIndexOf('/'), h.lastIndexOf('\\'));
-        tok = cut > 0 ? h.slice(0, cut) : cut === 0 ? h.slice(0, 1) : '.';
+        tok = dirPart;
       }
       // Where it really leads: /tmp mapped to the temp folder first, then every part that exists opened to its real long
       // name (so an 8.3 short name like CRUX-Q~2, a link or a .. cannot hide the folder).
@@ -694,6 +742,16 @@ const NPM_CI_FLAGS = /^(--ignore-scripts|--no-audit|--no-fund|--silent|--no-prog
 // ---------- builds that fetch only what is pinned ----------
 const gitOut = (cwd, args) => execFileSync('git', ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', ...args], { cwd, encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['ignore', 'pipe', 'ignore'] });
 const gitOk = (cwd, args) => { try { execFileSync('git', ['-c', 'core.fsmonitor=false', ...args], { cwd, timeout: 15000, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: 'ignore' }); return true; } catch { return false; } };
+// Reflog messages: `fetch [options] origin [names]: fast-forward`, no refspec (a colon) in the action; a clone; for the local
+// main also a commit, a merge, a pull from origin, or the branch just created.
+const fetchedFromOrigin = msg => {
+  const m = /^(fetch\b.*?): [a-z][a-z -]*$/.exec(msg);   // the action git logged, then what it did
+  if (!m) return false;
+  const toks = m[1].split(' ').slice(1);
+  return toks.every(t => /^(?:-[-\w=.]+|\+?[\w./-]+)$/.test(t)) && toks.some(t => t === 'origin' || t === '--all');
+};
+const FETCHED = { test: msg => fetchedFromOrigin(msg) || /^clone: from ./.test(msg) };
+const LOCAL_MAIN = { test: msg => FETCHED.test(msg) || /^(?:commit(?: \([\w -]+\))?: |merge [\w./-]+: |pull(?: -[-\w=.]+)*(?: origin(?: \+?[\w./-]+)*)?: |branch: Created from )/.test(msg) };
 const WATCHED = /(^|\/)(cargo\.toml|cargo\.lock|package\.json|package-lock\.json|npm-shrinkwrap\.json|\.npmrc|\.yarnrc(\.yml)?|rust-toolchain(\.toml)?|pnpm-workspace\.yaml|\.pnpmfile\.cjs)$|(^|\/)\.cargo\/config(\.toml)?$/i;
 // An .npmrc that reroutes npm: a registry (also per scope, also with the key in quotes), a proxy, a CA, a shell or node
 // option, another config file, switched-off TLS checks or switched-on install scripts.
@@ -729,6 +787,23 @@ function manifestFindings(rel, text) {
   }
   return [];
 }
+// Every dependency a package.json adds or changes since main (each base), as named by the project: all of them must be on
+// the approved packages (the one being installed is added by the install itself, later). overrides/resolutions may not change.
+// baseTexts: what each base has (null: no such file there; undefined: could not be read, so everything counts as changed).
+function changedDeps(rel, text, baseTexts, approved) {
+  let j;
+  try { j = JSON.parse(text); } catch { return [`${rel} cannot be read`]; }
+  const bases = baseTexts.map(t => { if (t === null) return {}; try { return JSON.parse(t); } catch { return undefined; } });
+  const out = [];
+  for (const k of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const [name, spec] of Object.entries(j?.[k] || {})) {
+      if (bases.every(b => b && b[k] && b[k][name] === spec)) continue;
+      if (!approved(name)) out.push(`${rel} adds or changes ${name} (${k}), which is not on your approved packages`);
+    }
+  }
+  for (const k of ['overrides', 'resolutions']) if (bases.some(b => !b || JSON.stringify(b[k] ?? null) !== JSON.stringify(j?.[k] ?? null))) out.push(`${rel} changes ${k}`);
+  return out;
+}
 // Lockfile, manifests and registry config unchanged from the merge-base with main? -> [] when so, else why not.
 // The repository must be the project's own: the project folder is its top, and the folder the command runs in belongs
 // to the same repository (the project folder or one of its registered worktrees), so a repository made inside the
@@ -738,14 +813,13 @@ function manifestFindings(rel, text) {
 // path whether or not git lists them (an ignored folder's own lockfile counts), and each must be tracked by git.
 // installOnly (npm install): the lockfile and registry config must match main; manifests only need to name registry
 // packages (the install itself changes them).
-export function lockfileProblems(cwd, { projectDir, home = homedir(), installOnly = false } = {}) {
+export function lockfileProblems(cwd, { projectDir, home = homedir(), installOnly = false, approved = null } = {}) {
   const none = 'This folder is not in the project\'s own git repository, which the hub can read';
   let top, common, worktrees;
   try {
-    const topCwd = gitOut(cwd, ['rev-parse', '--show-toplevel']).trim();
-    const topProj = gitOut(projectDir, ['rev-parse', '--show-toplevel']).trim();
-    const commonCwd = gitOut(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
-    common = gitOut(projectDir, ['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
+    const [topCwd = '', commonCwd = ''] = gitOut(cwd, ['rev-parse', '--show-toplevel', '--path-format=absolute', '--git-common-dir']).split(/\r?\n/).map(x => x.trim());
+    let topProj;
+    [topProj = '', common = ''] = gitOut(projectDir, ['rev-parse', '--show-toplevel', '--path-format=absolute', '--git-common-dir']).split(/\r?\n/).map(x => x.trim());
     if (!topCwd || !topProj || !commonCwd || !common) return [none];
     if (low(topProj) !== low(resolve(projectDir))) return ['The project folder is not the top of its own git repository'];
     if (low(commonCwd) !== low(common)) return ['This folder belongs to a different git repository than the project'];
@@ -753,11 +827,25 @@ export function lockfileProblems(cwd, { projectDir, home = homedir(), installOnl
     if (!worktrees.includes(low(topCwd))) return ['This folder is not the project or one of its registered worktrees'];
     top = topCwd;
   } catch { return [none]; }
+  // How each base branch last moved must look like a fetch from origin (and, for main, a commit, merge or pull): a ref
+  // moved by `git fetch . HEAD:refs/remotes/origin/main`, update-ref or `git branch -f` is no base. The newest reflog
+  // entry must also be the ref's current value, so deleting the newest entry to show an older one does not help.
+  let refs;
+  try { refs = new Map(gitOut(top, ['for-each-ref', '--format=%(refname)%09%(objectname)', 'refs/remotes/origin/main', 'refs/heads/main']).split(/\r?\n/).filter(Boolean).map(l => l.split('\t'))); } catch { return [none]; }
+  const moved = (ref, ok) => {
+    let line = '';
+    try { line = gitOut(top, ['reflog', 'show', '-n', '1', '--format=%H%x09%gs', ref]).trim(); } catch { }
+    const [h, msg = ''] = line.split('\t');
+    return h && h === refs.get(ref) && ok.test(msg) ? null : `${ref} was last moved by something other than a fetch from origin${ref === 'refs/heads/main' ? ', a commit, a merge or a pull' : ''} (${msg ? msg.slice(0, 60) : 'no record of it'})`;
+  };
+  const hasMain = refs.has('refs/heads/main');
+  const bad = [moved('refs/remotes/origin/main', FETCHED), hasMain ? moved('refs/heads/main', LOCAL_MAIN) : null].filter(Boolean);
+  if (bad.length) return bad;
   // Every base to compare with: where the branch left origin/main (required) and, if there is one, the local main.
   const bases = [];
   try { bases.push({ ref: 'origin/main', sha: gitOut(top, ['merge-base', 'HEAD', 'origin/main']).trim() }); } catch { }
   if (!bases[0]?.sha) return ['The hub cannot find where this branch left the project\'s origin/main (no merge-base)'];
-  if (gitOk(top, ['rev-parse', '--verify', '--quiet', 'refs/heads/main'])) {
+  if (hasMain) {
     let b = '';
     try { b = gitOut(top, ['merge-base', 'HEAD', 'refs/heads/main']).trim(); } catch { }
     if (!b) return ['The hub cannot find where this branch left the project\'s local main (no merge-base)'];
@@ -772,8 +860,12 @@ export function lockfileProblems(cwd, { projectDir, home = homedir(), installOnl
         if (m) b.files.set(m[4], { mode: m[1], sha: m[3] });
       }
     }
-    tracked = new Set(gitOut(top, ['ls-files', '-z', '--full-name', '--cached']).split('\0').filter(Boolean));
-    inTree = gitOut(top, ['ls-files', '-z', '--full-name', '--cached', '--others', '--exclude-standard']).split('\0').filter(Boolean);
+    tracked = new Set(); inTree = [];
+    for (const rec of gitOut(top, ['ls-files', '-z', '-t', '--full-name', '--cached', '--others', '--exclude-standard']).split('\0').filter(Boolean)) {
+      const f = rec.slice(2);   // "H path" tracked, "? path" untracked
+      inTree.push(f);
+      if (rec[0] !== '?') tracked.add(f);
+    }
   } catch { return ['The hub cannot list the repository\'s files']; }
   const want = installOnly ? /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|package\.json|\.npmrc)$/i : WATCHED;
   const manifestOnly = rel => installOnly && /(^|\/)package\.json$/i.test(rel);
@@ -810,6 +902,11 @@ export function lockfileProblems(cwd, { projectDir, home = homedir(), installOnl
       }
     }
     if (text == null) continue;
+    if (installOnly && approved && /(^|\/)package\.json$/i.test(rel)) {
+      let baseTexts;
+      try { baseTexts = there.map(e => e ? gitOut(top, ['cat-file', 'blob', e.sha]) : null); } catch { baseTexts = [undefined]; }
+      why.push(...changedDeps(rel, text, baseTexts, approved));
+    }
     if (/(^|\/)\.npmrc$/i.test(rel) && NPMRC_BAD.test(text)) why.push(`${rel} sets a registry, proxy or script option`);
     else if (/\.cargo\/config/i.test(rel) && CARGO_CONFIG_BAD.test(text)) why.push(`${rel} sets a registry, source, patch or build option`);
     why.push(...manifestFindings(rel, text));
@@ -957,7 +1054,7 @@ export function decide(ctx) {
     for (const f of [join(cwd, '.npmrc'), join(ctx.projectDir, '.npmrc'), join(home, '.npmrc')]) { const t = readText(f); if (t != null && NPMRC_BAD.test(t)) problems.push('An .npmrc sets a registry, proxy or script option'); }
     // What npm would resolve the rest of the tree from: the lockfile must match main, and the manifests may name no git,
     // path or address source (a changed manifest alone is fine: this install is what changes it).
-    if (!problems.length) { const locked = lockfileProblems(cwd, { projectDir: ctx.projectDir, home, installOnly: true }); if (locked.length) problems.push(`npm install is only settled here when the lockfile and registry config match main and the manifests name only registry packages: ${locked.join('; ')}`); }
+    if (!problems.length) { const locked = lockfileProblems(cwd, { projectDir: ctx.projectDir, home, installOnly: true, approved: n => !!findPackage(lists.packages, 'npm', n, lists.key) }); if (locked.length) problems.push(`npm install is only settled here when the lockfile and registry config match main and the manifests name only registry packages: ${locked.join('; ')}`); }
     if (problems.length) return { note: problems };
     const gates = specs.flatMap((s, i) => gate(lists, 'npm', s, entries[i], npmBaseline(cwd, s.name), { before }));
     if (gates.length) return { gate: gates };

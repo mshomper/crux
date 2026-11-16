@@ -110,6 +110,28 @@ test('downloads: the record is the project\'s log, so running the file stays a s
   for (const a of hub2.approvals.values()) a.finish({ behavior: 'deny', message: 'test' }, 'denied');
 });
 
+test('round 3: an install of an approved package waits for the registry before it is judged', async () => {
+  const { hub, p, w } = setup('warmer');
+  const asked = [];
+  hub.lists.fetcher = async (eco, name) => { asked.push(`${eco}:${name}`); await new Promise(r => setTimeout(r, 80)); return { latest: '3.23.8', versions: { '3.23.8': { at: Date.now() - 30 * 86400000 } } }; };
+  hub.lists.addPackage({ eco: 'npm', name: 'zod', baseMajor: 3 });
+  const pending = hub.requestApproval(p, w, 'Bash', { command: 'npm install zod --ignore-scripts --before=2020-01-01' });
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(asked, ['npm:zod'], 'the registry is asked before anything is judged');
+  assert.equal(await Promise.race([pending, new Promise(r => setTimeout(() => r('waiting'), 10))]), 'waiting', 'still waiting for the answer');
+  await new Promise(r => setTimeout(r, 250));
+  assert.ok(hub.lists.cache.get('npm:zod'), 'the answer is in by the time the request is judged');
+  assert.equal(p.log.ofType('approval').length, 1, 'then judged once: here a card (the test folder is not a repository)');
+  assert.deepEqual(asked, ['npm:zod'], 'one fetch');
+  for (const a of hub.approvals.values()) a.finish({ behavior: 'deny', message: 'test' }, 'denied');
+  // not an install of approved packages: no waiting, no fetch
+  asked.length = 0;
+  const other = hub.requestApproval(p, w, 'Bash', { command: 'npm install evil --ignore-scripts' });
+  assert.deepEqual(asked, []);
+  void other;
+  for (const a of hub.approvals.values()) a.finish({ behavior: 'deny', message: 'test' }, 'denied');
+});
+
 test('the one-line audit entry of a single allow offers the same buttons', () => {
   const { hub, p, w } = setup('audit');
   const a = { p, agent: w, toolName: 'Bash', input: { command: 'npm install zod --ignore-scripts' } };
