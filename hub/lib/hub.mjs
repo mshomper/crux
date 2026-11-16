@@ -1789,6 +1789,22 @@ export class Hub {
       allow ? (always ? 'always allowed' : 'allowed') : 'denied');
   }
 
+  // The mid-turn warning level: the agent's own handoff mark plus 15 points, never above 85%.
+  warnLevelFor(p, agent) { return Math.min(85, this.markFor(p, agent) + 15); }
+
+  // Called by an agent when it has read its context size during a turn. One message per turn, once the level is passed:
+  // it goes in as a normal message (the running turn takes it in), and the usual end-of-turn handoff follows (onIdle).
+  // Not the Conductor, not a retiring agent, not an expedition member whose expedition is closing.
+  midTurnWarn(p, agent) {
+    const pct = agent.contextPct;
+    if (pct == null || agent.warnedThisTurn || agent.role === 'conductor' || agent.retiring || agent.state === 'retired') return false;
+    if (pct < this.warnLevelFor(p, agent) || this.expeditionClosing(p, agent)) return false;
+    agent.warnedThisTurn = true;
+    p.log.append('context_warning', { agent: agent.name, contextPct: pct, thread: agent.thread });
+    agent.send(`[From the hub] You are at ${pct}% of your context. Finish the step you're on, post your summary with handoff notes, and end your turn; the hub hands ${agent.role !== 'worker' ? 'the role' : 'your task'} on after it.`);
+    return true;
+  }
+
   // ---------- handoffs (decisions 10 and 16) ----------
   // An agent retires in three steps: it writes the judgement half of a handoff (the hub adds the facts),
   // a successor starts and may ask it up to three questions, then it retires. Workers follow the same rule.
