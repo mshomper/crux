@@ -14,7 +14,7 @@ import { CommandPolicy } from '../lib/permissions.mjs';
 import { cardsFor } from '../lib/push.mjs';
 
 const sent = [];
-Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'working'; };
+Agent.prototype.send = function (t, a, meta) { sent.push([this.name, t, meta]); this.state = 'working'; };
 Agent.prototype.close = function () { this.q = null; };
 
 const RULES = 'The orchestrator may ALLOW project work. ALWAYS goes to Matt: pushing to main.';
@@ -46,6 +46,46 @@ test('a worker request with no hard stop goes to the running orchestrator, with 
   assert.equal(to, orch.name);
   for (const bit of [`[Permission request ${ap.approval}]`, 'Worker: builder', "Worker's goal: Build permission routing", 'Tool: Bash', 'npm run build', 'answer_permission', 'R001']) assert.ok(msg.includes(bit), bit);
   assert.deepEqual(cardsFor({ ...ap, project: 'proj' }), [], 'no phone push while the orchestrator has it');
+});
+
+test('the request carries its approval id as meta, and the log shows when the orchestrator took it in', () => {
+  const { hub, p, orch, w } = setup();
+  ask(hub, p, w, 'npm run build');
+  const id = last(p, 'approval').approval;
+  assert.deepEqual(sent[0][2], { approval: id });
+  assert.equal(p.log.ofType('approval_delivered').length, 0, 'not logged while it only sits in the inbox');
+  orch.noteDelivered(sent[0][2]);   // what the Inbox does when Claude Code takes the message in
+  const ev = last(p, 'approval_delivered');
+  assert.equal(ev.approval, id);
+  assert.equal(ev.agent, orch.name);
+  assert.ok(ev.ts, 'the log stamps the time');
+});
+
+test('while the orchestrator waits on a card of its own, a worker request comes to you at once; then routing is normal again', async () => {
+  const { hub, p, orch, w } = setup();
+  const own = ask(hub, p, orch, 'gh pr merge 5 --merge');
+  const ownId = last(p, 'approval').approval;
+  assert.equal(last(p, 'approval').routedTo, null);
+  sent.length = 0;
+  ask(hub, p, w, 'npm run build');
+  const ap = last(p, 'approval');
+  assert.equal(ap.routedTo, orch.name);
+  assert.equal(last(p, 'approval_escalated').approval, ap.approval, 'escalated at once');
+  assert.equal(sent.length, 0, 'the orchestrator gets no message');
+  assert.equal(cardsFor({ ...last(p, 'approval_escalated'), project: 'proj' }).length, 1, 'a card for you');
+  hub.answerApproval(ownId, true);   // your answer on its card
+  await own;
+  ask(hub, p, w, 'npm run lint');
+  assert.equal(sent.length, 1, 'with its card answered, routing is normal again');
+  assert.equal(sent[0][0], orch.name);
+});
+
+test('with no card of its own waiting, a worker request routes to the orchestrator as before', () => {
+  const { hub, p, orch, w } = setup();
+  ask(hub, p, w, 'npm run build');
+  assert.equal(p.log.ofType('approval_escalated').length, 0);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], orch.name);
 });
 
 test('the orchestrator allows: the worker goes ahead and the answer is logged as one line in its thread', async () => {

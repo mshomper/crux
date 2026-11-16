@@ -676,6 +676,12 @@ export class Hub {
       this.approvals.set(id, entry);
       p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input), routedTo: route.to, stops: route.stops, rules: route.rules, ...listable(toolName, input) });
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
+      // The orchestrator's own turn is blocked while a hard-stop card of its own waits for you, so it cannot read a worker's
+      // request: that one comes to you at once. Routing returns to normal when the orchestrator's card is answered.
+      if (route.to && route.to !== CHECK_NAME && this.orchestratorBlocked(p, route.to, entry)) {
+        this.escalate(id, `${route.to} is waiting for you on a card of its own`, 'hub');
+        return;
+      }
       if (route.to) {
         entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), Math.max(0, this.settings.get('permissionTimeoutSec') * 1000 - waitedMs));
         entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
@@ -683,7 +689,7 @@ export class Hub {
         else {
           // Shadow mode changes nothing live: the request goes to the orchestrator at once, as today, with no note about the
           // check. What the hub's own scan finds is only logged, in check_shadow (scanStops, scanDoubts).
-          try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd)); }
+          try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd), [], { approval: id }); }
           catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
           if (route.shadow) this.runShadow(id, entry);
         }
@@ -818,12 +824,21 @@ export class Hub {
     this.escalate(id, `${reason} (no orchestrator is running to consult)`, CHECK_NAME);
   }
 
+  // Does this orchestrator have a hard-stop card of its own waiting for you (so it cannot read anything else)?
+  orchestratorBlocked(p, name, except) {
+    return [...this.approvals.values()].some(a => a !== except && a.p === p && !a.routedTo && a.agent.name === name);
+  }
+
   // The request now waits with the orchestrator, with what the check said. Its timer is still the original one.
   consultOrchestrator(id, a, orch, reason, fallbackWhy, extra) {
+    if (this.orchestratorBlocked(a.p, orch.name, a)) {   // its turn is blocked on a card of its own: straight to you
+      a.routedTo = orch.name;
+      return this.escalate(id, `${orch.name} is waiting for you on a card of its own`, CHECK_NAME);
+    }
     this.logAnswer(a, id, 'consult', reason, CHECK_NAME, extra);
     a.routedTo = orch.name;
     const said = fallbackWhy ? `${fallbackWhy}, so it comes to you.` : `The permission check could not settle it and asks you to decide: ${reason}`;
-    try { orch.send(this.permissionMessage(a.p, orch, id, a.agent, a.toolName, a.input, a.route.rules, a.route.unsure, a.route.cwd, said)); }
+    try { orch.send(this.permissionMessage(a.p, orch, id, a.agent, a.toolName, a.input, a.route.rules, a.route.unsure, a.route.cwd, said), [], { approval: id }); }
     catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
   }
 

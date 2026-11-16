@@ -202,7 +202,8 @@ export class Push {
       tag = g.tag; tagKey = g.key;
     }
     if (this.sent.has(tagKey)) { this.settled.add(tag); if (this.settled.size > 50) this.settled.delete(this.settled.values().next().value); }
-    if (this.sentDesk.has(tagKey)) { this.toDesktops('clear', { card: tag }); this.unfollow(tag); }   // the app takes the notice down
+    if (this.sentDesk.has(tagKey)) this.toDesktops('clear', { card: tag });   // the app takes the notice down
+    this.unfollow(tag);   // a held card (never sent to the PC) has a phone check too
   }
   // The question rules' options for a project, with which decisions have been notified (decision 64).
   askOpts(project, ctx) {
@@ -402,11 +403,11 @@ export class Push {
     card = this.live(card, ctx);
     if (!card || this.already(card)) return;
     const id = `${card.card} (${card.project})`;
-    if (!this.open(card, ctx)) return this.log(`${id}: settled before it went out`);
+    if (!this.open(card, ctx)) return this.routed(card, id, 'skipped', 'settled before it went out', `${id}: settled before it went out`);
     // Decision 60 A: a question or decision the Conductor is holding for its digest (you are away) waits for the
     // digest's one notice. Asked per card, so a card the Conductor did not take is never held. Permission requests
     // (they may need you now) and raises to Trusted still go at once.
-    if (this.heldForDigest(card)) return this.log(`${id}: held for the Conductor's digest (you are away)`);
+    if (this.heldForDigest(card)) return this.routed(card, id, 'held', 'held for the Conductor digest', `${id}: held for the Conductor's digest (you are away)`);
     const looking = isLooking(card, this.presences.values());
     // Decision 58 A: the PC while it is in use (or when no phone is set up).
     const desk = this.desktops.size > 0 && (this.pcInUse() || (!this.subs.length && this.desktopCanShow()));
@@ -415,26 +416,47 @@ export class Push {
     if (card.always) {
       this.toPhone(card);
       if (desk && !looking) this.toDesk(card, { follow: false });
-      return this.log(`${id}: phone${desk && !looking ? ' and PC' : ''} (always told)`);
+      return this.routed(card, id, 'phone', 'always told', `${id}: phone${desk && !looking ? ' and PC' : ''} (always told)`);
     }
-    if (looking) return this.log(`${id}: held, you are looking at it in an open hub page`);
+    const follows = this.subs.length > 0 && card.kind !== 'digest' && card.kind !== 'restart';   // digest and restart notices have no phone follow-up
+    if (looking) {
+      // Held while you look at it, but not dropped: if it still waits 3 minutes on and you have gone, the phone gets it.
+      if (follows) this.armFollow(card, true);
+      return this.routed(card, id, 'held', 'you are looking at it in an open hub page', `${id}: held, you are looking at it in an open hub page`);
+    }
     if (desk) {
-      const follow = this.subs.length > 0 && card.kind !== 'digest' && card.kind !== 'restart';   // digest and restart notices have no phone follow-up
-      this.toDesk(card, { follow });
-      return this.log(`${id}: PC${follow ? ', phone in 3 minutes if it still waits' : ''}`);
+      this.toDesk(card, { follow: follows });
+      return this.routed(card, id, 'pc', follows ? 'PC in use, phone in 3 minutes if it still waits' : 'PC in use', `${id}: PC${follows ? ', phone in 3 minutes if it still waits' : ''}`);
     }
     const sent = this.toPhone(card);
-    this.log(`${id}: phone${this.desktops.size ? ' (PC idle, locked, asleep or notices off)' : ''}`);
+    this.routed(card, id, 'phone', this.desktops.size ? 'PC idle, locked, asleep or notices off' : 'no PC app', `${id}: phone${this.desktops.size ? ' (PC idle, locked, asleep or notices off)' : ''}`);
     return sent;
+  }
+
+  // One notice decision: the console line as before, and an event (card id only, never its contents; C001).
+  routed(card, id, to, reason, line) {
+    this.log(line);
+    try { this.onRouted?.({ project: card.project, card: card.card, to, reason }); } catch { }
   }
 
   toDesk(card, { follow }) {
     this.markSent(card, this.sentDesk);
     this.toDesktops('notify', payloadOf(card));
-    if (!follow) return;
-    this.follow.set(card.card, { card, due: Date.now() + PHONE_FOLLOWUP_MS });
+    if (follow) this.armFollow(card);
+  }
+
+  // The phone check 3 minutes on: still waiting, and you are not looking at it, then the phone gets it.
+  // held: the card was only held (nothing went to the PC), so a restart must not count it as told on the PC.
+  armFollow(card, held = false) {
+    this.follow.set(card.card, { card, due: Date.now() + PHONE_FOLLOWUP_MS, ...(held ? { held: true } : {}) });
     this.saveFollow();
-    this.timers.setTimeout(() => this.followUp(card.card), PHONE_FOLLOWUP_MS);
+    this.setFollowTimer(card.card, PHONE_FOLLOWUP_MS);
+  }
+  // One timer per card: arming again, or settling, clears the earlier one.
+  setFollowTimer(cardId, ms) {
+    const timers = (this.followTimers ||= new Map());
+    this.timers.clearTimeout(timers.get(cardId));
+    timers.set(cardId, this.timers.setTimeout(() => this.followUp(cardId), ms));
   }
 
   // The phone backup for a PC notice: the card still waits and nobody is looking at it.
@@ -444,14 +466,21 @@ export class Push {
     this.unfollow(cardId);
     const id = `${cardId} (${f.card.project})`;
     if (this.sent.has(keyOf(f.card))) return;
-    if (!this.ctx || !this.open(f.card, this.ctx)) return this.log(`${id}: settled, no phone follow-up`);
-    if (this.heldForDigest(f.card)) return this.log(`${id}: no phone follow-up, held for the Conductor's digest`);
-    if (isLooking(f.card, this.presences.values())) return this.log(`${id}: no phone follow-up, you are looking at it`);
+    if (!this.ctx || !this.open(f.card, this.ctx)) return this.routed(f.card, id, 'skipped', 'settled, no phone follow-up', `${id}: settled, no phone follow-up`);
+    if (this.heldForDigest(f.card)) return this.routed(f.card, id, 'held', 'held for the Conductor digest', `${id}: no phone follow-up, held for the Conductor's digest`);
+    if (isLooking(f.card, this.presences.values())) {
+      this.armFollow(f.card, f.held);   // still looking: check again in 3 minutes rather than drop it
+      return this.routed(f.card, id, 'held', 'you are looking at it; checking again in 3 minutes', `${id}: no phone follow-up yet, you are looking at it; checking again in 3 minutes`);
+    }
     this.toPhone(f.card);
-    this.log(`${id}: phone, as it still waits after the PC notice`);
+    this.routed(f.card, id, 'phone', 'still waits 3 minutes on', `${id}: phone, as it still waits after the PC notice`);
   }
 
-  unfollow(cardId) { if (this.follow.delete(cardId)) this.saveFollow(); }
+  unfollow(cardId) {
+    const t = this.followTimers?.get(cardId);
+    if (t !== undefined) { this.timers.clearTimeout(t); this.followTimers.delete(cardId); }
+    if (this.follow.delete(cardId)) this.saveFollow();
+  }
   saveFollow() {
     try { mkdirSync(this.dir, { recursive: true }); writeFileSync(this.followFile, JSON.stringify([...this.follow.values()]), { mode: 0o600 }); } catch { }
   }
@@ -460,8 +489,8 @@ export class Push {
   resume(ctx, now = Date.now()) {
     this.ctx = ctx;
     for (const [cardId, f] of this.follow) {
-      this.sentDesk.add(keyOf(f.card));
-      this.timers.setTimeout(() => this.followUp(cardId), Math.max(0, f.due - now));
+      if (!f.held) this.sentDesk.add(keyOf(f.card));   // a held-only card never went to the PC
+      this.setFollowTimer(cardId, Math.max(0, f.due - now));
     }
   }
 
