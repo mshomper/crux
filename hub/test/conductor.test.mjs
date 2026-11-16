@@ -199,6 +199,8 @@ test('a Conductor brief never counts as your answer: the orchestrator\'s questio
   c.toOrchestrator('alpha', 'conductor-1', 'Matt is away today.');
   assert.equal(open(), 1);
   hub.fromYou(a, 'orchestrator', 'Yes, merge it.');
+  assert.equal(open(), 1, 'a plain message is not an answer either');
+  hub.answerQuestions(a, a.log.events.findLast(e => e.type === 'summary').id, [{ index: 0, text: 'Yes, merge it.' }]);
   assert.equal(open(), 0);
 });
 
@@ -481,14 +483,14 @@ test('once you answer or dismiss the first card, its repeat counts as answered; 
   s = await askBoth();
   s.hub.dismissQuestion(s.a, s.workerCard.id);
   assert.deepEqual(openQuestions(s.a.log.events), []);
-  // You reply in w1's thread: the same.
+  // A plain reply in w1's thread is not an answer: it stays.
   s = await askBoth();
   s.hub.fromYou(s.a, 'w1', 'Only on release.');
-  assert.deepEqual(openQuestions(s.a.log.events), []);
+  assert.deepEqual(openQuestions(s.a.log.events).map(q => q.from), ['w1']);
   // A newer summary from w1 that asks something else does not close w1's first card: both wait, the repeat stays hidden.
   s = await askBoth();
   s.hub.postSummary(s.a, s.w, summary({ questions: ['Which lens is the default?'] }));
-  assert.deepEqual(openQuestions(s.a.log.events).map(q => [q.from, q.open.map(x => x.text)]), [['w1', [Q]], ['w1', ['Which lens is the default?']]]);
+  assert.deepEqual(openQuestions(s.a.log.events).map(q => [q.from, q.open.map(x => x.text)]), [['w1', ['Which lens is the default?']], ['w1', [Q]]]);   // newest first
   // w1 hands off without you: its card still waits, and still holds the repeat.
   s = await askBoth();
   s.hub.finishRetire(s.a, s.w);
@@ -581,7 +583,7 @@ test('no wake for cards you settled before it came: no turn, no reply; one still
   hub.approvals.set('ap7', { p: b });
   b.log.append('approval', { thread: 'w1', approval: 'ap7', agent: 'w1', tool: 'Bash', input: {}, routedTo: null });
   // Within the batching window you answer the question and the permission card.
-  hub.fromYou(a, 'orchestrator', 'Yes, merge it.');
+  hub.answerQuestions(a, a.log.events.findLast(e => e.type === 'summary').id, [{ index: 0, text: 'Yes, merge it.' }]);
   hub.approvals.delete('ap7');
   await sleep(80);
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);   // no turn at all
@@ -615,6 +617,8 @@ test('a worker question you answer within the window wakes nothing; the orchestr
   a.log.append('message', { thread: w.thread, from: orch.name, text: 'Cyan.' });
   assert.equal(c.pending.length, 1, 'the orchestrator answering does not settle it: still waiting on you');
   a.log.append('message', { thread: w.thread, from: 'you', text: 'Cyan.' });
+  assert.equal(c.pending.length, 1, 'your plain message is not an answer either');
+  hub.answerQuestions(a, a.log.events.findLast(e => e.type === 'summary').id, [{ index: 0, text: 'Cyan.' }]);
   await sleep(80);
   assert.equal(sent.filter(([n]) => n.startsWith('conductor')).length, 0);
   assert.equal(c.pending.length, 0);

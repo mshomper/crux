@@ -17,7 +17,7 @@ import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './setting
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, EffortCeilings, modelId, effortLevel, modelLabel } from './agent-types.mjs';
-import { answerMessage, answerNote } from '../public/questions.js';
+import { answerMessage, answerNote, QUESTION_RULES } from '../public/questions.js';
 import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage, FABLE_NOTE } from './usage.mjs';
@@ -114,6 +114,7 @@ export class Hub {
     if (this.conductor) {
       const home = this.conductor.home;
       this.restore(home);
+      this.markQuestionRules(home);
       home.log.on(ev => this.emit({ ...ev, project: CONDUCTOR, logged: true }));
     }
     this.idleTimer = setInterval(() => { this.idleCheck(); this.auditChecks(); }, IDLE_CHECK_MS);
@@ -245,11 +246,19 @@ export class Hub {
     if (this.projects.has(p.name)) return this.projects.get(p.name);
     this.projects.set(p.name, p);
     this.restore(p);
+    this.markQuestionRules(p);
     p.log.on(ev => this.emit({ ...ev, project: p.name, logged: true }));
     p.desk.notice = text => this.notice(p, 'orchestrator', text);
     if (this.noAgents) p.desk.local = true;   // a test hub never pushes decision records to the real GitHub
     p.board.freshPages();   // decision 41: pages are local, so rebuild any a pull left missing or stale
     return p;
+  }
+
+  // One-time cutover for the question rules (public/questions.js): the first start with them logs this event, once per
+  // log. Questions asked before it keep the old closing rules (so the backlog stays closed); later ones wait for you.
+  // It lives in the log, so a restart and every device read the same moment.
+  markQuestionRules(p) {
+    if (!p.log.events.some(e => e.type === QUESTION_RULES)) p.log.append(QUESTION_RULES, { version: 2 });
   }
 
   project(name) {

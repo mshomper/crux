@@ -4,11 +4,17 @@
 // A round summary's questions wait, each on its own, until:
 // - you answer it from Needs you (a message of yours whose `answers` names it), or dismiss it;
 // - every decision it names (decision 31, D0031, decisions 31 to 33) is picked.
-// The whole card goes when you write a plain message in its thread (the latest asking summary there), or when you
-// dismiss the card. Only YOU close a question (Matt, 2026-11-16: "stop disappearing"): the orchestrator writing into the
-// thread, the asker retiring or being handed off, and a newer summary from the same agent never close an older card.
+// The whole card goes when you dismiss it. Only an explicit act of yours closes a question (Matt, 2026-11-16: "stop
+// disappearing"): a plain message in the thread, the orchestrator writing into it, the asker retiring or being handed
+// off, and a newer summary from the same agent never close an older card.
 // Every summary that asked something keeps its own card; a newer one in the same thread hides only the questions it
-// repeats (the same words), so a re-ask is one card, not two.
+// repeats (the same words), so a re-ask is one card, not two. Several cards of one thread show the newest first.
+//
+// One-time cutover (version 0.25.8): the hub logs a `question_rules` event the first time it starts with this version.
+// Summaries that asked BEFORE it keep the old closing rules (the orchestrator or anyone but you writing in the thread, the
+// asker retiring, a newer asking summary, or your plain message), so the backlog the old rules already closed stays
+// closed; summaries after it follow the rules above and never age out. No such event in the log: every summary is new.
+export const QUESTION_RULES = 'question_rules';
 
 const SETTLED = s => !!s && !['open', 'found'].includes(s);
 
@@ -44,34 +50,50 @@ export function answeredByPicks(question, decisionStatus = () => undefined) {
 // opts: { decisionStatus(id), decisions: the project's decision records ({ id, title, status, options }),
 // decisionNotified(id): the server's notices say whether that decision's notice went (the page leaves it out: there the
 // decision card shows next to it) }.
-export function openQuestions(events, opts) { const r = readCards(events, opts); return withoutRepeatCards(r, opts); }
+export function openQuestions(events, opts) { return newestFirst(withoutRepeatCards(readCards(events, opts), opts)); }
+
+// Cards of one thread together, the newest first; threads stay in the order their first card was asked.
+function newestFirst(cards) {
+  const groups = new Map();
+  for (const c of cards) { if (!groups.has(c.thread)) groups.set(c.thread, []); groups.get(c.thread).push(c); }
+  return [...groups.values()].flatMap(g => g.sort((a, b) => b.at - a.at));
+}
 
 // Every summary card still asking something, before repeats are set aside (cards), every summary that asked
 // (asked: { ev, at, pos }), and every question you yourself settled, in any summary (settled: { id, i, at, thread,
 // from, text, when }): answered, dismissed, or answered by your picks; `when` is the settling event's place in the log.
 function readCards(events, { decisionStatus = () => undefined } = {}) {
-  const dismissed = new Map();
+  const dismissed = new Map(), retired = new Set();
   const gone = new Map();   // summary id -> Map of question place -> where you answered or dismissed it one by one
   const mark = (id, i, pos) => { if (!gone.has(id)) gone.set(id, new Map()); gone.get(id).set(Number(i), pos); };
-  const last = new Map();   // thread -> { ev, answered, byYou, when }
+  const last = new Map();   // thread -> the latest asking summary there
   const asked = [];         // every summary that asked something, with how it was closed
   const picked = new Map(); // decision number -> its latest pick's place in the log
+  const evs = events || [];
+  // The cutover's place in the log; summaries before it are legacy ones (old closing rules). None logged: all are new.
+  const cutover = evs.findIndex(e => e?.type === QUESTION_RULES) + 1;
   let pos = 0;
-  for (const e of events || []) {
+  for (const e of evs) {
     pos++;
     if (e.type === 'pick') picked.set(Number(e.decision), pos);
     if (e.type === 'question_dismissed') { e.index == null ? dismissed.set(e.question, pos) : mark(e.question, e.index, pos); continue; }
+    if (e.type === 'agent_retired') retired.add(e.agent);
     if (!e.thread) continue;
     // at: its place among the asking summaries, so "earlier" never ties (two summaries can share a millisecond);
-    // pos: its place in the whole log
-    if (e.type === 'summary' && e.questions?.length) { const s = { ev: e, at: asked.length, pos, answered: false, byYou: false }; last.set(e.thread, s); asked.push(s); }
-    else if (e.type === 'message') {
+    // pos: its place in the whole log; legacy: asked before the cutover.
+    if (e.type === 'summary' && e.questions?.length) {
+      const prev = last.get(e.thread);
+      if (prev?.legacy) prev.closed = true;   // old rule: a newer asking summary replaced it
+      const s = { ev: e, at: asked.length, pos, answered: false, byYou: false, legacy: cutover > 0 && pos < cutover, closed: false };
+      last.set(e.thread, s); asked.push(s);
+    } else if (e.type === 'message') {
       if (e.from === 'you' && Array.isArray(e.answers) && e.answers.length) { for (const a of e.answers) mark(a.question, a.index, pos); continue; }
-      // Only your own plain message settles a card. The orchestrator (or a successor agent) writing in the thread, and a
-      // Conductor brief (decision 55), are never an answer: the question still waits on you until you answer or dismiss it.
-      if (e.conductor || e.from !== 'you') continue;
+      // A Conductor brief (decision 55) is never an answer. For summaries after the cutover nothing else in the thread is
+      // either: only an explicit answer (above) or a dismissal settles them. Before it, the old rule: anyone but the asker
+      // writing in the thread closed the latest card there.
+      if (e.conductor) continue;
       const q = last.get(e.thread);
-      if (q && !q.answered) { q.answered = true; q.byYou = true; q.when = pos; }
+      if (q?.legacy && !q.answered && e.from !== q.ev.from) { q.answered = true; q.byYou = e.from === 'you'; q.when = pos; }
     }
   }
   const settled = [];
@@ -84,8 +106,8 @@ function readCards(events, { decisionStatus = () => undefined } = {}) {
     });
   }
   const cards = [];
-  for (const { ev, at, pos, answered } of asked) {
-    if (answered || dismissed.has(ev.id)) continue;
+  for (const { ev, at, pos, answered, legacy, closed } of asked) {
+    if (answered || closed || dismissed.has(ev.id) || (legacy && retired.has(ev.from))) continue;
     const done = gone.get(ev.id) || new Map();
     let byPicks = 0;
     const open = [];
