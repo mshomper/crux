@@ -159,6 +159,8 @@ html[data-hud] .card.xfinished .card-head > .icon{color:var(--good)}
   .xp-test .xp-judge .xp-j{flex:1;justify-content:center}
   .xp-test .xp-judge .xp-j.on{flex:2}
   .xp-test .xp-j:not(.on) span{display:inline}
+  .xp-env{flex-wrap:wrap}   /* the dollar note drops to its own line instead of squeezing the 15 % button */
+  .xp-usd{flex:1 1 100%;text-align:right;white-space:normal}
   .xp-pick-row{grid-template-columns:minmax(0,1fr);gap:4px}
   .xp-pick .eseg em{font-size:9.5px;letter-spacing:0}
   .xp-role{grid-template-columns:auto minmax(0,1fr)}
