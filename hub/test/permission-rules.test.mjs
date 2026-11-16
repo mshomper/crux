@@ -13,7 +13,8 @@ const projectDir = join(root, 'proj');
 const tmp = join(root, 'tmp');
 mkdirSync(join(projectDir, 'hub'), { recursive: true });
 mkdirSync(tmp, { recursive: true });
-writeFileSync(join(projectDir, 'hub', 'package.json'), JSON.stringify({ scripts: { start: 'node server.mjs' } }));
+writeFileSync(join(projectDir, 'hub', 'package.json'), JSON.stringify({ scripts: { start: 'node server.mjs', test: 'node --test', lint: 'echo lint' } }));
+writeFileSync(join(projectDir, 'package.json'), JSON.stringify({ scripts: { test: 'node --test', lint: 'echo lint' } }));   // npm test reads the script it runs
 const home = homedir();
 
 const run = (command, tool = 'Bash') => classify({ tool, input: { command }, projectDir, tmp, home });
@@ -209,9 +210,9 @@ test('regressions from the log: none of these is a hard stop', () => {
   assert.equal(notHard(`"/c/Program Files/Microsoft/Edge/Application/msedge.exe" --headless=new --screenshot="${join(tmp, 'shots', 'a.png').replace(/\\/g, '/')}" "http://localhost:4748/"`), 'unsure', 'A7: a browser with no profile of its own in temp');
   assert.equal(at(`"/c/Program Files/Microsoft/Edge/Application/msedge.exe" --headless=new --screenshot="C:/Windows/a.png" "http://localhost:4748/"`).route, 'human', 'a screenshot written outside');
   // the orchestrator's own reads: a GET to the hub piped into a node filter that only reads stdin, and log filters
-  assert.equal(notHard('curl -s -m 5 http://localhost:4747/api/state | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{const j=JSON.parse(s);for(const p of j.projects){console.log(p.name, JSON.stringify(p.settings||p.permissions||\'\'));for(const a of p.agents.filter(a=>a.state!==\'retired\'))console.log(\' \',a.name,a.state,a.model||a.modelSeen,a.effort,a.type)}})"; grep \'"version"\' hub/package.json'), 'allow');
-  assert.equal(notHard('tail -n 400 .crux/events.jsonl | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{for(const l of s.trim().split(\'\\n\')){let e;try{e=JSON.parse(l)}catch{continue};console.log(e.type)}})"'), 'allow');
-  assert.equal(notHard('grep \'"chat-images"\' .crux/events.jsonl | tail -n 12 | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{for(const l of s.trim().split(\'\\n\')){const e=JSON.parse(l);console.log(JSON.stringify(e).slice(0,90))}})"; grep -n "classify\\|auto" hub/lib/permissions.mjs | head -30'), 'allow');
+  assert.equal(notHard('curl -s -m 5 http://localhost:4747/api/state | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{const j=JSON.parse(s);for(const p of j.projects){console.log(p.name, JSON.stringify(p.settings||p.permissions||\'\'));for(const a of p.agents.filter(a=>a.state!==\'retired\'))console.log(\' \',a.name,a.state,a.model||a.modelSeen,a.effort,a.type)}})"; grep \'"version"\' hub/package.json'), 'unsure');   // inline code is a doubt now (fix/inline-code-doubt), never a hard stop
+  assert.equal(notHard('tail -n 400 .crux/events.jsonl | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{for(const l of s.trim().split(\'\\n\')){let e;try{e=JSON.parse(l)}catch{continue};console.log(e.type)}})"'), 'unsure');
+  assert.equal(notHard('grep \'"chat-images"\' .crux/events.jsonl | tail -n 12 | node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{for(const l of s.trim().split(\'\\n\')){const e=JSON.parse(l);console.log(JSON.stringify(e).slice(0,90))}})"; grep -n "classify\\|auto" hub/lib/permissions.mjs | head -30'), 'unsure');
   assert.equal(notHard('cd /c/Users/mshom/Documents/GitHub/crux && git status --short'), 'allow');
 });
 

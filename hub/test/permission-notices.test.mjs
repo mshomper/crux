@@ -40,6 +40,7 @@ const why = r => `${r.route}: ${[...r.reasons, ...r.unsure].join('; ')}`;
 const allow = (cwd, c, tool, extra) => { const r = run(cwd, c, tool, extra); assert.equal(r.route, 'allow', `${c}\n -> ${why(r)}`); };
 const notMatt = (cwd, c, tool, extra) => { const r = run(cwd, c, tool, extra); assert.notEqual(r.route, 'human', `${c}\n -> ${why(r)}`); return r.route; };
 const matt = (cwd, c, tool, extra) => { const r = run(cwd, c, tool, extra); assert.equal(r.route, 'human', `${c}\n -> ${why(r)}`); return r.reasons.join('; '); };
+const unsureRoute = (cwd, c, tool, extra) => { const r = run(cwd, c, tool, extra); assert.equal(r.route, 'unsure', `${c}\n -> ${why(r)}`); };   // inline code: a doubt (fix/inline-code-doubt)
 const ps = 'PowerShell';
 
 test('1. git is read from the agent\'s own worktree: a feature push is a feature push, cd .. stays inside', () => {
@@ -138,7 +139,7 @@ print(open(r'$d\app\voices.json').read()[:10])
 test('4a. inline scripts: XML namespace names are not the network; real calls still are', () => {
   // f7763fa8 (shape): an SVG written by node -e, then a headless screenshot, all in temp
   mkdirSync(join(tmp, 'svg-work'), { recursive: true });
-  allow(proj, String.raw`cd "${T}/svg-work" && node -e "
+  unsureRoute(proj, String.raw`cd "${T}/svg-work" && node -e "
 const fs=require('fs'); const b=(f)=>fs.readFileSync(f).toString('base64');
 const s='<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"10\" height=\"10\"><image xlink:href=\"data:image/png;base64,'+b('a.png')+'\"/><text>Before and after</text></svg>';
 fs.writeFileSync('ba.svg',s);" && "/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --user-data-dir="${T}/svg-work/prof" --screenshot="${T}/svg-work/ba.png" "file:///${T}/svg-work/ba.svg" 2>/dev/null; ls -la ba.png`);
@@ -370,6 +371,7 @@ test('R1 MEDIUM 7. after something the hub could not read, the branch is unknown
   // a part that cannot switch branches keeps the branch known; explicit branches never needed it
   assert.equal(notMatt(wt, 'git commit -q -m "v $(date +%s)" && git push'), 'unsure');
   notMatt(wt, 'unknowntool x && git push -u origin feat/voice');
+  writeFileSync(join(wt, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));   // npm test reads the script it runs
   allow(wt, 'npm test && git push');
 });
 

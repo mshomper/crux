@@ -269,7 +269,11 @@ const FILE_READERS = new Set(['cat', 'head', 'tail', 'wc', 'ls', 'dir', 'stat', 
 const OPTION_RISK = new Set(['git', 'rg', 'sort', 'sed', 'find', 'tree', 'xxd', 'uniq', 'jq', 'column', 'nl', 'strings', 'od', 'tee', 'awk', 'gawk', 'mawk']);
 // The only node -e / -p scripts that count as reads (exact text, quotes as given).
 const KNOWN_NODE_E = new Set(["console.log(require('os').tmpdir())", 'console.log(require("os").tmpdir())', "require('os').tmpdir()", 'console.log(process.cwd())',
-  'console.log(process.platform)', 'console.log(process.version)', 'console.log(process.arch)', 'console.log(Date.now())', 'console.log(new Date().toISOString())']);
+  'console.log(process.platform)', 'console.log(process.version)', 'console.log(process.arch)', 'console.log(Date.now())', 'console.log(new Date().toISOString())',
+  'process.version', 'process.versions.node', 'process.platform', 'process.arch', 'process.cwd()', 'Date.now()', 'console.log(process.versions.node)']);
+// The only python -c scripts that count as reads (exact text): version and platform prints.
+const KNOWN_PY_C = new Set(['import sys; print(sys.version)', 'import sys;print(sys.version)', 'import sys; print(sys.version_info)', 'import sys; print(sys.platform)',
+  'import platform; print(platform.python_version())', 'import platform; print(platform.platform())', 'import sys; print(sys.executable)']);
 const GIT_READ_SUBS = new Set([...GIT_READ].filter(x => x !== 'ls-remote'));
 // Does anything listen on this port right now? One netstat call; when it cannot tell, yes (the safe answer).
 export function portListening(port) {
@@ -821,7 +825,8 @@ class Check {
         this.unsure('A heredoc with commands inside');
         for (const inner of substitutions(body)) { bit(inner); if (this.mayMoveBranch(inner, ps)) this.branchUnknown = true; }
       }
-      if (/\b(node|python3?|py)\s+-(\s|$)/.test(before)) this.script(body);
+      // The program that reads the heredoc as its script (node, node -, python3 -u -, perl, ruby, sh, bash, pwsh ...): code.
+      if (/^\s*(?:[\w.]+=\S*\s+)*(?:\S*[\\/])?(node|nodejs|deno|bun|python3?|py|perl|ruby|sh|bash|zsh|dash|pwsh|powershell)(?:\.exe)?(?=\s|$)/i.test(before.split(/[|;&]/).pop())) this.script(body);
       block(body, !!q);
       return `${before}${after}`;
     });
@@ -1704,6 +1709,8 @@ class Check {
       }
       const inner = args.slice(i + 1).join(' ').replace(/\\([$"`\\])/g, '$1');
       const saved = { urls: this.urlsHere, local: this.localUrls };
+      // A script block run from -Command (& { ... }, . { ... }, -ScriptBlock) is code, not a command: a doubt.
+      if (/(^|[\s;(|])[&.]\s*\{|-scriptblock\b/i.test(inner)) { this.unsure('A script block run from powershell -Command', true); this.scanBits?.push(inner); }
       this.command(inner, true, cwd);
       this.urlsHere = saved.urls; this.localUrls = saved.local;
       return;
@@ -2418,8 +2425,16 @@ class Check {
   }
 
   node(args, cwd = this.projectDir) {
-    const i = args.findIndex(x => /^(-e|-p|--eval|--print)$/.test(x));
-    if (i >= 0) return this.script(this.blockText(args[i + 1] || ''));
+    // node runs the last -e/-p/--eval/--print: every one is read as code, and more than one is a doubt (the exact-string
+    // allow never applies to a command that names two).
+    const evals = args.map((x, i) => (/^(-e|-p|--eval|--print|-pe|-ep)$/.test(x) || /^--(eval|print)=/.test(x) ? i : -1)).filter(i => i >= 0);
+    if (evals.length > 1) {
+      this.unsure('node with more than one -e or -p: it runs the last one, the hub reads none of them as a known string', true);
+      for (const i of evals) this.script(/^--/.test(args[i]) && args[i].includes('=') ? args[i].slice(args[i].indexOf('=') + 1) : this.blockText(args[i + 1] || ''));
+      return;
+    }
+    const i = evals[0] ?? -1;
+    if (i >= 0) return this.script(/^--(eval|print)=/.test(args[i]) ? args[i].slice(args[i].indexOf('=') + 1) : this.blockText(args[i + 1] || ''));
     const file = args.find(x => !x.startsWith('-'));
     if (file && /^(server|restart)\.mjs$/.test(basename(file))) {
       // restart.mjs stops whatever listens on its port before it starts: only a port this agent started a hub on, or one
@@ -2771,13 +2786,51 @@ class Check {
     if (NPM_NET.has(sub)) return this.stop(`Reaches the npm registry (${tool} ${sub})`);
     if (sub === 'config') return /^(get|list|ls)$/.test(a[1] || '') ? undefined : this.stop('Changes npm settings');
     if (!NPM_OK.has(sub)) return this.unsure(`Not sure what this does (npm ${sub})`);
-    // "npm start" in a folder whose start script is the hub would start it on port 4747 unless a port is given.
-    if (sub === 'start' || (sub === 'run' && a[1] === 'start')) {
-      const pre = args.indexOf('--prefix');
-      let start = '';
-      try { start = JSON.parse(readFileSync(join(pre >= 0 ? resolve(cwd, args[pre + 1]) : cwd, 'package.json'), 'utf8')).scripts?.start || ''; } catch { }
-      if (/server\.mjs/.test(start)) { this.testHubStart(a); this.hubData(cwd, true); }
-    }
+    this.packageScripts(tool, sub, a, args, cwd);
+  }
+
+  // npm run X, npm test, npm start, yarn and pnpm run X (and bun run X): the script runs from package.json, which a worker
+  // can edit, so what it holds is classified as an inline shell command, its pre and post hooks too ("deploy": "git push
+  // --force origin main" is a hard stop). A script that is missing, or a package.json the hub cannot read, is a doubt.
+  // "npm start" in a folder whose start script is the hub starts it on port 4747 unless a port is given: the words after --
+  // go to the script, so `node server.mjs --port 4793` is judged like any test hub start.
+  packageScripts(tool, sub, a, args, cwd) {
+    if (tool === 'bun' && sub === 'test') return;   // bun's own test runner, not a script
+    const runs = /^(run|run-script)$/.test(sub);
+    const name = runs ? a.slice(1).find(x => !x.startsWith('-')) : /^(test|t|tst|start)$/.test(sub) ? (sub === 'start' ? 'start' : 'test') : null;
+    if (runs && !name) return;   // npm run with no name only lists the scripts
+    if (!name) return;
+    if (args.some(x => /^(-w|--workspaces?|--include-workspace-root)(=|$)/.test(x))) return this.unsure(`Runs a script of another package (${tool} ${name} with a workspace option)`, true);
+    this.npmDepth = (this.npmDepth || 0) + 1;
+    try {
+      if (this.npmDepth > 4) return this.unsure(`A package script that runs other package scripts too deeply (${name})`, true);
+      const pre = args.findIndex(x => /^--?(prefix|C|dir|cwd)$/.test(x));
+      const dir = pre >= 0 && args[pre + 1] ? resolve(cwd, args[pre + 1]) : cwd;
+      let scripts;
+      try { scripts = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).scripts; } catch { scripts = undefined; }
+      if (!scripts || typeof scripts !== 'object' || typeof scripts[name] !== 'string') {
+        return this.unsure(`A package script the hub cannot read (${tool} ${name}: package.json missing, unreadable or with no such script)`, true);
+      }
+      // Every word after the script name goes to the script, with or without -- (npm 7+: `npm run pushit main` runs
+      // `<script> main`), except the package-folder options npm itself takes; the -- itself is dropped.
+      const subAt = args.indexOf(sub);
+      const nameAt = runs ? args.indexOf(name, subAt + 1) : subAt;
+      const extra = [];
+      args.slice(nameAt + 1).forEach((x, i, rest) => {
+        if (/^--?(prefix|C|dir|cwd)$/.test(x) || /^--?(prefix|C|dir|cwd)$/.test(rest[i - 1] || '') || /^--(prefix|dir|cwd)=/.test(x) || x === '--') return;
+        extra.push(x);
+      });
+      const quoted = extra.map(x => `'${String(x).replace(/'/g, `'\\''`)}'`).join(' ');
+      // The settings in front of this request (CRUX_HUB_DATA=... npm start) reach the script too.
+      const envText = [...this.env()].filter(([k, v]) => /^[A-Za-z_]\w*$/.test(k) && typeof v === 'string').map(([k, v]) => `${k}='${v.replace(/'/g, `'\\''`)}' `).join('');
+      for (const n of [`pre${name}`, name, `post${name}`]) {
+        const text = scripts[n];
+        if (text == null) continue;
+        if (typeof text !== 'string') { this.unsure(`A package script the hub cannot read (${n})`, true); continue; }
+        this.scanBits?.push(text);
+        this.innerCommand(`${envText}${n === name && quoted ? `${text} ${quoted}` : text}`, dir);
+      }
+    } finally { this.npmDepth--; }
   }
 
   // Trusted (decision 45): installing, updating and removing the project's own packages, and reading the registry.
@@ -2846,7 +2899,23 @@ class Check {
   // namespace names (xmlns="http://www.w3.org/2000/svg" in an SVG the script writes) are names, never fetched: they
   // do not count as the network (decision 64 A); a real call (fetch, http.get, require('https')) still does.
   script(code) {
-    const reach = String(code).replace(/https?:\/\/www\.w3\.org\/(?:2000\/svg|1999\/xlink|1999\/xhtml|1998\/Math\/MathML|XML\/1998\/namespace|2000\/xmlns\/?)(?![\w./-])/g, 'XMLNS');
+    code = String(code);
+    // Fail closed (plan A1): inline code (node -e / -p / --eval, python -c, a script on stdin or in a heredoc) is never
+    // allowed because the hub found nothing wrong in it: the hub reads a few words and quoted paths, not what the code
+    // builds at run time (os.tmpdir() with '..', pathlib.Path.home() / '.claude'). Only a short list of exact read-only
+    // strings (the temp-dir print, version prints) and the one stop-by-port shape below pass; any other is a doubt, and the
+    // risky-word scan reads the code too, so a hard-stop shape inside it is still a stop.
+    let exact = KNOWN_NODE_E.has(code.trim()) || KNOWN_PY_C.has(code.trim());
+    const d0 = this.doubts.length;
+    this.scriptChecks(code, () => { exact = exact || this.doubts.length === d0; });
+    if (!exact) {
+      this.unsure('Inline code the hub cannot read in full: only a few exact read-only strings (the temp-dir print, version prints) are allowed');
+      this.scanBits?.push(code);
+    }
+  }
+  // The checks on what an inline script reaches for; stopShapeOk() is called when the one allowed stop-by-port shape passed.
+  scriptChecks(code, stopShapeOk) {
+    const reach =String(code).replace(/https?:\/\/www\.w3\.org\/(?:2000\/svg|1999\/xlink|1999\/xhtml|1998\/Math\/MathML|XML\/1998\/namespace|2000\/xmlns\/?)(?![\w./-])/g, 'XMLNS');
     if (/\b(fetch|https?|net|dgram|tls|http2|XMLHttpRequest|WebSocket|urllib|requests|socket)\b/.test(reach)) this.stop('An inline script that could reach the network');
     if (/\b(child_process|execSync|execFileSync|spawn|spawnSync|exec\(|execFile|subprocess|os\.system|os\.popen)\b/.test(code)) this.unsure('An inline script that runs other programs');
     if (/\b(rmSync|unlinkSync|rmdirSync|rm\(|unlink\(|rmdir\(|os\.remove|os\.unlink|shutil\.rmtree)\b/.test(code)) this.scriptDeletes(code);
@@ -2863,7 +2932,7 @@ class Check {
         const uses = (code.match(/\b(stopTree|pidsOnPort|process\.kill|taskkill)\b/g) || []).length;   // each shape holds two
         if (!found.length || uses !== found.length * 2 || !found.every(m => this.startedHubs?.has(Number(m[2])))) {
           this.unsure('An inline script that stops processes by port or id, other than the one shape, on a test hub this agent started', true);
-        }
+        } else if (code.replace(shape, '').replace(/^\s*import\(\s*'\.\/hub\/lib\/relaunch\.mjs'\s*\)\.then\(\s*async\s+\w+\s*=>\s*\{\s*\}\s*\)\s*;?\s*$/, '').trim() === '') stopShapeOk();
       }
     }
     if (/process\.env|os\.environ|homedir\(\)|expanduser/.test(code)) this.stop('An inline script that reads environment variables or the home folder');

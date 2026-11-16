@@ -296,8 +296,9 @@ test('bug 2: a download piped into a program that runs it, or run after saving, 
   assert.equal(bash('auto', 'curl -s https://example.com/a | node'), 'human');
   // A local test hub's JSON piped into a script given inline is data, not code; a pipe into a bare interpreter is not contained.
   const readJson = 'curl -s localhost:4791/api/state | node -e "let s=0;process.stdin.on(1,d=>s+=d)"';
-  assert.equal(bash('trusted', readJson), 'allow');
-  assert.equal(bash('auto', readJson), 'allow');
+  // (fix/inline-code-doubt: inline code is never allowed unread, so it is a doubt for the orchestrator, not a hard stop)
+  assert.equal(bash('trusted', readJson), 'unsure');
+  assert.equal(bash('auto', readJson), 'unsure');
   assert.equal(bash('trusted', 'curl -s localhost:4791/api/state | node'), 'human', 'even a local download, run as code');
   for (const level of ['auto', 'trusted']) {
     assert.equal(bash(level, 'cat notes.txt | node'), 'unsure', `${level}: node reading its script from a pipe`);
@@ -555,7 +556,7 @@ test('round 4: everyday requests to test hubs and reads of the live hub still pa
     'curl -sI http://localhost:4747/', 'curl -s -X GET http://localhost:4747/api/state', `curl -s -o ${T}/state.json localhost:4791/api/state`,
     `curl -s -X POST -H "content-type: application/json" -H "origin: http://localhost:4791" -d '{"project":"p"}' localhost:4791/api/settings`,
     `curl -s -H 'Content-Type: application/json' --json '{"a":1}' http://127.0.0.1:4791/api/settings`,
-    'curl -s localhost:4791/api/state | node -e "let s=0;process.stdin.on(1,d=>s+=d)"', 'curl -s localhost:4791/api/state | jq .version',
+'curl -s localhost:4791/api/state | jq .version',
     `CRUX_HUB_DATA=${T}/data curl -s localhost:4791/api/state`, 'wget -qO- http://localhost:4791/api/state',
     { ps: 'irm http://localhost:4747/api/state' }, { ps: 'Invoke-RestMethod http://localhost:4791/api/state' },
     { ps: `Invoke-RestMethod http://localhost:4791/api/settings -Method Post -ContentType application/json -Body '{"project":"p"}'` },
