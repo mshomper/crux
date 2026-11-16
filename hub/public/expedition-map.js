@@ -32,6 +32,15 @@ export function runningGatherers(events, id) {
   return open.size;
 }
 
+// The small progress line while the end runs (expedition_step events: report, commit, push, pr, card, summary).
+export const END_WORDS = { report: 'writing the report', commit: 'committing it', push: 'pushing the branch', pr: 'opening the draft PR', card: 'posting the card', summary: 'sending its summary' };
+export function endProgress(events, id) {
+  const done = events.filter(e => e.type === 'expedition_step' && e.expedition === id).map(e => e.step);
+  if (!done.length) return '';
+  const next = Object.keys(END_WORDS).find(s => !done.includes(s));
+  return next ? `ending: ${END_WORDS[next]} (${done.length} of 6 done)` : 'ended';
+}
+
 // The whole picture for the map and the sidebar, or null when no expedition is running in this project.
 //   p: { agents, events }, now: ms (a parameter so a test can fix it), activityOf: agent name -> what it is doing.
 export function expeditionCluster(p, now = Date.now(), activityOf = () => '') {
@@ -74,7 +83,7 @@ export function expeditionCluster(p, now = Date.now(), activityOf = () => '') {
   const gatherers = runningGatherers(events, id);
   const parked = mine.filter(e => e.type === 'expedition_parked' && e.kind !== 'lesson').length;
   return {
-    id, name: slugOf(id), phase, lead: leadView, stations, gatherers, parked, loop: loops.length ? loops[loops.length - 1].number : 0,
+    id, name: slugOf(id), phase, ending: endProgress(mine, id), lead: leadView, stations, gatherers, parked, loop: loops.length ? loops[loops.length - 1].number : 0,
     time, budget, amber: time.pct >= AMBER_AT || (budget.pct != null && budget.pct >= AMBER_AT), stopped: !!stopped
   };
 }
@@ -91,7 +100,7 @@ export function fmtMoney(usd) {
 export function clusterCaption(c) {
   const time = `time ${fmtDuration(c.time.usedMs)} of ${fmtDuration(c.time.totalMs)}`;
   const budget = c.budget.totalUSD ? `budget ${fmtMoney(c.budget.usedUSD)} of ${fmtMoney(c.budget.totalUSD)}` : 'budget figure not set';
-  return { title: `EXPEDITION · ${c.name.toUpperCase()}`, time, budget, line: `${time}  ${budget}` };
+  return { title: `EXPEDITION · ${c.name.toUpperCase()}`, time, budget, ...(c.ending ? { ending: c.ending } : {}), line: `${time}  ${budget}${c.ending ? `  ${c.ending}` : ''}` };
 }
 // One line for the sidebar row: "building · loop 1 · 3 gatherers · 2 parked".
 export function clusterLine(c) {

@@ -79,11 +79,4 @@ export function finishedCard(ev, proposals = [], opts = {}) {
 // The sidebar row after the end: one line saying how it went (decision 70 and M049 item 1).
 export const endedLine = cur => cur ? [STOP_WORDS[cur.stopReason] || cur.phase, cur.pr?.url ? 'draft PR open' : ''].filter(Boolean).join(' · ') : '';
 
-// The small progress line while the end runs (expedition_step events: report, commit, push, pr, card, summary).
-export const END_WORDS = { report: 'writing the report', commit: 'committing it', push: 'pushing the branch', pr: 'opening the draft PR', card: 'posting the card', summary: 'sending its summary' };
-export function endProgress(events, id) {
-  const done = events.filter(e => e.type === 'expedition_step' && e.expedition === id).map(e => e.step);
-  if (!done.length) return '';
-  const next = Object.keys(END_WORDS).find(s => !done.includes(s));
-  return next ? `ending: ${END_WORDS[next]} (${done.length} of 6 done)` : 'ended';
-}
+export { endProgress, END_WORDS } from './expedition-map.js';   // the end-progress line lives with the cluster

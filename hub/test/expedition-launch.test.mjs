@@ -119,6 +119,19 @@ test('the finished card: answer, stop reason, counts, PR link, amber marks for u
   assert.match(finishedCard({ ...ev, stopReason: 'Matt' }, []), /You stopped it/);
 });
 
+test('the cluster carries the end-progress line while the end runs, and no Stop-worthy line before', async () => {
+  const { expeditionCluster, clusterCaption } = await import('../public/expedition-map.js');
+  const T = Date.parse('2026-11-16T08:00:00Z'), at = ms => new Date(T + ms).toISOString();
+  const ID = '20261116-json-bench';
+  const ev = (...x) => x.map((e, i) => ({ id: `e${i}`, ts: at(0), expedition: ID, ...e }));
+  const base = [{ type: 'expedition_started', envelope: { hours: 6 } }, { type: 'expedition_stopped', reason: 'Matt', ts: at(3600e3) }];
+  const p = events => ({ agents: [], events: ev(...events) });
+  assert.equal(expeditionCluster(p(base), T + 4000e3).ending, '');
+  const c = expeditionCluster(p([...base, { type: 'expedition_step', step: 'report' }]), T + 4000e3);
+  assert.equal(c.ending, 'ending: committing it (1 of 6 done)');
+  assert.match(clusterCaption(c).line, /ending: committing it/);
+});
+
 test('the end-progress line follows the logged steps', () => {
   const evs = [{ type: 'expedition_step', expedition: 'E', step: 'report' }, { type: 'expedition_step', expedition: 'E', step: 'commit' }];
   assert.equal(endProgress(evs, 'E'), 'ending: pushing the branch (2 of 6 done)');
