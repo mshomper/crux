@@ -354,6 +354,9 @@ const trimmed = re => ({ test: s => re.test(trimParts(s)) || re.test(s), source:
 // environment, Docker, kubectl, Azure and Google Cloud logins (their token files and databases), and every shell's history.
 const SECRET_MORE = String.raw`(^|\/)(\.config\/gh|gh\/hosts\.yml|\.docker\/config\.json|\.kube|\.azure|\.config\/gcloud|gcloud|\.gcloud|\.oci|\.config\/doctl)(\/|$)|(^|\/)(credentials\.db|access_tokens\.db|legacy_credentials|application_default_credentials\.json|accesstokens\.json|msal_token_cache\.(json|bin)|service_principal_entries\.json|azureprofile\.json|docker-credentials\w*)$|(^|\/)proc\/[^/]+\/(environ|cmdline|fd(\/|$))|(^|\/)(environ|\.claude\.json|state\.vscdb(-journal)?|login data(-journal)?|(github )?cli\/hosts\.yml)$|(^|\/)(google\/chrome|chromium|microsoft\/edge|bravesoftware\/brave-browser)\/user data(\/|$)|(^|\/)\.[\w-]*_history$|(^|\/)(ConsoleHost_history\.txt|\.viminfo|\.lesshst|\.python_history|history\.sqlite)$`;
 const SECRET = trimmed(new RegExp(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub(?!\/voice(?:\/(?!\.\.?(?:\/|$))[^/]+)*\/?$))(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/.source + '|' + SECRET_MORE, 'i'));
+// Does a path (relative to a repo, or absolute) name a secret or a credential store, by the same pattern the permission rules use
+// everywhere? The expedition end uses it so that `git add -A` never commits one (phase 5, review round 1).
+export const secretFileName = name => SECRET.test(norm(name));
 const KNOWN_TOOLS = new Set(['Task', 'Agent', 'TodoWrite', 'TaskStop', 'KillShell', 'KillBash', 'BashOutput', 'ToolSearch', 'Skill',
   'EnterPlanMode', 'ExitPlanMode', 'WebSearch', 'LS']);
 // Path and system variables are not secrets: reading them is fine. Names that look secret are hard stops.
@@ -508,6 +511,27 @@ export function frozenWrite(tool, input = {}, { dirs = [], cwd = null, projectDi
     if (hit) return why(hit.text);
   }
   return null;
+}
+
+// ---------- an expedition's own folder, for the file tools (phase 5, review round 1) ----------
+// Workers run in acceptEdits mode: Claude Code approves a Write, Edit or MultiEdit inside the working folder itself and never
+// asks the permission callback, so classify's rule about .crux (Check.inExpeditionFolder) is not seen for them. The PreToolUse
+// hook asks this instead, the same rule: inside the project's .crux, a file tool may write only inside the asking agent's own
+// expedition folder (root), and there not BRIEF.md (the user's) or the hub's swap folders. Everything else under .crux (the event
+// log, other expeditions, the stored copy of the test in .frozen) is refused. Paths outside .crux are not this rule's business.
+// -> a plain-words reason, or null.
+export function expeditionFolderWrite(tool, input = {}, { root = '', projectDir = '', cwd = null } = {}) {
+  if (!root || !['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) return null;
+  const f = input.file_path ?? input.notebook_path ?? input.path;
+  let s = String(f ?? '').trim();
+  if (!s || /[$%`]/.test(s)) return null;
+  s = homeAndDevice(s, homedir());
+  const abs = resolve(isAbsolute(s) || /^[a-z]:/i.test(s) ? s : join(cwd || projectDir || process.cwd(), s));
+  const a = norm(longPath(abs) || abs), crux = norm(resolve(projectDir, '.crux')), r = norm(resolve(root));
+  if (!(a === crux || a.startsWith(`${crux}/`))) return null;
+  const rel = a.startsWith(`${r}/`) ? a.slice(r.length + 1) : null;
+  if (rel !== null && !/(^|\/)\.\.(\/|$)/.test(rel) && rel !== 'brief.md' && !/^\.test-(restore|old)/.test(rel)) return null;
+  return `Writes outside your own expedition folder (${String(f).slice(0, 120)}). Inside .crux you may write only in .crux/expeditions/<your id>/, and not BRIEF.md: the event log, other expeditions and the stored test are the hub's`;
 }
 
 // PowerShell methods that only compute from the object they are called on (strings, numbers, dates, hashtables).

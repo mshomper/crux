@@ -11,7 +11,7 @@ import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
-import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite } from './permission-rules.mjs';
+import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite, expeditionFolderWrite } from './permission-rules.mjs';
 import { normalizeOverlay } from './permission-lists.mjs';
 import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
 import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './settings.mjs';
@@ -142,7 +142,7 @@ export class Hub {
     // counted message. Nothing launches an expedition yet, so until phase 5 it finds nothing to watch. A live hub makes its
     // first check only after resumeAll (below), so a Lead cannot get both a resume message and its final message from one
     // start; a test hub has no resume and checks at once.
-    this.expeditionEnd = new ExpeditionEnd(this, { now: expeditionWatch.now });   // the end's logged steps (phase 5); the watchdog's check sweeps it
+    this.expeditionEnd = new ExpeditionEnd(this);   // the end's logged steps (phase 5); the watchdog's check sweeps it. Its clock is the real one (log times are real); tests set end.now
     this.expeditionWatch = new ExpeditionWatchdog(this, expeditionWatch);   // tests pass { now, timers, checkMs, stopWaitMs }
     this.expeditionWatch.start({ firstCheck: this.noAgents });
     // Decision 64 A raised a shorter saved permission wait to 5 minutes, once: said once in each orchestrator thread.
@@ -582,7 +582,7 @@ export class Hub {
       '', 'The brief:', '', text
     ].join('\n');
     const lead = this.startWorker(p, 'exp-lead', task, by, `Expedition ${id}`.slice(0, 90), { type: merged.lead.type, model: merged.lead.model, effort: merged.lead.effort, expedition: id, expeditionRole: 'lead' });
-    return { id, lead: lead.name, expedition: ex.state().started, dollarCap: this.dollarCap(e) };
+    return { id, lead: lead.name, expedition: ex.state().started, dollarCap: this.dollarCap(e, input.envelope) };
   }
 
   // ---------- phase 5: defaults, the dollar cap, drafts and the launch ----------
@@ -609,12 +609,18 @@ export class Hub {
   }
 
   // What the launch screen says about the budget. meterGuard: the 7-day meter guard exists (it hides under an API key).
-  dollarCap(envelope = this.expeditionEnvelope()) {
+  // confirmed: only the dollars-per-percent figure in hub.json is "the confirmed figure" (decision 69 C). source says where the cap
+  // came from: 'figure' (percent x that figure), 'typed' (a figure typed at this launch: it counts as the user's own confirmation
+  // for this run), 'hub.json envelope' (a dollar figure in hub.json's envelope alone: a cap, but not a confirmed figure), or null.
+  // over: the envelope the launch itself sent.
+  dollarCap(envelope = this.expeditionEnvelope(), over = {}) {
     const per = this.dollarsPerPercent(), meterGuard = this.usage?.available !== false;
+    const typed = Number(over?.dollars) > 0, cfgDollars = Number(this.expeditionConfig().envelope?.dollars) > 0;
+    const source = envelope.dollars == null ? null : per ? 'figure' : typed ? 'typed' : cfgDollars ? 'hub.json envelope' : null;
     const note = envelope.dollars != null
-      ? (per && envelope.dollars === Math.round(envelope.percent * per * 100) / 100 ? `${envelope.percent}% of the week is about $${envelope.dollars} (at $${per} per 1%, the figure in hub.json). The run stops at that dollar figure or when the 7-day meter rises ${envelope.percent} points, whichever comes first.` : `The run stops at about $${envelope.dollars}${meterGuard ? ` or when the 7-day meter rises ${envelope.percent} points, whichever comes first` : ' (the meters are hidden under an API key, so only this and the time limit hold)'}.`)
+      ? (per && envelope.dollars === Math.round(envelope.percent * per * 100) / 100 ? `${envelope.percent}% of the week is about $${envelope.dollars} (at $${per} per 1%, the figure in hub.json). The run stops at that dollar figure or when the 7-day meter rises ${envelope.percent} points, whichever comes first.` : `The run stops at about $${envelope.dollars}${source === 'hub.json envelope' ? ' (a dollar figure in hub.json\'s envelope, not a confirmed dollars-per-percent figure)' : ''}${meterGuard ? ` or when the 7-day meter rises ${envelope.percent} points, whichever comes first` : ' (the meters are hidden under an API key, so only this and the time limit hold)'}.`)
       : `No dollars-per-percent figure is confirmed yet, so there is no dollar cap: this run is held by the time limit${meterGuard ? ` and the 7-day meter (up ${envelope.percent} points)` : ' only (the meters are hidden under an API key)'}. Set defaults.expedition.dollarsPerPercent in hub.json: dollars of estimated spend per 1% of the week.`;
-    return { confirmed: per != null, dollarsPerPercent: per, dollars: envelope.dollars, meterGuard, note };
+    return { confirmed: per != null, dollarsPerPercent: per, dollars: envelope.dollars, source, meterGuard, note };
   }
 
   // The role table a launch starts from, and what the launch screen shows: the agent type files, then hub.json's
@@ -789,11 +795,15 @@ export class Hub {
   // canUseTool; a hook's deny is the one place that still sees them. The same narrow rule as classify's (frozenWrite), logged
   // like any refusal. A plain-words reason, or null. hookInput: { tool_name, tool_input, cwd, tool_use_id, agent_id }.
   expeditionFrozenBlock(p, agent, hookInput) {
+    if (!agent?.expedition || !hookInput?.tool_name) return null;
     const dirs = this.frozenDirs(p, agent);
-    if (!dirs.length || !hookInput?.tool_name) return null;
     const input = hookInput.tool_input || {};
+    const cwd = hookInput.cwd || agent.cwdFor?.(hookInput.tool_use_id) || null;
     let why = null;
-    try { why = frozenWrite(hookInput.tool_name, input, { dirs, cwd: hookInput.cwd || agent.cwdFor?.(hookInput.tool_use_id) || null, projectDir: p.dir }); } catch { why = null; }   // never break the agent's call: the hash check is the real guard
+    if (dirs.length) { try { why = frozenWrite(hookInput.tool_name, input, { dirs, cwd, projectDir: p.dir }); } catch { why = null; } }   // never break the agent's call: the hash check is the real guard
+    // Review round 1: the file tools under .crux may write only in the agent's own expedition folder (acceptEdits never asks
+    // canUseTool for them, so classify's rule is not seen): the same rule, asked here.
+    if (!why) { try { why = expeditionFolderWrite(hookInput.tool_name, input, { root: this.expeditionOf(p, agent).root, projectDir: p.dir, cwd }); } catch { why = null; } }
     if (!why) return null;
     const subagent = agent.subagentFor?.(hookInput.tool_use_id, hookInput.agent_id) || null;
     return this.denyQuiet(p, agent, hookInput.tool_name, input, why, { subagent }).message;

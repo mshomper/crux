@@ -338,7 +338,8 @@ test('keyed on the hub\'s own record of the agent: another expedition\'s agent h
   assert.equal((await hub.requestApproval(p, b2, 'Write', { file_path: join(se2.ex.testDir, 'CHECKLIST.md'), content: 'x' })).behavior, 'deny');
   assert.doesNotMatch((await hub.requestApproval(p, b2, 'Write', { file_path: join(ex.testDir, 'CHECKLIST.md'), content: 'x' })).message, /frozen success test/, 'not this agent\'s expedition: the hash check of that one is its guard');
   const hook = b2.options().hooks.PreToolUse[0].hooks[0];
-  assert.deepEqual(await hook({ tool_name: 'Write', tool_input: { file_path: join(ex.testDir, 'CHECKLIST.md') }, tool_use_id: 'y', cwd: p.dir }), {});
+  // Not its frozen folder, but not its own expedition folder either: the file tools may write only in their own (phase 5 review).
+  assert.match((await hook({ tool_name: 'Write', tool_input: { file_path: join(ex.testDir, 'CHECKLIST.md') }, tool_use_id: 'y', cwd: p.dir })).hookSpecificOutput.permissionDecisionReason, /outside your own expedition folder/);
   assert.equal((await hook({ tool_name: 'Write', tool_input: { file_path: join(se2.ex.testDir, 'CHECKLIST.md') }, tool_use_id: 'z', cwd: p.dir })).hookSpecificOutput.permissionDecision, 'deny');
   // Nothing in a request names the expedition: extra fields in the tool input change nothing.
   const r = await hub.requestApproval(p, b2, 'Write', { file_path: join(se2.ex.testDir, 'a.md'), content: 'x', expedition: 'none', expeditionRole: 'lead', frozen: [] });

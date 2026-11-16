@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { gitAsync, runGh } from './decisions-desk.mjs';
+import { secretFileName } from './permission-rules.mjs';
 
 export const REPORT_DIR = 'docs/expeditions';   // where the report lands on the branch: docs/expeditions/<id>/REPORT.md
 
@@ -56,23 +57,41 @@ export class ExpeditionDesk {
 
   // Copy the report onto the branch and commit everything the worktree holds (the build, the report). A second call with
   // nothing new changes nothing and returns the commit that is already there. -> { commit (short hash), already }
+  // The worktree must be on expedition/<id> before anything is committed: a worktree someone left on another branch would take
+  // the commit there. (Review round 1.)
+  async checkBranch() {
+    const head = await this.tryGit(['rev-parse', '--abbrev-ref', 'HEAD']);
+    if (head !== this.branch) throw new Error(`the worktree ${this.dir} is on ${head || 'no branch'}, not ${this.branch}, so nothing is committed there`);
+  }
+
+  // Files that look like secrets (the permission rules' own pattern: .env, keys, credential files...) are never committed or
+  // pushed by the hub: `git add -A` takes whatever the Builder left, so each staged name is checked and a hit is unstaged and
+  // left in the worktree for the user to look at. -> { commit (short hash), already, leftOut: [names] }
   async commit(message) {
     await this.ensureWorktree();
+    await this.checkBranch();
     const from = join(this.ex.root, 'REPORT.md');
     if (!existsSync(from)) throw new Error('REPORT.md is missing, so there is nothing to put on the branch');
     const to = join(this.dir, ...this.reportRel.split('/'));
     mkdirSync(dirname(to), { recursive: true });
     copyFileSync(from, to);
     await this.git(['add', '-A'], this.dir);
-    const staged = String((await this.tryGit(['diff', '--cached', '--name-only'])) || '').trim();
-    if (!staged) return { commit: await this.tryGit(['rev-parse', '--short', 'HEAD']), already: true };
+    const names = async () => String((await this.tryGit(['-c', 'core.quotepath=off', 'diff', '--cached', '--name-only'])) || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const leftOut = (await names()).filter(secretFileName);
+    if (leftOut.length) await this.git(['reset', '-q', '--', ...leftOut.map(n => `:(literal)${n}`)], this.dir);
+    if (!(await names()).length) return { commit: await this.tryGit(['rev-parse', '--short', 'HEAD']), already: true, leftOut };
     await this.git(['commit', '-q', '-m', message], this.dir);
-    return { commit: await this.tryGit(['rev-parse', '--short', 'HEAD']), already: false };
+    return { commit: await this.tryGit(['rev-parse', '--short', 'HEAD']), already: false, leftOut };
   }
 
-  // Push the branch (never forced). { ok, local }: a test hub does not push.
+  // Push the branch (never forced). { ok, local }: a test hub does not push. A secret-looking file already committed on the
+  // branch (by the Builder, say) stops the push, in plain words: nothing of it leaves the machine.
   async push() {
     if (this.local) return { ok: false, local: true };
+    const base = await this.findBase();
+    const seen = await this.tryGit(['-c', 'core.quotepath=off', 'log', '--name-only', '--pretty=format:', `${this.remote}/${base}..HEAD`]);
+    const hits = [...new Set(String(seen || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).filter(secretFileName))];
+    if (hits.length) throw new Error(`not pushed: ${hits.length === 1 ? 'a file that looks' : 'files that look'} like ${hits.length === 1 ? 'a secret is' : 'secrets are'} already committed on ${this.branch} (${hits.slice(0, 5).join(', ')}). Remove ${hits.length === 1 ? 'it' : 'them'} from the branch, then push it yourself`);
     await this.git(['push', '-q', '-u', this.remote, this.branch], this.dir);
     return { ok: true, local: false };
   }

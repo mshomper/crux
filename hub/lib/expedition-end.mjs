@@ -62,12 +62,15 @@ export class ExpeditionEnd {
     if (s.steps.has('card')) return 'summary';   // the sequence is done but for the Lead's summary: see afterCard
     const lead = this.hub.expeditionLead(p, id);
     if (!lead) return 'no lead';   // nobody left to write: the report is what the files hold
-    if (this.leadBusy(p, lead)) return null;
+    // An hour after the stop the end happens whatever the Lead is doing: one whose final turn never ends is interrupted (run's
+    // force), so a stuck Lead cannot keep the report, the branch and the card from the user.
+    const stale = now - Date.parse(s.stopped.ts) >= END_WAIT_MS;
+    if (this.leadBusy(p, lead)) return stale ? 'stale' : null;
     const hubStop = HUB_STOPS.includes(s.stopped.reason);
-    if (hubStop && !s.finalNote) return now - Date.parse(s.stopped.ts) >= END_WAIT_MS ? 'stale' : null;   // the stop sequence is still running
+    if (hubStop && !s.finalNote) return stale ? 'stale' : null;   // the stop sequence is still running
     if (s.reportReadyNote) return 'report ready';
     if (hubStop && this.turnEndedAfter(p, lead, s.finalNote)) return 'final turn over';
-    return now - Date.parse(s.stopped.ts) >= END_WAIT_MS ? 'stale' : null;
+    return stale ? 'stale' : null;
   }
 
   // The watchdog's check calls this for every project, every 30 seconds, and the Lead's turn end calls it for its expedition.
@@ -85,14 +88,14 @@ export class ExpeditionEnd {
     const why = this.due(p, id);
     if (!why) return [];
     if (why === 'summary') return this.afterCard(p, id) ? [{ expedition: id, did: 'summary' }] : [];
-    this.begin(p, id);
+    this.begin(p, id, { force: why === 'stale' });
     return [{ expedition: id, did: 'end', why }];
   }
 
-  begin(p, id) {
+  begin(p, id, opts = {}) {
     const key = `${p.name}/${id}`;
     if (this.running.has(key)) return this.running.get(key);
-    const run = this.run(p, id)
+    const run = this.run(p, id, opts)
       .catch(e => this.failed(p, id, e))
       .finally(() => this.running.delete(key));
     this.running.set(key, run);
@@ -100,11 +103,11 @@ export class ExpeditionEnd {
   }
   failed(p, id, e) {
     console.warn(`Expedition end ${id}:`, e?.message || e);
-    const key = `${p.name}/${id}/${firstLine(e)}`;
-    if (this.reported.has(key)) return;   // said once; the next check tries again
-    this.reported.add(key);
-    const lead = this.anyLead(p, id);
-    this.hub.notice(p, lead?.thread || 'orchestrator', `The end of expedition ${id} hit a problem and will be tried again: ${firstLine(e)}`);
+    // The notice is a logged event, and "said once" is read from the log, so a restart does not say it again either.
+    const lead = this.anyLead(p, id), thread = lead?.thread || 'orchestrator';
+    const text = `The end of expedition ${id} hit a problem and will be tried again: ${firstLine(e)}`;
+    if (p.log.events.some(x => x.type === 'notice' && x.thread === thread && x.text === this.hub.memory.personalize(text))) return;
+    this.hub.notice(p, thread, text);
   }
   // Resolves when every end in flight is over (tests, an orderly shutdown).
   async settled() { while (this.running.size) await Promise.all([...this.running.values()]); }
@@ -112,9 +115,12 @@ export class ExpeditionEnd {
   // ---------- the sequence ----------
   // Runs the steps still missing, in order. Resolves to the steps it did. Throws only on a crash (the hook, a bug, a full
   // disk): a desk failure is logged on its step instead.
-  async run(p, id) {
+  // force: the hour is up with the Lead still in a turn: it is interrupted (then closed if it does not answer within the stop's
+  // own fallback time) and the end goes on.
+  async run(p, id, { force = false } = {}) {
     const hub = this.hub, ex = hub.expeditionOf(p, id);
     const did = [];
+    if (force) await this.stopLead(p, id);
     const step = async (name, f) => {
       if (ex.state().phase !== 'stopped' || ex.hasStep(name)) return;
       await this.hook?.('before', name);
@@ -135,6 +141,14 @@ export class ExpeditionEnd {
     return did;
   }
 
+  async stopLead(p, id) {
+    const lead = this.hub.expeditionLead(p, id), w = this.hub.expeditionWatch;
+    if (!lead || !busyNow(lead)) return;
+    this.hub.notice(p, lead.thread, `${lead.name} was still in a turn an hour after the expedition stopped, so the hub stopped it and is writing the end itself.`);
+    await lead.interrupt?.().catch(() => false);
+    if (!(await w.waitIdle([lead], w.stopWaitMs))) lead.close();
+  }
+
   reportStep(p, ex, { hubStop, question }) {
     // M049 6: test/ is checked at the finish for a hub stop too (time, budget, the user's Stop), not only the Lead's own.
     const integrity = ex.checkFrozen('finish');
@@ -143,7 +157,11 @@ export class ExpeditionEnd {
     const claims = verdict && /^#{1,4}\s.*(claims?|corrections?)/im.test(verdict) ? 'checked' : 'not checked';
     const md = assembleReport({ leadText, events: p.log.events, id: ex.id, question, claims, hubStop });
     ex.write('REPORT.md', md);
-    ex.step('report', { file: 'REPORT.md', leadWrote: !!String(leadText || '').replace(/<!-- hub-generated[\s\S]*$/, '').trim(), claims, ...(integrity.checked && integrity.ok === false ? { integrity: integrity.restored ? 'restored' : 'not restored' } : {}) });
+    // BRIEF.md is the user's ask, hashed at the launch: if it is not what was launched (an agent's file tool under acceptEdits, a
+    // disguised write), the card says so in plain words.
+    let briefChanged = false;
+    try { briefChanged = ex.briefHash() !== ex.state().started?.briefHash; } catch { briefChanged = true; }
+    ex.step('report', { file: 'REPORT.md', leadWrote: !!String(leadText || '').replace(/<!-- hub-generated[\s\S]*$/, '').trim(), claims, ...(briefChanged ? { briefChanged: true } : {}), ...(integrity.checked && integrity.ok === false ? { integrity: integrity.restored ? 'restored' : 'not restored' } : {}) });
   }
 
   stepData(ex, name) { return ex.stepEvent(name); }
@@ -152,7 +170,7 @@ export class ExpeditionEnd {
     const desk = this.deskFor(p, ex);
     const answer = answerLine(ex.read('REPORT.md')) || question || ex.id;
     let data;
-    try { const r = await desk.commit(`Expedition ${ex.id}: ${clipText(answer, 72)}`); data = { ok: true, commit: r.commit, already: r.already, branch: ex.branch, report: desk.reportRel }; }
+    try { const r = await desk.commit(`Expedition ${ex.id}: ${clipText(answer, 72)}`); data = { ok: true, commit: r.commit, already: r.already, branch: ex.branch, report: desk.reportRel, ...(r.leftOut?.length ? { leftOut: r.leftOut } : {}) }; }
     catch (e) { data = { ok: false, error: firstLine(e), branch: ex.branch }; }
     ex.step('commit', data);
   }
@@ -194,13 +212,20 @@ export class ExpeditionEnd {
     const commit = this.stepData(ex, 'commit'), push = this.stepData(ex, 'push'), pr = this.stepData(ex, 'pr'), rep = this.stepData(ex, 'report');
     const answer = answerLine(r) || question || '(no answer written)';
     const loops = s.loops, good = loops.filter(l => !l.tampered), passing = good.length ? good.at(-1).passing : null;
-    const problem = !commit?.ok ? `The branch was not made: ${commit?.error || 'unknown'}.` : !push?.ok ? (push?.local ? 'Not pushed: this is a test hub.' : `Not pushed: ${push?.error || 'unknown'}. The commit is on ${ex.branch} in the project; push it yourself.`) : !pr?.ok ? `The draft pull request was not opened: ${pr?.error || 'unknown'}. The branch ${ex.branch} is pushed; open it from GitHub.` : null;
+    const main = !commit?.ok ? `The branch was not made: ${commit?.error || 'unknown'}.` : !push?.ok ? (push?.local ? 'Not pushed: this is a test hub.' : `Not pushed: ${push?.error || 'unknown'}. The commit is on ${ex.branch} in the project; push it yourself.`) : !pr?.ok ? `The draft pull request was not opened: ${pr?.error || 'unknown'}. The branch ${ex.branch} is pushed; open it from GitHub.` : null;
+    // What the end left out or found changed, in plain words (review round 1).
+    const leftOut = commit?.leftOut || [];
+    const extra = [
+      leftOut.length ? `Left out of the commit because ${leftOut.length === 1 ? 'it looks' : 'they look'} like ${leftOut.length === 1 ? 'a secret' : 'secrets'}: ${leftOut.slice(0, 5).join(', ')}${leftOut.length > 5 ? `, and ${leftOut.length - 5} more` : ''}. ${leftOut.length === 1 ? 'It is' : 'They are'} still in the build folder.` : null,
+      rep?.briefChanged ? 'BRIEF.md is not what was launched: it was changed during the run, so read the report with that in mind.' : null
+    ].filter(Boolean);
+    const problem = [main, ...extra].filter(Boolean).join(' ') || null;
     return {
       thread: 'orchestrator', title: `Expedition finished: ${clipText(answer, 120)}`, question, answer, stopReason: s.stopped?.reason || null, hubStop,
       loops: loops.length, passing, decisions: s.decisions.length, parked: proposalsOf(p.log.events, ex.id).length, lessons: s.parked.filter(e => e.kind === 'lesson').length,
       claimsChecked: rep?.claims === 'checked', leadWrote: rep?.leadWrote !== false,
       branch: ex.branch, commit: commit?.commit || null, pushed: !!push?.ok, pr: pr?.ok ? { url: pr.url, number: pr.number, draft: pr.draft !== false } : null,
-      problem, reportPath: commit?.report || null
+      problem, leftOut, briefChanged: !!rep?.briefChanged, reportPath: commit?.report || null
     };
   }
 
@@ -221,7 +246,10 @@ export class ExpeditionEnd {
       }
     }
     const go = ex.state().summaryGoNote;
-    if (go && (!lead || (!this.leadBusy(p, lead) && this.turnEndedAfter(p, lead, go)))) {
+    // An hour after the go-ahead the hub posts the summary whatever the Lead is doing (a Lead stuck in a turn would otherwise
+    // keep the orchestrator from ever hearing of the end).
+    const stale = go && this.now() - Date.parse(go.ts) >= END_WAIT_MS;
+    if (go && (!lead || stale || (!this.leadBusy(p, lead) && this.turnEndedAfter(p, lead, go)))) {
       const who = lead || this.anyLead(p, id);
       if (!who) return false;
       const f = ex.state().finished;
@@ -235,7 +263,9 @@ export class ExpeditionEnd {
   retireAll(p, id) {
     const hub = this.hub;
     const lead = hub.expeditionLead(p, id);
-    if (this.leadBusy(p, lead)) return false;
+    const summary = hub.expeditionOf(p, id).stepEvent('summary');
+    const stale = summary && this.now() - Date.parse(summary.ts) >= END_WAIT_MS;   // an hour on, a stuck Lead no longer holds the rest
+    if (this.leadBusy(p, lead) && !stale) return false;
     let n = 0;
     for (const a of [...p.agents.values()]) {
       if (a.expedition !== id || a.state === 'retired') continue;

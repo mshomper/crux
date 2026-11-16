@@ -24,17 +24,17 @@ const REPORT = '# Report\n\n## Answer\nUse library A: it is faster and smaller.\
 const summary = (over = {}) => ({ done: [], changed: [], questions: [], decisions_needed: [], blocked_on: [], next_step: '', visuals: [], approvals: [], open_questions: [], ...over });
 
 // A recording desk. fail: { push: 'message' } makes that step's call reject (a failure the end logs as a result).
-function fakeDesk(calls, fail = {}) {
+function fakeDesk(calls, fail = {}, extra = {}) {
   return {
     reportRel: 'docs/expeditions/x/REPORT.md',
-    async commit(msg) { calls.push(['commit', msg]); if (fail.commit) throw new Error(fail.commit); return { commit: 'abc1234', already: false }; },
+    async commit(msg) { calls.push(['commit', msg]); if (fail.commit) throw new Error(fail.commit); return { commit: 'abc1234', already: false, leftOut: extra.leftOut || [] }; },
     async push() { calls.push(['push']); if (fail.push) throw new Error(fail.push); return { ok: true, local: false }; },
     async pr(o) { calls.push(['pr', o.title, o.body]); if (fail.pr) throw new Error(fail.pr); return { url: 'https://github.com/o/r/pull/7', number: 7, draft: true, existed: false }; }
   };
 }
 
 // An expedition that has passed and is waiting for its end: members retired, the Lead idle with its report written.
-function world({ reason = 'passed', calls = [], fail = {} } = {}) {
+function world({ reason = 'passed', calls = [], fail = {}, extra = {} } = {}) {
   sent.length = 0;
   const env = stubHub({ level: 'auto' });
   const mark = quietMark(env);
@@ -44,7 +44,7 @@ function world({ reason = 'passed', calls = [], fail = {} } = {}) {
   for (const r of FIVE) env.hub.retireFinished(env.p, se.agents[r].name, 'hub', 'test');
   se.agents.lead.state = 'idle';
   se.ex.write('REPORT.md', REPORT);
-  env.hub.expeditionEnd.deskFactory = () => fakeDesk(calls, fail);
+  env.hub.expeditionEnd.deskFactory = () => fakeDesk(calls, fail, extra);
   return { env, se, mark, calls, hub: env.hub, p: env.p, ex: se.ex, id: se.id, end: env.hub.expeditionEnd, lead: se.agents.lead };
 }
 const count = (p, id, type, f = () => true) => p.log.events.filter(e => e.type === type && e.expedition === id && f(e)).length;
@@ -401,4 +401,106 @@ test('a test hub never pushes: the hub\'s own desk is local on a test hub unless
   await W.end.run(W.p, W.id);
   assert.deepEqual([W.ex.stepEvent('commit').ok, W.ex.stepEvent('push').ok, W.ex.stepEvent('pr').ok], [false, false, false]);
   assert.match(W.ex.state().finished.problem, /^The branch was not made: the project is not a git repository/);
+});
+
+// ---------- review round 1 ----------
+test('secrets: the desk never commits a file that looks like one (it is unstaged and left in the folder), and says so; one already committed stops the push', async () => {
+  const { remote, dir } = repoWithRemote();
+  const p = { dir, name: 'proj', log: { events: [] } };
+  const ex = new Expedition(p, '20261116-secrets').init();
+  ex.write('REPORT.md', REPORT);
+  const desk = new ExpeditionDesk({ ex, gh: async () => '[]' });
+  await desk.commit('first');
+  for (const [f, body] of [['.env', 'KEY=1\n'], ['server.pem', 'x'], ['config/credentials.json', '{}'], ['id_rsa', 'k'], ['src/a.js', 'ok\n'], ['notes.md', 'fine\n']]) {
+    mkdirSync(join(ex.worktree, f, '..'), { recursive: true }); writeFileSync(join(ex.worktree, f), body);
+  }
+  const r = await desk.commit('with build');
+  assert.deepEqual(r.leftOut.sort(), ['.env', 'config/credentials.json', 'id_rsa', 'server.pem']);
+  const committed = git(['show', '--name-only', '--format=', 'HEAD'], ex.worktree).split(/\r?\n/).sort();
+  assert.deepEqual(committed, ['notes.md', 'src/a.js']);
+  assert.ok(existsSync(join(ex.worktree, '.env')), 'still in the build folder for the user to look at');
+  // Only secrets left: nothing new to commit, still no secret in it.
+  const again = await desk.commit('again');
+  assert.deepEqual([again.already, again.leftOut.sort()], [true, ['.env', 'config/credentials.json', 'id_rsa', 'server.pem']]);
+  // A secret the Builder committed itself: the push is refused in plain words, and nothing reaches the remote.
+  writeFileSync(join(ex.worktree, '.npmrc'), '//registry:_authToken=x\n');
+  git(['add', '-f', '.npmrc'], ex.worktree); git(['commit', '-q', '-m', 'oops'], ex.worktree);
+  await assert.rejects(desk.push(), /^Error: not pushed: a file that looks like a secret is already committed on expedition\/.* \(\.npmrc\)\. Remove it from the branch, then push it yourself$/);
+  assert.throws(() => git(['rev-parse', `expedition/${ex.id}`], remote), 'the branch is not on the remote');
+  // Taking it out of the last commit is not enough: it is in the history that would be pushed.
+  git(['rm', '-q', '--cached', '.npmrc'], ex.worktree); git(['commit', '-q', '-m', 'remove'], ex.worktree);
+  await assert.rejects(desk.push(), /already committed/);
+});
+
+test('the card says plainly what was left out as a secret, and a changed BRIEF.md', async () => {
+  const W = world({ extra: { leftOut: ['.env', 'keys/server.pem'] } });
+  writeFileSync(join(W.ex.root, 'BRIEF.md'), 'A different ask.\n');
+  await W.end.run(W.p, W.id);
+  assert.equal(W.ex.stepEvent('commit').leftOut.length, 2);
+  assert.equal(W.ex.stepEvent('report').briefChanged, true);
+  const f = W.ex.state().finished;
+  assert.deepEqual([f.leftOut, f.briefChanged], [['.env', 'keys/server.pem'], true]);
+  assert.equal(f.problem, 'Left out of the commit because they look like secrets: .env, keys/server.pem. They are still in the build folder. BRIEF.md is not what was launched: it was changed during the run, so read the report with that in mind.');
+  const N = world();
+  await N.end.run(N.p, N.id);
+  assert.deepEqual([N.ex.state().finished.problem, N.ex.state().finished.briefChanged, N.ex.stepEvent('report').briefChanged], [null, false, undefined]);
+});
+
+test('the desk refuses to commit in a worktree that is on another branch', async () => {
+  const { dir } = repoWithRemote();
+  const p = { dir, name: 'proj', log: { events: [] } };
+  const ex = new Expedition(p, '20261116-wrongbranch').init();
+  ex.write('REPORT.md', REPORT);
+  const desk = new ExpeditionDesk({ ex, gh: async () => '[]' });
+  await desk.commit('first');
+  git(['checkout', '-q', '-b', 'something-else'], ex.worktree);
+  await assert.rejects(desk.commit('second'), new RegExp(`is on something-else, not expedition/${ex.id}, so nothing is committed there`));
+  assert.equal(git(['log', '--format=%s', '-1'], ex.worktree), 'first', 'nothing was committed on the other branch');
+});
+
+test('an hour on, a Lead whose final turn never ends is interrupted and the end goes on; so is a summary it never sends', async () => {
+  const W = world({ reason: 'time' });
+  W.ex.note('final', { kind: 'final', reason: 'time' });
+  W.lead.state = 'working';
+  const stopped = Date.parse(W.ex.state().stopped.ts);
+  assert.equal(W.end.due(W.p, W.id, stopped + END_WAIT_MS - 1000), null, 'not yet: the Lead may still be writing');
+  assert.equal(W.end.due(W.p, W.id, stopped + END_WAIT_MS + 1000), 'stale');
+  let interrupted = 0;
+  W.lead.interrupt = async () => { interrupted++; W.lead.state = 'idle'; return true; };
+  W.end.now = () => stopped + END_WAIT_MS + 1000;
+  assert.deepEqual(W.end.consider(W.p, W.id).map(d => [d.did, d.why]), [['end', 'stale']]);
+  await W.end.settled();
+  assert.equal(interrupted, 1);
+  assert.equal(W.ex.hasStep('card'), true, 'the end went on without the Lead');
+  assert.match(W.p.log.ofType('notice').find(n => /an hour after the expedition stopped/.test(n.text)).text, /exp-lead was still in a turn/);
+  // The summary: the Lead is stuck in a turn after the go-ahead; an hour later the hub posts it.
+  W.lead.state = 'working';
+  W.end.now = () => Date.parse(W.ex.state().summaryGoNote.ts) + 1000;
+  assert.deepEqual(W.end.consider(W.p, W.id), [], 'not yet');
+  W.end.now = () => Date.parse(W.ex.state().summaryGoNote.ts) + END_WAIT_MS + 1000;
+  assert.deepEqual(W.end.consider(W.p, W.id).map(d => d.did), ['summary']);
+  assert.equal(sent.filter(([n]) => n === W.env.orch.name).length, 1);
+  assert.equal(W.ex.state().phase, 'ended');
+  // And a Lead still stuck an hour after its summary no longer holds the others.
+  W.end.now = () => Date.parse(W.ex.stepEvent('summary').ts) + 1000;
+  assert.deepEqual(W.end.consider(W.p, W.id), [], 'the summary is only a second old');
+  W.end.now = () => Date.parse(W.ex.stepEvent('summary').ts) + END_WAIT_MS + 1000;
+  assert.deepEqual(W.end.consider(W.p, W.id).map(d => d.did), ['retire']);
+  assert.equal(W.lead.state, 'retired');
+});
+
+test('an end that crashes says so once: the notice is a logged event and a restart does not say it again', async () => {
+  const W = world();
+  W.ex.note('report ready', { kind: 'report-ready' });
+  W.end.hook = (w, s) => { if (w === 'before' && s === 'commit') throw new Error('disk is full'); };
+  const warn = console.warn; console.warn = () => { };
+  const told = p => p.log.ofType('notice').filter(n => /hit a problem and will be tried again: disk is full/.test(n.text)).length;
+  try {
+    await W.end.begin(W.p, W.id); await W.end.begin(W.p, W.id);
+    assert.equal(told(W.p), 1, 'twice in a row: once');
+    const { hub2, p2 } = restart(W.env);
+    hub2.expeditionEnd.hook = W.end.hook;
+    await hub2.expeditionEnd.begin(p2, W.id);
+    assert.equal(told(p2), 1, 'after a restart: still once, read from the log');
+  } finally { console.warn = warn; }
 });

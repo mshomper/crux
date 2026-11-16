@@ -291,6 +291,51 @@ test('M049 7: an expedition agent writes its own outputs under its expedition fo
   assert.equal(classify({ tool: 'Bash', input: { command: `echo hi > "${join(root, 'verify', 'run-1', 'o.txt').replace(/\\/g, '/')}"` }, projectDir: p.dir, expeditionRoot: root }).route, 'allow', 'a plain shell redirect there too');
 });
 
+test('review: the file tools under acceptEdits never reach the callback, so the PreToolUse hook denies them outside the agent\'s own expedition folder (BRIEF.md, the event log, .frozen, other folders)', async () => {
+  const env = world();
+  const se = new StubExpedition(env);
+  se.run({ stop: false });
+  const { p, hub } = env, root = se.ex.root;
+  const hookOf = a => a.options().hooks.PreToolUse[0].hooks[0];
+  const call = (a, tool, file, over = {}) => hookOf(a)({ tool_name: tool, tool_input: { file_path: file }, tool_use_id: 'tu-9', cwd: p.dir, ...over });
+  const denied = r => r.hookSpecificOutput?.permissionDecision === 'deny';
+  const outside = [join(root, 'BRIEF.md'), join(p.dir, '.crux', 'events.jsonl'), join(p.dir, '.crux', 'expeditions', '.frozen', se.id, 'CHECKLIST.md'), join(p.dir, '.crux', 'expeditions', 'other-one', 'notes-1.md'), join(root, '..', 'other-one', 'x.md'), join(p.dir, '.crux', 'x.txt')];
+  for (const tool of ['Write', 'Edit', 'MultiEdit']) {
+    for (const f of outside) assert.equal(denied(await call(se.agents.builder, tool, f)), true, `${tool} ${f}`);
+  }
+  const mine = [join(root, 'notes-4.md'), join(root, 'verify', 'run-2', 'a.txt'), join(root, 'synthesis.md'), join(p.dir, 'src', 'x.js'), '.crux/expeditions/' + se.id + '/notes-5.md'];
+  for (const f of mine) assert.deepEqual(await call(se.agents.builder, 'Write', f), {}, f);
+  // A gatherer's call inside the Lead is the Lead's hook with an agent_id: the same rule. The Lead's own writes in its folder are fine.
+  assert.equal(denied(await call(se.agents.lead, 'Write', join(p.dir, '.crux', 'events.jsonl'), { agent_id: 'g1', agent_type: 'expedition-gatherer' })), true);
+  assert.deepEqual(await call(se.agents.lead, 'Write', join(root, 'PLAN.md')), {});
+  // Logged where an expedition's refusals go: its own thread, no card, nothing parked.
+  const why = p.log.ofType('permission_answer').filter(e => e.worker === se.agents.builder.name && /outside your own expedition folder/.test(e.reason));
+  assert.equal(why.length, 15, 'five paths, three tools; the stored copy\'s path is refused as the frozen test, which is first');
+  assert.equal(p.log.ofType('permission_answer').filter(e => e.worker === se.agents.builder.name && /frozen success test/.test(e.reason)).length, 4, 'three here and the one the stub\'s own requests() made');
+  assert.equal(hub.approvals.size, 0);
+  // A plain worker is not an expedition agent: the hook leaves it to the permission rules.
+  const plain = hub.startWorker(p, 'plain', 'Build', 'you', 'x');
+  assert.deepEqual(await call(plain, 'Write', join(p.dir, '.crux', 'events.jsonl')), {});
+});
+
+test('review: a dollar figure in hub.json\'s envelope alone is a cap but not a confirmed figure; one typed at launch counts for that run; the confirmed figure wins', () => {
+  const none = world();
+  none.hub.defaults = { expedition: { envelope: { dollars: 30 } } };
+  const a = none.hub.launchExpedition(none.p, { question: Q });
+  assert.deepEqual([a.dollarCap.confirmed, a.dollarCap.dollarsPerPercent, a.dollarCap.dollars, a.dollarCap.source], [false, null, 30, 'hub.json envelope']);
+  assert.match(a.dollarCap.note, /a dollar figure in hub\.json's envelope, not a confirmed dollars-per-percent figure/);
+  assert.equal(none.view().defaults.dollarsPerPercent, null, 'the screen still says there is no confirmed figure');
+  const typed = world();
+  const b = typed.hub.launchExpedition(typed.p, { question: Q, envelope: { dollars: 12 } });
+  assert.deepEqual([b.dollarCap.confirmed, b.dollarCap.dollars, b.dollarCap.source], [false, 12, 'typed']);
+  const sure = world();
+  sure.hub.defaults = { expedition: { dollarsPerPercent: 9, envelope: { dollars: 5 } } };
+  const c = sure.hub.launchExpedition(sure.p, { question: Q, envelope: { dollars: 1 } });
+  assert.deepEqual([c.dollarCap.confirmed, c.dollarCap.dollars, c.dollarCap.source], [true, 63, 'figure']);
+  const nothing = world();
+  assert.equal(nothing.hub.launchExpedition(nothing.p, { question: Q }).dollarCap.source, null);
+});
+
 // ---------- M049 8: package baselines from the launch panel ----------
 test('M049 8: a pre-approved package\'s baseline version may come as numbers, numeric strings or the version seen; a bad one is refused before anything is written', () => {
   const env = world();
