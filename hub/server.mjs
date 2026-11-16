@@ -120,6 +120,7 @@ const decisionOpen = (project, id) => ['open', 'found'].includes(decisionStatus(
 // (decision 64).
 const pushCtx = { get approvals() { return hub.approvals; }, decisionOpen, decisionStatus, decisions: name => { try { return hub.project(name).board.decisions(); } catch { return []; } }, events: name => hub.project(name).log.events };
 hub.on(ev => { if (ev.logged && ev.project !== CONDUCTOR) push.handle(ev, pushCtx); });
+push.onRouted = r => { try { hub.project(r.project).log.append('notice_routed', { card: r.card, to: r.to, reason: r.reason }); } catch { } };   // each notice decision, by card id only
 push.resume(pushCtx);   // decision 58: phone follow-ups for PC notices sent before a restart
 // Decision 60 A: the Conductor is live while you are here and holds cards for one digest while you are away, judged by
 // the presence the hub already tracks. Your return (a page or the desktop app reporting in) posts the digest; while
