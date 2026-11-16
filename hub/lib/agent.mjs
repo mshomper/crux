@@ -85,9 +85,31 @@ export class Agent {
     this.hub.emit({ type: 'agent_state', project: this.project.name, thread: this.thread, agent: this.name, state, contextPct: this.contextPct });
   }
 
+  // The Expedition watchdog's stop (phase 3): end the turn now. The SDK answers within milliseconds with an error result
+  // (error_during_execution, aborted_streaming) that still carries usage, the session stays alive for its next message,
+  // and the turn's in-flight subagents and their shell tasks are killed with it (spike, M046). An agent that is not in a
+  // turn gets no result from an interrupt, so nothing is sent for it and false comes back.
+  async interrupt() {
+    const q = this.q;
+    if (!q || !['working', 'starting'].includes(this.state) || typeof q.interrupt !== 'function') return false;
+    this.interrupted = true;   // the error result that follows is the hub's doing: no "stopped" notice, no error flag
+    try { await q.interrupt(); return true; }
+    catch (e) { this.interrupted = false; console.warn(`[${this.project.name}/${this.name}] interrupt failed:`, e.message); return false; }
+  }
+
+  // Backstop for the interrupt: the subagent tasks the hub counted that are still open are stopped one by one.
+  async stopTasks() {
+    const q = this.q;
+    if (!q || typeof q.stopTask !== 'function') return 0;
+    let n = 0;
+    for (const id of [...(this.subagents?.keys() || [])]) { try { await q.stopTask(id); n++; } catch { /* already over */ } }
+    return n;
+  }
+
   // meta (optional): { request } for a Conductor brief (decision 62); noted as delivered once Claude Code takes it in.
   send(textMsg, attachments = [], meta = null) {
     if (this.state === 'retired' && !this.retiring) throw new Error(`${this.name} has retired`);
+    this.interrupted = false;   // a new message ends any interrupt the hub caused: its result has long arrived
     // A test hub: the message is in the log, but no Claude Code process starts.
     if (this.hub.noAgents) {
       if (!this.toldNoAgents) { this.toldNoAgents = true; this.hub.notice(this.project, this.thread, `Test hub: ${this.name} does not start here, so messages to it are kept but not read.`); }
@@ -328,6 +350,9 @@ export class Agent {
 
   // One SDK message. Kept apart from loop() so tests can feed it messages.
   async onMessage(m, q) {
+    // The Expedition watchdog (phase 3) counts every assistant message of an expedition agent, a gatherer's included
+    // (the stream carries subagent frames with agent_id), once per message id.
+    if (m.type === 'assistant' && this.expedition) this.hub.expeditionWatch?.onAssistant(this, m);
     if (isNoOutputNudge(m)) {
       // The Conductor may end a turn with no text (a wake that needs nothing). Should Claude Code still ask it for
       // visible output, what it writes in reply stays out of its thread, and no summary is posted, until the result.
@@ -355,16 +380,20 @@ export class Agent {
     } else if (m.type === 'result') {
       this.quietTurn = false;
       // The turn that just ended: its start, and whether it ended in an error (no reminder then).
-      this.lastTurn = { start: this.inTurn ? this.turnStartedAt : Date.now(), end: Date.now(), error: !!m.is_error && m.subtype !== 'success' };
+      // A turn the watchdog interrupted ends in an error result by design: not an error, and no notice for it.
+      const cut = this.interrupted && m.terminal_reason === 'aborted_streaming';
+      if (this.interrupted) this.interrupted = false;
+      this.lastTurn = { start: this.inTurn ? this.turnStartedAt : Date.now(), end: Date.now(), error: !cut && !!m.is_error && m.subtype !== 'success' };
       this.inTurn = false;
       this.logUsage(m);
+      if (this.expedition) this.hub.expeditionWatch?.onResult(this);   // the result's figure replaces the estimate
       // A refused effort level may come back as an error result instead: lower it and run the message again.
       const errText = m.is_error ? [m.result, ...(m.errors || [])].filter(Boolean).join(' ') : '';
       if (errText && this.q === q && this.lowerForRefusal(errText)) return this.restartAfterRefusal();
       try { this.contextPct = Math.round((await q.getContextUsage()).percentage); } catch { /* older CLI */ }
       if (/not logged in/i.test(m.result || '')) {
         this.hub.notice(this.project, this.thread, 'Claude Code is not signed in on this machine. Stop the hub, run "npm run login" in the hub folder, sign in with your Claude plan, then start the hub again.');
-      } else if (m.is_error && m.subtype !== 'success') {
+      } else if (m.is_error && m.subtype !== 'success' && !cut) {
         this.hub.notice(this.project, this.thread, `${this.name} stopped: ${m.subtype.replace(/_/g, ' ')}`);
       }
       this.setState('idle');
@@ -389,7 +418,9 @@ export class Agent {
       ex.subagent({ phase: 'started', subagentType: type, taskId: id });
     } else if (m.subtype === 'task_progress') {
       const t = live.get(id);
-      if (t && Number.isFinite(m.usage?.total_tokens)) t.tokens = m.usage.total_tokens;   // the watchdog's estimate between results (phase 3)
+      // total_tokens is the size of the subagent's latest call, not what it has spent so far (spike M046). The watchdog
+      // counts a gatherer's spend from its own assistant frames; this and tool_uses are only its fallback lower bound.
+      if (t && Number.isFinite(m.usage?.total_tokens)) { t.tokens = m.usage.total_tokens; t.toolUses = m.usage.tool_uses ?? t.toolUses; }
     } else {
       const t = live.get(id);
       if (!t) return;   // not one the hub saw start (a restart in between): nothing to close

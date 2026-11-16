@@ -25,6 +25,7 @@ import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, parseCommand, sdk
 import { totalsOf, sumCost } from '../public/usage.js';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
+import { ExpeditionWatchdog } from './expedition-watchdog.mjs';
 import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
 
 export class Project {
@@ -105,7 +106,7 @@ export class Hub {
   // (server.mjs: <data>/conductor). Null: no Conductor (tests that do not ask for one).
   // checker: the one-shot permission check (decision 66, lib/permission-check.mjs); tests pass one with a stubbed model.
   // Left out, it is made on first use: the Agent SDK on this machine's sign-in, or the API when a key is set up.
-  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null }) {
+  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {} }) {
     this.noAgents = !!noAgents;
     this.checkerMade = checker;
     this.checkGit = null;   // how the check asks git about a script (lib/permission-scripts.mjs); tests swap in a fake
@@ -134,6 +135,10 @@ export class Hub {
     this.idleTimer = setInterval(() => { this.idleCheck(); this.auditChecks(); }, IDLE_CHECK_MS);
     this.idleTimer.unref?.();
     this.usage.restore();
+    // The Expedition watchdog (decisions 69 and 71): rebuilt from the logs now, checked every 30 seconds and after every
+    // counted message. Nothing launches an expedition yet, so until phase 5 it finds nothing to watch.
+    this.expeditionWatch = new ExpeditionWatchdog(this, expeditionWatch);   // tests pass { now, timers, checkMs, stopWaitMs }
+    this.expeditionWatch.start();
     // Decision 64 A raised a shorter saved permission wait to 5 minutes, once: said once in each orchestrator thread.
     const from = this.settings?.timeoutRaisedFrom;
     if (from != null) {
@@ -563,7 +568,8 @@ export class Hub {
     for (const [name, body] of Object.entries(test || {})) ex.write(`test/${name}`, body);
     const hours = Number(envelope.hours) > 0 ? Number(envelope.hours) : undefined;
     const limit = Math.min(GATHERER_LIMIT, Math.max(1, Math.round(Number(gatherers)) || 3));
-    ex.start({ envelope: { ...envelope, ...(hours ? { hours } : {}), gatherers: limit }, roles: merged, planStart: null });   // the plan-meter readings at the start are phase 3's (the watchdog)
+    // planStart: the 7-day meter's reading now (spend measure 2 counts the rise from it); null under an API key or before the meters load.
+    ex.start({ envelope: { ...envelope, ...(hours ? { hours } : {}), gatherers: limit }, roles: merged, planStart: this.expeditionWatch.planStart() });
     const e = ex.state().started.envelope;
     const task = [
       `You are the Lead of expedition ${id} in ${p.name}. Its folder is .crux/expeditions/${id}/ : BRIEF.md (the question, scope and envelope) and test/ (the success test) are there; everything you and your team write goes in that folder.`,
@@ -574,6 +580,13 @@ export class Hub {
     ].join('\n');
     const lead = this.startWorker(p, 'exp-lead', task, by, `Expedition ${id}`.slice(0, 90), { type: merged.lead.type, model: merged.lead.model, effort: merged.lead.effort, expedition: id, expeditionRole: 'lead' });
     return { id, lead: lead.name, expedition: ex.state().started };
+  }
+
+  // The user's Stop (reason 'Matt'): the watchdog's stop sequence for one expedition (spec 4.4 and 4.8). Nothing calls it
+  // yet: phase 5 adds POST /api/expedition/stop and turns on the map's Stop button (M045).
+  stopExpedition(p, id, reason = 'Matt') {
+    if (!['Matt', 'time', 'budget'].includes(reason)) throw new Error(`The hub stops an expedition for Matt, time or budget; "${reason}" is the Lead's to log (expedition_finish, expedition_loop_result).`);
+    return this.expeditionWatch.stopNow(p, id, reason);
   }
 
   startWorker(p, name, task, by = 'you', goal = '', settings = {}) {
@@ -1546,7 +1559,9 @@ export class Hub {
     // Decision 62: a Conductor request it was given and did not answer gets one reminder, as a short follow-up turn,
     // before anything else, a threshold handoff included (that waits for the end of the reminder's turn).
     if (agent.role === 'orchestrator' && !p.hubWide && this.conductor?.remindReplies(p, agent)) return;
-    if (agent.contextPct != null && agent.contextPct >= this.markFor(p, agent)) {
+    // No handoff once the 90% note has gone: the Lead (or any member) finishes the write-up itself, and the final turn must not
+    // wait on a successor's start-up (plan phase 2). Before 90% the threshold handoff applies as for any worker.
+    if (agent.contextPct != null && agent.contextPct >= this.markFor(p, agent) && !(agent.expedition && this.expeditionOf(p, agent).state().reserveNote)) {
       this.notice(p, agent.thread, `${agent.name} is at ${agent.contextPct}% of its context; handing ${agent.role !== 'worker' ? 'the role' : 'its task'} on.`);
       this.retire(p, agent, { reason: 'threshold' });
       return;

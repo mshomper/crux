@@ -69,6 +69,38 @@ test('after the final summary the orchestrator gets exactly one message, once, a
   assert.deepEqual(problems, []);
 });
 
+// Phase 3: the watchdog's own stop (a limit, or the user's Stop) interrupts, retires and sends the Lead a final message. None
+// of that may reach the orchestrator or open a card, and after the end there is still exactly one summary.
+for (const reason of ['time', 'Matt']) {
+  test(`the watchdog's ${reason} stop is quiet: interrupt, retirements and the Lead's final message reach no one upward, and the end is still one summary`, async () => {
+    const clock = { t: Date.now() }, pending = [];
+    const timers = { setTimeout: (fn, ms) => { const h = { fn, ms, on: true }; pending.push(h); return h; }, clearTimeout: h => { if (h) h.on = false; }, setInterval: () => ({ unref() { } }), clearInterval() { } };
+    sent.length = 0;
+    const env = stubHub({ level: 'auto', watch: { now: () => clock.t, timers } });
+    const mark = quietMark(env);
+    const ex = new StubExpedition(env);
+    ex.run({ stop: false });
+    const wd = env.hub.expeditionWatch;
+    clock.t = Date.parse(ex.ex.state().started.ts) + 7 * 3600 * 1000;
+    if (reason === 'time') assert.deepEqual(wd.check(clock.t).map(d => d.did), ['stop']);
+    else wd.stopNow(env.p, ex.id, 'Matt', clock.t);
+    await new Promise(r => setImmediate(r));
+    for (const h of pending.filter(x => x.on && x.ms === 60000)) { h.on = false; h.fn(); }   // the members the stub left "working" never answer: the fallback closes them
+    await wd.settled();
+    assert.equal(ex.ex.state().stopped.reason, reason);
+    assert.equal(ex.ex.state().phase, 'stopped');
+    assert.deepEqual(['advisor', 'synthesizer', 'skeptic', 'builder', 'verifier'].map(r => ex.agents[r].state), Array(5).fill('retired'));
+    assert.notEqual(ex.agents.lead.state, 'retired');
+    assert.equal(sent.filter(([name, t]) => name === ex.agents.lead.name && t.startsWith('[From the hub] The expedition has stopped')).length, 1);
+    assert.deepEqual(quietProblems(env, mark, sent), []);
+    // The end: the report and steps, then the Lead's one summary: the orchestrator gets exactly one message.
+    ex.finish();
+    ex.finalSummary();
+    assert.equal(sent.filter(([name]) => name === env.orch.name).length, 1);
+    assert.equal(ex.ex.state().phase, 'ended');
+  });
+}
+
 test('the check can fail: a plain worker that asks a question trips it', async () => {
   const { env, mark } = fresh();
   const w = env.hub.startWorker(env.p, 'plain', 'Build it', env.orch.name, 'Build it');
