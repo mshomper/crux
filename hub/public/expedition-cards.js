@@ -22,7 +22,7 @@ export const draftBody = (project, ev) => ({
   project, brief: ev.brief, question: ev.question || undefined, test: ev.test, envelope: ev.envelope, roles: ev.roles, gatherers: ev.gatherers, preApprovals: ev.preApprovals, draft: ev.id
 });
 // A proposed next expedition opens the panel with its short brief, so you can change it first (Launch there sends proposal).
-export const proposalSeed = pr => ({ question: pr.question || pr.text || '', success: [], proposal: { expedition: pr.expedition, parked: pr.id }, brief: pr.brief });
+export const proposalSeed = pr => ({ question: pr.question || pr.text || '', reason: pr.reason || '', success: [], proposal: { expedition: pr.expedition, parked: pr.id }, brief: pr.brief });
 
 // The closing event for a draft, if any (expedition_draft_closed { draft, status, expedition? }).
 export const closedOf = (events, id) => events.find(e => e.type === 'expedition_draft_closed' && e.draft === id) || null;
@@ -65,8 +65,7 @@ export function finishedCard(ev, proposals = [], opts = {}) {
   const next = proposals.length ? `<div class="xc-next"><span class="xc-k">Proposed next expeditions</span><ul>${proposals.map(pr => `<li><span class="xc-ptext" title="${esc(pr.reason || '')}">${esc(pr.question || pr.text)}</span><button type="button" class="btn xc-pl" data-xprop-launch="${esc(pr.id)}" title="Open a new expedition pre-filled with this brief">${ic('compass')}Launch</button></li>`).join('')}</ul></div>` : '';
   return `<article class="card xcard xfinished" data-xfinished="${esc(ev.expedition)}">
     <div class="card-head">${ic('check')}<span class="xc-kk">Expedition finished</span>${unchecked ? warn('The final check of the report\'s claims and numbers did not run, so treat them as unchecked.') : ''}${ev.problem ? warn(ev.problem) : ''}</div>
-    <h3 class="xc-answer">${esc(ev.title || ev.answer || 'Finished')}</h3>
-    ${ev.answer && ev.title && ev.answer !== ev.title ? `<p class="xc-q">${esc(ev.answer)}</p>` : ''}
+    <h3 class="xc-answer">${esc(String(ev.title || ev.answer || 'Finished').replace(/^Expedition finished:\s*/i, ''))}</h3>
     <div class="xc-tiles four">${tiles.map(([k, v]) => `<div class="xc-tile"><span class="xc-k">${k}</span><b>${v}</b></div>`).join('')}</div>
     <p class="xc-meta">${unchecked ? 'Claims not checked. ' : ''}${ev.lessons ? `${plural(ev.lessons, 'lesson')} held for your say. ` : ''}${ev.loops ? `${plural(ev.loops, 'build loop')}. ` : ''}${ev.pushed === false && ev.branch ? 'The branch was not pushed. ' : ''}</p>
     <div class="xc-links">${ev.branch ? `<span class="xc-branch" title="The branch the report is on">${ic('branch')}<code>${esc(ev.branch)}</code></span>` : ''}${prLink(ev.pr)}${ev.reportPath ? `<span class="xc-report" title="${esc(ev.reportPath)}">${ic('list')}<span>Report: ${esc(String(ev.reportPath).split(/[\\/]/).slice(-2).join('/'))}</span></span>` : ''}</div>

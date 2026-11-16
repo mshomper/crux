@@ -38,7 +38,10 @@ test('Launch is blocked, with a reason, for each refusal the hub makes; warnings
   assert.deepEqual(ids(one, ctx()), [], 'nothing else blocks');
   const same = ready(); same.roles.verifier.model = same.roles.builder.model;
   assert.ok(ids(same, ctx()).includes('same'), 'Verifier on the Builder\'s model');
-  const warn = problems(ready(), ctx({ check: 'off', st: { ...ST, defaults: { ...ST.defaults, dollarsPerPercent: null }, budgetNote: 'Held by time only.' } }));
+  const noFig = { ...ST, defaults: { ...ST.defaults, dollarsPerPercent: null }, budgetNote: 'Held by time only.' };
+  assert.equal(problems(ready(), ctx({ st: noFig })).some(p => p.id === 'dollars'), false, 'a default launch is not nagged about the dollar figure');
+  const touched = ready(); touched.touched = true;
+  const warn = problems(touched, ctx({ check: 'off', st: noFig }));
   assert.deepEqual(warn.filter(p => p.level === 'block'), []);
   assert.ok(warn.some(p => p.id === 'check') && warn.some(p => p.id === 'dollars' && p.text === 'Held by time only.'));
   assert.ok(ids(ready(), ctx({ st: { ...ST, launch: { ok: false, reason: 'Nope.' } } })).includes('hub'), 'the hub\'s own reason shows');
@@ -112,6 +115,9 @@ test('a draft\'s Launch sends the draft as written with its id; Edit and a propo
   assert.equal(d.question, DRAFT.question); assert.equal(d.success.length, 4); assert.equal(d.sites[0].host, 'a.org');
   const s = proposalSeed({ id: 'p1', expedition: 'E', question: 'Q?', brief: 'B' });
   assert.deepEqual(s.proposal, { expedition: 'E', parked: 'p1' });
+  const pd = startDraft(ST, proposalSeed({ id: 'p1', expedition: 'E', question: 'Q?', reason: 'Parked: outside the brief' }));
+  assert.match(panelHtml(pd, ctx({ project: 'p' }), h), /class="xp-reason">Parked: outside the brief/, 'the reason shows quietly under the box');
+  assert.equal('reason' in launchBody('p', pd, ST), false, 'and is never sent');
 });
 
 test('the finished card: answer, stop reason, counts, PR link, amber marks for unchecked claims and a problem, Launch per proposal', () => {
@@ -120,6 +126,10 @@ test('the finished card: answer, stop reason, counts, PR link, amber marks for u
   assert.match(html, /The test passed/); assert.match(html, /17 passing/); assert.match(html, /Draft PR #1/); assert.match(html, /rel="noopener"/);
   assert.equal((html.match(/class="xc-warn"/g) || []).length, 2, 'claims not checked and the problem, each behind an amber mark');
   assert.match(html, /Claims not checked/);
+  assert.match(html, /<h3 class="xc-answer">It is faster<\/h3>/);
+  const dup = finishedCard({ ...ev, title: 'Expedition finished: It is faster', answer: 'A longer answer text' }, []);
+  assert.match(dup, /<h3 class="xc-answer">It is faster<\/h3>/, 'the prefix is stripped');
+  assert.doesNotMatch(dup, /A longer answer text/, 'the answer is shown once');
   assert.match(html, /data-xprop-launch="p1"/);
   assert.doesNotMatch(finishedCard({ ...ev, claimsChecked: true, problem: null }, []), /xc-warn|xc-next/);
   assert.match(finishedCard({ ...ev, stopReason: 'Matt' }, []), /You stopped it/);

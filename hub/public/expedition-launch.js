@@ -72,6 +72,7 @@ export function startDraft(state = null, seed = {}) {
   const success = seed.success || testItems(seed.test);
   return {
     question: String(seed.question || ''),
+    reason: String(seed.reason || ''),   // a proposal's why, shown quietly under the box; never sent
     success,   // optional: none written means the team writes the test itself while it plans
     more: success.length > 0 || !!(seed.preApprovals?.sites?.length || seed.preApprovals?.packages?.length),   // the fold opens when it holds something
     hours: HOURS.includes(Number(env.hours)) ? Number(env.hours) : DEFAULT_ENVELOPE.hours,
@@ -139,7 +140,8 @@ export function problems(d, ctx = {}) {
   if (noJudge) out.push({ id: 'nojudge', level: 'warn', text: `${noJudge === 1 ? 'One item is' : `${noJudge} items are`} set to a command with no command written. Without one nothing judges ${noJudge === 1 ? 'it' : 'them'}.` });
   if (ctx.check && ctx.check !== 'on') out.push({ id: 'check', level: 'warn', text: 'The permission check is off in this project: anything the hub cannot settle by itself is parked, never asked.' });
   if (ctx.level === 'auto' && !d.sites.length) out.push({ id: 'web', level: 'warn', text: 'At Auto, gatherers cannot open arbitrary web pages. Name the sites they should read under Pre-approved, or use Trusted.' });
-  if (ctx.st && !(estimateUSD(d.percent, ctx.st) > 0)) out.push({ id: 'dollars', level: 'warn', text: ctx.st.budgetNote || 'No dollar figure is confirmed yet, so there is no dollar cap. The time limit still applies.' });
+  // Only once the envelope or More has been opened: on a default launch it would be permanent noise.
+  if (d.touched && ctx.st && !(estimateUSD(d.percent, ctx.st) > 0)) out.push({ id: 'dollars', level: 'warn', text: ctx.st.budgetNote || 'No dollar figure is confirmed yet, so there is no dollar cap. The time limit still applies.' });
   if (ctx.st?.defaults && ctx.st.defaults.meterGuard === false) out.push({ id: 'meters', level: 'warn', text: 'The plan meters are not watching this run, so only the dollar cap guards the budget.' });
   // The hub's own answer (it also refuses at launch): shown as the reason Launch is off.
   if (ctx.st?.launch && ctx.st.launch.ok === false && ctx.st.launch.reason && !out.some(p => p.level === 'block' && (p.id === 'running' || p.id === 'ask'))) out.push({ id: 'hub', level: 'block', text: ctx.st.launch.reason });
@@ -217,7 +219,7 @@ export function panelHtml(d, ctx, h) {
     <div class="xp-cols">
       <div class="xp-col xp-scope">
         <section><h3 class="xp-h">What do you want done or answered? ${help(tips.question)}</h3>
-          <textarea class="xp-in xp-q" data-xp-q rows="4" placeholder="Say it in your own words. The team plans the rest." aria-label="What you want done or answered" spellcheck="true">${esc(d.question)}</textarea></section>
+          <textarea class="xp-in xp-q" data-xp-q rows="4" placeholder="Say it in your own words. The team plans the rest." aria-label="What you want done or answered" spellcheck="true">${esc(d.question)}</textarea>${d.reason ? `<p class="xp-reason">${esc(d.reason)}</p>` : ''}</section>
         <section><h3 class="xp-h">Envelope ${help(tips.envelope)}</h3>
           <div class="xp-env"><span class="xp-eico" title="Time limit">${ic('clock')}</span><span class="xp-seg" role="radiogroup" aria-label="Time limit">${HOURS.map(v => segBtn('hours', v, `${v} h`, d.hours === v)).join('')}</span></div>
           <div class="xp-env"><span class="xp-eico" title="Share of your plan">${ic('coin')}</span><span class="xp-seg" role="radiogroup" aria-label="Share of your plan">${PERCENTS.map(v => segBtn('percent', v, `${v} %`, d.percent === v)).join('')}</span><span class="xp-usd" title="${usd == null ? 'No dollar figure is confirmed yet' : 'The dollar cap the hub enforces: this share of the plan at the confirmed rate'}">${usd == null ? 'no dollar cap yet' : `≈ ${money(usd)}`}</span></div></section>
@@ -241,7 +243,7 @@ export function panelHtml(d, ctx, h) {
     <footer class="xp-foot">
       <p class="xp-fixed">${ic('branch')}<span>Ends at one branch and a draft PR. It never merges.</span></p>
       <div class="xp-acts">
-        ${warnMark(ps, blocks.length ? '' : '')}
+        ${warnMark(warns)}
         <button type="button" class="btn ghost xp-cancel" data-xp-cancel title="Close without launching">Cancel</button>
         <button type="button" class="btn primary xp-go" data-xp-go ${blocks.length ? 'disabled' : ''} title="${esc(blocks.length ? blocks.map(p => p.text).join(' ') : 'Start the expedition')}">${ic('compass')}Launch</button>
       </div>
@@ -257,8 +259,10 @@ export class ExpeditionPanel {
   open(seed = {}) {
     const p = this.host.project();
     if (!p) return;
+    this.launched = false;
     this.p = p; this.seedMeta = seed.draft ? { draft: seed.draft } : seed.proposal ? { proposal: seed.proposal } : null;   // sent back so the hub closes the card
-    this.d = startDraft(p.expedition || null, seed);
+    // A question typed and then lost to a stray outside click (the panel closes on one) comes back on the next blank open.
+    this.d = startDraft(p.expedition || null, !seed.question && !seed.draft && !seed.proposal && this.kept ? { ...seed, question: this.kept } : seed);
     this.paint(true);
   }
   ctx() {
@@ -283,8 +287,8 @@ export class ExpeditionPanel {
       dlg.addEventListener('click', e => this.click(e));
       dlg.addEventListener('input', e => this.input(e));
       dlg.addEventListener('change', e => this.change(e));
-      dlg.addEventListener('toggle', e => { if (this.d && e.target.matches?.('[data-xp-more]')) this.d.more = e.target.open; }, true);   // the fold remembers itself across redraws
-      dlg.addEventListener('close', () => { dlg.classList.remove('exp-panel'); this.d = null; });
+      dlg.addEventListener('toggle', e => { if (this.d && e.target.matches?.('[data-xp-more]')) { this.d.more = e.target.open; if (e.target.open) { this.d.touched = true; this.refreshFoot(); } } }, true);   // the fold remembers itself across redraws
+      dlg.addEventListener('close', () => { dlg.classList.remove('exp-panel'); if (this.d && !this.launched && this.d.question.trim() && !this.seedMeta) this.kept = this.d.question; this.d = null; });
     }
     dlg.querySelector('.hc-x')?.setAttribute('title', 'Close without launching');
     dlg.querySelector('.xp-q')?.focus({ preventScroll: true });
@@ -298,8 +302,8 @@ export class ExpeditionPanel {
     let b;
     if (q('[data-xp-cancel]')) return this.close();
     if (q('[data-xp-go]')) return this.launch();
-    if ((b = q('[data-xp-hours]'))) d.hours = Number(b.dataset.xpHours);
-    else if ((b = q('[data-xp-percent]'))) d.percent = Number(b.dataset.xpPercent);
+    if ((b = q('[data-xp-hours]'))) { d.hours = Number(b.dataset.xpHours); d.touched = true; }
+    else if ((b = q('[data-xp-percent]'))) { d.percent = Number(b.dataset.xpPercent); d.touched = true; }
     else if ((b = q('[data-xp-judge]'))) { const [i, k] = b.dataset.xpJudge.split(':'); d.success[Number(i)].judge = k; }
     else if ((b = q('[data-xp-rm-test]'))) { d.success.splice(Number(b.dataset.xpRmTest), 1); }
     else if (q('[data-xp-add-test]')) d.success.push({ text: '', judge: 'checklist', command: '' });
@@ -360,6 +364,7 @@ export class ExpeditionPanel {
     const go = this.dialog.querySelector('[data-xp-go]'); if (go) go.disabled = true;
     try {
       const res = await this.host.api('/api/expedition', { ...launchBody(p.name, this.d, p.expedition || null), ...(this.seedMeta || {}) });
+      this.launched = true; this.kept = '';
       this.close();
       this.host.toast('The expedition has started. Its Lead is planning; you will get one card when it finishes.', 'info');
       this.host.afterLaunch?.(res);
