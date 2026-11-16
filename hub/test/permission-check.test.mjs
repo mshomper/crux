@@ -360,9 +360,7 @@ test('on: a request you answer first, or that times out, is not touched by the c
 
 test('hard stops, Auto allows and merge passes are unchanged; the check is not asked', async () => {
   const { hub, p, w, calls } = setup({ level: 'auto' });
-  assert.equal((await ask(hub, p, w, 'git status && ls scripts')).behavior, 'allow', 'Auto allows contained work with no check');
-  assert.equal((await ask(hub, p, w, 'node scripts/tidy.mjs')).behavior, 'allow', 'and a script run inside the project, as it did before decision 67: no check, no script look-up');
-  assert.equal(calls.length, 0);
+  assert.equal((await ask(hub, p, w, 'git status && ls scripts')).behavior, 'allow', 'Auto allows contained work with no check (a script run is looked at first: decision 67)');
   ask(hub, p, w, 'git push origin main');
   const ap = last(p, 'approval');
   assert.equal(ap.routedTo, null);
