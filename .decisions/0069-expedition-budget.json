@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the hub turn the budget percentage into dollars using one figure, dollars per 1% of your week, which it estimates from the logs and you confirm once? I recommend it, with the plan-meter guard beside it: you keep thinking in percent, and the launch screen shows the dollar figure before you launch.",
  "for_you": [
   "The launch screen shows the budget as a percentage with its dollar figure beside it; the run stops at whichever trips first: that dollar figure, or your week's meter rising by that many points",
@@ -71,9 +71,9 @@
  "recommendation": "C: keeps 'percent' as the thing you set while the stop works on dollars it can actually measure.",
  "confidence": "medium",
  "change_mind": "If the first runs show the meter guard always trips first, the dollar figure can be raised; if the reverse, lowered.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "C",
+ "reason": "",
+ "decided_on": "2026-11-16",
  "superseded_by": null,
  "challenge": null,
  "settles": [

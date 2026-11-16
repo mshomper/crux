@@ -1,7 +1,7 @@
 # 0069 How does "7% of the plan" become a budget the hub can stop on?
 
-- Status: open
-- Date: 2026-11-16
+- Status: decided
+- Date: 2026-11-16, decided 2026-11-16
 - Lenses: architecture
 - Builds on: 0036, 0065
 - Settles: agent job budget cap = enforced in estimated dollars from a human-confirmed dollars-per-plan-percent figure, with a plan-meter guard beside it; spend counted during turns
@@ -17,6 +17,10 @@ For you:
 - Spend counts while turns are still running, and stopped agents' last turns are counted, so the stop isn't late
 - Setup: Once: keep or change the hub's estimate of dollars per 1% (one number in hub.json)
 - With an API key the meters hide, so the screen shows dollars only
+
+## Decision
+
+**C: One confirmed figure, plus the meter guard.** The hub suggests dollars per 1% of your week from the logs; you keep or change it once. The cap is enforced in dollars, and the plan-meter guard (up 7 points since launch) runs beside it.
 
 ## Context
 
@@ -38,7 +42,7 @@ The hub keeps measuring how far the meter moves per dollar and converts the perc
 - Con: The log is too noisy for this; a wrong factor over- or under-spends without you seeing it
 - Effort: Medium
 
-### C: One confirmed figure, plus the meter guard (recommended)
+### C: One confirmed figure, plus the meter guard (chosen) (recommended)
 
 The hub suggests dollars per 1% of your week from the logs; you keep or change it once. The cap is enforced in dollars, and the plan-meter guard (up 7 points since launch) runs beside it.
 - Pro: You think in percent and see the dollars; two guards, as the spec wants; nothing hidden
