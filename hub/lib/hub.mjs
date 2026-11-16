@@ -512,8 +512,10 @@ export class Hub {
   // pass them); model and effort are the launch screen's picks for that role (stored in expedition_started), never the Lead's.
   leadStart(p, lead, { type, goal = '', task }) {
     const ex = this.leadScope(p, lead), s = ex.state();
-    if (!s.started || !['planning', 'running'].includes(s.phase)) throw new Error(`Expedition ${ex.id} is ${s.phase === 'new' ? 'not started' : s.phase}: no new agents can be started.`);
     const role = expeditionRoleOfType(String(type ?? '').trim());
+    // After the stop only a Verifier may start: it checks the report's numbers and claims (spec 4.8, step 1).
+    const open = s.started && (['planning', 'running'].includes(s.phase) || (s.phase === 'stopped' && role === 'verifier'));
+    if (!open) throw new Error(s.phase === 'stopped' ? `Expedition ${ex.id} is stopped: only a Verifier can be started now, to check the report.` : `Expedition ${ex.id} is ${s.phase === 'new' ? 'not started' : s.phase}: no new agents can be started.`);
     const allowed = EXPEDITION_HUB_ROLES.filter(r => r !== 'lead');
     if (!role || !allowed.includes(role)) throw new Error(`An expedition starts only these roles, by type: ${allowed.map(r => EXPEDITION_ROLES[r].type).join(', ')}. Gatherers (expedition-gatherer) are not started: call them with the Agent tool.`);
     const brief = String(task ?? '').trim();

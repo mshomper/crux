@@ -61,7 +61,8 @@ test('expedition_close_gate freezes the test once: the hash is logged, the phase
   assert.match(g.testHash, /^[0-9a-f]{64}$/);
   assert.equal(g.testHash, ex.ex.testHash());
   assert.deepEqual([g.verdict, g.amendments, g.expedition], ['approve with changes', ['3. results tied to a reference'], ex.id]);
-  assert.equal(said, `Gate closed. The success test is frozen (hash ${g.testHash.slice(0, 12)}); building and verifying can start.`);
+  assert.equal(said, `Gate closed. The hub logged the test's hash (${g.testHash.slice(0, 12)}). Treat test/ as frozen from here: do not change it, and tell the others the same. Building and verifying can start.`);
+  assert.doesNotMatch(said, /hub (froze|locks)|is frozen \(/, 'it does not claim a hub lock that phase 4 has not built');
   assert.equal(ex.ex.state().phase, 'running');
   assert.match(await call('expedition_close_gate', { verdict: 'again' }), /^Gate not closed: .*is running; this needs it to be planning/);
   assert.equal(p.log.ofType('expedition_gate').length, 1);
@@ -79,30 +80,66 @@ test('expedition_close_gate refuses an empty verdict and an empty test, and logs
   void ex;
 });
 
-test('expedition_loop_result numbers the loop and judges progress itself; two loops in a row with none says to finish', async () => {
+test('expedition_loop_result numbers the loop and judges progress itself; the second loop in a row with none stops the expedition (no-progress)', async () => {
   const { ex, call, p } = world();
+  ex.usage('lead', { cost: 0.25 }); ex.usage('builder', { cost: 0.5 });
   assert.match(await call('expedition_loop_result', { passing: 1 }), /^Not logged: .*is planning; this needs it to be running/, 'not before the gate');
   await call('expedition_close_gate', { verdict: 'ok' });
   assert.equal(await call('expedition_loop_result', { passing: 0 }), 'Loop 1: 0 passing, no progress.', 'nothing passing is not progress');
   assert.equal(await call('expedition_loop_result', { passing: 3 }), 'Loop 2: 3 passing, progress.');
   assert.equal(await call('expedition_loop_result', { passing: 3 }), 'Loop 3: 3 passing, no progress.');
-  assert.match(await call('expedition_loop_result', { passing: 2 }), /^Loop 4: 2 passing, no progress\. Two loops in a row made no progress: call expedition_finish with reason no-progress/);
+  assert.equal(ex.ex.state().phase, 'running', 'one loop without progress does not stop it');
+  assert.equal(p.log.ofType('expedition_stopped').length, 0);
+  // The second in a row: the hub stops it itself, with its own totals; the Lead called nothing.
+  assert.match(await call('expedition_loop_result', { passing: 2 }), /^Loop 4: 2 passing, no progress\. Two loops in a row made no progress, so the hub has stopped the expedition \(no-progress\)\. Write the report now; the Verifier can still check it\.$/);
+  const s = p.log.ofType('expedition_stopped');
+  assert.equal(s.length, 1);
+  assert.deepEqual([s[0].reason, s[0].expedition, s[0].totals.costUSD], ['no-progress', ex.id, 0.75]);
+  assert.equal(ex.ex.state().phase, 'stopped');
   assert.deepEqual(p.log.ofType('expedition_loop').map(e => [e.number, e.passing, e.progress, e.expedition]), [[1, 0, false, ex.id], [2, 3, true, ex.id], [3, 3, false, ex.id], [4, 2, false, ex.id]]);
+  // Nobody is retired by it (that is the time or budget stop's, spec 4.4); a further loop is refused and logs nothing.
+  assert.ok(p.workers({ expedition: ex.id }).every(w => w.state !== 'retired'));
+  assert.match(await call('expedition_loop_result', { passing: 5 }), /^Not logged: .*is stopped; this needs it to be running/);
+  assert.equal(p.log.ofType('expedition_loop').length, 4);
 });
 
-test('expedition_finish stops the expedition with the hub\'s own totals; only passed or no-progress are the Lead\'s to give', async () => {
+test('a loop with progress between two without does not count as two in a row', async () => {
+  const { ex, call, p } = world();
+  await call('expedition_close_gate', { verdict: 'ok' });
+  for (const n of [2, 2, 4, 4]) await call('expedition_loop_result', { passing: n });
+  assert.equal(ex.ex.state().phase, 'running');
+  assert.equal(p.log.ofType('expedition_stopped').length, 0);
+});
+
+test('expedition_finish takes no reason: passed, only while running and after at least one loop; refusals log nothing', async () => {
   const { ex, call, rt, p } = world();
   ex.usage('lead', { cost: 0.25 }); ex.usage('builder', { cost: 0.5 });
+  assert.deepEqual(Object.keys(rt.expedition_finish.inputSchema.shape ?? {}), [], 'no reason to give: no-progress, time, budget and Matt are the hub\'s');
+  assert.match(await call('expedition_finish', {}), /^Not finished: The expedition is planning: it can be finished as passed only while it is running, after the plan gate\./);
   await call('expedition_close_gate', { verdict: 'ok' });
-  assert.equal(rt.expedition_finish.inputSchema.shape.reason.safeParse('time').success, false, 'time, budget and Matt come from the hub');
-  assert.equal(rt.expedition_finish.inputSchema.shape.reason.safeParse('passed').success, true);
-  assert.equal(await call('expedition_finish', { reason: 'passed' }), 'Stopped (passed). Write the report now.');
+  assert.match(await call('expedition_finish', {}), /^Not finished: No build-verify loop is logged yet/);
+  assert.equal(p.log.ofType('expedition_stopped').length, 0);
+  await call('expedition_loop_result', { passing: 2 });
+  assert.equal(await call('expedition_finish', {}), 'Stopped (passed). Write REPORT.md now and have the Verifier check it. The hub\'s own end step comes later.');
   const s = p.log.ofType('expedition_stopped').at(-1);
-  assert.deepEqual([s.reason, s.expedition], ['passed', ex.id]);
-  assert.equal(s.totals.costUSD, 0.75);
+  assert.deepEqual([s.reason, s.expedition, s.totals.costUSD], ['passed', ex.id, 0.75]);
   assert.equal(ex.ex.state().phase, 'stopped');
-  assert.match(await call('expedition_finish', { reason: 'no-progress' }), /^Not finished: .*is stopped; this needs it to be planning or running/);
+  assert.ok(p.workers({ expedition: ex.id }).every(w => w.state !== 'retired'), 'finishing retires no one');
+  assert.match(await call('expedition_finish', {}), /^Not finished: The expedition is stopped:/);
   assert.equal(p.log.ofType('expedition_stopped').length, 1);
+});
+
+test('after either stop the Lead can start a Verifier (only that role) to check the report', async () => {
+  for (const how of ['passed', 'no-progress']) {
+    const { ex, call, lead, hub, p } = world();
+    await call('expedition_close_gate', { verdict: 'ok' });
+    if (how === 'passed') { await call('expedition_loop_result', { passing: 1 }); await call('expedition_finish', {}); }
+    else for (const n of [0, 0]) await call('expedition_loop_result', { passing: n });
+    assert.equal(ex.ex.state().phase, 'stopped', how);
+    assert.throws(() => hub.leadStart(p, lead, { type: 'expedition-skeptic', task: 'x' }), /only a Verifier can be started now/);
+    const v = hub.leadStart(p, lead, { type: 'expedition-verifier', task: 'Check every number in REPORT.md.' });
+    assert.deepEqual([v.expeditionRole, v.expedition, v.type], ['verifier', ex.id, 'expedition-verifier'], how);
+  }
 });
 
 test('each Lead\'s tools act on its own expedition only', async () => {
@@ -134,7 +171,7 @@ test('the tools keep the invariant: a whole life through them sends the orchestr
   await call('expedition_close_gate', { verdict: 'ok' });
   await call('expedition_park', { text: 'p', reason: 'outside' });
   await call('expedition_loop_result', { passing: 2 });
-  await call('expedition_finish', { reason: 'passed' });
+  await call('expedition_finish', {});
   await new Promise(r => setImmediate(r));
   assert.deepEqual(quietProblems(env, mark, sent), []);
 });

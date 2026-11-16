@@ -203,23 +203,32 @@ export function cruxTools(hub, project, agent) {
         { text: z.string().describe('What was parked, in one plain sentence.'), reason: z.string().describe('Why it is outside the brief.') },
         attempt('Not parked', ({ text: what, reason }) => { hub.expeditionOf(project, agent).park({ text: what, reason, maker: agent.name }); return 'Parked; it is listed in the report.'; })),
 
-      tool('expedition_close_gate', 'Close the plan gate, once: after the Advisor has reviewed the plan and you have amended test/ as needed. The hub hashes test/ and logs the Advisor\'s verdict and your amendments; after this nobody changes test/.',
+      tool('expedition_close_gate', 'Close the plan gate, once: after the Advisor has reviewed the plan and you have amended test/ as needed. The hub hashes test/ and logs the Advisor\'s verdict and your amendments. From here test/ is frozen by agreement: nobody changes it (the hub\'s own lock on it comes in a later phase, so the agreement is what holds it for now).',
         { verdict: z.string().describe('The Advisor\'s verdict in a line, e.g. "approve with changes".'), amendments: z.array(z.string()).optional().default([]).describe('The amendments made to the test at the gate, one line each. Empty if none.') },
-        attempt('Gate not closed', ({ verdict, amendments }) => `Gate closed. The success test is frozen (hash ${hub.expeditionOf(project, agent).gate({ verdict, amendments }).testHash.slice(0, 12)}); building and verifying can start.`)),
+        attempt('Gate not closed', ({ verdict, amendments }) => `Gate closed. The hub logged the test's hash (${hub.expeditionOf(project, agent).gate({ verdict, amendments }).testHash.slice(0, 12)}). Treat test/ as frozen from here: do not change it, and tell the others the same. Building and verifying can start.`)),
 
-      tool('expedition_loop_result', 'Log the end of one build-verify loop: how many success-test items pass now. The hub numbers the loop and decides whether it made progress (more items passing than any earlier loop). Two loops in a row with no progress end the expedition.',
+      tool('expedition_loop_result', 'Log the end of one build-verify loop: how many success-test items pass now. The hub numbers the loop and judges whether it made progress (more items passing than any earlier loop). When a second loop in a row makes no progress the hub stops the expedition itself (reason no-progress); you do not call anything for that.',
         { passing: z.number().int().min(0).describe('Items passing after this loop.') },
         attempt('Not logged', ({ passing }) => {
           const ex = hub.expeditionOf(project, agent), loops = ex.state().loops;
           const progress = passing > Math.max(0, ...loops.map(l => l.passing));
-          const ev = ex.loop({ number: loops.length + 1, passing, progress });
           const stuck = !progress && loops.length > 0 && !loops.at(-1).progress;
-          return `Loop ${ev.number}: ${passing} passing, ${progress ? 'progress' : 'no progress'}.${stuck ? ' Two loops in a row made no progress: call expedition_finish with reason no-progress and write the report.' : ''}`;
+          const ev = ex.loop({ number: loops.length + 1, passing, progress });
+          const line = `Loop ${ev.number}: ${passing} passing, ${progress ? 'progress' : 'no progress'}.`;
+          if (!stuck) return line;
+          ex.stop({ reason: 'no-progress', totals: howItRan(project.log.events, ex.id).totals });
+          return `${line} Two loops in a row made no progress, so the hub has stopped the expedition (no-progress). Write the report now; the Verifier can still check it.`;
         })),
 
-      tool('expedition_finish', 'End the expedition from your side: the success test passes (passed), or two loops made no progress (no-progress). The hub then retires the others and runs the end (report copied, branch pushed, draft PR). Then write REPORT.md; send your one summary only when the hub tells you the end is done. Time and budget stops come from the hub, not from you.',
-        { reason: z.enum(['passed', 'no-progress']) },
-        attempt('Not finished', ({ reason }) => { const ex = hub.expeditionOf(project, agent); ex.stop({ reason, totals: howItRan(project.log.events, ex.id).totals }); return `Stopped (${reason}). Write the report now.`; }))
+      tool('expedition_finish', 'End the expedition because the success test passes. Only while it is running (the gate is closed) and after at least one build-verify loop was logged. It records the stop; it does not retire anyone (everyone but you is retired only at the hub\'s time or budget stop). Then write REPORT.md and have the Verifier check it. The hub\'s end step (report copied to the branch, push, draft PR, the card) is done by the hub later; send your one summary only when it tells you so. No-progress, time, budget and the user\'s Stop come from the hub, not from you.',
+        {},
+        attempt('Not finished', () => {
+          const ex = hub.expeditionOf(project, agent), s = ex.state();
+          if (s.phase !== 'running') throw new Error(`The expedition is ${s.phase === 'new' ? 'not started' : s.phase}: it can be finished as passed only while it is running, after the plan gate.`);
+          if (!s.loops.length) throw new Error('No build-verify loop is logged yet: log one with expedition_loop_result before you finish.');
+          ex.stop({ reason: 'passed', totals: howItRan(project.log.events, ex.id).totals });
+          return 'Stopped (passed). Write REPORT.md now and have the Verifier check it. The hub\'s own end step comes later.';
+        }))
     );
   }
 
