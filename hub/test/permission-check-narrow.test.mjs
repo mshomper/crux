@@ -113,6 +113,51 @@ test('comments and unused imports carry no note; strong doubts stay strong', () 
   assert.ok(scanScriptText('$g status\n', { kind: 'shell' }).doubts.length > 0);
 });
 
+test('review of #101: a push target held in a variable or joined with + is a strong doubt, not a stop and not a note only', () => {
+  for (const t of ["execFileSync('git', ['push', 'origin', branch])", "execFileSync('git', ['push', '-u', 'origin', target])", "execFileSync('git', ['push', ...args])", "execFileSync('git', ['push', 'origin', `feat/${n}`])",
+    "execSync('git push origin ' + branch)", "execSync('git push origin ' + name + ' --set-upstream')", "execSync(`git push origin ${branch}`)"]) {
+    const r = scanScriptText(t);
+    assert.deepEqual(r.stops, [], t);
+    assert.ok(r.doubts.some(d => /branch named at run time/.test(d)), t);
+  }
+  // plain literals are still just a note
+  for (const t of ["execFileSync('git', ['push', '-u', 'origin', 'feat/x'])", "execSync('git push origin HEAD')"]) {
+    const r = scanScriptText(t);
+    assert.deepEqual([r.stops, r.doubts], [[], []], t);
+  }
+  // a variable that holds main is still found when it is written out
+  assert.ok(scanScriptText("execFileSync('git', ['push', 'origin', 'main'])").stops.length > 0);
+});
+
+test('review of #101: an empty-source refspec deletes a branch: a stop', () => {
+  for (const t of ["execFileSync('git', ['push', 'origin', ':old-feature'])", "execFileSync('git', ['push', 'origin', '+:x'])", "execSync('git push origin :old-feature')", "execSync('git push origin +:x')", "execSync('git push origin feat/a :feat/b')"])
+    assert.ok(scanScriptText(t).stops.some(s => /git push/.test(s)), t);
+  assert.ok(scanScriptText('git push origin :old\n', { kind: 'shell' }).stops.length > 0);
+  // HEAD:feat/x and remote URLs are not
+  for (const t of ["execSync('git push origin HEAD:feat/x')", "execSync('git push https://github.com/o/r.git feat/x')"]) assert.deepEqual(scanScriptText(t).stops, [], t);
+});
+
+test('review of #101: ~/.claude reached through variables, two levels deep, is a stop; an untraced write in such a file is a strong doubt; S08 stays a note', () => {
+  const stops = [
+    "const home = os.homedir();\nconst d = join(home, '.claude');\nrmSync(d, { recursive: true });",
+    "const home = os.homedir();\nconst d = path.join(home, '.claude');\nconst agents = path.join(d, 'agents');\nfs.writeFileSync(path.join(agents, 'x.md'), 'hi');",
+    "const base = process.env.USERPROFILE;\nconst cfg = base + '/.claude/settings.json';\nwriteFileSync(cfg, '{}');",
+    "const home = os.homedir();\nconst a = join(home, '.claude');\nconst b = join(a, 'agents');\nconst c = join(b, 'x.md');\nunlinkSync(c);",
+    "home = os.path.expanduser('~')\nd = os.path.join(home, '.claude', 'agents')\nshutil.rmtree(d)\n"
+  ];
+  for (const t of stops) assert.ok(scanScriptText(t, { kind: t.includes('expanduser') ? 'py' : 'js' }).stops.some(s => /\.claude/.test(s)), t);
+  const untraced = "const home = os.homedir();\nconst d = join(home, '.claude');\nfunction wipe(p) { rmSync(p, { recursive: true }); }\nwipe(pick(process.argv[2]));\n";
+  const r = scanScriptText(untraced);
+  assert.ok(r.stops.length > 0 || r.doubts.some(d => /\.claude/.test(d)), 'a stop or at least a strong doubt');
+  const odd = "const h = os.homedir();\nconst target = process.argv[2];\nwriteFileSync(target, 'x');\nconsole.log(existsSync(join(h, '.claude')));\n";
+  assert.ok(scanScriptText(odd).doubts.some(d => /\.claude/.test(d)), 'a write to a path nobody can see, in a file that names .claude and the home folder');
+  // reading and listing stays a note
+  const list = HARMLESS['S08 lists agent file names in ~/.claude (a read)'][1]['tools/list-agents.mjs'];
+  const l = scanScriptText(list);
+  assert.deepEqual([l.stops, l.doubts], [[], []]);
+  assert.ok(l.notes.some(n => /\.claude/.test(n)));
+});
+
 test('the bad shapes of the earlier scan tests still stop', () => {
   for (const t of ["await fetch('http://localhost:4747/api/restart', { method: 'POST' })", "readFileSync(join(homedir(), '.ssh', 'id_rsa'))", "execSync('npm install left-pad')", "execSync('gh pr merge 12')", "exec(`git reset --hard origin/main`)", "execSync('rm -rf ~')"])
     assert.ok(scanScriptText(t).stops.length > 0, t);

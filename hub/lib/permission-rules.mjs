@@ -508,9 +508,23 @@ function judgePush(texts, kind) {
     out.any = true;
     // like every command here: only next to a call that starts a process (or in a script of commands) is it a push at all
     if (kind !== 'shell' && !SPAWN_CALL.test(t.slice(Math.max(0, m.index - 240), m.index + m[0].length))) continue;
-    if (/(^|\s)(?:-f|--force\S*|--mirror|--delete|-d|--all|--prune)(?=\s|$|=)/.test(args)) out.stop ||= 'with --force, --mirror, --delete or --all';
+    // an empty-source refspec (":old-feature", "+:x") deletes a branch on the remote
+    if (/(^|\s)(?:-f|--force\S*|--mirror|--delete|-d|--all|--prune)(?=\s|$|=)|(^|\s)\+?:[^\s]/.test(args)) out.stop ||= 'with --force, --mirror, --delete, --all or an empty-source refspec (a branch deletion)';
     else if (/(^|[\s:+/'"])(?:main|master)(?=[\s:'",)\]]|$)/.test(args)) out.stop ||= 'to main or master';
     else if (/\$|%\w+%/.test(args)) out.dynamic = true;
+  }
+  // A target held in a JS variable or joined with +: ['push', 'origin', branch] and 'git push origin ' + branch. As written
+  // (texts[0]); next to a spawn like any command here.
+  const raw = texts[0] || '';
+  if (kind !== 'shell') {
+    for (const m of raw.matchAll(/\[\s*(['"`])push\1((?:\s*,\s*[^\],]+)*)\s*\]/g)) {
+      if (!SPAWN_CALL.test(raw.slice(Math.max(0, m.index - 240), m.index + m[0].length))) continue;
+      out.any = true;
+      if (m[2].split(',').map(s => s.trim()).filter(Boolean).some(el => !/^(['"`])[^'"`$\\]*\1$/.test(el))) out.dynamic = true;
+    }
+    for (const m of raw.matchAll(/git\s+push\b[^'"`\n]*['"`]\s*\+\s*[\w$(]/g)) {
+      if (SPAWN_CALL.test(raw.slice(Math.max(0, m.index - 240), m.index + m[0].length))) { out.any = true; out.dynamic = true; }
+    }
   }
   return out;
 }
@@ -541,6 +555,23 @@ function claudeWritten(texts, kind) {
       const py = /(\w+)\s*=[^;\n]*$/.exec(before);
       if (kind === 'py' && py && new RegExp(WRITE_FN.source + '\\s*\\([^\\n]*\\b' + py[1] + '\\b', 'i').test(t)) return true;
     }
+  }
+  if (kind === 'shell') return false;
+  // The path built in steps: const home = os.homedir(); const d = join(home, '.claude'); const agents = join(d, 'agents'); rmSync(agents).
+  // Names that hold the home folder, then names built from one of those and '.claude', then names built from those; a write call
+  // given any of them is a stop.
+  for (const t of texts) {
+    if (!/\.claude\b/.test(t)) continue;
+    // what a read call gives back (a listing, file text) is not a path: it does not carry the path on
+    const reads = /\b(?:readdir\w*|readFile\w*|stat\w*|lstat\w*|exists\w*|access\w*|listdir|glob\w*|read_text|read_bytes|open\w*)\s*\(/i;
+    const assigns = [...t.matchAll(/(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*)/g)].map(m => [m[1], m[2]]).filter(([, e]) => !reads.test(e));
+    const homeNames = new Set(assigns.filter(([, e]) => /\b(?:homedir|userprofile|expanduser)\b|\$HOME|process\.env\.(?:HOME|USERPROFILE)|~/i.test(e)).map(([n]) => n));
+    const names = new Set(assigns.filter(([, e]) => /\.claude\b/.test(e) && (/\b(?:homedir|userprofile|expanduser)\b|~/i.test(e) || [...homeNames].some(h => new RegExp('\\b' + h.replace(/\$/g, '\\$') + '\\b').test(e)))).map(([n]) => n));
+    for (let i = 0; i < 4; i++) for (const [n, e] of assigns) if (!names.has(n) && [...names].some(h => new RegExp('\\b' + h.replace(/\$/g, '\\$') + '\\b').test(e))) names.add(n);
+    for (const n of names) if (new RegExp(WRITE_FN.source + '\\s*\\([^;]*\\b' + n.replace(/\$/g, '\\$') + '\\b', 'i').test(t)) return true;
+    // Not traced: a write call whose path is not a plain string, in a file that works from the home folder and names .claude
+    // (a path built up in a way the steps above did not follow): a strong doubt at least.
+    if ((homeNames.size || /\b(?:homedir|userprofile)\b|\$HOME|%USERPROFILE%/i.test(t)) && new RegExp(WRITE_FN.source + '\\s*\\(\\s*(?![\'"`])', 'i').test(t)) return 'doubt';
   }
   return false;
 }
@@ -641,7 +672,9 @@ export function scanScriptText(text, { kind = 'js', test = false } = {}) {
   judge(SCRIPT_LOGINS, FILE_CALL, m => `it reads or runs something with "${quote(m)}", a login or secret store`, m => `it mentions "${quote(m)}", a login or secret store`);
   judge(SCRIPT_SECRET_PATH, FILE_CALL, () => 'it reads, writes or runs something with .ssh or a private key', () => 'it mentions .ssh or a private key');
   // the home folder's .claude: a stop for a write, delete or move; a list or a read is a note
-  if (claudeWritten(both, kind)) stops.push('it writes into the home folder\'s .claude');
+  const cw = claudeWritten(both, kind);
+  if (cw === true) stops.push('it writes into the home folder\'s .claude');
+  else if (cw === 'doubt') doubts.push('it writes with a path built up in steps in a file that works from the home folder and names .claude');
   else note(SCRIPT_HOME_CLAUDE, 'it names the home folder\'s .claude (a read or a list)');
   judge(SCRIPT_LIVE_HUB, NET_CALL, () => 'it calls the live hub\'s port (4747 or 4748)', () => 'it names the live hub\'s port (4747 or 4748)');
   note(/\b(?:4747|4748)\b/, 'it names a port the live hub uses (4747 or 4748)');
