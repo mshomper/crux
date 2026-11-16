@@ -13,7 +13,7 @@ const looking = { project: 'crux', thread: 'needs', visible: true, focused: true
 function harness() {
   const dir = makeTmp('crux-rearm-');
   const phoneSent = [], routed = [];
-  const timers = { queue: [], setTimeout(fn, ms) { this.queue.push({ fn, ms }); }, clearTimeout() { }, run(ms) { for (const t of this.queue.splice(0)) if (t.ms === ms) t.fn(); else this.queue.push(t); } };
+  const timers = { queue: [], cleared: [], setTimeout(fn, ms) { const t = { fn, ms }; this.queue.push(t); return t; }, clearTimeout(t) { if (t) { this.cleared.push(t); this.queue = this.queue.filter(x => x !== t); } }, run(ms) { for (const t of this.queue.splice(0)) if (t.ms === ms) t.fn(); else this.queue.push(t); } };
   const sender = { generateVAPIDKeys: () => ({ publicKey: 'pub', privateKey: 'priv' }), sendNotification: async (_s, body) => { phoneSent.push(JSON.parse(body)); } };
   const push = new Push({ dir, sender, timers, log: () => { } });
   push.subscribe({ endpoint: 'https://push.example/phone', keys: { p256dh: 'k', auth: 'a' } }, 'iPhone');
@@ -62,6 +62,35 @@ test('answered while it was held: nothing is sent, and the check says so', async
     h.timers.run(PHONE_FOLLOWUP_MS); await settle();
     assert.equal(h.phoneSent.length, 0);
     assert.deepEqual(h.routed.map(r => r.to), ['held', 'skipped']);
+  } finally { h.done(); }
+});
+
+test('one timer per card: arming again clears the earlier one, and a settled card clears its check even if never sent to the PC', async () => {
+  const h = harness();
+  try {
+    h.push.presence('page', looking);
+    h.push.handle(approvalEv, h.ctx); await settle();
+    const card = { card: 'approval:ap-1', project: 'crux', kind: 'approval' };
+    h.push.armFollow(card, true);
+    assert.equal(h.timers.queue.length, 1, 'only the latest timer is live');
+    assert.equal(h.timers.cleared.length, 1);
+    h.approvals.delete('ap-1');
+    h.push.handle({ id: 'e2', type: 'approval_result', project: 'crux', approval: 'ap-1' }, h.ctx);
+    assert.equal(h.push.follow.size, 0, 'a held card that is answered is unfollowed');
+    assert.equal(h.timers.queue.length, 0, 'and its timer is cleared');
+  } finally { h.done(); }
+});
+
+test('after a restart, a held-only follow-up is not counted as sent to the PC; a PC one is', async () => {
+  const h = harness();
+  try {
+    h.push.presence('page', looking);
+    h.push.handle(approvalEv, h.ctx); await settle();
+    h.push.handle({ ...approvalEv, id: 'e3', approval: 'ap-2' }, { ...h.ctx, approvals: new Map([['ap-1', {}], ['ap-2', {}]]) });
+    h.push.follow.set('approval:ap-2', { ...h.push.follow.get('approval:ap-1'), card: { card: 'approval:ap-2', project: 'crux', kind: 'approval' }, held: undefined });
+    h.push.resume(h.ctx, Date.now());
+    assert.equal(h.push.sentDesk.has('crux|approval:ap-1'), false, 'held only: not sent to the PC');
+    assert.equal(h.push.sentDesk.has('crux|approval:ap-2'), true);
   } finally { h.done(); }
 });
 

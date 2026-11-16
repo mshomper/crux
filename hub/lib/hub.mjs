@@ -678,7 +678,7 @@ export class Hub {
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
       // The orchestrator's own turn is blocked while a hard-stop card of its own waits for you, so it cannot read a worker's
       // request: that one comes to you at once. Routing returns to normal when the orchestrator's card is answered.
-      if (route.to && [...this.approvals.values()].some(a => a !== entry && a.p === p && !a.routedTo && a.agent.name === route.to)) {
+      if (route.to && route.to !== CHECK_NAME && this.orchestratorBlocked(p, route.to, entry)) {
         this.escalate(id, `${route.to} is waiting for you on a card of its own`, 'hub');
         return;
       }
@@ -824,8 +824,17 @@ export class Hub {
     this.escalate(id, `${reason} (no orchestrator is running to consult)`, CHECK_NAME);
   }
 
+  // Does this orchestrator have a hard-stop card of its own waiting for you (so it cannot read anything else)?
+  orchestratorBlocked(p, name, except) {
+    return [...this.approvals.values()].some(a => a !== except && a.p === p && !a.routedTo && a.agent.name === name);
+  }
+
   // The request now waits with the orchestrator, with what the check said. Its timer is still the original one.
   consultOrchestrator(id, a, orch, reason, fallbackWhy, extra) {
+    if (this.orchestratorBlocked(a.p, orch.name, a)) {   // its turn is blocked on a card of its own: straight to you
+      a.routedTo = orch.name;
+      return this.escalate(id, `${orch.name} is waiting for you on a card of its own`, CHECK_NAME);
+    }
     this.logAnswer(a, id, 'consult', reason, CHECK_NAME, extra);
     a.routedTo = orch.name;
     const said = fallbackWhy ? `${fallbackWhy}, so it comes to you.` : `The permission check could not settle it and asks you to decide: ${reason}`;

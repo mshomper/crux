@@ -449,6 +449,19 @@ test('on: consult goes to the live orchestrator with the check\'s reason; only i
   assert.equal(last(p, 'permission_answer').by, orch.name);
 });
 
+test('on: a consult (or an invalid check answer) skips an orchestrator that waits on a card of its own, and goes to you at once', async () => {
+  for (const reply of [{ answer: 'consult', reason: 'needs the goal' }, { answer: 'bogus' }]) {
+    const { hub, p, orch, w } = setup({ replies: [reply] });
+    ask(hub, p, orch, 'gh pr merge 5 --merge');   // its own hard-stop card, routed to nobody
+    sent.length = 0;
+    ask(hub, p, w, 'node scripts/tidy.mjs');
+    const id = last(p, 'approval').approval;
+    await settle();
+    assert.equal(sent.length, 0, 'the orchestrator is sent nothing');
+    assert.equal(last(p, 'approval_escalated').approval, id, 'a card for you');
+  }
+});
+
 test('on: consult with no live orchestrator (none, retiring, in error) goes to you', async () => {
   for (const make of [
     () => setup({ orchestrator: false, replies: [{ answer: 'consult', reason: 'needs the goal' }] }),
