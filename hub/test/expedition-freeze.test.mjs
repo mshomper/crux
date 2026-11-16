@@ -441,9 +441,12 @@ test('close_gate\'s tool text says the real lock, not an agreement; the Lead is 
   assert.doesNotMatch(d, /by agreement|later phase/);
   assert.match(d, /keeps a copy of it outside the worktree/);
   assert.match(d, /\.crux\/expeditions\/\.frozen\/<id>\//);
-  assert.match(d, /__pycache__.*verify\/run-N\//);
+  assert.match(d, /not kept in the stored copy or compared, so do not put any in test\//, 'cache names are not kept: the Lead is told before the gate');
+  assert.match(d, /verify\/run-N\//);
   assert.match(d, /restores test\/ from its copy.*Verifier FAIL/);
   assert.match(rt.expedition_loop_result.description, /checks test\/ against the frozen copy/);
   assert.match(rt.expedition_finish.description, /unchanged from the frozen copy/);
-  assert.match(await call('expedition_close_gate', { verdict: 'ok' }), /test\/ is locked from here: writes into it are refused/);
+  const said = await call('expedition_close_gate', { verdict: 'ok' });
+  assert.match(said, /test\/ is locked from here: writes into it are refused/);
+  assert.match(said, /The Verifier runs a scratch copy of the stored copy in verify\/run-N\/, never test\/ itself\. Caches a run leaves \(__pycache__, \*\.pyc, \.pytest_cache, node_modules\) are not kept or compared\./);
 });

@@ -199,7 +199,8 @@ export class Expedition {
         why = `${e?.message || String(e)}; test/ was left as found`;
         if (moved && !existsSync(this.testDir)) { try { renameSync(old, this.testDir); } catch { /* the old one stays beside it */ } }
       }
-      for (const d of [fresh, old]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* best effort: a leftover is harmless */ } }
+      // .test-old goes only while test/ exists: if both renames failed in a row it is the only copy of what was found.
+      for (const d of existsSync(this.testDir) ? [fresh, old] : [fresh]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* best effort: a leftover is harmless */ } }
     }
     this.record('expedition_integrity', { at, restored, changed: changed.slice(0, 20), changedCount: changed.length, expectedHash: want, foundHash: found, ...(why ? { why } : {}) });
     return { checked: true, ok: false, restored, changed, why };
