@@ -25,8 +25,6 @@
 .hud-bg{position:absolute;inset:0;pointer-events:none;z-index:-1;
   background:
     radial-gradient(circle at var(--cx,50%) var(--cy,50%),rgba(90,150,255,.2),rgba(60,120,255,.06) 18%,transparent 42%),
-    linear-gradient(rgba(111,227,255,.045) 1px,transparent 1px) 0 0/28px 28px,
-    linear-gradient(90deg,rgba(111,227,255,.045) 1px,transparent 1px) 0 0/28px 28px,
     linear-gradient(180deg,rgba(14,22,34,.55),rgba(5,8,13,.2));
   -webkit-mask-image:radial-gradient(ellipse at var(--cx,50%) var(--cy,50%),#000 30%,rgba(0,0,0,.35) 75%);mask-image:radial-gradient(ellipse at var(--cx,50%) var(--cy,50%),#000 30%,rgba(0,0,0,.35) 75%)}
 .hud-lines,.hud-glow{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
