@@ -94,8 +94,8 @@ export function namesOtherProject(text, roots) {
   }
   return null;
 }
-const OTHER_WHY = d => `Reads another project's data (${d}): its event log and files are not this project's to read`;
-// Does this request name another hub project's folder? -> the folder (as text), or null. Used by classify (a hard stop) and by the
+const OTHER_WHY = d => `Reads another project's data (${d}): only if the task is about that project`;
+// Does this request name another hub project's folder? -> the folder (as text), or null. Used by classify (an unclear step) and by the
 // hub's own read shortcuts (a plain Read or `cat` is no longer answered on the spot when it reaches another project).
 // The whole command is read for the folder's path (either slash, Git Bash's /c/ form, ~ and $HOME written out); a word that climbs
 // out of the worker's folder (../../AcuLoad/.crux/events.jsonl) is resolved from where the command runs.
@@ -452,9 +452,9 @@ export function mergeNeedsOwner({ level = 'auto', into = null } = {}) {   // esl
 // expeditionRoot (phase 5): the asking agent's own expedition folder, .crux/expeditions/<id>/. Writes there are not "the hub's
 // own log" stops (see Check.inExpeditionFolder); the rest of .crux still is.
 // otherProjects: the folders of the other projects this hub lists (the asking agent's own project is never in it). Anything that
-// names one of them (a path, a .crux event log, a file in it) is a hard stop, never an allow: another project's data is not this
-// project's to read (Matt, 2026-11-16, M051). It is plain, with no exception for a task that names the other project: the card is
-// the place to say yes.
+// names one of them (a path, a .crux event log, a file in it) is never allowed on the spot: it is "unclear", so the orchestrator
+// decides with the task in view (a crux worker may read another project's log when its task is about that project). It is not a
+// hard stop (orchestrator-11, 2026-11-16). A write there is outside the project and stays the hard stop it already is.
 export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], hubs = [], level = 'auto', lists = null, frozen = [], expeditionRoot = null, otherProjects = [] }) {
   if (frozen?.length) {
     let why = null;
@@ -491,7 +491,7 @@ function classifyWith(c, tool, input) {
   // Another project's folder named anywhere in the command, or in a file tool's path, search folder or pattern.
   if (c.others.length) {
     const other = otherProjectTouched(tool, input, { projectDir: c.projectDir, cwd: c.cwd0, home: c.home, otherProjects: c.others });
-    if (other) c.stop(OTHER_WHY(other));
+    if (other) c.unsure(OTHER_WHY(other), true);
   }
   // Something the hub could not read that also names a hard-stop action is not left to judgment. Decision 64 A: only
   // the text the hub could not read counts (riskyText), without commit messages, quoted text and here-strings.
@@ -1006,7 +1006,7 @@ class Check {
     if (w === 'tmp' && write) this.noteTemp(p, cwd);
     if (this.secretAt(p, cwd)) this.stop(`Touches secrets or credentials: ${p}`);
     // A path that reaches another hub project (also by a relative path: ..\..\..\AcuLoad\.crux\events.jsonl)
-    if (this.others?.length) { const a = this.abs(p, cwd); const other = typeof a === 'string' && namesOtherProject(a, this.others); if (other) this.stop(OTHER_WHY(other)); }
+    if (this.others?.length) { const a = this.abs(p, cwd); const other = typeof a === 'string' && namesOtherProject(a, this.others); if (other) this.unsure(OTHER_WHY(other), true); }
     // Any repo's settings or hooks, nested or in temp (git init sub && ... > sub/.git/config): git runs what they
     // name (core.fsmonitor, hooks), so a later read-only git there would run it (review round 1).
     if (write && w !== 'null' && /(^|\/)\.git\/(config|hooks)(\/|$)/.test(norm(this.abs(p, cwd)))) this.stop(`Writes a git repo's settings or hooks (${p})`);

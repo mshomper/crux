@@ -1053,7 +1053,7 @@ export class Hub {
     const file = norm(input.file_path || input.path || input.notebook_path);
     const privateNotes = norm(join(this.memory.profileDir, 'private.md'));
     const readsPrivate = (file && file === privateNotes) || /private\.md/i.test(String(input.command || input.pattern || ''));
-    // M051: another hub project's data is never answered on the spot, not even a plain read: it goes on to the rules (a hard stop).
+    // M051: another hub project's data is never answered on the spot, not even a plain read: it goes on to the rules, which call it unclear: the orchestrator decides with the task in view.
     const readsOther = this.otherProjectDirs(p).length > 0 && !!otherProjectTouched(toolName, input, { projectDir: p.dir, cwd, otherProjects: this.otherProjectDirs(p) });
     if (readsOther) return null;
     if (['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(toolName) && !readsPrivate && !touchesSecrets(toolName, input, cwd)) return { behavior: 'allow', updatedInput: input };
@@ -1273,8 +1273,8 @@ export class Hub {
     return on;
   }
 
-  // The folders of the other projects this hub lists (never the asking agent's own): another project's data is a hard stop
-  // for the rules and for the check (M051). Read from the hub's own list, never from a request.
+  // The folders of the other projects this hub lists (never the asking agent's own): another project's data is never allowed
+  // on the spot, by the rules or by the check; it goes to the orchestrator as unclear (M051). Read from the hub's own list, never from a request.
   otherProjectDirs(p) {
     try { return p.hubWide ? [] : [...this.projects.values()].filter(x => !x.hubWide).map(x => x.dir).filter(d => d && d !== p.dir); } catch { return []; }
   }

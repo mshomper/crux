@@ -225,7 +225,7 @@ test('2: the rule modules the worker did not change are committed: not scanned, 
   assert.equal(s.unread, false);
 });
 
-// ---------- 3. another project's data is never an allow ----------
+// ---------- 3. another project's data is never an allow, and never a hard stop: the orchestrator decides ----------
 const HOME = process.platform === 'win32' ? 'C:\\Users\\me' : '/home/me';
 const MINE = process.platform === 'win32' ? 'C:\\Users\\me\\GitHub\\crux' : '/home/me/GitHub/crux';
 const OTHER = process.platform === 'win32' ? 'C:\\Users\\me\\GitHub\\AcuLoad' : '/home/me/GitHub/AcuLoad';
@@ -234,7 +234,7 @@ const cls = (tool, input, extra = {}) => classify({ tool, input, projectDir: MIN
 const slash = p => p.replace(/\\/g, '/');
 const gitBash = p => p.replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`).replace(/\\/g, '/');
 
-test('3: reading another hub project\'s event log or files is a hard stop (to Matt), by every way of naming it', () => {
+test('3: reading another hub project\'s event log or files is unclear (to the orchestrator), never allowed on the spot, by every way of naming it', () => {
   const log = `${OTHER}\\.crux\\events.jsonl`;
   const named = [
     ['Read', { file_path: log }],
@@ -254,20 +254,29 @@ test('3: reading another hub project\'s event log or files is a hard stop (to Ma
   ];
   for (const [tool, input] of named) {
     const c = cls(tool, input);
-    assert.equal(c.route, 'human', `${tool} ${JSON.stringify(input)}: ${c.route}`);
-    assert.ok(c.reasons.some(r => /another project's data/.test(r)), `${tool}: ${c.reasons}`);
+    assert.equal(c.route, 'unsure', `${tool} ${JSON.stringify(input)}: ${c.route} ${c.reasons}`);
+    assert.ok(c.unsure.some(r => /another project's data/.test(r)), `${tool}: ${c.unsure}`);
+    assert.deepEqual(c.reasons, [], 'not a hard stop');
   }
 });
 
-test('3: a relative path that reaches the other project from the worker\'s folder is a hard stop too', () => {
+test('3: a relative path that reaches the other project from the worker\'s folder is unclear too', () => {
   const cwd = `${MINE}\\.claude\\worktrees\\w1`;
   const c = cls('Bash', { command: 'cat ../../../../AcuLoad/.crux/events.jsonl' }, { cwd });
-  assert.equal(c.route, 'human');
-  assert.ok(c.reasons.some(r => /another project's data/.test(r)), String(c.reasons));
-  assert.equal(cls('Read', { file_path: '../../../../AcuLoad/README.md' }, { cwd }).route, 'human');
+  assert.equal(c.route, 'unsure');
+  assert.ok(c.unsure.some(r => /another project's data/.test(r)), String(c.unsure));
+  assert.equal(cls('Read', { file_path: '../../../../AcuLoad/README.md' }, { cwd }).route, 'unsure');
 });
 
-test('3 (negative): the project\'s own files, its own log and its worktrees, and a folder that only starts with another project\'s name, are not stopped', () => {
+test('3 (negative): a write into another project is still the hard stop it was (outside the project)', () => {
+  for (const [tool, input] of [['Write', { file_path: `${OTHER}\\notes.md`, content: 'x' }], ['Bash', { command: `echo hi > ${slash(OTHER)}/notes.md` }], ['Bash', { command: `rm -rf ${slash(OTHER)}/.crux` }]]) {
+    const c = cls(tool, input);
+    assert.equal(c.route, 'human', `${tool} ${JSON.stringify(input)}: ${c.route}`);
+    assert.ok(c.reasons.some(r => /outside the project/i.test(r)), String(c.reasons));
+  }
+});
+
+test('3 (negative): the project\'s own files, its own log and its worktrees, and a folder that only starts with another project\'s name, are not flagged', () => {
   const ok = [
     ['Read', { file_path: `${MINE}\\.crux\\events.jsonl` }],
     ['Read', { file_path: `${MINE}\\.claude\\worktrees\\w1\\hub\\lib\\hub.mjs` }],
@@ -277,24 +286,25 @@ test('3 (negative): the project\'s own files, its own log and its worktrees, and
   ];
   for (const [tool, input] of ok) {
     const c = cls(tool, input);
-    assert.ok(!c.reasons.some(r => /another project's data/.test(r)), `${tool} ${JSON.stringify(input)}: ${c.reasons}`);
+    assert.ok(!c.unsure.some(r => /another project's data/.test(r)), `${tool} ${JSON.stringify(input)}: ${c.unsure}`);
   }
   // no list of other projects: nothing changes
-  assert.ok(!classify({ tool: 'Read', input: { file_path: `${OTHER}\\x` }, projectDir: MINE, home: HOME, level: 'auto' }).reasons.some(r => /another project's data/.test(r)));
+  assert.ok(!classify({ tool: 'Read', input: { file_path: `${OTHER}\\x` }, projectDir: MINE, home: HOME, level: 'auto' }).unsure.some(r => /another project's data/.test(r)));
   // a folder that holds this project is not "another project"
   const parent = classify({ tool: 'Read', input: { file_path: `${MINE}\\README.md` }, projectDir: MINE, home: HOME, level: 'auto', otherProjects: [HOME + '\\GitHub', MINE] });
-  assert.ok(!parent.reasons.some(r => /another project's data/.test(r)));
+  assert.ok(!parent.unsure.some(r => /another project's data/.test(r)));
 });
 
-test('3: a script (or a file it imports, or code in the command) that names another project\'s folder is a stop in the scan, and the check escalates without a model call', async () => {
+test('3: a script (or a file it imports, or code in the command) that names another project\'s folder is listed by the scan, and the check says consult (the orchestrator decides) without a model call', async () => {
   const dirs = [OTHER];
   const named = `import { readFileSync } from 'node:fs';\nconsole.log(readFileSync('${OTHER.replace(/\\/g, '/')}/.crux/events.jsonl', 'utf8').length);\n`;
-  assert.ok(scanScripts({ scripts: [{ kind: 'attached', path: 'x.mjs', text: named }] }, { dirs, own: MINE }).stops.some(s => /another hub project's folder/.test(s)));
-  assert.ok(scanScripts({ scripts: [], imports: [{ path: 'lib.mjs', text: named }], inlineCode: [] }, { dirs, own: MINE }).stops.length > 0);
-  assert.ok(scanScripts({ scripts: [], imports: [], inlineCode: [named] }, { dirs, own: MINE }).stops.length > 0);
-  assert.deepEqual(scanScripts({ scripts: [{ kind: 'attached', path: 'x.mjs', text: "console.log('hi')" }] }, { dirs, own: MINE }).stops, []);
-  assert.deepEqual(scanScripts({ scripts: [{ kind: 'attached', path: 'x.mjs', text: named }] }).stops.filter(s => /another hub project/.test(s)), [], 'no list: no such stop');
-  // through the check, with a real script: the same script is a plain read when the hub lists no such project, a stop when it does
+  assert.ok(scanScripts({ scripts: [{ kind: 'attached', path: 'x.mjs', text: named }] }, { dirs, own: MINE }).others.some(s => /another hub project's folder/.test(s)));
+  assert.ok(scanScripts({ scripts: [], imports: [{ path: 'lib.mjs', text: named }], inlineCode: [] }, { dirs, own: MINE }).others.length > 0);
+  assert.ok(scanScripts({ scripts: [], imports: [], inlineCode: [named] }, { dirs, own: MINE }).others.length > 0);
+  assert.deepEqual(scanScripts({ scripts: [{ kind: 'attached', path: 'x.mjs', text: named }] }, { dirs, own: MINE }).stops, [], 'not a hard stop');
+  assert.deepEqual(scanScripts({ scripts: [{ kind: 'attached', path: 'x.mjs', text: "console.log('hi')" }] }, { dirs, own: MINE }).others, []);
+  assert.deepEqual(scanScripts({ scripts: [{ kind: 'attached', path: 'x.mjs', text: named }] }).others, [], 'no list: nothing listed');
+  // through the check, with a real script: the same script is a plain read when the hub lists no such project, a consult when it does
   const t = worktree({ 'tools/x.mjs': `import { readFileSync } from 'node:fs';\nreadFileSync('PLACEHOLDER');\n` });
   const other = `${t.proj}-b`;
   writeFileSync(join(t.wt, 'tools', 'x.mjs'), `import { readFileSync } from 'node:fs';\nconsole.log(readFileSync('${other.replace(/\\/g, '/')}/.crux/events.jsonl', 'utf8').length);\n`);
@@ -304,9 +314,26 @@ test('3: a script (or a file it imports, or code in the command) that names anot
   assert.equal(r0.answer, 'allow', 'no other project listed: nothing to stop');
   const c1 = checker('allow');
   const r1 = await ask(c1, t, 'node tools/x.mjs', git, { otherProjects: [other, t.proj] });
-  assert.equal(r1.answer, 'escalate', r1.reason);
+  assert.equal(r1.answer, 'consult', r1.reason);
+  assert.equal(r1.via, 'code');
   assert.equal(c1.calls, 0, 'no model call');
-  assert.match(r1.reason, /another hub project's folder/);
+  assert.match(r1.reason, /another hub project's/);
+  // the same in shadow mode: the model is asked, the answer is still consult, the model's own word is kept beside it
+  const c1s = checker('allow');
+  const r1s = await ask(c1s, t, 'node tools/x.mjs', git, { otherProjects: [other, t.proj], shadow: true });
+  assert.equal(r1s.answer, 'consult');
+  assert.equal(r1s.raw, 'allow');
+  assert.equal(c1s.calls, 1);
+  // a command that itself names the other project (no script at all) is a consult in code too
+  const c1c = checker('allow');
+  const r1c = await c1c.run.run({ ...FACTS, dir: t.proj, worker: 'w', goal: 'g', tool: 'Bash', input: { command: `cat ${other.replace(/\\/g, '/')}/.crux/events.jsonl | head -3` }, cwd: t.wt, doubts: [], scripts: null, otherProjects: [other, t.proj] });
+  assert.equal(r1c.answer, 'consult');
+  assert.equal(c1c.calls, 0);
+  // a real hard stop still wins over it: escalate
+  const pushy = worktree({ 'tools/x.mjs': `import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['push', 'origin', 'HEAD:main']);\n` });
+  writeFileSync(join(pushy.wt, 'tools', 'x.mjs'), `import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['push', 'origin', 'HEAD:main']);\n// ${`${pushy.proj}-b`.replace(/\\/g, '/')}/.crux\n`);
+  const r1p = await ask(checker('allow'), pushy, 'node tools/x.mjs', git, { otherProjects: [`${pushy.proj}-b`, pushy.proj] });
+  assert.equal(r1p.answer, 'escalate', r1p.reason);
   // the project's own folder, and a folder that only starts with the other's name, are not "another project"
   writeFileSync(join(t.wt, 'tools', 'x.mjs'), `import { readFileSync } from 'node:fs';\nconsole.log(readFileSync('${other.replace(/\\/g, '/')}2/a.txt', 'utf8').length, '${t.proj.replace(/\\/g, '/')}');\n`);
   const r2 = await ask(checker('allow'), t, 'node tools/x.mjs', git, { otherProjects: [other, t.proj] });
@@ -317,6 +344,8 @@ test('3: the check\'s instructions say it too', () => {
   const s = buildPrefix(FACTS);
   assert.ok(s.includes(OTHER_PROJECTS_FACT));
   assert.match(OTHER_PROJECTS_FACT, /never an allow/);
+  assert.match(OTHER_PROJECTS_FACT, /consult/);
+  assert.ok(!/escalate\. Only Matt/.test(OTHER_PROJECTS_FACT), 'not a hard stop');
   assert.ok(s.indexOf(OTHER_PROJECTS_FACT) < s.indexOf('THE PROJECT\'S RULES'), 'a project fact, before the rules');
   assert.ok(!s.includes('AcuLoad'), 'no other project is named to the model');
 });
@@ -324,7 +353,7 @@ test('3: the check\'s instructions say it too', () => {
 // ---------- 3, through the hub: the list of projects comes from the hub, not from the request ----------
 Agent.prototype.send = function () { this.state = 'working'; };
 Agent.prototype.close = function () { this.q = null; };
-test('3: in a hub with two projects, a worker in one that reads the other\'s log gets a card for Matt, at Auto', async () => {
+test('3: in a hub with two projects, a worker in one that reads the other\'s log goes to the orchestrator (never allowed on the spot, no hard stop), at Auto', async () => {
   const root = makeTmp('crux-m051-hub-');
   const a = join(root, 'alpha'), b = join(root, 'beta');
   for (const d of [a, b]) mkdirSync(join(d, '.crux'), { recursive: true });
@@ -332,6 +361,7 @@ test('3: in a hub with two projects, a worker in one that reads the other\'s log
   const hub = new Hub({ projects: [a, b], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }) });
   const p = hub.project('alpha');
   assert.deepEqual(hub.otherProjectDirs(p), [b]);
+  p.board.addEntry({ kind: 'requirement', title: 'Orchestrator permission rules (test)', summary: 'rules', body: 'The orchestrator may ALLOW project work. ALWAYS goes to Matt: pushing to main.', from: 'you' });
   const orch = hub.ensureOrchestrator(p); orch.q = {};
   const w = hub.startWorker(p, 'builder', 'Build the feature', 'you', 'Build it');
   w.q = {};
@@ -345,10 +375,10 @@ test('3: in a hub with two projects, a worker in one that reads the other\'s log
   const find = () => p.log.ofType('approval').filter(c => /beta/i.test(String(c.input?.command || c.input?.file_path)));
   for (let i = 0; i < 300 && find().length < 2; i++) await new Promise(r => setTimeout(r, 10));
   const cards = find();
-  assert.equal(cards.length, 2, 'a card for the cat and one for the Read');
+  assert.equal(cards.length, 2, 'a waiting request for the cat and one for the Read');
   for (const card of cards) {
-    assert.ok(!card.routedTo, 'it comes to Matt, not to the orchestrator');
-    assert.ok((card.stops || []).some(x => /another project's data/.test(x)), String(card.stops));
+    assert.equal(card.routedTo, orch.name, 'it goes to the orchestrator, not to Matt');
+    assert.deepEqual(card.stops || [], [], 'no hard stop');
   }
   for (const e of [...hub.approvals.values()]) e.finish({ behavior: 'deny', message: 'test' }, 'test');
   assert.equal((await other).behavior, 'deny');
@@ -376,16 +406,16 @@ test('the study replay: test runs and rule-module stops are re-judged, another p
     line({ answer: 'consult', rawAnswer: 'allow', downgraded: true, unread: true, command: 'node --test test/a.test.mjs ' + 'x'.repeat(400) }),
     line({ answer: 'escalate', rawAnswer: 'consult', scanStops: ['permission-rules.mjs (imported): it runs "gh pr merge", a hard stop'], command: 'node --test test/a.test.mjs' }),
     line({ answer: 'escalate', rawAnswer: 'allow', unread: true, scanStops: ['permission-rules.mjs (imported): it runs "gh pr merge", a hard stop'], command: 'node tools/other.mjs' }),
-    line({ answer: 'consult', rawAnswer: 'consult', command: `cat ${slash(OTHER)}/.crux/events.jsonl | head -3` }),
+    line({ answer: 'allow', rawAnswer: 'allow', command: `cat ${slash(OTHER)}/.crux/events.jsonl | head -3` }),
     line({ answer: 'allow', rawAnswer: 'allow', command: 'ls' })
   ];
   const r = replayShadow(events, { parseCommand, otherDirs: [OTHER] });
   assert.equal(r.total, 7);
-  assert.deepEqual(r.before, { consult: 4, allow: 1, escalate: 2, deny: 0 });
+  assert.deepEqual(r.before, { consult: 3, allow: 2, escalate: 2, deny: 0 });
   assert.equal(r.testRuns, 1);
   assert.equal(r.ruleModuleStops, 2);
   assert.equal(r.otherProject, 1);
-  assert.deepEqual(r.after, { consult: 4, allow: 2, escalate: 1, deny: 0 }, JSON.stringify(r.after));
+  assert.deepEqual(r.after, { consult: 5, allow: 2, escalate: 0, deny: 0 }, JSON.stringify(r.after));
 });
 
 test('a redirect written as one word (2>&1, >/dev/null) is not a file for node --test to run; a script after a lone > is still read', async () => {

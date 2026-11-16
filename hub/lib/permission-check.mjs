@@ -8,7 +8,7 @@
 // small runner with a timeout. hub.mjs decides what each answer does.
 import { basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { scanScriptText, otherProjectRoots, namesOtherProject } from './permission-rules.mjs';
+import { scanScriptText, otherProjectRoots, namesOtherProject, otherProjectTouched } from './permission-rules.mjs';
 import { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, OWN_TEST_LIMIT, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit } from './permission-scripts.mjs';
 // The script handling lives in permission-scripts.mjs; it is re-exported here, where the rest of the check is.
 export { SCRIPT_LIMIT, SCRIPTS_TOTAL, MAX_SCRIPTS, OWN_TEST_LIMIT, scriptPaths, parseCommand, loadsUnseen, isProjectScript, isCommittedFile, importsOf, scriptsFor, defaultGit };
@@ -76,13 +76,15 @@ export const JUNCTION_FACT = '- In a worker\'s worktree, hub/node_modules (and a
 // this very agent started. The ports come from the hub's own record (the request's "Test hubs this worker started" line), never
 // from the command's own claim.
 export const DUMMY_KEY_FACT = '- Exception to the rule on keys, tokens and passwords: an obviously fake one (a value like "test", "dummy", "fake" or "dummy-token", and nothing else that merely looks short) sent only to a test hub this worker started, at localhost or 127.0.0.1, may be allowed. The request lists the ports of the test hubs this worker started, from the hub\'s own record; never take the command\'s own claim about a port. Anything that looks real escalates as before: a long random string, a known key prefix (sk-, ghp_, xoxb-, AKIA, eyJ ...), a value read from an environment variable, a file or a key store, or any send to port 4747 or 4748 or to a port not in that list.';
-// Matt, 2026-11-16 (M051): another hub project's data is never an allow, whatever the command or script is for. The hub's own
-// code already sends a path it can read to him; this covers what it could not read in full (a script, a built-up path).
+// Matt, 2026-11-16 (M051), changed by orchestrator-11 the same day: another hub project's data is never an allow, whatever the
+// command or script is for, and it is not a hard stop either: the orchestrator decides with the task in view (a crux worker may
+// read another project's log when its task is about that project). The code answers "consult" before any model call; this line
+// covers what the code could not read in full (a script, a built-up path).
 // Matt, 2026-11-16 (M051): a worker's own test file is read like the project's own work. The hub marks one only when it is attached
 // in full and every file it imports or starts has been followed (committed and unchanged from main, or the worker's own and
 // scanned in code), so "you may not allow" is not listed against it. Read it: what it does is still yours to judge.
 export const OWN_TEST_FACT = '- A script the hub marks "the worker\'s own test file in its own worktree" is attached in full and everything it imports or starts has been followed by the hub, so the rule above about files you cannot see does not hold it back. Read it: allow when it only exercises the project\'s code in the worker\'s own worktree or temp (temp repos, temp data folders, test hubs on this worker\'s own ports) and the command around it is plain; consult or escalate as for any script if the text itself does something risky (a push or merge, a write outside the worktree or temp, another project\'s data, a key or token, the live hub).';
-export const OTHER_PROJECTS_FACT ='- Other projects on this hub are not this project\'s to read. A command or script that reads, lists, searches or copies another hub project\'s folder (its .crux event log, its files, its .decisions, its worktrees), or a folder that is not this project\'s and that looks like another project\'s repo, is never an allow, however plain the read looks or whatever the goal says: escalate. Only Matt can say yes.';
+export const OTHER_PROJECTS_FACT ='- Other projects on this hub are not this project\'s to read. A command or script that reads, lists, searches or copies another hub project\'s folder (its .crux event log, its files, its .decisions, its worktrees), or a folder that is not this project\'s and that looks like another project\'s repo, is never an allow, however plain the read looks or whatever the goal says: consult. The orchestrator decides with the task in view (a worker\'s task may be about that project). A write there is outside the project: escalate as for any write outside.';
 export const JSON_ONLY ='Your reply is that JSON object only: no text before it, no text after it, no reasoning, and no code fence.';
 
 const posix = dir => String(dir).replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => `/${d.toLowerCase()}`);
@@ -177,9 +179,9 @@ export function applyRules({ answer, reason }, { unread = false, doubts = [] } =
 // the model may not allow. Committed scripts are the project's reviewed code and are not scanned.
 // others: { dirs, own } the other hub projects' folders and this project's: a script (or a file it imports, or code written in the
 // command) that names one of those folders is a stop, never an allow (M051).
-export function scanScripts(scripts, others = null) {
+export function scanScripts(scripts, listed = null) {
   const texts = [];
-  const roots = others?.dirs?.length ? otherProjectRoots(others.dirs, others.own) : [];
+  const roots = listed?.dirs?.length ? otherProjectRoots(listed.dirs, listed.own) : [];
   const kindOf = p => (/\.(sh|bash|ps1|psm1|bat|cmd)$/i.test(p) ? 'shell' : /\.py$/i.test(p) ? 'py' : 'js');
   // The project's own tests (s.test: the real path is inside the project and under hub/test/, set by scriptsFor) are full of strings
   // about git push and ~/.ssh because they test the rules; see scanScriptText, test.
@@ -187,15 +189,15 @@ export function scanScripts(scripts, others = null) {
   // the files an attached script imports (relative imports, followed; the model is not sent them, the scan reads them)
   for (const s of scripts?.imports || []) texts.push([`${basename(s.path)} (imported)`, s.text, kindOf(s.path), !!s.test]);
   for (const c of scripts?.inlineCode || []) texts.push(['the command\'s own code', c, 'js', false]);
-  const stops = [], doubts = [], notes = [];
+  const stops = [], doubts = [], notes = [], others = [];
   for (const [name, text, kind, test] of texts) {
     const r = scanScriptText(text, { kind, test });
-    if (roots.length && namesOtherProject(text, roots)) stops.push(`${name}: it names another hub project's folder, whose data is not this project's to read`);
+    if (roots.length && namesOtherProject(text, roots)) others.push(`${name}: it names another hub project's folder, whose data is not this project's to read without the task in view`);
     for (const w of r.stops) stops.push(`${name}: ${w}`);
     for (const w of r.doubts) doubts.push(`${name}: ${w}`);
     for (const w of r.notes) notes.push(`${name}: ${w}`);
   }
-  return { stops, doubts, notes };
+  return { stops, doubts, notes, others };
 }
 
 // ---------- the call ----------
@@ -277,7 +279,13 @@ export class PermissionCheck {
     // With the check on: no model call. In shadow (req.shadow) the model is still asked, so the study sees what it says on
     // exactly the dangerous cases; the line logs "escalate" (what On would do) with the model's raw answer next to it.
     if (stopWhy && !req.shadow) return { valid: true, answer: 'escalate', raw: 'escalate', reason: `${stopWhy}, so it goes to you without asking the model.`.slice(0, 300), downgraded: false, scanned: true, scan, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
-    const doubts = stopWhy ? [...scan.stops, ...scan.doubts] : scan.doubts;
+    // Another hub project's data (named in the command, a script, or a file a script imports): never allowed by the check, and not
+    // a hard stop either (orchestrator-11, 2026-11-16): the orchestrator decides with the task in view. In code, no model call.
+    let otherWhy = scan.others[0] || null;
+    if (!otherWhy && req.otherProjects?.length) { try { const hit = otherProjectTouched(req.tool, req.input || {}, { projectDir: req.dir, cwd: req.cwd, otherProjects: req.otherProjects }); if (hit) otherWhy = 'the request itself names another hub project\'s folder'; } catch { /* the rules saw it too */ } }
+    const otherReason = otherWhy ? `It reaches another hub project's data (${otherWhy.replace(/^the request itself names /, 'names ')}); the orchestrator decides with the task in view.`.slice(0, 300) : null;
+    if (!stopWhy && otherReason && !req.shadow) return { valid: true, answer: 'consult', raw: 'consult', reason: otherReason, downgraded: false, scanned: true, scan, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
+    const doubts = stopWhy ? [...scan.stops, ...scan.doubts] : otherWhy ? [...scan.others, ...scan.doubts, ...(scan.others.length ? [] : [otherWhy])] : scan.doubts;
     const system = buildPrefix(req), user = buildSuffix(doubts.length || scan.notes.length ? { ...req, scripts: { ...req.scripts, scanDoubts: doubts, scanNotes: scan.notes.slice(0, 12) } } : req);
     const ac = new AbortController();
     let timer, got = null, error = null;
@@ -297,6 +305,7 @@ export class PermissionCheck {
     const base = { scan, model: this.model, ms: Date.now() - started, unread, via: got?.via || null, tokens: got?.tokens || null, costUSD: got?.costUSD ?? null, listUSD: got?.tokens ? listCost(this.model, got.tokens) : null, modelUsage: got?.modelUsage || null };
     const parsed = error ? null : parseAnswer(got?.text);
     if (stopWhy) return { valid: true, answer: 'escalate', raw: parsed?.answer ?? null, reason: `${stopWhy}. ${parsed ? `The model said ${parsed.answer}: ${parsed.reason}` : `The model gave no valid answer (${error || 'bad reply'})`}`.slice(0, 340), downgraded: false, scanned: true, ...base };
+    if (otherReason) return { valid: true, answer: 'consult', raw: parsed?.answer ?? null, reason: otherReason, downgraded: false, scanned: true, ...base };   // shadow: the model was asked, the answer is still consult
     if (error) return { valid: false, error, ...base };
     if (!parsed) return { valid: false, error: 'the reply was not {answer, reason}', ...base };
     return { valid: true, ...applyRules(parsed, { unread, doubts }), ...base };

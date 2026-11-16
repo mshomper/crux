@@ -512,7 +512,7 @@ export function compareShadow(events, { sinceMs = -Infinity } = {}) {
 // to the logged command text. It cannot see the files (the workers' worktrees are gone), so it takes the stated shape of each fix:
 //   1. a `node --test` run of test files (and nothing else that is unread) is no longer held back: the model's allow stands;
 //   2. a hard stop that came only from the hub's rule modules (imported) is gone: the line falls back to what the model said;
-//   3. a command that names another hub project's folder is an escalate.
+//   3. a command that names another hub project's folder is a consult (never an allow; the orchestrator decides).
 // The model's own consults stay consults (they may fall once it is sent whole test files; that needs a live replay).
 export function replayShadow(events, { parseCommand, otherDirs = [], sinceMs = -Infinity } = {}) {
   const roots = otherDirs.map(d => String(d).toLowerCase().replace(/[\\/]+/g, '/').replace(/\/+$/, '')).filter(Boolean);
@@ -538,7 +538,7 @@ export function replayShadow(events, { parseCommand, otherDirs = [], sinceMs = -
       out.ruleModuleStops++;
       now = raw === 'allow' && e.unread && !testRun(e.command, e.tool) ? 'consult' : raw;
     } else if (e.downgraded && raw === 'allow' && testRun(e.command, e.tool)) { out.testRuns++; now = 'allow'; }
-    if (names(e.command) && !(e.scanStops?.length)) { if (now !== 'escalate') out.otherProject++; now = 'escalate'; }
+    if (names(e.command) && !(e.scanStops?.length)) { if (now !== 'consult') out.otherProject++; now = 'consult'; }
     out.after[now]++;
   }
   return out;
@@ -573,7 +573,7 @@ export function checkSection(name, events, { sinceMs = -Infinity, replay = null 
       `| Deny | ${r.before.deny} | ${r.after.deny} |`, '',
       `- Held-back lines now read as seen (test files only, or no script at all) so the model's allow stands: ${r.testRuns}`,
       `- Escalations caused only by the hub's own rule modules, now back to what the model said: ${r.ruleModuleStops}`,
-      `- Commands naming another hub project's folder, now escalated: ${r.otherProject}`, '');
+      `- Commands naming another hub project's folder, now a consult (the orchestrator decides): ${r.otherProject}`, '');
   }
   if (c.disagree.length) {
     lines.push('### Every disagreement, in full', '');
