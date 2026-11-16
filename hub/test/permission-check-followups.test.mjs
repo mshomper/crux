@@ -78,3 +78,77 @@ test('2. in hub/test/, a real spawn of a stop command is still a stop; the same 
   assert.deepEqual(t.stops, []);
   assert.ok(t.doubts.some(d => /git push/.test(d)));
 });
+
+// ---------- round 2 of the #99 review ----------
+import { symlinkSync, mkdtempSync } from 'node:fs';
+import { isProjectTest } from '../lib/permission-scripts.mjs';
+
+test('R2-1. require( or import( with anything but one plain string literal is a name built at run time: unread', async () => {
+  const shapes = {
+    'a.cjs': "const m = require('child' + '_process');\nm.execSync('echo hi');\n",
+    'b.cjs': "const x = 'process';\nconst m = require(`child_${x}`);\n",
+    'c.cjs': "const name = ['child', 'process'].join('_');\nrequire(name);\n",
+    'd.mjs': "const m = await import('child' + '_process');\n",
+    'e.mjs': "const m = await import(`node:child_${'process'}`);\n",
+    'f.cjs': "const m = require('node:child' + '_process');\n"
+  };
+  const proj = tree({ ...shapes, 'ok.cjs': "const fs = require('node:fs');\nconst p = require(`node:path`);\nconsole.log(typeof fs, typeof p);\n" });
+  for (const f of Object.keys(shapes)) {
+    const r = await look(proj, `node ${f}`);
+    assert.equal(r.unread, true, f);
+    assert.ok(r.scripts[0].loads.includes('loads a file named at run time'), `${f}: ${r.scripts[0].loads}`);
+  }
+  assert.equal((await look(proj, 'node ok.cjs')).unread, false, 'plain literals are fine');
+  // pieces joined with + are an obscured-text doubt as well
+  assert.ok(scanScriptText("run('pu' + 'sh')").doubts.some(d => /joins short pieces/.test(d)));
+  assert.ok(!scanScriptText("const s = 'a fairly long sentence about nothing at all' + ' and another long one here';").doubts.some(d => /joins short pieces/.test(d)));
+});
+
+test('R2-2. a path is a test only when its real path is inside the project and under hub/test/', async () => {
+  const root = makeTmp('crux-followups-r2-');
+  const proj = join(root, 'proj'), outside = join(root, 'outside');
+  for (const d of [join(proj, 'hub', 'test'), join(proj, '.claude', 'worktrees', 'w1', 'hub', 'test'), join(proj, 'other', 'hub', 'test'), join(proj, 'hub', 'testing'), outside]) mkdirSync(d, { recursive: true });
+  const files = { in: join(proj, 'hub', 'test', 'x.test.mjs'), wt: join(proj, '.claude', 'worktrees', 'w1', 'hub', 'test', 'x.test.mjs'), nested: join(proj, 'other', 'hub', 'test', 'x.test.mjs'),
+    sibling: join(proj, 'hub', 'testing', 'x.test.mjs'), out: join(outside, 'x.test.mjs') };
+  for (const f of Object.values(files)) writeFileSync(f, 'x');
+  assert.equal(isProjectTest(files.in, proj), true);
+  assert.equal(isProjectTest(files.wt, proj), true, 'in one of the project\'s worktrees');
+  assert.equal(isProjectTest(files.nested, proj), false, 'some other hub/test');
+  assert.equal(isProjectTest(files.sibling, proj), false);
+  assert.equal(isProjectTest(files.out, proj), false, 'outside the project');
+  assert.equal(isProjectTest(files.in, null), false);
+  // a junction at hub/test that points outside: the real path decides
+  const proj2 = join(root, 'proj2');
+  mkdirSync(join(proj2, 'hub'), { recursive: true });
+  symlinkSync(outside, join(proj2, 'hub', 'test'), 'junction');
+  assert.equal(isProjectTest(join(proj2, 'hub', 'test', 'x.test.mjs'), proj2), false, 'a link to a folder outside the project');
+  // and scriptsFor passes it through to the scan: the same words are a stop in the linked file, a doubt in a real test
+  const words = "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['push', 'origin', 'HEAD:main']);\n";
+  writeFileSync(join(outside, 'y.test.mjs'), words);
+  assert.ok(scanScripts(await look(proj2, 'node --test hub/test/y.test.mjs')).stops.length > 0);
+});
+
+test('R2-2. in a test, a stop stays when the file loads the process module in code and the command sits next to a spawn, wrappers included', () => {
+  const wrapper = "import { execSync } from 'node:child_process';\nconst sh = c => execSync(c);\nsh('git push origin main');\n";
+  assert.ok(scanScriptText(wrapper, { test: true }).stops.some(s => /git push/.test(s)), 'a wrapper around execSync');
+  const required = "const { execSync } = require('child_process');\nexecSync('git push origin main');\n";
+  assert.ok(scanScriptText(required, { test: true }).stops.length > 0);
+  // the process module named only in data does not count; nor do words with no process module at all
+  const data = "const cases = ['node -e \"require(\'child_process\').execSync(\'git push\')\"', 'git push'];\nclassify({ command: cases[0] });\n";
+  assert.deepEqual(scanScriptText(data, { test: true }).stops, []);
+  assert.deepEqual(scanScriptText("execSync('git push origin main');\n", { test: true }).stops, [], 'no import: it cannot start anything');
+  // a test that loads it and also names ~/.ssh as data: the secret is a doubt, the command (if any) a stop
+  const mixed = scanScriptText("import { execFileSync } from 'node:child_process';\nconst ssh = '.ssh';\nreadFileSync(join(homedir(), '.ssh', 'id_rsa'));\nexecFileSync('git', ['status']);\n", { test: true });
+  assert.deepEqual(mixed.stops, []);
+  assert.ok(mixed.doubts.some(d => /\.ssh/.test(d)));
+});
+
+test('R2-3. shell: git, npm or pip after a path separator, and a command word held in a variable, are doubts', () => {
+  for (const text of ['/usr/bin/git status\n', String.raw`C:\Program Files\Git\bin\git.exe status` + '\n', 'cd x && /usr/local/bin/npm test\n', './node_modules/.bin/../../bin/pip3 list\n'])
+    assert.ok(scanScriptText(text, { kind: 'shell' }).doubts.some(d => /runs git, npm or pip/.test(d)), text);
+  for (const text of ['g=git\n$g status\n', 'g=git\n${g} status\n', 'g=git; $g push\n', '& $g status\n', '%g% status\n'])
+    assert.ok(scanScriptText(text, { kind: 'shell' }).doubts.some(d => /command held in a variable/.test(d)), text);
+  // assignments and ordinary words are not
+  for (const text of ['g=git\n$x = 5\necho done\n', 'echo $g\nls -la\n'])
+    assert.ok(!scanScriptText(text, { kind: 'shell' }).doubts.some(d => /command held in a variable/.test(d)), text);
+});

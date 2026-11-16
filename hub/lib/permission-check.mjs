@@ -169,12 +169,11 @@ export function applyRules({ answer, reason }, { unread = false, doubts = [] } =
 export function scanScripts(scripts) {
   const texts = [];
   const kindOf = p => (/\.(sh|bash|ps1|psm1|bat|cmd)$/i.test(p) ? 'shell' : 'js');
-  // The project's own tests (hub/test/) are full of strings about git push and ~/.ssh because they test the rules: a stop there
-  // needs a real spawn of a stop command (scanScriptText, test).
-  const isTest = p => /[\\/]hub[\\/]test[\\/]/i.test(p);
-  for (const s of scripts?.scripts || []) if (s.kind === 'attached') texts.push([basename(s.path), s.scanText ?? s.text, kindOf(s.path), isTest(s.path)]);
+  // The project's own tests (s.test: the real path is inside the project and under hub/test/, set by scriptsFor) are full of strings
+  // about git push and ~/.ssh because they test the rules; see scanScriptText, test.
+  for (const s of scripts?.scripts || []) if (s.kind === 'attached') texts.push([basename(s.path), s.scanText ?? s.text, kindOf(s.path), !!s.test]);
   // the files an attached script imports (relative imports, followed; the model is not sent them, the scan reads them)
-  for (const s of scripts?.imports || []) texts.push([`${basename(s.path)} (imported)`, s.text, kindOf(s.path), isTest(s.path)]);
+  for (const s of scripts?.imports || []) texts.push([`${basename(s.path)} (imported)`, s.text, kindOf(s.path), !!s.test]);
   for (const c of scripts?.inlineCode || []) texts.push(['the command\'s own code', c, 'js', false]);
   const stops = [], doubts = [];
   for (const [name, text, kind, test] of texts) {

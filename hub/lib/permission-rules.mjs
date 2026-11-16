@@ -495,9 +495,10 @@ const SCRIPT_HOME_CRUX = /~[\\/]+crux\b/i;
 const SCRIPT_LIVE_HUB = /:(?:4747|4748)\b|(?:localhost|127\.0\.0\.1|::1|0\.0\.0\.0)[:\s'",]*(?:4747|4748)\b|\bport\W{0,12}(?:4747|4748)\b/i;
 const SCRIPT_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|copyFile(?:Sync)?|cp(?:Sync)?|mkdir(?:Sync)?|createWriteStream|symlink(?:Sync)?|truncate(?:Sync)?|rmtree|shutil|Remove-Item|Set-Content|Out-File|Copy-Item|Move-Item|New-Item)\b/;
 // kind: 'shell' for .sh, .ps1, .bat and the like (the text is the commands), else code ('js').
-// test: the file is under hub/test/ (or *.test.mjs): it is full of strings about git push and ~/.ssh because it tests the rules,
-// so a stop there needs a real spawn of a stop command (a spawn / exec call whose own arguments are the command); every
-// other stop is a doubt.
+// test: the file is one of the project's own tests (its real path is inside the project and under hub/test/, decided by
+// scriptsFor, never by a name): it is full of strings about git push and ~/.ssh because it tests the rules. There a stop
+// stays a stop only for a command (git push, an install ...) in a file that loads the process module in code, within the same
+// 240-character window of a spawn as everywhere else; every other stop is a doubt.
 export function scanScriptText(text, { kind = 'js', test = false } = {}) {
   const raw = String(text || '');
   const open = psOpen(raw).replace(/[`\[\]{}+]/g, ' ');
@@ -513,6 +514,7 @@ export function scanScriptText(text, { kind = 'js', test = false } = {}) {
     if (any) { const why = doubtWhy(any); if (!doubts.includes(why)) doubts.push(why); }
   };
   for (const re of SCRIPT_COMMANDS) judge(re, SPAWN_CALL, m => `it runs "${quote(m)}", a hard stop`, m => `it mentions "${quote(m)}" (no process is started next to it)`);
+  const commandStops = new Set(stops);   // the stops that are commands (git push, an install ...), before the others are added
   judge(SCRIPT_LOGINS, FILE_CALL, m => `it reads or runs something with "${quote(m)}", a login or secret store`, m => `it mentions "${quote(m)}", a login or secret store`);
   judge(SCRIPT_SECRET_PATH, FILE_CALL, () => 'it reads, writes or runs something with .ssh or a private key', () => 'it mentions .ssh or a private key');
   judge(SCRIPT_HOME_CLAUDE, WRITE_CALL, () => 'it writes into the home folder\'s .claude', () => 'it names the home folder\'s .claude');
@@ -532,25 +534,24 @@ export function scanScriptText(text, { kind = 'js', test = false } = {}) {
   }
   // A shell script that runs git, npm or pip at all, or uses eval, is a doubt (a built-up command or a hidden push is not
   // something the patterns above can place in a script made of commands).
+  // Short pieces of text joined with + ('pu' + 'sh', 'child' + '_process') hide a word from every pattern here.
+  seeIn(/(?:'[^'\\\n]{1,8}'|"[^"\\\n]{1,8}"|`[^`$\\\n]{1,8}`)\s*\+\s*(?:'[^'\\\n]{1,8}'|"[^"\\\n]{1,8}"|`[^`$\\\n]{1,8}`)/, doubts, 'it joins short pieces of text with + (a word built up to hide it)');
   if (kind === 'shell') {
-    seeIn(/(^|[\s;&|(@])(?:git|npm|pnpm|yarn|pip3?|pipx|uv|winget|choco)(?:\.exe)?\s/im, doubts, 'it runs git, npm or pip');
+    // git, npm or pip after a path separator too (/usr/bin/git, .\git.exe), and a command word held in a variable ($g status)
+    seeIn(/(^|[\s;&|(@\\/])(?:git|npm|pnpm|yarn|pip3?|pipx|uv|winget|choco)(?:\.exe|\.cmd)?\s/im, doubts, 'it runs git, npm or pip');
     seeIn(/(^|[\s;&|(])(?:eval|iex|Invoke-Expression)(\s|\()/im, doubts, 'it evaluates text as commands (eval or iex)');
+    seeIn(/(^|[;&|(]|\n)[ \t]*&?[ \t]*(?:\$\{?[A-Za-z_]\w*\}?|%[A-Za-z_]\w*%)(?![\w.\[]|\s*=)/m, doubts, 'it runs a command held in a variable');
   }
   if (test && stops.length) {
-    // real spawns only: the first arguments of a spawn / exec call, up to the end of the statement
-    const real = [];
-    // (a bare `.exec(` is a regular expression's, not a process: only exec( on its own, or a method of the process module)
-    for (const m of raw.matchAll(/(?<![.\w])(?:spawn(?:Sync)?|exec(?:Sync|File|FileSync)?|fork)\s*\(([^;]{0,240})|\.\s*(?:spawn(?:Sync)?|exec(?:Sync|File|FileSync)|fork)\s*\(([^;]{0,240})/g)) {
-      m[1] ??= m[2];
-      // a call written inside a quoted string (a test's data: '... .execSync("git push") ...') is text, not a spawn
-      const before = raw.slice(raw.lastIndexOf('\n', m.index) + 1, m.index).replace(/\\./g, '');
-      if (['\'', '"', '`'].some(q => (before.split(q).length - 1) % 2 === 1)) continue;
-      const slice = psOpen(m[1] || '').replace(/[`\[\]{}+]/g, ' ');
-      for (const re of SCRIPT_COMMANDS) { const hit = re.exec(slice); if (hit) { const why = `it runs "${quote(hit)}", a hard stop`; if (!real.includes(why)) real.push(why); } }
-    }
-    const moved = stops.filter(s => !real.includes(s));
-    stops.length = 0; stops.push(...real);
-    for (const s of moved) { const why = `${s.replace(/, a hard stop$/, '')} (in a test file; only a real spawn of a stop command is a stop there)`; if (!doubts.includes(why)) doubts.push(why); }
+    // In the project's own tests only a command (git push, an install ...) stays a stop, and only when the file loads the process
+    // module in code (an import or require statement; test data that merely mentions child_process does not count). The command
+    // is then within the same 240-character window of a spawn as in any file. Every other stop is a doubt.
+    // (no quote before the module name's own: a line of test data that contains "require('child_process')" inside a string is not one)
+    const loadsProcess = /^[ \t]*(?:import\b[^\n'"`]*|(?:export[ \t]+)?(?:const|let|var)\b[^\n'"`]*?(?:require|await[ \t]+import)[ \t]*\([ \t]*)['"`](?:node:)?child_process(?:\/promises)?['"`]/m.test(raw);
+    const keep = stops.filter(s => loadsProcess && commandStops.has(s));
+    const moved = stops.filter(s => !keep.includes(s));
+    stops.length = 0; stops.push(...keep);
+    for (const s of moved) { const why = `${s.replace(/, a hard stop$/, '')} (in one of the project's tests; only a command next to a spawn, in a test that loads the process module, is a stop there)`; if (!doubts.includes(why)) doubts.push(why); }
   }
   return { stops, doubts };
 }
