@@ -272,7 +272,7 @@ const trimParts = s => String(s).split('/').map(x => (x === '.' || x === '..' ? 
 const trimmed = re => ({ test: s => re.test(trimParts(s)) || re.test(s), source: re.source });
 // More places that hold a login or what was typed (review of PR #89 round 1): GitHub CLI's hosts file, the process
 // environment, Docker, kubectl, Azure and Google Cloud logins (their token files and databases), and every shell's history.
-const SECRET_MORE = String.raw`(^|\/)(\.config\/gh|gh\/hosts\.yml|\.docker\/config\.json|\.kube|\.azure|\.config\/gcloud|gcloud|\.gcloud|\.oci|\.config\/doctl)(\/|$)|(^|\/)(credentials\.db|access_tokens\.db|legacy_credentials|application_default_credentials\.json|accesstokens\.json|msal_token_cache\.(json|bin)|service_principal_entries\.json|azureprofile\.json|docker-credentials\w*)$|(^|\/)proc\/(self|thread-self|\d+|\*|\?)\/(environ|cmdline|fd(\/|$))|(^|\/)\.[\w-]*_history$|(^|\/)(ConsoleHost_history\.txt|\.viminfo|\.lesshst|\.python_history|history\.sqlite)$`;
+const SECRET_MORE = String.raw`(^|\/)(\.config\/gh|gh\/hosts\.yml|\.docker\/config\.json|\.kube|\.azure|\.config\/gcloud|gcloud|\.gcloud|\.oci|\.config\/doctl)(\/|$)|(^|\/)(credentials\.db|access_tokens\.db|legacy_credentials|application_default_credentials\.json|accesstokens\.json|msal_token_cache\.(json|bin)|service_principal_entries\.json|azureprofile\.json|docker-credentials\w*)$|(^|\/)proc\/[^/]+\/(environ|cmdline|fd(\/|$))|(^|\/)(environ|\.claude\.json|state\.vscdb(-journal)?|login data(-journal)?|(github )?cli\/hosts\.yml)$|(^|\/)(google\/chrome|chromium|microsoft\/edge|bravesoftware\/brave-browser)\/user data(\/|$)|(^|\/)\.[\w-]*_history$|(^|\/)(ConsoleHost_history\.txt|\.viminfo|\.lesshst|\.python_history|history\.sqlite)$`;
 const SECRET = trimmed(new RegExp(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub(?!\/voice(?:\/(?!\.\.?(?:\/|$))[^/]+)*\/?$))(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/.source + '|' + SECRET_MORE, 'i'));
 const KNOWN_TOOLS = new Set(['Task', 'Agent', 'TodoWrite', 'TaskStop', 'KillShell', 'KillBash', 'BashOutput', 'ToolSearch', 'Skill',
   'EnterPlanMode', 'ExitPlanMode', 'WebSearch', 'LS']);
@@ -360,7 +360,7 @@ const RISKY_PATTERNS = [
   /\brm\s+-\w*[rf]\w*\s+(\/(?!tmp\/(?![^\s;&|]*\.\.)[\w-])|~|\.\.|[a-z]:)/i, /\bremove-item\b[^;|\n]*(\.\.|~|[a-z]:\\)/i,
   /\.env\b|\.ssh\b|\.crux-hub\b|\bid_(rsa|ed25519)\b|\bcredentials?\b|\bpassword\b|\bsecret\b|api[_-]?key/i,
   // logins and what was typed, read from text the hub could not read in full (a $(...), an eval, a script)
-  /gcloud|\.gcloud\b|\.kube\b|\.azure\b|hosts\.yml|\.docker[\\/]config|proc[\\/](self|\d+)[\\/]environ|_history\b|ConsoleHost_history|HistorySavePath|\bGet-(StoredCredential|AzAccessToken|AzKeyVaultSecret|PSReadLineOption)\b|\b(cmdkey|vaultcmd)\b|\bjq\b[^;&|\n]*\b(\$ENV|env)\b|\baccess[_-]?token|\btoken\.json|[\\/]dev[\\/](tcp|udp)[\\/]/i
+  /gcloud|\.gcloud\b|\.kube\b|\.azure\b|hosts\.yml|\.claude\.json|state\.vscdb|login data|\.docker[\\/]config|proc[\\/][^\\/\s]+[\\/]environ|_history\b|ConsoleHost_history|HistorySavePath|\bGet-(StoredCredential|AzAccessToken|AzKeyVaultSecret|PSReadLineOption)\b|\b(cmdkey|vaultcmd)\b|\bjq\b[^;&|\n]*\b(\$ENV|env)\b|\baccess[_-]?token|\btoken\.json|[\\/]dev[\\/](tcp|udp)[\\/]/i
 ];
 // PowerShell text with its quotes and commas opened ('push','origin' -> push origin), for the risky-word scan.
 const psOpen = t => String(t).replace(/'((?:''|[^'])*)'|"((?:""|`.|[^"`])*)"/g, (m, a, b) => ` ${a ?? b} `).replace(/[,()@]/g, ' ');
@@ -589,25 +589,39 @@ class Check {
     // A commit message passed through a quoted heredoc is plain text: $(cat <<'EOF' ... EOF)
     // Only where the marker really opens one (review of PR #89): a heredoc is bash's, a here-string is PowerShell's, and neither
     // opens inside quotes or after a # comment, where the lines after it are commands like any other.
-    let s = ps ? cmd : cmd.replace(/\$\(\s*cat\s+<<-?\s*'(\w+)'[^\n]*\n([\s\S]*?)\n\s*\1\s*\n?\s*\)/g, (all, tag, body, off) => {
-      const at = contextAt(cmd.slice(0, off), false);
-      return at === 'sq' || at === 'comment' ? all : block(body, true);   // inside "...", $(cat <<'EOF' is the usual commit message
+    // The quote and comment state at a marker is read from the text in front of it with the bodies already taken out left
+    // out (their quotes are data), and a second marker after one body was taken out is a doubt: the hub cannot be sure
+    // which markers open one (review round 2 of PR #89: it echo it\'s '<<B' / cat <<A ... echo '<<B' shapes).
+    let taken = 0;
+    const another = () => { if (taken++) this.unsure('A second heredoc or here-string after one already taken out: the hub cannot tell which markers open one', true); };
+    let s = ps ? cmd : replaceWithPrefix(cmd, /\$\(\s*cat\s+<<-?\s*'(\w+)'[^\n]*\n([\s\S]*?)\n\s*\1\s*\n?\s*\)/g, (m, pre) => {
+      const at = contextAt(pre, false);
+      if (at === 'sq' || at === 'comment') return m[0];   // inside "...", $(cat <<'EOF' is the usual commit message
+      another();
+      return block(m[2], true);
     });
     // PowerShell here-strings: literal when single-quoted
     if (ps) {
-      s = s.replace(/@'\r?\n([\s\S]*?)\r?\n'@/g, (all, body, off) => (contextAt(s.slice(0, off), true) ? all : block(body, true)));
-      s = s.replace(/@"\r?\n([\s\S]*?)\r?\n"@/g, (all, body, off) => {
-        if (contextAt(s.slice(0, off), true)) return all;
-        if (!/\$[\w({]/.test(body)) return block(body, true);
+      s = replaceWithPrefix(s, /@'\r?\n([\s\S]*?)\r?\n'@/g, (m, pre) => {
+        if (contextAt(pre, true)) return m[0];
+        another();
+        return block(m[1], true);
+      });
+      s = replaceWithPrefix(s, /@"\r?\n([\s\S]*?)\r?\n"@/g, (m, pre) => {
+        if (contextAt(pre, true)) return m[0];
+        another();
+        if (!/\$[\w({]/.test(m[1])) return block(m[1], true);
         this.unsure('A here-string with variables the hub cannot read');
-        for (const inner of substitutions(body)) { bit(inner); if (this.mayMoveBranch(inner, ps)) this.branchUnknown = true; }   // $( ... ) inside it runs
-        return block(body, false);
+        for (const inner of substitutions(m[1])) { bit(inner); if (this.mayMoveBranch(inner, ps)) this.branchUnknown = true; }   // $( ... ) inside it runs
+        return block(m[1], false);
       });
     }
     // Other heredocs: a script fed to node or python is checked as a script; anything else is data. Not <<< (a here-string
     // of bash), not << inside (( )) (a shift), not in quotes or after a # (see above).
-    if (!ps) s = s.replace(/^([^\n]*?)(?<!<)<<(?!<)-?\s*(['"]?)(\w+)\2([^\n]*)\n([\s\S]*?)\n\s*\3\s*(?=\n|$)/gm, (all, before, q, tag, after, body, off) => {
-      if (contextAt(s.slice(0, off) + before, false) || (/\(\(/.test(before) && !/\)\)/.test(before))) return all;
+    if (!ps) s = replaceWithPrefix(s, /^([^\n]*?)(?<!<)<<(?!<)-?\s*(['"]?)(\w+)\2([^\n]*)\n([\s\S]*?)\n\s*\3\s*(?=\n|$)/gm, (m, pre) => {
+      const [all, before, q, tag, after, body] = m;
+      if (contextAt(pre + before, false) || (/\(\(/.test(before) && !/\)\)/.test(before))) return all;
+      another();
       if (!q && /\$\(|`/.test(body)) {
         this.unsure('A heredoc with commands inside');
         for (const inner of substitutions(body)) { bit(inner); if (this.mayMoveBranch(inner, ps)) this.branchUnknown = true; }
@@ -670,6 +684,12 @@ class Check {
   // methods on strings, numbers, dates and the like is read. Looked for in the whole command, inside "$( )" in a string too;
   // text in single quotes is not run.
   methodCalls(cmd) {
+    // A method named by a quoted string or a variable ($_.'Kill'(), $_."Kill"(), $_.$m(), [IO.File]::$m()) is read for
+    // what it is not: the name is only known at run time. A doubt, whatever the name holds.
+    if (/(?:[\w$\])}]|\bnew\b)\s*\.\s*(?:'[^'\n]*'|"[^"\n]*"|\$\{?\w+\}?)\s*\(|::\s*(?:'[^'\n]*'|"[^"\n]*"|\$\{?\w+\}?)\s*\(/.test(String(cmd))) {
+      this.unsure('Calls a method whose name the hub cannot read (a quoted name or a variable after the dot)');
+      return;
+    }
     const text = String(cmd).replace(/'(?:''|[^'])*'/g, "''");
     for (const m of text.matchAll(/(?:[\w$\])}]|\bnew\b)\s*\.\s*([A-Za-z_]\w*)\s*\(/g)) {
       if (PS_SAFE_METHODS.has(m[1].toLowerCase())) continue;
@@ -1564,6 +1584,14 @@ class Check {
       const web = this.trusted && /^https:\/\/[\w.-]+\//i.test(pos[0] || '');
       if (pos[0] && !web && !/^[\w.-]+$/.test(pos[0]) && !/^(https:\/\/|git@)github\.com[/:]/i.test(pos[0])) return this.stop(`Fetches from an address the hub cannot check (${pos[0]})`);
       if (sub === 'clone' && pos[1] && this.outside(pos[1], cwd)) return this.stop(`Clones outside the project folder (${pos[1]})`);
+      // git fetch . HEAD:main with -u / --update-head-ok moves the checked-out branch; a refspec with a destination
+      // (src:dst: a bare branch name, refs/heads/*, refs/remotes/*) writes that ref whatever the checkout. A hard stop.
+      if (sub === 'fetch' || sub === 'pull') {
+        const upd = rest.find(x => /^--update-head-ok$|^-[a-zA-Z]*u[a-zA-Z]*$/.test(x));
+        if (upd) return this.stop(`git ${sub} ${upd}: it may overwrite the checked-out branch`);
+        const into = pos.slice(1).find(x => /:./.test(x));
+        if (into) return this.stop(`git ${sub} with a refspec that writes a branch or remote-tracking ref (${into})`);
+      }
       // A clone from the web is a download: running anything from it later is a stop (M039 4).
       if (sub === 'clone' && pos[0] && /:\/\/|^[\w.-]+@[\w.-]+:/.test(pos[0])) {   // dest: pos[1], else the repo's name
         this.markDown(pos[1] || pos[0].replace(/[\\/]+$/, '').replace(/\.git$/i, '').split(/[\\/:]/).pop(), cwd);
@@ -2354,6 +2382,22 @@ function splitHostFields(v) {
   return out;
 }
 
+// str.replace(re, ...) where fn(match, pre) also gets pre: the text in front of the match as it stands after the earlier
+// replacements (a body taken out is gone from it, so its quotes cannot be mistaken for the command's own).
+function replaceWithPrefix(str, re, fn) {
+  let out = '', pre = '', last = 0, m;
+  re.lastIndex = 0;
+  while ((m = re.exec(str))) {
+    const gap = str.slice(last, m.index);
+    pre += gap; out += gap;
+    const rep = fn(m, pre);
+    pre += rep; out += rep;
+    last = m.index + m[0].length;
+    if (!m[0].length) re.lastIndex++;
+  }
+  return out + str.slice(last);
+}
+
 // What the end of this text sits in: 'sq' (single quotes), 'dq' (double quotes), 'comment' (a # comment, or a PowerShell <# #>
 // block) or null (plain code). Used to tell a heredoc or here-string marker that opens one from a "<<EOF" in a string or a comment.
 export function contextAt(prefix, ps = false) {
@@ -2475,6 +2519,8 @@ export function splitParts(s, ps = false, withOps = false) {
     if (ps && c === '{' && prev(i) === '@') { ht++; cur += c; continue; }
     if (ht > 0) { if (c === '}') ht--; cur += c; continue; }
     if (c === '\\' && !ps && s[i + 1] === '\n') { i++; continue; } // line continuation
+    // In bash a \ outside quotes makes the next character plain text: \' and \" open no quote (echo it\'s '<<B').
+    if (c === '\\' && !ps && i + 1 < s.length) { cur += c + s[i + 1]; i++; continue; }
     // PowerShell ( ... ) or @( ... ) after a command word is that command's argument: kept in the part whole, its
     // inside noted (groups) so the hub reads it as a command too and counts the argument as unreadable.
     if (ps && (c === '(' || (c === '@' && s[i + 1] === '(')) && /[\s,=]/.test(prev(i)) && psArgument(cur)) {
