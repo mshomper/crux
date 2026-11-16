@@ -23,6 +23,7 @@ import { SideResizer } from './side-width.js';
 import { routeSwitch } from './route-switch.js';
 import { picturesButton, installPictures } from './pictures.js';
 import { levelChip, LEVELS as LEVEL_INFO, SettingsCards } from './project-settings.js';
+import { ListsCard, listAddButtons, listAddBody } from './lists-card.js';
 import { GuardUI } from './guard.js';
 import { briefButton, installBrief } from './brief.js';
 import { VoiceRecorder, VoicePlayer, VOICE_CLIENT, voiceLine, switchTip } from './voice.js';
@@ -467,8 +468,11 @@ function renderHubSwitches() {
 // Which permission level applies here (decisions 34 and 45): Ask, Auto or Trusted, set on the project's settings
 // card (project-settings.js), which also holds connectors and the handoff numbers (decision 44 B).
 const modeWord = p => (LEVEL_INFO[p.permissionMode] || LEVEL_INFO.standard).word;
+// Plan v3 A10: Matt's trusted sites and approved packages, opened from the project settings card.
+const listsCard = new ListsCard({ api, toast: (m, tone) => toast(m, tone) });
 const settingsCards = new SettingsCards({
   api, reload: () => load(), toast: m => toast(m),
+  openLists: p => listsCard.show(p),
   hubSettings: () => S.settings || {},
   sideRect: () => $('#side')?.getBoundingClientRect()
 });
@@ -627,7 +631,7 @@ function approvalCard(ev, p = proj()) {
     ${plain ? `<div class="raw">${fold('cmd:' + ev.approval, raw, String(input).length > 120 || String(input).includes('\n'))}</div>` : raw}
     <div class="row">${live
       // M008 10: Allow and Deny side by side; Always allow is a quieter text button that says which rule it saves.
-      ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button><button class="btn deny" data-deny="${ev.approval}">${icon('x')}Deny</button>${ev.always ? `<button class="always-btn" data-approve="${ev.approval}" data-always title="Allows this now, and saves the rule to this project's Claude Code settings (.claude/settings.local.json), where you can remove it">Always allow <span class="always-rule">${esc(ev.always.join('; '))}</span></button>` : ''}`
+      ? `<button class="btn primary" data-approve="${ev.approval}">${icon('check')}Allow</button><button class="btn deny" data-deny="${ev.approval}">${icon('x')}Deny</button>${listAddButtons(ev.listable)}${ev.always ? `<button class="always-btn" data-approve="${ev.approval}" data-always title="Allows this now, and saves the rule to this project's Claude Code settings (.claude/settings.local.json), where you can remove it">Always allow <span class="always-rule">${esc(ev.always.join('; '))}</span></button>` : ''}`
       : `<span class="chip">${esc(result ? result.how : 'expired')}</span>`}</div>
   </article>`;
 }
@@ -638,11 +642,13 @@ function permLine(ev) {
   const [word, tone] = ANSWER[ev.answer] || [ev.answer, ''];
   const who = ev.by === 'you' ? 'You' : '';
   const open = S.open.has('perm:' + ev.id);
-  return `<button class="perm-line ${tone} ${open ? 'open' : ''}" data-expand="perm:${esc(ev.id)}" title="${esc(`${ev.worker} · ${ev.tool}: ${ev.command}\n${ev.reason}`)}">
+  const line = `<button class="perm-line ${tone} ${open ? 'open' : ''}" data-expand="perm:${esc(ev.id)}" title="${esc(`${ev.worker} · ${ev.tool}: ${ev.command}\n${ev.reason}`)}">
     ${icon('shield')}<span class="pl-who">${esc(ev.worker)}</span><span class="pl-tool">${esc(ev.tool)}</span>
     <code class="pl-cmd">${esc(ev.command)}</code>
     <span class="pl-ans">${who ? `${who} ` : ''}${esc(word)}</span><span class="pl-why">${esc(ev.reason)}</span>
     <span class="time">${timeOf(ev.ts)}</span></button>`;
+  // A10: a single allow can become an "always" for the site or package it used (Matt's own click, never an agent's).
+  return ev.answer === 'allow' && ev.listable?.length ? `<div class="perm-wrap">${line}${listAddButtons(ev.listable, 'always-btn list-add')}</div>` : line;
 }
 
 // only: the decision ids to draw under this summary (AP.decisionCardsOnce: one card per decision in a thread).
@@ -1558,6 +1564,15 @@ document.addEventListener('click', e => {
   const ls = e.target.closest('[data-lesson]');
   if (ls) return act(() => api('/api/lessons', { project: projectOf(ls).name, ids: ls.dataset.lesson.split(','), accept: ls.dataset.accept === '1' }));
   const lu = e.target.closest('[data-level-undo]'); if (lu) return undoLevel(proj(), lu.dataset.levelUndo);
+  const la = e.target.closest('[data-list-add]');
+  if (la) {
+    const it = JSON.parse(la.dataset.listAdd), p = projectOf(la);
+    return act(async () => {
+      await api('/api/lists/add', listAddBody(p.name, it));
+      toast(`Added ${it.host || it.name} to your ${it.kind === 'site' ? 'trusted sites' : 'approved packages'}. Agents here may use it without asking from now on.`, 'info');
+      await load();
+    });
+  }
   const ap = e.target.closest('[data-approve]'); if (ap) return act(() => api('/api/approval', { id: ap.dataset.approve, allow: true, always: 'always' in ap.dataset }));
   const dn = e.target.closest('[data-deny]'); if (dn) return act(() => api('/api/approval', { id: dn.dataset.deny, allow: false }));
 });
@@ -1741,6 +1756,7 @@ load().then(() => {
   guardUI.check().then(st => { if (st && !st.paired) guardUI.openPair(); });
   if (openUsage !== null) { if (openUsage === 'session') usageUI.range = 'session'; usageUI.open(); }
   if (openSettings === 'hub') settingsCards.openHub();
+  else if (openSettings === 'lists' && proj()) listsCard.show(proj());   // ?settings=lists: the trusted sites and packages card
   else if (openSettings !== null && proj()) settingsCards.openProject(proj(), { alwaysOpen: openSettings === 'always' });
 })
   .catch(() => { if (phoneStart) $('#app').classList.add('show-side'); connect(); });

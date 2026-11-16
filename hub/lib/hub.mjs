@@ -1,6 +1,6 @@
 // The hub: projects, their agents, and the routing between you, the orchestrator role and workers.
 import { basename, resolve, join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EventLog } from './events.mjs';
 import { Board } from './board.mjs';
@@ -12,7 +12,8 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool } from './permission-rules.mjs';
-import { HubSettings, HANDOFF_NUMBERS } from './settings.mjs';
+import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
+import { HubSettings, HANDOFF_NUMBERS, projectKey } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, EffortCeilings, modelId, effortLevel, modelLabel } from './agent-types.mjs';
@@ -67,6 +68,9 @@ const when = ts => new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + '
 // between agents waking.
 export const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000, RESUME_GAP_MS = 4000;
 
+// A10: what a request could add to Matt's lists (the "Always allow" offers on its card and audit line), as an event field.
+const listable = (tool, input) => { const l = suggestList(tool, input); return l.length ? { listable: l } : {}; };
+
 export class Hub {
   // defaults: { orchestrator: { type, model, effort }, worker: {...} } from ~/crux/hub.json (decision 20).
   // agentHome: the folder whose .claude/agents holds the all-projects types (your home folder).
@@ -84,6 +88,8 @@ export class Hub {
     // Routing guide 9.1: effort levels each model accepts, learned from refusals and kept in the hub settings.
     this.effortCeilings = new EffortCeilings(settings?.effortCeilings, map => { try { settings?.save?.({ effortCeilings: map }); } catch { /* kept for this run */ } });
     this.agentHome = agentHome;
+    // Plan v3 A10: Matt's trusted sites and approved packages (null for a settings stub that cannot keep them).
+    this.lists = typeof settings?.setLists === 'function' ? new PermissionLists({ settings }) : null;
     this.listeners = new Set();
     this.approvals = new Map();
     this.projects = new Map();
@@ -606,7 +612,10 @@ export class Hub {
   // Decision 21 A: a worker's request goes to the orchestrator first, unless the hub's own matcher finds a hard stop
   // in the permission rules (or cannot read it), routing is off, there is no rules entry, or no orchestrator is
   // running. Then it is a card for you, as before. If the orchestrator escalates or does not answer in time, too.
-  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID } = {}) {
+  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, warmed } = {}) {
+    // A10: an install of approved packages waits (up to about 5 seconds) for the registry's answer before it is judged.
+    const warm = warmed ? null : this.lists?.warm(toolName, input, p.dir);
+    if (warm) return warm.then(() => signal?.aborted ? { behavior: 'deny', message: 'Cancelled' } : this.requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, warmed: true }));
     const auto = this.autoAnswer(p, agent, toolName, input, agent.cwdFor?.(toolUseID) || p.dir);
     if (auto) return Promise.resolve(auto);
     // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).
@@ -640,7 +649,7 @@ export class Hub {
       };
       const entry = { p, agent, toolName, input, finish, always, routedTo: route.to, escalated: false };
       this.approvals.set(id, entry);
-      p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input), routedTo: route.to, stops: route.stops, rules: route.rules });
+      p.log.append('approval', { thread: agent.thread, approval: id, agent: agent.name, tool: toolName, input, title: title || null, description: description || null, always: always ? CommandPolicy.describe(always) : null, summary: CommandSummary.of(toolName, input), routedTo: route.to, stops: route.stops, rules: route.rules, ...listable(toolName, input) });
       signal?.addEventListener('abort', () => finish({ behavior: 'deny', message: 'Cancelled' }, 'cancelled'));
       if (route.to) {
         entry.timer = setTimeout(() => this.escalate(id, `No answer within ${this.timeoutLabel()}`, 'hub'), this.settings.get('permissionTimeoutSec') * 1000);
@@ -664,7 +673,12 @@ export class Hub {
     const cwd = agent.cwdFor?.(toolUseID) || null;
     agent.downloads ||= new Set();
     agent.testHubs ||= new Set();   // plan A7: ports of the test hubs this agent started; it may stop only those
-    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: agent.downloads, hubs: agent.testHubs, level });
+    // A10: the project's record of downloaded files (its event log) counts for every agent, across restarts; Matt's lists.
+    // Everything inside a quarantine folder (any project's) counts as downloaded too: running it, or a copy of it, is a stop.
+    const marks = quarantineMarks(tmpdir());
+    const known = new Set([...downloadsFrom(p.log.events), ...marks]);
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir) });
+    for (const d of c.downloaded || []) if (!known.has(d)) p.log.append('download', { path: d, agent: agent.name, thread: agent.thread, ...(c.downloads?.find(x => x.path.toLowerCase().replace(/\\/g, '/') === d) || {}) });
     const { route, tempMade } = c;
     this.startsOf = { agent, ports: route === 'human' ? [] : c.hubsStarted || [] };   // noted in requestApproval, once the request is allowed
     const [reasons, unsure] = [c.reasons, c.unsure].map(l => l.map(s => this.memory.personalize(s)));   // they reach cards: the user's own name
@@ -785,6 +799,50 @@ export class Hub {
     return on;
   }
 
+  // ---------- Matt's trusted sites and approved packages (plan v3, A10) ----------
+  // Only the page's own actions reach these (server.mjs, behind the write guard and a fresh step-up for adding): no
+  // agent tool does. scope: 'all' (every project) or 'project' (this one only).
+  listsView(p) {
+    if (!this.lists) return { sites: [], packages: [], minAgeDays: 3, ecosystems: {}, scopeKey: projectKey(p.dir), project: p.name };
+    const names = Object.fromEntries([...this.projects.values()].map(x => [projectKey(x.dir), x.name]));
+    return { ...this.lists.view(names), scopeKey: projectKey(p.dir), project: p.name };
+  }
+  async addToLists(p, body = {}, by = 'you') {
+    if (!this.lists) throw new Error('This hub cannot keep trusted lists.');
+    const scope = body.scope === 'project' ? projectKey(p.dir) : 'all';
+    const who = by === 'you' ? 'You' : by;
+    const where = scope === 'all' ? 'every project' : p.name;
+    if (body.kind === 'site') {
+      const e = this.lists.addSite({ host: body.host, access: body.access || 'pages', pin: body.pin, scope, subdomains: body.subdomains, by });
+      this.notice(p, 'orchestrator', `${who} added ${e.host}${e.pin || ''} to the trusted sites (${e.access}) for ${where}. Matching reads of it need no card${e.access === 'downloads' ? '; downloads go to a quarantine folder in temp and running them still comes to you' : ''}.`);
+      return e;
+    }
+    if (body.kind === 'package') {
+      // The version the project may move to on its own is the one it has now; for a fresh package, the latest at the time of approval.
+      const eco = body.eco;
+      const asked = eco === 'pip' ? pipName(String(body.name || '').trim()) : String(body.name || '').trim();
+      const info = !this.noAgents && validPackage(eco, asked) && (eco === 'npm' || eco === 'pip') ? await this.lists.prime(eco, asked) : null;   // a test hub never calls out; this also fills the remembered answer
+      const v = /^(\d+)\.(\d+)/.exec(String(info?.latest ?? ''));
+      const e = this.lists.addPackage({ eco, name: body.name, scope, baseMajor: v ? Number(v[1]) : null, baseMinor: v ? Number(v[2]) : null, revision: body.revision, by });
+      this.notice(p, 'orchestrator', `${who} added ${e.name} (${ECOSYSTEMS[e.eco] || e.eco}) to the approved packages for ${where}. Installs of it need no card, except a release under 3 days old or a new major version.`);
+      return e;
+    }
+    throw new Error('Add a site or a package.');
+  }
+  setListAccess(p, id, access, by = 'you') {
+    if (!this.lists) throw new Error('This hub cannot keep trusted lists.');
+    const e = this.lists.setAccess(id, access);
+    this.notice(p, 'orchestrator', `${by === 'you' ? 'You' : by} ${access === 'downloads' ? 'allowed downloads from' : 'limited to pages'} ${e.host}${e.pin || ''}.`);
+    return e;
+  }
+  removeFromLists(p, id, by = 'you') {
+    if (!this.lists) throw new Error('This hub cannot keep trusted lists.');
+    const e = this.lists.remove(id);
+    if (!e) throw new Error('That entry is not on the list any more.');
+    this.notice(p, 'orchestrator', `${by === 'you' ? 'You' : by} removed ${e.kind === 'site' ? `${e.host}${e.pin || ''} from the trusted sites` : `${e.name} (${ECOSYSTEMS[e.eco] || e.eco}) from the approved packages`}.`);
+    return e;
+  }
+
   // The rules the orchestrator answers under: the board's entry; in Auto mode with no entry, the hub's built-in
   // defaults (R005's text with this project's folders); in Ask mode with no entry, none (everything comes to you).
   rulesFor(p) {
@@ -841,7 +899,7 @@ export class Hub {
 
   logAnswer(a, id, answer, reason, by) {
     const i = a.input || {};
-    a.p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: a.agent.name, workerThread: a.agent.thread, tool: a.toolName, command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400), answer, reason, by });
+    a.p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: a.agent.name, workerThread: a.agent.thread, tool: a.toolName, command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400), answer, reason, by, ...(answer === 'allow' ? listable(a.toolName, i) : {}) });
   }
 
   // The card comes to you: escalated by the orchestrator, timed out, or routing switched off. It buzzes your phone.
