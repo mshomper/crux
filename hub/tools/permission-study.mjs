@@ -465,7 +465,8 @@ export function report(sections, { since, generated = new Date().toISOString() }
 // ---------- the permission check in shadow mode (decision 66, plan B7 step 3) ----------
 // Each `check_shadow` line is what the one-shot check said about a request the orchestrator was also sent. This puts
 // it beside the real answer (the `permission_answer` for the same approval from the orchestrator, you, or the hub's
-// timeout). "Consult" is not a disagreement: it means the check would have handed the request to the orchestrator.
+// timeout). The check answers allow, deny or escalate (decision 73), like the orchestrator. Lines from before then may say
+// "consult" (the old layered check passing a request back): that is not a disagreement, it is counted apart.
 // Every disagreement is listed in full, with the whole command, so you can read them all; the allows both sides gave
 // are a count here (the weekly list of 10 is in the orchestrator thread). Read-only, like the rest of this tool.
 const WORD = { allow: 'allow', deny: 'deny', escalate: 'escalate', timeout: 'escalate' };   // a timeout came to you, as an escalation does
@@ -476,7 +477,7 @@ export function compareShadow(events, { sinceMs = -Infinity } = {}) {
     if (e.type === 'permission_answer' && e.approval && e.by !== 'permission check' && !real.has(e.approval)) real.set(e.approval, e);
     if (e.type === 'approval_result' && e.approval) results.set(e.approval, e.how);
   }
-  const out = { total: 0, invalid: 0, consult: 0, pending: 0, modelAllowed: 0, downgraded: 0, agree: { allow: 0, deny: 0, escalate: 0 }, disagree: [], usage: { calls: 0, cost: 0, list: 0, cacheRead: 0, input: 0 } };
+  const out = { total: 0, invalid: 0, consult: 0, pending: 0, said: { allow: 0, deny: 0, escalate: 0 }, agree: { allow: 0, deny: 0, escalate: 0 }, disagree: [], usage: { calls: 0, cost: 0, list: 0, cacheRead: 0, input: 0 } };
   for (const e of evs) {
     if (e.type === 'usage' && e.shadow && e.agent === 'permission check') {
       const m = Object.values(e.models || {})[0] || {};
@@ -485,24 +486,15 @@ export function compareShadow(events, { sinceMs = -Infinity } = {}) {
     if (e.type !== 'check_shadow') continue;
     out.total++;
     if (!e.valid) { out.invalid++; continue; }
-    // What the model itself said, before the hub's own rule (an allow on a script not fully seen becomes a consult).
-    // Lines from before this was logged have only `answer`.
-    if ((e.rawAnswer || e.answer) === 'allow') out.modelAllowed++;
-    if (e.downgraded) out.downgraded++;
+    if (e.answer === 'consult') { out.consult++; continue; }   // an old line: the layered check passing the request back
+    if (out.said[e.answer] !== undefined) out.said[e.answer]++;
     const r = real.get(e.approval);
-    const row = (check, modelSaid) => ({ ts: e.ts, approval: e.approval, worker: e.worker, tool: e.tool, command: e.command, check, modelSaid, checkReason: e.reason, downgraded: !!e.downgraded,
-      real: r.answer, realBy: r.by, realReason: r.reason, outcome: results.get(e.approval) || null, allowedByCheckOnly: modelSaid === 'allow' });
-    if (e.answer === 'consult') {
-      out.consult++;
-      // The model said allow and the hub's rule held it back: if the real answer was not an allow, that is the
-      // dangerous direction too, so it is listed (it counts as a consult above, and here as a disagreement).
-      if (e.downgraded && r && (WORD[r.answer] || r.answer) !== 'allow') out.disagree.push(row('consult', 'allow'));
-      continue;
-    }
     if (!r) { out.pending++; continue; }
+    const row = check => ({ ts: e.ts, approval: e.approval, worker: e.worker, tool: e.tool, command: e.command, check, checkReason: e.reason,
+      real: r.answer, realBy: r.by, realReason: r.reason, outcome: results.get(e.approval) || null, allowedByCheckOnly: check === 'allow' });
     const theirs = WORD[r.answer] || r.answer;
     if (theirs === e.answer) { out.agree[e.answer]++; continue; }
-    out.disagree.push(row(e.answer, e.rawAnswer || e.answer));
+    out.disagree.push(row(e.answer));
   }
   return out;
 }
@@ -518,8 +510,8 @@ export function checkSection(name, events, { sinceMs = -Infinity } = {}) {
   lines.push(`| Requests the check read | ${c.total} |`);
   lines.push(`| Said the same as the real answer | ${agreed} of ${judged} (${pct(agreed, judged)}): ${c.agree.allow} allow, ${c.agree.deny} deny, ${c.agree.escalate} escalate |`);
   lines.push(`| Disagreed with the real answer | ${c.disagree.length}, of which **${dangerous.length} where the check would have allowed and the real answer did not** |`);
-  lines.push(`| The model itself said allow (before the rule that holds back unread scripts) | ${c.modelAllowed}; the rule turned ${c.downgraded} of them into consult |`);
-  lines.push(`| Said consult (the orchestrator would decide) | ${c.consult} (${pct(c.consult, c.total)}; the bar is 10% or less) |`);
+  lines.push(`| Said allow, deny, escalate (to you) | ${c.said.allow}, ${c.said.deny}, ${c.said.escalate} (escalate is ${pct(c.said.escalate, c.total)} of the lines; the bar for what comes up is about 10%) |`);
+  if (c.consult) lines.push(`| Old lines that passed the request back ("consult", the layered check) | ${c.consult} (${pct(c.consult, c.total)}) |`);
   lines.push(`| No valid answer (bad reply, timeout, error) | ${c.invalid} |`);
   lines.push(`| Real answer not in yet | ${c.pending} |`);
   if (c.usage.calls) lines.push(`| Cost of the check's calls | ${usd(c.usage.list)} at list price over ${c.usage.calls} calls (${usd(c.usage.list / c.usage.calls)} each); ${pct(c.usage.cacheRead, c.usage.cacheRead + c.usage.input)} of input read from cache |`);
@@ -529,7 +521,7 @@ export function checkSection(name, events, { sinceMs = -Infinity } = {}) {
     for (const d of c.disagree.sort((a, b) => Number(b.allowedByCheckOnly) - Number(a.allowedByCheckOnly) || String(a.ts).localeCompare(b.ts))) {
       lines.push(`#### ${d.allowedByCheckOnly ? 'CHECK WOULD HAVE ALLOWED' : 'Check was stricter'}: ${d.worker} · ${d.tool} · ${String(d.ts).slice(0, 16).replace('T', ' ')} UTC`, '');
       lines.push('```', String(d.command), '```', '');
-      lines.push(`- Check said **${d.check}**${d.downgraded ? ' (the model said allow; turned into consult because a script was not fully seen)' : ''}: ${d.checkReason}`);
+      lines.push(`- Check said **${d.check}**: ${d.checkReason}`);
       lines.push(`- Real answer **${d.real}** by ${d.realBy}: ${d.realReason}${d.outcome ? ` (card ended: ${d.outcome})` : ''}`);
       lines.push(`- Request ${d.approval}`, '');
     }

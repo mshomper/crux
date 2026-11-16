@@ -98,7 +98,8 @@ test('on: a worker-written (untracked) or changed script goes to the check; its 
       assert.match(r.message, /permission check declined: it deletes things outside the project/);
       assert.equal(calls.length, 1, cmd);
       assert.match(calls[0].user, /Auto mode would allow it because it runs a script inside the project, but that script .* is not committed and unchanged from main/);
-      assert.ok(calls[0].user.includes('attached in full'), `${cmd}: the script text is attached for the check`);
+      assert.ok(!/attached|CUT OFF|NOT ATTACHED/.test(calls[0].user), `${cmd}: the script text is not sent: the check judges the request plainly (decision 73)`);
+      assert.ok(calls[0].user.includes(cmd.split(' ').slice(-1)[0]) || calls[0].user.includes(cmd), `${cmd}: the request itself is what it sees`);
       assert.equal(last(p, 'permission_answer').by, CHECK_NAME);
     }
   }
@@ -108,23 +109,20 @@ test('on: a worker-written (untracked) or changed script goes to the check; its 
   assert.equal(last(ok.p, 'permission_answer').by, CHECK_NAME);
 });
 
-test('on: escalate and consult work as for any request; an unread script cannot be allowed by the check', async () => {
+test('on: escalate works as for any request; a script that loads another file is judged plainly, and the model\'s allow is the answer', async () => {
   const esc = setup({ tracked: [], replies: [{ answer: 'escalate', reason: 'would change the live hub' }] });
   const pe = ask(esc.hub, esc.p, esc.w, 'node scripts/x.mjs');
   await settle();
   assert.equal(last(esc.p, 'approval_escalated').by, CHECK_NAME);
   esc.hub.answerApproval(last(esc.p, 'approval').approval, true);
   assert.equal((await pe).behavior, 'allow');
-  // a script that loads another file is unread: the model's allow is turned into consult, and the orchestrator is asked
-  const { hub, p, orch, w, dir } = setup({ tracked: [], replies: [{ answer: 'allow', reason: 'looks fine' }] });
+  // a script that loads another file: nothing holds the model's allow back any more (decision 73)
+  const { hub, p, w, dir } = setup({ tracked: [], replies: [{ answer: 'allow', reason: 'looks fine' }] });
   writeFileSync(join(dir, 'scripts', 'loader.mjs'), "import { go } from './helper.mjs';\ngo();");
-  const pending = ask(hub, p, w, 'node scripts/loader.mjs');
-  await settle();
-  const id = last(p, 'approval').approval;
-  assert.equal(last(p, 'permission_answer').answer, 'consult');
-  assert.equal(sent.at(-1)[0], orch.name);
-  hub.answerPermission(p, orch, id, 'deny', 'not now');
-  assert.equal((await pending).behavior, 'deny');
+  assert.equal((await ask(hub, p, w, 'node scripts/loader.mjs')).behavior, 'allow');
+  const line = last(p, 'permission_answer');
+  assert.deepEqual([line.answer, line.by, line.downgraded], ['allow', CHECK_NAME, undefined]);
+  assert.equal(sent.length, 0, 'the orchestrator is not asked');
 });
 
 test('on: the 5 minutes run from the request, not from the end of the script look-up', async (t) => {

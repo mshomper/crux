@@ -34,7 +34,7 @@ test('shadow lines are compared with the real answer for the same request', () =
   const c = compareShadow(log());
   assert.equal(c.total, 9);
   assert.deepEqual(c.agree, { allow: 2, deny: 0, escalate: 1 });
-  assert.equal(c.consult, 1, 'consult is not a disagreement');
+  assert.equal(c.consult, 1, 'an old consult line is not a disagreement');
   assert.equal(c.invalid, 1);
   assert.equal(c.pending, 1);
   assert.deepEqual(c.disagree.map(d => [d.approval, d.check, d.real, d.allowedByCheckOnly]), [['a4', 'deny', 'allow', false], ['a5', 'allow', 'escalate', true], ['a9', 'allow', 'deny', true]]);
@@ -51,7 +51,8 @@ test('the section lists every disagreement in full, the dangerous direction firs
   assert.match(t, /Requests the check read \| 9/);
   assert.match(t, /Said the same as the real answer \| 3 of 6 \(50%\): 2 allow, 0 deny, 1 escalate/);
   assert.match(t, /Disagreed with the real answer \| 3, of which \*\*2 where the check would have allowed and the real answer did not\*\*/);
-  assert.match(t, /Said consult .*\| 1 \(11%; the bar is 10% or less\)/);
+  assert.match(t, /Said allow, deny, escalate \(to you\) \| 5, 1, 1 \(escalate is 11% of the lines/);
+  assert.match(t, /Old lines that passed the request back \("consult", the layered check\) \| 1 \(11%\)/);
   assert.match(t, /No valid answer .*\| 1/);
   assert.ok(t.indexOf('CHECK WOULD HAVE ALLOWED') < t.indexOf('Check was stricter'), 'the worrying ones first');
   assert.ok(t.includes('node tools/x.mjs --out C:\\Users\\someone\\notes.txt'), 'the whole command');

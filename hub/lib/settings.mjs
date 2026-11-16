@@ -33,7 +33,7 @@ export const HANDOFF_NUMBERS = {
 // Permission levels (decisions 34 and 45). 'standard' is shown as Ask. Trusted is set only from the hub page.
 export const LEVELS = ['standard', 'auto', 'trusted'];
 // The one-shot permission check per project (decision 66): off (the orchestrator answers, as before), shadow (it runs
-// beside the orchestrator and only logs), on (it answers; the orchestrator is consulted only when it says so).
+// beside the orchestrator and only logs), on (it answers allow, deny or escalate to you; the orchestrator is asked only when it gives no valid answer).
 export const CHECK_MODES = ['off', 'shadow', 'on'];
 
 export class HubSettings {
