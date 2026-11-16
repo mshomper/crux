@@ -141,7 +141,7 @@ test('4a. inline scripts: XML namespace names are not the network; real calls st
   allow(proj, String.raw`cd "${T}/svg-work" && node -e "
 const fs=require('fs'); const b=(f)=>fs.readFileSync(f).toString('base64');
 const s='<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"10\" height=\"10\"><image xlink:href=\"data:image/png;base64,'+b('a.png')+'\"/><text>Before and after</text></svg>';
-fs.writeFileSync('ba.svg',s);" && "/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --screenshot="${T}/svg-work/ba.png" "file:///${T}/svg-work/ba.svg" 2>/dev/null; ls -la ba.png`);
+fs.writeFileSync('ba.svg',s);" && "/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --user-data-dir="${T}/svg-work/prof" --screenshot="${T}/svg-work/ba.png" "file:///${T}/svg-work/ba.svg" 2>/dev/null; ls -la ba.png`);
   matt(proj, 'node -e "fetch(\'http://www.w3.org/2000/svg\')"');
   matt(proj, 'node -e "require(\'https\').get(\'https://example.com\')"');
   matt(proj, 'node -e "const s=\'<svg xmlns=\\"http://evil.example/ns\\"/>\'; console.log(s)"');
