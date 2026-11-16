@@ -13,7 +13,8 @@ const projectDir = join(root, 'proj');
 const tmp = join(root, 'tmp');
 mkdirSync(join(projectDir, 'hub'), { recursive: true });
 mkdirSync(tmp, { recursive: true });
-writeFileSync(join(projectDir, 'hub', 'package.json'), JSON.stringify({ scripts: { start: 'node server.mjs' } }));
+writeFileSync(join(projectDir, 'hub', 'package.json'), JSON.stringify({ scripts: { start: 'node server.mjs', test: 'node --test', lint: 'echo lint' } }));
+writeFileSync(join(projectDir, 'package.json'), JSON.stringify({ scripts: { test: 'node --test', lint: 'echo lint' } }));   // npm test reads the script it runs
 const home = homedir();
 
 const run = (command, tool = 'Bash') => classify({ tool, input: { command }, projectDir, tmp, home });

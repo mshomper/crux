@@ -312,6 +312,7 @@ test('the orchestrator prompt reads the rules from the board, and explains the t
 test('auto mode (decision 34): contained work is allowed at once, only unclear requests reach the orchestrator', async () => {
   const { hub, p, orch, w } = setup();
   writeFileSync(join(p.dir, '.crux-hub.json'), '{ "permissions": "auto" }');
+  writeFileSync(join(p.dir, 'package.json'), JSON.stringify({ scripts: { build: 'echo build' } }));   // npm run reads the script it runs
   assert.equal(hub.permissionMode(p), 'auto');
   const before = p.log.events.length;
   for (const c of ['npm run build', 'rm -rf hub/tmp', 'git commit -m "x"', 'git push -u origin feat/routing', 'CRUX_HUB_DATA=/tmp/crux-x/data CRUX_HOME=/tmp/crux-x/home node server.mjs --port 4750']) {

@@ -117,7 +117,7 @@ test('3. near misses: a link pointing outside, made outside, into .git, or other
 test('4. timeout N <command> is judged as the command it runs', () => {
   allow('Bash', SHOT, 'retired-list');
   allow('Bash', SHOT2, 'retired-list');
-  allow('Bash', 'timeout --preserve-status -k 5 60 npm test');
+  allow('Bash', 'timeout --preserve-status -k 5 60 node --test');   // (npm test reads package.json, which this fixed path has no copy of here)
 });
 
 test('4. near misses: timeout around a hard stop or an unknown program', () => {

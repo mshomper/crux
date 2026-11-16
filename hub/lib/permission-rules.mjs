@@ -2681,13 +2681,44 @@ class Check {
     if (NPM_NET.has(sub)) return this.stop(`Reaches the npm registry (${tool} ${sub})`);
     if (sub === 'config') return /^(get|list|ls)$/.test(a[1] || '') ? undefined : this.stop('Changes npm settings');
     if (!NPM_OK.has(sub)) return this.unsure(`Not sure what this does (npm ${sub})`);
-    // "npm start" in a folder whose start script is the hub would start it on port 4747 unless a port is given.
-    if (sub === 'start' || (sub === 'run' && a[1] === 'start')) {
-      const pre = args.indexOf('--prefix');
-      let start = '';
-      try { start = JSON.parse(readFileSync(join(pre >= 0 ? resolve(cwd, args[pre + 1]) : cwd, 'package.json'), 'utf8')).scripts?.start || ''; } catch { }
-      if (/server\.mjs/.test(start)) { this.testHubStart(a); this.hubData(cwd, true); }
-    }
+    this.packageScripts(tool, sub, a, args, cwd);
+  }
+
+  // npm run X, npm test, npm start, yarn and pnpm run X (and bun run X): the script runs from package.json, which a worker
+  // can edit, so what it holds is classified as an inline shell command, its pre and post hooks too ("deploy": "git push
+  // --force origin main" is a hard stop). A script that is missing, or a package.json the hub cannot read, is a doubt.
+  // "npm start" in a folder whose start script is the hub starts it on port 4747 unless a port is given: the words after --
+  // go to the script, so `node server.mjs --port 4793` is judged like any test hub start.
+  packageScripts(tool, sub, a, args, cwd) {
+    if (tool === 'bun' && sub === 'test') return;   // bun's own test runner, not a script
+    const runs = /^(run|run-script)$/.test(sub);
+    const name = runs ? a.slice(1).find(x => !x.startsWith('-')) : /^(test|t|tst|start)$/.test(sub) ? (sub === 'start' ? 'start' : 'test') : null;
+    if (runs && !name) return;   // npm run with no name only lists the scripts
+    if (!name) return;
+    if (args.some(x => /^(-w|--workspaces?|--include-workspace-root)(=|$)/.test(x))) return this.unsure(`Runs a script of another package (${tool} ${name} with a workspace option)`, true);
+    this.npmDepth = (this.npmDepth || 0) + 1;
+    try {
+      if (this.npmDepth > 4) return this.unsure(`A package script that runs other package scripts too deeply (${name})`, true);
+      const pre = args.findIndex(x => /^--?(prefix|C|dir|cwd)$/.test(x));
+      const dir = pre >= 0 && args[pre + 1] ? resolve(cwd, args[pre + 1]) : cwd;
+      let scripts;
+      try { scripts = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).scripts; } catch { scripts = undefined; }
+      if (!scripts || typeof scripts !== 'object' || typeof scripts[name] !== 'string') {
+        return this.unsure(`A package script the hub cannot read (${tool} ${name}: package.json missing, unreadable or with no such script)`, true);
+      }
+      const dd = args.indexOf('--');
+      const extra = dd >= 0 ? args.slice(dd + 1) : tool === 'npm' ? [] : args.slice(Math.max(0, args.indexOf(name) + 1));
+      const quoted = extra.map(x => `'${String(x).replace(/'/g, `'\\''`)}'`).join(' ');
+      // The settings in front of this request (CRUX_HUB_DATA=... npm start) reach the script too.
+      const envText = [...this.env()].filter(([k, v]) => /^[A-Za-z_]\w*$/.test(k) && typeof v === 'string').map(([k, v]) => `${k}='${v.replace(/'/g, `'\\''`)}' `).join('');
+      for (const n of [`pre${name}`, name, `post${name}`]) {
+        const text = scripts[n];
+        if (text == null) continue;
+        if (typeof text !== 'string') { this.unsure(`A package script the hub cannot read (${n})`, true); continue; }
+        this.scanBits?.push(text);
+        this.innerCommand(`${envText}${n === name && quoted ? `${text} ${quoted}` : text}`, dir);
+      }
+    } finally { this.npmDepth--; }
   }
 
   // Trusted (decision 45): installing, updating and removing the project's own packages, and reading the registry.

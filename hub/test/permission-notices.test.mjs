@@ -371,6 +371,7 @@ test('R1 MEDIUM 7. after something the hub could not read, the branch is unknown
   // a part that cannot switch branches keeps the branch known; explicit branches never needed it
   assert.equal(notMatt(wt, 'git commit -q -m "v $(date +%s)" && git push'), 'unsure');
   notMatt(wt, 'unknowntool x && git push -u origin feat/voice');
+  writeFileSync(join(wt, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));   // npm test reads the script it runs
   allow(wt, 'npm test && git push');
 });
 
