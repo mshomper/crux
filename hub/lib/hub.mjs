@@ -745,6 +745,7 @@ export class Hub {
       rulesId: rules?.entryId, rulesBody: rules?.body, worker: agent.name,
       goal: agent.goal || String(agent.task || '').split('\n')[0].slice(0, 200),
       tool: toolName, input, cwd, doubts: route.unsure || [],
+      testPorts: [...(agent.testHubs || [])],   // plan A7: the test hubs this agent started, the hub's own record
       // shell: how its text is split into words (Git Bash for Bash, PowerShell for PowerShell)
       scripts: route.scripts !== undefined ? route.scripts : isShell ? await scriptsFor(String(input?.command || ''), { cwd, projectDir: p.dir, shell: toolName === 'PowerShell' ? 'powershell' : 'bash', ...(this.checkGit ? { git: this.checkGit } : {}) }) : null
     };
