@@ -7,7 +7,7 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the permission check be stripped back to what was first vetted: one fresh model gets the request and the rules, and answers allow, deny or ask you? I recommend it. In a replay of 625 real requests it agreed with the orchestrator 87% of the time and sent only 11% up, while the layered check passed back 93%. It runs in shadow for a few days before it answers anything for real.",
  "for_you": [
   "Today: almost every unclear request still lands on the orchestrator. After this, about 9 in 10 would be answered by the check, and about 1 in 10 would come up",
@@ -75,9 +75,9 @@
  "recommendation": "A: it matches the vetted design, and the replay shows it would take most of the load while hard stops stay in code.",
  "confidence": "firm",
  "change_mind": "If the shadow period shows it allowing something the orchestrator refuses for a safety reason, go to C.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-16",
  "superseded_by": null,
  "challenge": null,
  "settles": [
