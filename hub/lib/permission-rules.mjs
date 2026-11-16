@@ -465,23 +465,57 @@ const RUNS_TEXT = /child_process|\bexec(Sync|File|FileSync)?\s*\(|\bspawn(Sync)?
 // and 'git' + ' push' read as `git push`) plus the stops that only make sense in code: the home folder's .claude, ~/crux, the
 // live hub's ports. stops: the permission check escalates to Matt before any model call. doubts: the model may not allow.
 // Indexes into RISKY_PATTERNS that are only a doubt in code: a bare push / merge word, kill, and the secret-ish words.
-const SCRIPT_STOPS = RISKY_PATTERNS.filter((_, i) => ![2, 7, 10].includes(i));   // 2: bare push|merge, 7: kill, 10: .env .ssh ... and password words
-const SCRIPT_SECRET_PATH = /\.env\b|\.ssh\b|\.crux-hub\b|\bid_(rsa|ed25519)\b/i;
+// Review round 1 of #95: a word in a script is a hard stop only where it does something. The hub's own server.mjs names
+// .crux-hub, ~/crux and port 4747, and most tests write "git push" in a string: those are doubts. A command (git push,
+// an install, rm -rf /) is a stop when it sits next to a call that starts a process (or the file is itself a shell
+// script); a secret location (.ssh, a private key, a login store) next to a file or process call; the home folder's
+// .claude next to a write; the live hub's port next to a network call. Anywhere else the same words are doubts.
+const SCRIPT_COMMANDS = RISKY_PATTERNS.filter((_, i) => ![2, 7, 10, 11].includes(i));   // not: 2 bare push|merge, 7 kill, 10 secret words, 11 logins
+const SCRIPT_LOGINS = RISKY_PATTERNS[11];
+const SPAWN_CALL = /\b(?:spawn(?:Sync)?|exec(?:Sync|File|FileSync)?|fork|system|popen|Popen|check_output|check_call|subprocess|Start-Process|Invoke-Expression|Invoke-Command|iex|child_process)\b/i;
+const FILE_CALL = /\b(?:readFile(?:Sync)?|readdir(?:Sync)?|writeFile(?:Sync)?|appendFile(?:Sync)?|createReadStream|createWriteStream|open(?:Sync)?|copyFile(?:Sync)?|cp(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|mkdir(?:Sync)?|symlink(?:Sync)?|read_text|write_text|read_bytes|write_bytes|Get-Content|Set-Content|Add-Content|Out-File|Remove-Item|Copy-Item|Move-Item|New-Item|cat|type|curl|wget|scp|sftp|robocopy|xcopy|rsync|tar)\b|\bspawn|\bexec/i;
+const WRITE_CALL = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|createWriteStream|copyFile(?:Sync)?|cp(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|mkdir(?:Sync)?|symlink(?:Sync)?|write_text|write_bytes|Set-Content|Add-Content|Out-File|Remove-Item|Copy-Item|Move-Item|New-Item|robocopy|xcopy|rsync|tee|mv|cp|rm)\b|\bspawn|\bexec/i;
+const NET_CALL = /\b(?:fetch|XMLHttpRequest|WebSocket|http\.request|https\.request|https?\.get|axios|net\.connect|createConnection|curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|urlopen|requests\.\w+)\b/i;
+// The first match of `re` that has `call` within `span` characters before its end; null when none. kind 'shell': the whole
+// file is commands, so any match counts.
+function inPosition(texts, re, call, kind, span = 240) {
+  const g = new RegExp(re.source, re.flags.replace('g', '') + 'g');
+  for (const t of texts) {
+    g.lastIndex = 0;
+    for (let m; (m = g.exec(t));) {
+      if (kind === 'shell' || call.test(t.slice(Math.max(0, m.index - span), m.index + m[0].length))) return m;
+      if (m[0].length === 0) g.lastIndex++;
+    }
+  }
+  return null;
+}
+const SCRIPT_SECRET_PATH = /\.ssh\b|\bid_(rsa|ed25519)\b/i;
 const SCRIPT_HOME_CLAUDE = /(?:~[\\/]+|homedir\W|userprofile\W|\$HOME\W|%USERPROFILE%[\\/]*|[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s'"`]+[\\/]+|\/(?:home|Users)\/[^\/\s'"`]+\/)[^;\n]{0,80}?\.claude(?:\.json|\b)/i;
 const SCRIPT_HOME_CRUX = /~[\\/]+crux\b/i;
 const SCRIPT_LIVE_HUB = /:(?:4747|4748)\b|(?:localhost|127\.0\.0\.1|::1|0\.0\.0\.0)[:\s'",]*(?:4747|4748)\b|\bport\W{0,12}(?:4747|4748)\b/i;
 const SCRIPT_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|copyFile(?:Sync)?|cp(?:Sync)?|mkdir(?:Sync)?|createWriteStream|symlink(?:Sync)?|truncate(?:Sync)?|rmtree|shutil|Remove-Item|Set-Content|Out-File|Copy-Item|Move-Item|New-Item)\b/;
-export function scanScriptText(text) {
+// kind: 'shell' for .sh, .ps1, .bat and the like (the text is the commands), else code ('js').
+export function scanScriptText(text, { kind = 'js' } = {}) {
   const raw = String(text || '');
   const open = psOpen(raw).replace(/[`\[\]{}+]/g, ' ');
   const both = [raw, open];
   const stops = [], doubts = [];
   const seeIn = (re, list, why) => { if (both.some(t => re.test(t)) && !list.includes(why)) list.push(why); };
-  for (const re of SCRIPT_STOPS) { const m = both.map(t => re.exec(t)).find(Boolean); if (m) { const why = `it contains "${m[0].trim().replace(/\s+/g, ' ').slice(0, 60)}", a hard stop`; if (!stops.includes(why)) stops.push(why); } }
-  seeIn(SCRIPT_SECRET_PATH, stops, 'it names a secret or credential location (.env, .ssh, .crux-hub, a private key)');
-  seeIn(SCRIPT_HOME_CLAUDE, stops, 'it reaches into the home folder\'s .claude');
-  seeIn(SCRIPT_HOME_CRUX, stops, 'it reaches into ~/crux');
-  seeIn(SCRIPT_LIVE_HUB, stops, 'it names the live hub\'s port (4747 or 4748)');
+  const quote = m => String(m[0]).trim().replace(/\s+/g, ' ').slice(0, 60);
+  // stop where it does something, else a doubt ("mentions")
+  const judge = (re, call, stopWhy, doubtWhy) => {
+    const at = inPosition(both, re, call, kind);
+    if (at) { const why = stopWhy(at); if (!stops.includes(why)) stops.push(why); return; }
+    const any = both.map(t => re.exec(t)).find(Boolean);
+    if (any) { const why = doubtWhy(any); if (!doubts.includes(why)) doubts.push(why); }
+  };
+  for (const re of SCRIPT_COMMANDS) judge(re, SPAWN_CALL, m => `it runs "${quote(m)}", a hard stop`, m => `it mentions "${quote(m)}" (no process is started next to it)`);
+  judge(SCRIPT_LOGINS, FILE_CALL, m => `it reads or runs something with "${quote(m)}", a login or secret store`, m => `it mentions "${quote(m)}", a login or secret store`);
+  judge(SCRIPT_SECRET_PATH, FILE_CALL, () => 'it reads, writes or runs something with .ssh or a private key', () => 'it mentions .ssh or a private key');
+  judge(SCRIPT_HOME_CLAUDE, WRITE_CALL, () => 'it writes into the home folder\'s .claude', () => 'it names the home folder\'s .claude');
+  judge(SCRIPT_LIVE_HUB, NET_CALL, () => 'it calls the live hub\'s port (4747 or 4748)', () => 'it names the live hub\'s port (4747 or 4748)');
+  seeIn(/\.env\b|\.crux-hub\b/i, doubts, 'it names .env or .crux-hub');
+  seeIn(SCRIPT_HOME_CRUX, doubts, 'it names ~/crux');
   seeIn(/(^|\s)(push|merge)(\s|$)/i, doubts, 'it has a bare "push" or "merge" word, which may be a git command built up');
   seeIn(/(\b(stop-process|taskkill|killall|pkill)\b|(^|[\s;&|(])kill\s|process\.kill\s*\()/i, doubts, 'it stops processes');
   seeIn(/\bcredentials?\b|\bpassword\b|\bsecret\b|api[_-]?key|\baccess[_-]?token\b|\bauth[_-]?token\b/i, doubts, 'it mentions a secret, a password or a key');

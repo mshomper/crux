@@ -157,11 +157,14 @@ export function applyRules({ answer, reason }, { unread = false, doubts = [] } =
 // the model may not allow. Committed scripts are the project's reviewed code and are not scanned.
 export function scanScripts(scripts) {
   const texts = [];
-  for (const s of scripts?.scripts || []) if (s.kind === 'attached') texts.push([basename(s.path), s.scanText ?? s.text]);
-  for (const c of scripts?.inlineCode || []) texts.push(['the command\'s own code', c]);
+  const kindOf = p => (/\.(sh|bash|ps1|psm1|bat|cmd)$/i.test(p) ? 'shell' : 'js');
+  for (const s of scripts?.scripts || []) if (s.kind === 'attached') texts.push([basename(s.path), s.scanText ?? s.text, kindOf(s.path)]);
+  // the files an attached script imports (relative imports, followed; the model is not sent them, the scan reads them)
+  for (const s of scripts?.imports || []) texts.push([`${basename(s.path)} (imported)`, s.text, kindOf(s.path)]);
+  for (const c of scripts?.inlineCode || []) texts.push(['the command\'s own code', c, 'js']);
   const stops = [], doubts = [];
-  for (const [name, text] of texts) {
-    const r = scanScriptText(text);
+  for (const [name, text, kind] of texts) {
+    const r = scanScriptText(text, { kind });
     for (const w of r.stops) stops.push(`${name}: ${w}`);
     for (const w of r.doubts) doubts.push(`${name}: ${w}`);
   }
@@ -243,11 +246,11 @@ export class PermissionCheck {
     // The hub's own scan of the script text first: a hard stop in it goes to you without a model call (nothing for the
     // model to be talked out of); a doubt means the model may not allow.
     const scan = scanScripts(req.scripts);
-    if (scan.stops.length) {
-      const reason = `A script it runs has a hard stop in its text (${scan.stops[0]}${scan.stops.length > 1 ? `; ${scan.stops.length - 1} more` : ''}), so it goes to you without asking the model.`.slice(0, 300);
-      return { valid: true, answer: 'escalate', raw: 'escalate', reason, downgraded: false, scanned: true, scan, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
-    }
-    const doubts = scan.doubts;
+    const stopWhy = scan.stops.length ? `A script it runs has a hard stop in its text (${scan.stops[0]}${scan.stops.length > 1 ? `; ${scan.stops.length - 1} more` : ''})` : null;
+    // With the check on: no model call. In shadow (req.shadow) the model is still asked, so the study sees what it says on
+    // exactly the dangerous cases; the line logs "escalate" (what On would do) with the model's raw answer next to it.
+    if (stopWhy && !req.shadow) return { valid: true, answer: 'escalate', raw: 'escalate', reason: `${stopWhy}, so it goes to you without asking the model.`.slice(0, 300), downgraded: false, scanned: true, scan, model: this.model, ms: Date.now() - started, unread, via: 'code', tokens: null, costUSD: null, listUSD: null, modelUsage: null };
+    const doubts = stopWhy ? [...scan.stops, ...scan.doubts] : scan.doubts;
     const system = buildPrefix(req), user = buildSuffix(doubts.length ? { ...req, scripts: { ...req.scripts, scanDoubts: doubts } } : req);
     const ac = new AbortController();
     let timer, got = null, error = null;
@@ -265,8 +268,9 @@ export class PermissionCheck {
     } catch (e) { error = e?.message || String(e); }
     finally { clearTimeout(timer); }
     const base = { scan, model: this.model, ms: Date.now() - started, unread, via: got?.via || null, tokens: got?.tokens || null, costUSD: got?.costUSD ?? null, listUSD: got?.tokens ? listCost(this.model, got.tokens) : null, modelUsage: got?.modelUsage || null };
+    const parsed = error ? null : parseAnswer(got?.text);
+    if (stopWhy) return { valid: true, answer: 'escalate', raw: parsed?.answer ?? null, reason: `${stopWhy}. ${parsed ? `The model said ${parsed.answer}: ${parsed.reason}` : `The model gave no valid answer (${error || 'bad reply'})`}`.slice(0, 340), downgraded: false, scanned: true, ...base };
     if (error) return { valid: false, error, ...base };
-    const parsed = parseAnswer(got?.text);
     if (!parsed) return { valid: false, error: 'the reply was not {answer, reason}', ...base };
     return { valid: true, ...applyRules(parsed, { unread, doubts }), ...base };
   }

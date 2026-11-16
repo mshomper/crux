@@ -3,7 +3,7 @@
 // The model is a stub that counts its calls.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTmp } from './helpers/tmp.mjs';
 import { PROMPT, PermissionCheck, buildPrefix, buildSuffix, scanScripts, scriptsFor, EXTRA_FACT, CHECK_MODEL } from '../lib/permission-check.mjs';
@@ -51,10 +51,59 @@ test('the four shapes inside an attached script go to you in code, with no model
 });
 
 test('"git" + " push" built up, a PowerShell push, and gh pr merge are caught in script text', () => {
-  for (const text of ["run('git ' + 'push origin main')", "cp.spawnSync('git', ['merge', 'feature'])", "Start-Process git -ArgumentList 'push','origin','main'", 'gh pr merge 12 --squash', "exec(`git reset --hard origin/main`)", "execSync('npm install left-pad')"])
+  for (const text of ["exec('git ' + 'push origin main')", "cp.spawnSync('git', ['merge', 'feature'])", "Start-Process git -ArgumentList 'push','origin','main'", "execSync('gh pr merge 12 --squash')", "exec(`git reset --hard origin/main`)", "execSync('npm install left-pad')"])
     assert.ok(scanScriptText(text).stops.length > 0, text);
   for (const text of ["console.log('hello')", "const merged = items.push(1)", "writeFileSync('out.txt', 'x')", "execFileSync('git', ['status'])", 'function mergeSort(a) { return a }'])
     assert.deepEqual(scanScriptText(text).stops, [], text);
+  // a shell script is all commands: the same words are stops there without a call next to them
+  assert.ok(scanScriptText('git push origin HEAD:main\n', { kind: 'shell' }).stops.length > 0);
+});
+
+test('round 2 (#95 review): words are a hard stop only where they do something; elsewhere they are doubts', () => {
+  // text that only mentions: a test's data, a message, a table of rules
+  for (const text of ["const cases = ['git push origin main', 'gh pr merge 12']", "console.log('Open http://localhost:4747/ in your browser')", "const dir = join(homedir(), '.crux-hub');", "const home = '~/crux'; const env = '.env';", "const p = 4747;"]) {
+    const r = scanScriptText(text);
+    assert.deepEqual(r.stops, [], text);
+  }
+  assert.ok(scanScriptText("const dir = join(homedir(), '.crux-hub');").doubts.length > 0, 'a doubt, so the model may not allow');
+  assert.ok(scanScriptText("const cases = ['git push origin main']").doubts.some(d => /git push/.test(d)));
+  // where it does something
+  for (const text of ["await fetch(`http://localhost:4747/api/x`, { method: 'POST' })", "execSync('git push origin main')", "readFileSync(join(homedir(), '.ssh', 'id_rsa'))", "rmSync(join(homedir(), '.claude', 'agents'), { recursive: true })"])
+    assert.ok(scanScriptText(text).stops.length > 0, text);
+});
+
+test('the hub\'s own server.mjs, changed, run as `node hub/server.mjs --port 4800`, has no hard stop (it names .crux-hub, ~/crux and 4747)', async () => {
+  const src = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
+  assert.ok(/\.crux-hub|crux/.test(src) && /4747/.test(src), 'the file does name them');
+  const proj = tree({ 'hub/server.mjs': src + '\n// changed by the worker\n' });
+  const scripts = await scriptsFor('node hub/server.mjs --port 4800', { cwd: proj, projectDir: proj, git: fakeGit() });
+  assert.equal(scripts.scripts[0].kind, 'attached');
+  const scan = scanScripts(scripts);
+  assert.deepEqual(scan.stops, [], 'no hard stop');
+});
+
+test('the relative imports of an attached script are scanned too: run.mjs imports push.mjs, which force-pushes', async () => {
+  const proj = tree({ 'tools/run.mjs': "import { go } from './push.mjs';\ngo();\n", 'tools/push.mjs': "import { execFileSync } from 'node:child_process';\nexport const go = () => execFileSync('git', ['push', '--force', 'origin', 'HEAD:main']);\n", 'tools/safe.mjs': "export const x = 1;\n" });
+  const scripts = await scriptsFor('node tools/run.mjs', { cwd: proj, projectDir: proj, git: fakeGit() });
+  assert.deepEqual(scripts.imports.map(i => i.path.split(/[\\/]/).pop()), ['push.mjs']);
+  const scan = scanScripts(scripts);
+  assert.ok(scan.stops.some(s => /push\.mjs \(imported\)/.test(s) && /git/.test(s)), scan.stops.join('|'));
+  const c = checker('allow');
+  const r = await c.run.run({ ...FACTS, dir: proj, worker: 'w', goal: 'g', tool: 'Bash', input: { command: 'node tools/run.mjs' }, cwd: proj, doubts: [], scripts });
+  assert.equal(r.answer, 'escalate');
+  assert.equal(c.calls, 0);
+  // a committed, unchanged import is the project's reviewed code: followed, not scanned
+  const ok = await scriptsFor('node tools/run.mjs', { cwd: proj, projectDir: proj, git: fakeGit(['push.mjs']) });
+  assert.deepEqual(ok.imports, []);
+});
+
+test('npm pre and post hooks of a package script are read and scanned', async () => {
+  const proj = tree({ 'package.json': JSON.stringify({ scripts: { build: 'node tools/ok.mjs', prebuild: 'node tools/pre.mjs', postbuild: 'node tools/post.mjs' } }),
+    'tools/ok.mjs': 'console.log(1)', 'tools/pre.mjs': "execFileSync('git', ['push', 'origin', 'HEAD:main'])", 'tools/post.mjs': "await fetch('http://127.0.0.1:4748/api/restart')" });
+  const scripts = await scriptsFor('npm run build', { cwd: proj, projectDir: proj, git: fakeGit() });
+  const scan = scanScripts(scripts);
+  assert.ok(scan.stops.some(s => /^pre\.mjs/.test(s)), 'prebuild: ' + scan.stops.join('|'));
+  assert.ok(scan.stops.some(s => /^post\.mjs/.test(s)), 'postbuild: ' + scan.stops.join('|'));
 });
 
 test('code written in the command (node -e, a heredoc) is scanned too', async () => {
@@ -159,33 +208,57 @@ function hubWith(mode, scriptText) {
 }
 const PUSH = "import { execFileSync } from 'node:child_process';\nexecFileSync('git', ['push', 'origin', 'HEAD:main']);\n";
 
-test('shadow: a scan hard stop goes to the orchestrator as today, shown in its request text, and is only logged in check_shadow', async () => {
+test('shadow: a scan hard stop changes nothing live: the request goes to the orchestrator at once with no note; the model is still asked; check_shadow logs both', async () => {
   const { hub, p, orch, w, calls } = hubWith('shadow', PUSH);
   hub.requestApproval(p, w, 'Bash', { command: 'npm run build', description: 'a step' });
+  // at once, in the same tick, before any scan has run
+  const msgs = sent.filter(([n]) => n === orch.name);
+  assert.equal(msgs.length, 1);
+  assert.doesNotMatch(msgs[0][1], /scan|shadow|permission check/i, 'no word about the check in the request text');
   await settle();
-  const ap = p.log.ofType('approval').at(-1);
-  assert.equal(ap.routedTo, orch.name, 'with the orchestrator, as today');
-  assert.equal(sent.length >= 1, true);
-  const msg = sent.find(([n]) => n === orch.name)[1];
-  assert.match(msg, /hub's own scan of the text of a script this runs found: HARD STOP: x\.mjs: it contains "git push/);
-  assert.match(msg, /only in shadow mode here/);
   const a = [...hub.approvals.values()].at(-1);
   assert.equal(a.escalated, false, 'nothing was escalated to you');
   assert.equal(a.routedTo, orch.name);
   assert.equal(p.log.ofType('permission_answer').filter(e => e.by === 'permission check').length, 0, 'the check answered nothing');
-  assert.equal(calls.length, 0, 'and the model was not asked (the hard stop is found in code)');
+  assert.equal(calls.length, 1, 'the model was asked, so the study sees what it says on the dangerous cases');
   const sh = p.log.ofType('check_shadow').at(-1);
-  assert.equal(sh.answer, 'escalate');
+  assert.equal(sh.answer, 'escalate', 'what On would do');
+  assert.equal(sh.rawAnswer, 'allow', 'what the model said');
   assert.ok(sh.scanStops.some(s => /git push/.test(s)), 'the finding is in the log line');
+  assert.match(sh.reason, /The model said allow/);
 });
 
-test('shadow: a clean script adds nothing to the request text; the shadow run still logs', async () => {
+test('shadow: a clean script adds nothing; the shadow run still logs', async () => {
   const { hub, p, orch, w, calls } = hubWith('shadow', "console.log('hello')\n");
   hub.requestApproval(p, w, 'Bash', { command: 'npm run build', description: 'a step' });
   await settle();
   assert.doesNotMatch(sent.find(([n]) => n === orch.name)[1], /own scan/);
   assert.equal(calls.length, 1);
-  assert.equal(p.log.ofType('check_shadow').at(-1).answer, 'allow');
+  const sh = p.log.ofType('check_shadow').at(-1);
+  assert.equal(sh.answer, 'allow');
+  assert.equal(sh.scanStops, undefined);
+});
+
+test('shadow: a scan slower than 2 s, or one that throws, never delays or changes the request', async () => {
+  // slow: the git look-up hangs; the orchestrator already has the request
+  const slow = hubWith('shadow', PUSH);
+  slow.hub.checkGit = () => new Promise(() => { });
+  slow.hub.requestApproval(slow.p, slow.w, 'Bash', { command: 'npm run build', description: 'a step' });
+  assert.equal(sent.filter(([n]) => n === slow.orch.name).length, 1, 'sent at once');
+  assert.doesNotMatch(sent.find(([n]) => n === slow.orch.name)[1], /scan/i);
+  await settle();
+  assert.equal([...slow.hub.approvals.values()].at(-1).escalated, false);
+  // throws: the scan fails; the request is as today, and nothing is logged as an answer
+  const bad = hubWith('shadow', PUSH);
+  bad.hub.checkRequest = async () => { throw new Error('scan failed'); };
+  bad.hub.requestApproval(bad.p, bad.w, 'Bash', { command: 'npm run build', description: 'a step' });
+  assert.equal(sent.filter(([n]) => n === bad.orch.name).length, 1);
+  await settle();
+  const a = [...bad.hub.approvals.values()].at(-1);
+  assert.equal(a.escalated, false);
+  assert.equal(a.routedTo, bad.orch.name);
+  assert.equal(bad.p.log.ofType('check_shadow').at(-1).valid, false, 'logged as no valid answer');
+  assert.equal(bad.p.log.ofType('permission_answer').length, 0);
 });
 
 test('on: the same scan hard stop escalates to you in code, with no model call and no orchestrator message', async () => {

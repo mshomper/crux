@@ -21,7 +21,7 @@ import { answerMessage, answerNote } from '../public/questions.js';
 import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage, FABLE_NOTE } from './usage.mjs';
-import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, scanScripts, parseCommand, sdkCall, apiCall } from './permission-check.mjs';
+import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, parseCommand, sdkCall, apiCall } from './permission-check.mjs';
 import { totalsOf, sumCost } from '../public/usage.js';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
@@ -681,16 +681,11 @@ export class Hub {
         entry.timer?.unref?.();   // the server keeps the process alive; a waiting request alone should not
         if (route.check) this.runCheck(id, entry);   // the 5 minutes above run from this request, whatever the check says
         else {
-          const go = said => {
-            if (this.approvals.get(id) !== entry) return;   // answered or cancelled while the scan ran
-            try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd, said)); }
-            catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
-            if (route.shadow) this.runShadow(id, entry);
-          };
-          // Shadow mode changes nothing live: the request goes to the orchestrator as today. Its text carries what the hub's
-          // own scan of a script found (shown, never acted on; only with the check on does a scan hard stop escalate).
-          if (route.shadow && /^(Bash|PowerShell)$/.test(toolName)) this.shadowLook(entry).then(go, () => go(''));
-          else go('');
+          // Shadow mode changes nothing live: the request goes to the orchestrator at once, as today, with no note about the
+          // check. What the hub's own scan finds is only logged, in check_shadow (scanStops, scanDoubts).
+          try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd)); }
+          catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
+          if (route.shadow) this.runShadow(id, entry);
         }
       }
     });
@@ -831,32 +826,15 @@ export class Hub {
     catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
   }
 
-  // Shadow mode, before the orchestrator is sent the request: read the scripts it runs (at most about 2 seconds; the result
-  // is kept for the shadow run) and say what the hub's own text scan found, as one note for the request text.
-  async shadowLook(a) {
-    const { p, toolName, input, route } = a;
-    const cwd = route.cwd || p.dir;
-    let scripts;
-    try {
-      scripts = await Promise.race([
-        scriptsFor(String(input?.command || ''), { cwd, projectDir: p.dir, shell: toolName === 'PowerShell' ? 'powershell' : 'bash', ...(this.checkGit ? { git: this.checkGit } : {}) }),
-        new Promise(r => { const t = setTimeout(() => r(null), 2000); t.unref?.(); })
-      ]);
-    } catch { scripts = null; }
-    if (!scripts) return '';
-    route.scripts = scripts;   // checkRequest uses it instead of reading the scripts again
-    const { stops, doubts } = scanScripts(scripts);
-    if (!stops.length && !doubts.length) return '';
-    return `The hub's own scan of the text of a script this runs found: ${[...stops.map(s => `HARD STOP: ${s}`), ...doubts].join('; ')}. (The permission check is only in shadow mode here: this is shown to you, nothing is escalated for it; judge as usual.)`;
-  }
-
   // Shadow mode: the check reads the same request the orchestrator was sent and writes one `check_shadow` line. It has
   // no answer tool and touches nothing; hub/tools/permission-study.mjs --check compares it with the real answer.
   // Never rejects (a shadow run must not be able to disturb the real request).
   async runShadow(id, a) {
     try {
       let res;
-      try { res = await this.checker.run(await this.checkRequest(a)); }
+      // shadow: true makes the check ask the model even when the hub's scan found a hard stop (with the check on it would
+      // have escalated without a call), so the study sees what the model says on exactly the dangerous cases.
+      try { res = await this.checker.run({ ...(await this.checkRequest(a)), shadow: true }); }
       catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
       try { this.logCheckUsage(a.p, id, res, true); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
       const i = a.input || {};
@@ -865,7 +843,7 @@ export class Hub {
       a.p.log.append('check_shadow', {
         approval: id, worker: a.agent.name, tool: a.toolName,
         command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400),
-        valid: !!res.valid, answer: res.valid ? res.answer : null, rawAnswer: res.valid ? (res.raw || res.answer) : null, reason: res.valid ? res.reason : res.error,
+        valid: !!res.valid, answer: res.valid ? res.answer : null, rawAnswer: res.valid ? (res.raw === undefined ? res.answer : res.raw) : null, reason: res.valid ? res.reason : res.error,
         model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}),
         ...(res.scan?.stops?.length ? { scanStops: res.scan.stops.slice(0, 5) } : {}), ...(res.scan?.doubts?.length ? { scanDoubts: res.scan.doubts.slice(0, 5) } : {}), ms: res.ms ?? null
       });

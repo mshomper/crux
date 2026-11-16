@@ -738,8 +738,28 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     // scanText: more of a long script than the model is sent (up to 256 KB), so the hard-stop scan in code reads past the cut
     out.push({ path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, ...(cutOff ? { scanText: buf.subarray(0, 256 * 1024).toString('utf8') } : {}), loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) });
   }
+  // The files an attached script imports by relative path (importsOf resolves them), read for the hub's own text scan: up to
+  // 12 files and 256 KB each. Committed, unchanged files are the project's reviewed code and are followed but not scanned.
+  // The model is not sent them (the script "imports another file", so it may not be allowed anyway).
+  const imports = [], seenImp = new Set(out.filter(s => s.kind === 'attached').map(s => norm(s.path)));
+  const todo = out.filter(s => s.kind === 'attached' && /\.(mjs|cjs|js|jsx|ts|tsx|py)$/i.test(s.path)).map(s => ({ path: s.path, text: s.scanText ?? s.text }));
+  for (let n = 0; todo.length && n < 24; n++) {
+    const cur = todo.shift();
+    let specs = [];
+    try { specs = importsOf(cur.text, cur.path).specs; } catch { /* unreadable: nothing to follow */ }
+    for (const sp of specs) {
+      if (imports.length >= 12) break;
+      const r = resolveImport(sp, /\.py$/i.test(cur.path));
+      if (!r || /\.json$/i.test(r) || seenImp.has(norm(r))) continue;
+      seenImp.add(norm(r));
+      let text;
+      try { const b = readFileSync(r); if (b.subarray(0, 4096).includes(0)) continue; text = b.subarray(0, 256 * 1024).toString('utf8'); } catch { continue; }
+      if (!(await isCommittedFile(r, opts))) imports.push({ path: r, text });
+      if (/\.(mjs|cjs|js|jsx|ts|tsx|py)$/i.test(r)) todo.push({ path: r, text });
+    }
+  }
   // Text run as a command (iex, eval) is never a file the hub could read, wherever it sits in the command.
   if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|(?:^|[;&|(\s])eval\s/i.test(String(cmd || '')) && !inlineLoads.includes('evals text')) inlineLoads.push('evals text');
   const unread = out.some(s => s.kind !== 'committed' && (s.kind !== 'attached' || s.cutOff || s.loads.length)) || inlineLoads.length > 0;
-  return { scripts: out, inlineLoads, inlineCode, unread };
+  return { scripts: out, inlineLoads, inlineCode, imports, unread };
 }
