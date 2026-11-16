@@ -397,7 +397,15 @@ export function mergeNeedsOwner({ level = 'auto', into = null } = {}) {   // esl
 // hubs (plan A7): test-hub ports this agent started in earlier requests (the hub keeps them per agent; the result's
 // hubsStarted lists the ones this request starts). Stopping a hub is only for a port in the list.
 // lists (plan A10): Matt's trusted sites and approved packages for this project (permission-lists.mjs), or null.
-export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], hubs = [], level = 'auto', lists = null }) {
+// frozen (phase 4): the folders of the asking agent's expedition that are frozen (test/ and its stored copy), as full paths, or
+// []. A plain write into one is a stop of its own: { route: 'human', frozen: true }, whatever the level and the lists. The
+// hub turns it into a refusal for an expedition agent (it has no card to send it to). See frozenWrite for how narrow it is.
+export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], hubs = [], level = 'auto', lists = null, frozen = [] }) {
+  if (frozen?.length) {
+    let why = null;
+    try { why = frozenWrite(tool, input, { dirs: frozen, cwd, projectDir, home }); } catch { why = null; }   // a first line only: if it cannot read a request, the hash check is still there
+    if (why) return { route: 'human', reasons: [why], unsure: [], frozen: true, tempMade: [], downloaded: [], hubsStarted: [] };
+  }
   const c = new Check(projectDir, tmp, home, cwd);
   c.startedHubs = new Set([...hubs].map(Number));
   c.hubsNow = new Set();
@@ -431,6 +439,72 @@ function classifyWith(c, tool, input) {
   if (c.reasons.length) return { route: 'human', reasons: [...new Set(c.reasons)], unsure: [...new Set(c.doubts)] };
   if (c.doubts.length) return { route: 'unsure', reasons: [], unsure: [...new Set(c.doubts)] };
   return { route: 'allow', reasons: [], unsure: [] };
+}
+
+// ---------- an expedition's frozen success test (spec 4.5, phase 4) ----------
+// The first line of defence, and deliberately narrow (Matt, 2026-11-16, M042): it catches the PLAUSIBLE mistake, a plain
+// write into test/ or its stored copy by a name an agent would really type. It is not a guarantee. A disguised write
+// (a script, a variable, a link, an unusual spelling) gets past it, and the hub's own hash check at every loop and at the
+// finish restores test/ from the frozen copy: that is the real guard. What it reads:
+//   - the file tools (Write, Edit, MultiEdit, NotebookEdit) whose path is inside a frozen folder;
+//   - a shell redirection (>, >>, >|, 2>, &>) whose target is inside one;
+//   - mv, rm, sed -i, tee, touch, cp (its last word), Set-Content and their plain relatives, whose words name a path inside one.
+// Paths are read as the shell would: relative to where the command runs (a cd earlier in the same command counts),
+// .. and . resolved, either slash, Git Bash /c/... and ~/ forms, any case on Windows. A word with a variable in it is not read.
+const FROZEN_WRITE_ALL = new Set(['mv', 'move', 'move-item', 'mi', 'rm', 'rmdir', 'del', 'erase', 'rd', 'remove-item', 'ri', 'unlink', 'rename-item', 'rni', 'ren',
+  'tee', 'tee-object', 'touch', 'truncate', 'set-content', 'add-content', 'ac', 'out-file', 'clear-content', 'new-item', 'ni', 'mkdir', 'md']);
+const FROZEN_WRITE_LAST = new Set(['cp', 'copy', 'copy-item', 'cpi']);
+const FROZEN_CD = new Set(['cd', 'pushd', 'push-location', 'set-location', 'sl']);
+export function frozenWrite(tool, input = {}, { dirs = [], cwd = null, projectDir = '', home = homedir() } = {}) {
+  const roots = (dirs || []).filter(Boolean).map(d => norm(resolve(String(d))));
+  if (!roots.length) return null;
+  // A word as the full path it names, or null when the hub cannot tell (empty, or it holds a variable).
+  const full = (word, from) => {
+    let s = String(word ?? '').trim();
+    if (!s || /[$%`]/.test(s)) return null;
+    s = homeAndDevice(s, home);
+    if (/^~([\\/]|$)/.test(s)) s = join(home, s.slice(2));
+    const bash = /^\/([a-z])(?:\/|$)(.*)$/i.exec(s.replace(/\\/g, '/'));   // Git Bash: /c/Users/x
+    if (bash && process.platform === 'win32') s = `${bash[1].toUpperCase()}:/${bash[2]}`;
+    const abs = isAbsolute(s) || /^[a-z]:/i.test(s) ? s : join(from, s);
+    const r = resolve(abs);
+    return longPath(r) || r;
+  };
+  const inside = (word, from) => { const f = full(word, from); return f !== null && roots.some(r => under(f, r)); };
+  const base = cwd || projectDir || process.cwd();
+  const why = word => `Writes into the frozen success test (${String(word).slice(0, 120)}). test/ is frozen at the plan gate: if an item looks wrong, tell the Lead. The hub restores it from its copy anyway`;
+  if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) {
+    const f = input.file_path ?? input.notebook_path ?? input.path;
+    return f && inside(f, base) ? why(f) : null;
+  }
+  if (!/^(Bash|PowerShell)$/.test(tool)) return null;
+  const ps = tool === 'PowerShell';
+  let here = base;
+  for (const part of splitParts(String(input.command || ''), ps)) {
+    const w = tokens(part, ps);
+    // Redirections: the word after an output operator (a >&2 style duplicate of a descriptor is not a file).
+    const skip = new Set();
+    for (let i = 0; i < w.length; i++) {
+      if (!w[i].op) continue;
+      skip.add(i);
+      if (/>/.test(w[i].text) && !/&\d$/.test(w[i].text) && w[i + 1] && !w[i + 1].op) { skip.add(i + 1); if (!w[i + 1].vars && inside(w[i + 1].text, here)) return why(w[i + 1].text); }
+      else if (/</.test(w[i].text) && w[i + 1] && !w[i + 1].op) skip.add(i + 1);   // an input redirection's file: not a write
+    }
+    const words = w.filter((_, i) => !skip.has(i));
+    while (words.length && /^\w+=/.test(words[0].text) && !ps) words.shift();   // VAR=x cmd
+    if (!words.length) continue;
+    const prog = String(words[0].text).replace(/\\/g, '/').split('/').pop().toLowerCase().replace(/\.exe$/, '');
+    const args = words.slice(1).filter(x => !x.vars);
+    const plain = args.filter(x => !/^-/.test(x.text));
+    if (FROZEN_CD.has(prog)) { const t = plain[0] && full(plain[0].text, here); if (t) here = t; continue; }
+    let named = [];
+    if (FROZEN_WRITE_ALL.has(prog)) named = plain;
+    else if (FROZEN_WRITE_LAST.has(prog)) named = plain.slice(-1);
+    else if (prog === 'sed' && args.some(x => /^-(?!-)[A-Za-z]*i|^--in-place/.test(x.text))) named = plain;
+    const hit = named.find(x => inside(x.text, here));
+    if (hit) return why(hit.text);
+  }
+  return null;
 }
 
 // PowerShell methods that only compute from the object they are called on (strings, numbers, dates, hashtables).

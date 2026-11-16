@@ -5,6 +5,7 @@
 // phase adds, and this must still pass. Agents are stubbed: nothing starts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { recordAgents, stubHub, StubExpedition, quietMark, quietProblems } from './helpers/expedition-stub.mjs';
 
 const sent = recordAgents();
@@ -34,11 +35,15 @@ test('a whole expedition life sends the orchestrator nothing, opens no card and 
   // Phase 2: a hard stop, a gatherer's unclear request and a settings-file write were refused or parked, never a card;
   // a read went through. The Lead's message to its builder reached the builder only.
   const answers = await Promise.all(ex.answers);
-  assert.deepEqual(answers.map(a => a.behavior), ['deny', 'deny', 'deny', 'allow']);
+  assert.deepEqual(answers.map(a => a.behavior), ['deny', 'deny', 'deny', 'deny', 'allow']);
   assert.match(answers[0].message, /^Parked, not allowed:/);
   assert.match(answers[2].message, /^Not allowed: .*settings file/);
+  assert.match(answers[3].message, /^Not allowed: Writes into the frozen success test/);
   const parked = env.p.log.ofType('expedition_parked').filter(e => e.kind === 'request');
-  assert.equal(parked.length, 2, 'the hard stop and the web fetch; the settings write is denied, not parked');
+  assert.equal(parked.length, 2, 'the hard stop and the web fetch; the settings write and the frozen-test write are denied, not parked');
+  // Phase 4: the tamper the deny rule missed was found at the loop and put back, and that changed nothing upward.
+  assert.deepEqual(env.p.log.ofType('expedition_integrity').map(e => [e.at, e.restored, e.changed]), [['loop', true, ['CHECKLIST.md (changed)']]]);
+  assert.equal(readFileSync(ex.ex.path('test/CHECKLIST.md'), 'utf8').includes('weakened'), false, 'test/ is back as it was frozen');
   assert.deepEqual(parked.find(e => e.tool === 'WebFetch').subagent, { id: 'agent-1', type: 'expedition-gatherer' });
   assert.equal(env.hub.approvals.size, 0);
   assert.equal(env.p.log.ofType('permission_answer').filter(e => e.thread === 'orchestrator').length, 0);

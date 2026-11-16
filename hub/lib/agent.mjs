@@ -226,11 +226,13 @@ export class Agent {
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
       // Only notes where the call runs (noteCwd); it never allows, denies or changes anything.
-      // Notes where the call runs (noteCwd) and which subagent made it; the one thing it can refuse is the Expedition Lead's
-      // Agent tool after a hub stop (hub.expeditionToolBlock). Everything else is left to the permission callback.
+      // Notes where the call runs (noteCwd) and which subagent made it. It refuses two things, both an expedition's: the Lead's
+      // Agent tool after a hub stop (hub.expeditionToolBlock), and a plain write into the frozen success test, by anyone in
+      // the expedition, gatherers included (hub.expeditionFrozenBlock: acceptEdits never asks canUseTool for edits in the
+      // working folder, so this is where it is seen). Everything else is left to the permission callback.
       hooks: { PreToolUse: [{ hooks: [async input => {
         this.noteCwd(input); this.noteSubagent(input);
-        const why = input?.agent_id ? null : this.hub.expeditionToolBlock?.(p, this, input?.tool_name);
+        const why = (input?.agent_id ? null : this.hub.expeditionToolBlock?.(p, this, input?.tool_name)) || this.hub.expeditionFrozenBlock?.(p, this, input);
         return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : {};
       }] }] },
       ...(builtIn?.length ? { tools: builtIn } : {}),

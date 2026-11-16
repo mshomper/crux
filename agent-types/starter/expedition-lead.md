@@ -11,7 +11,7 @@ Your team. Advisor, Synthesizer, Skeptic, Builder and Verifier are hub agents: s
 
 The plan, in order:
 1. Write PLAN.md: sub-questions, the build target, who does what.
-2. Plan gate: wake the Advisor once to review the plan and the success test. Amendments to test/ are possible only now. When the gate closes the hub freezes test/ and logs its hash. After that, nobody changes test/.
+2. Plan gate: wake the Advisor once to review the plan and the success test. Amendments to test/ are possible only now. When the gate closes the hub freezes test/ and logs its hash. After that, nobody changes test/: the hub keeps a copy, refuses writes to it, and at each loop result and at the finish restores test/ from the copy if it changed and counts that as a Verifier FAIL.
 3. Gatherers in parallel, one sub-question each: at most 4 at once, and one second round of the same size, only for gaps they flagged. Each writes notes-<n>.md.
 4. Start the Builder as soon as the approach is fixed, in parallel with the research. It builds in its own worktree against the frozen test.
 5. Synthesizer: findings and a recommendation from the notes. Then the Skeptic reads the notes and the synthesis and tries to break them. Fold the objections into the report and into the Builder's instructions.

@@ -3,6 +3,7 @@
 // calling Lead's expedition, so the log, DECISIONS.md and the report come from the hub, not from lines the Lead writes.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readdirSync } from 'node:fs';
 import { recordAgents, stubHub, StubExpedition, quietMark, quietProblems } from './helpers/expedition-stub.mjs';
 import { cruxTools, cruxToolNames } from '../lib/tools.mjs';
 
@@ -61,8 +62,9 @@ test('expedition_close_gate freezes the test once: the hash is logged, the phase
   assert.match(g.testHash, /^[0-9a-f]{64}$/);
   assert.equal(g.testHash, ex.ex.testHash());
   assert.deepEqual([g.verdict, g.amendments, g.expedition], ['approve with changes', ['3. results tied to a reference'], ex.id]);
-  assert.equal(said, `Gate closed. The hub logged the test's hash (${g.testHash.slice(0, 12)}). Treat test/ as frozen from here: do not change it, and tell the others the same. Building and verifying can start.`);
-  assert.doesNotMatch(said, /hub (froze|locks)|is frozen \(/, 'it does not claim a hub lock that phase 4 has not built');
+  assert.match(said, new RegExp(`^Gate closed\\. The hub logged the test's hash \\(${g.testHash.slice(0, 12)}\\) and kept a copy of test/ outside the worktree\\. test/ is locked from here`));
+  assert.doesNotMatch(said, /by agreement/, 'the lock is the hub\'s now, not an agreement');
+  assert.deepEqual(readdirSync(ex.ex.frozenDir), ['CHECKLIST.md'], 'the copy is kept outside the worktree and outside the expedition\'s own folder');
   assert.equal(ex.ex.state().phase, 'running');
   assert.match(await call('expedition_close_gate', { verdict: 'again' }), /^Gate not closed: .*is running; this needs it to be planning/);
   assert.equal(p.log.ofType('expedition_gate').length, 1);

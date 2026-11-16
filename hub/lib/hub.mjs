@@ -11,7 +11,8 @@ import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
-import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool } from './permission-rules.mjs';
+import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite } from './permission-rules.mjs';
+import { normalizeOverlay } from './permission-lists.mjs';
 import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
 import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
@@ -547,7 +548,9 @@ export class Hub {
   // Launch (spec section 5; phase 5 adds the screen and the endpoint). Refuses, in plain words and before anything is
   // written, when: the brief is empty, an expedition already runs in this project, the project is at Ask, an agent type is
   // missing, or the Verifier would run on the Builder's model. test: files for test/ by name ({ 'CHECKLIST.md': '...' }).
-  launchExpedition(p, { brief, question = '', test = {}, envelope = {}, roles = {}, gatherers = 3 } = {}, by = 'you') {
+  // preApprovals (phase 4; the launch panel fills it in phase 5): { sites, packages } for this expedition's agents only. Checked
+  // before anything is written, kept in the start event, never added to the user's own lists.
+  launchExpedition(p, { brief, question = '', test = {}, envelope = {}, roles = {}, gatherers = 3, preApprovals = null } = {}, by = 'you') {
     const text = String(brief ?? '').trim();
     if (!text) throw new Error('The brief is empty: write the question, the scope and the success test first.');
     const running = Expedition.all(p).find(x => x.phase !== 'ended');
@@ -566,6 +569,7 @@ export class Hub {
     for (const name of Object.keys(test || {})) {
       if (!/^[A-Za-z0-9][\w.-]*$/.test(name) || name.includes('..') || /^BRIEF\.md$/i.test(name)) throw new Error(`"${name}" is not a name for a success-test file: use a plain file name such as CHECKLIST.md or run.json.`);
     }
+    try { normalizeOverlay(preApprovals, { strict: true }); } catch (e) { throw new Error(e.message); }   // before the folder exists
     const dir = join(p.dir, '.crux', 'expeditions');
     const taken =[...Expedition.all(p).map(x => x.id), ...(existsSync(dir) ? readdirSync(dir) : [])];
     const id = Expedition.makeId(question || text.split('\n')[0], { taken });
@@ -576,7 +580,7 @@ export class Hub {
     const limit = Math.min(GATHERER_LIMIT, Math.max(1, Math.round(Number(gatherers)) || 3));
     // planStart: the 7-day meter's reading at launch, as a record (it can be minutes old; null under an API key or before the
     // meters load). Spend measure 2 counts from the first fresh reading after the launch, which the watchdog logs itself.
-    ex.start({ envelope: { ...envelope, ...(hours ? { hours } : {}), gatherers: limit }, roles: merged, planStart: this.expeditionWatch.planStart() });
+    ex.start({ envelope: { ...envelope, ...(hours ? { hours } : {}), gatherers: limit }, roles: merged, planStart: this.expeditionWatch.planStart(), preApprovals });
     const e = ex.state().started.envelope;
     const task = [
       `You are the Lead of expedition ${id} in ${p.name}. Its folder is .crux/expeditions/${id}/ : BRIEF.md (the question, scope and envelope) and test/ (the success test) are there; everything you and your team write goes in that folder.`,
@@ -594,6 +598,43 @@ export class Hub {
     if (!agent?.expedition) return false;
     const s = this.expeditionOf(p, agent).state();
     return !!(s.reserveNote || s.stopped);
+  }
+
+  // ---------- phase 4: the frozen test and the launch's pre-approvals ----------
+  // The folders frozen from the plan gate on: the agent's own test/ and the folder holding the stored copies. Read from the
+  // hub's own record of which expedition the agent belongs to (agent.expedition, set at creation and read back from the log),
+  // never from anything the agent says or writes. [] for a plain agent, and for an expedition before its gate.
+  frozenDirs(p, agent) {
+    if (!agent?.expedition) return [];
+    try {
+      const ex = this.expeditionOf(p, agent);
+      return ex.state().gate ? [ex.testDir, ex.frozenRoot] : [];   // frozenRoot: every stored copy, so one rm cannot take them
+    } catch { return []; }
+  }
+
+  // The pre-approved sites and packages the launch gave this agent's expedition (the start event), only while it is planning
+  // or running: it ends at expedition_stopped, and a restart rebuilds it from the log. null for a plain agent.
+  expeditionOverlay(p, agent) {
+    if (!agent?.expedition) return null;
+    try {
+      const s = this.expeditionOf(p, agent).state();
+      return s.started && (s.phase === 'planning' || s.phase === 'running') ? s.started.preApprovals || null : null;
+    } catch { return null; }
+  }
+
+  // Asked from the PreToolUse hook for every tool call (the Agent tool aside), for the Lead's gatherers too. Workers run in
+  // acceptEdits mode, where Claude Code approves edits and plain file commands inside the working folder itself and never asks
+  // canUseTool; a hook's deny is the one place that still sees them. The same narrow rule as classify's (frozenWrite), logged
+  // like any refusal. A plain-words reason, or null. hookInput: { tool_name, tool_input, cwd, tool_use_id, agent_id }.
+  expeditionFrozenBlock(p, agent, hookInput) {
+    const dirs = this.frozenDirs(p, agent);
+    if (!dirs.length || !hookInput?.tool_name) return null;
+    const input = hookInput.tool_input || {};
+    let why = null;
+    try { why = frozenWrite(hookInput.tool_name, input, { dirs, cwd: hookInput.cwd || agent.cwdFor?.(hookInput.tool_use_id) || null, projectDir: p.dir }); } catch { why = null; }   // never break the agent's call: the hash check is the real guard
+    if (!why) return null;
+    const subagent = agent.subagentFor?.(hookInput.tool_use_id, hookInput.agent_id) || null;
+    return this.denyQuiet(p, agent, hookInput.tool_name, input, why, { subagent }).message;
   }
 
   // After a hub stop (time, budget, the user's Stop) the Lead may not call the Agent tool: its gatherers are gone with the
@@ -859,7 +900,7 @@ export class Hub {
   // running. Then it is a card for you, as before. If the orchestrator escalates or does not answer in time, too.
   requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, agentID, warmed } = {}) {
     // A10: an install of approved packages waits (up to about 5 seconds) for the registry's answer before it is judged.
-    const warm = warmed ? null : this.lists?.warm(toolName, input, p.dir);
+    const warm = warmed ? null : this.lists?.warm(toolName, input, p.dir, undefined, this.expeditionOverlay(p, agent));
     if (warm) return warm.then(() => signal?.aborted ? { behavior: 'deny', message: 'Cancelled' } : this.requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, agentID, warmed: true }));
     const auto = this.autoAnswer(p, agent, toolName, input, agent.cwdFor?.(toolUseID) || p.dir);
     if (auto) return Promise.resolve(auto);
@@ -887,6 +928,8 @@ export class Hub {
     }
     // Decision 64 A: the checker starts in the folder this tool call runs in (toolUseID -> the hook's cwd).
     const route = paused ? this.pausedRoute(p, agent, toolName, input, toolUseID) : this.routeFor(p, agent, toolName, input, toolUseID);
+    // The Expedition module (phase 4): a plain write into the frozen success test is refused, not parked (nothing to propose).
+    if (route.denied) return Promise.resolve(this.denyQuiet(p, agent, toolName, input, route.denied, { subagent }));
     // The Expedition module (decision 71): a request that would be a card, or go to the orchestrator, is parked instead.
     if (route.parked) return Promise.resolve(this.parkRequest(p, agent, toolName, input, route.parked, { subagent }));
     if (route.logged) {
@@ -1204,7 +1247,10 @@ export class Hub {
     // Everything inside a quarantine folder (any project's) counts as downloaded too: running it, or a copy of it, is a stop.
     const marks = quarantineMarks(tmpdir());
     const known = new Set([...downloadsFrom(p.log.events), ...marks]);
-    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir) });
+    // Phase 4: an expedition agent's classify also gets its frozen folders, and its launch's pre-approvals as an overlay on
+    // Matt's lists (never saved into them). Both come from the hub's own record of the agent's expedition.
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir, this.expeditionOverlay(p, agent)), frozen: this.frozenDirs(p, agent) });
+    if (c.frozen) return { denied: c.reasons[0] };
     for (const d of c.downloaded || []) if (!known.has(d)) p.log.append('download', { path: d, agent: agent.name, thread: agent.thread, ...(c.downloads?.find(x => x.path.toLowerCase().replace(/\\/g, '/') === d) || {}) });
     const { route, tempMade } = c;
     this.startsOf = { agent, ports: route === 'human' ? [] : c.hubsStarted || [] };   // noted in requestApproval, once the request is allowed

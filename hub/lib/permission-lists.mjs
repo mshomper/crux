@@ -224,6 +224,57 @@ const findPackage = (list, eco, name, key) => (list || []).find(e => e.eco === e
 const newId = p => `${p}${randomBytes(4).toString('hex')}`;
 export class ListsError extends Error { }
 
+// One site, checked the way Matt's own add checks it (addSite): -> { host, access, pin, subdomains }, or a ListsError.
+function cleanSite({ host, access = 'pages', pin = null, subdomains } = {}) {
+  const h = String(host ?? '').trim().toLowerCase();
+  if (!validHost(h)) throw new ListsError('Type just the site\'s name, like fda.gov: no https://, port, path or odd characters.');
+  if (!['pages', 'downloads'].includes(access)) throw new ListsError('Pages or downloads.');
+  let p = null;
+  if (pin != null && String(pin).trim() !== '') {
+    p = String(pin).trim().toLowerCase().replace(/\/+$/, '');
+    if (!/^(\/[\w.~-]+){1,6}$/.test(p) || p.split('/').some(x => x === '.' || x === '..')) throw new ListsError('A pinned path looks like /owner/repo.');
+  }
+  const open = isOpenHost(h);
+  if (access === 'downloads' && open && !p) throw new ListsError(`${h} serves anyone's files: pin downloads to one path, like /owner/repo.`);
+  return { host: h, access, pin: p, subdomains: p ? false : subdomains === false ? false : !open };
+}
+// One package, checked the way Matt's own add checks it (addPackage): -> { eco, name, baseMajor, baseMinor[, revision] }.
+function cleanPackage({ eco, name, baseMajor = null, baseMinor = null, revision = null } = {}) {
+  if (!ECOSYSTEMS[eco]) throw new ListsError('npm, pip or Hugging Face.');
+  const n = eco === 'pip' ? pipName(String(name ?? '').trim()) : String(name ?? '').trim();
+  if (!validPackage(eco, n)) throw new ListsError(eco === 'huggingface' ? 'A Hugging Face model looks like organisation/name.' : 'That is not a plain package name (no versions, paths, addresses or spaces).');
+  const rev = eco === 'huggingface' ? String(revision ?? '').trim().toLowerCase() : null;
+  if (eco === 'huggingface' && !/^[0-9a-f]{40}$/.test(rev)) throw new ListsError('A model is approved at one revision: give the full 40-character commit.');
+  return { eco, name: n, baseMajor: Number.isInteger(baseMajor) ? baseMajor : null, baseMinor: Number.isInteger(baseMinor) ? baseMinor : null, ...(rev ? { revision: rev } : {}) };
+}
+// The sites and packages an expedition's launch pre-approves for its own agents (phase 4): the same checks as Matt's adds,
+// so a bad entry is not a list entry. strict (the launch): a bad entry throws, naming it. Otherwise (reading the start
+// event back) a bad entry is dropped, never trusted. Anything but { sites, packages } arrays is empty.
+export function normalizeOverlay(raw, { strict = false } = {}) {
+  const out = { sites: [], packages: [] };
+  const take = (list, kind, clean, same) => {
+    for (const item of Array.isArray(list) ? list : []) {
+      try {
+        const c = clean(item);
+        if (!out[kind].some(x => same(x, c))) out[kind].push(c);
+      } catch (e) {
+        if (strict) throw new ListsError(`Pre-approved ${kind === 'sites' ? 'site' : 'package'} ${JSON.stringify(item?.host ?? item?.name ?? item).slice(0, 80)}: ${e.message}`);
+      }
+    }
+  };
+  take(raw?.sites, 'sites', cleanSite, (a, b) => a.host === b.host && a.pin === b.pin && a.access === b.access);
+  take(raw?.packages, 'packages', cleanPackage, (a, b) => a.eco === b.eco && sameName(a.eco, a.name, b.name));
+  return out;
+}
+// The overlay as list entries for one project key: scoped to it, so classify's own scope filter accepts them. Never saved.
+export function overlayEntries(raw, key) {
+  const o = normalizeOverlay(raw);
+  return {
+    sites: o.sites.map((s, i) => ({ id: `expedition-site-${i}`, ...s, scope: key, by: 'expedition launch' })),
+    packages: o.packages.map((p, i) => ({ id: `expedition-package-${i}`, ...p, scope: key, by: 'expedition launch' }))
+  };
+}
+
 export class PermissionLists {
   // settings: the hub's HubSettings (lists live in its settings.json). fetcher: async (eco, name) -> registry info or null.
   constructor({ settings, fetcher = registryLookup, now = () => Date.now(), home = homedir() } = {}) {
@@ -258,7 +309,7 @@ export class PermissionLists {
   // Before a request is classified (the hub's canUseTool is async): if it is an install of approved packages whose
   // registry answer is missing or too old, ask the registry now and wait up to ms for it, so the install is settled in this
   // one go instead of sending a card. -> a promise (always resolves), or null when there is nothing to wait for.
-  warm(tool, input, projectDir, ms = 5000) {
+  warm(tool, input, projectDir, ms = 5000, overlay = null) {
     try {
       if (!/^(Bash|PowerShell)$/.test(tool)) return null;
       const words = readWords(input?.command, tool === 'PowerShell');
@@ -269,7 +320,8 @@ export class PermissionLists {
       else if (/^(python3?|py)(\.exe)?$/i.test(basename(slash(words[0]))) && rest[0] === '-m' && rest[1] === 'pip' && rest[2] === 'install') { eco = 'pip'; specs = parsePipInstall(rest.slice(3), []).specs; }
       else return null;
       const key = projectKey(projectDir);
-      if (!specs.length || !specs.every(s => findPackage(this.data?.packages, eco, s.name, key))) return null;   // anything else stays as it was
+      const approved = [...(this.data?.packages || []), ...(overlay ? overlayEntries(overlay, key).packages : [])];
+      if (!specs.length || !specs.every(s => findPackage(approved, eco, s.name, key))) return null;   // anything else stays as it was
       const stale = specs.filter(s => { const h = this.cache.get(`${eco}:${s.name}`); return !h || this.now() - h.t > FRESH_MS; });
       if (!stale.length) return null;
       let timer;
@@ -279,9 +331,12 @@ export class PermissionLists {
   }
 
   // The snapshot classify() reads for one project.
-  forProject(dir) {
+  // overlay (phase 4): an expedition's own pre-approvals ({ sites, packages } from its start event), added to this snapshot
+  // only. It is read through the same matching and gates as Matt's entries and never saved into his lists.
+  forProject(dir, overlay = null) {
     const key = projectKey(dir), d = this.data || { sites: [], packages: [] };
-    return { key, sites: d.sites.filter(e => e.scope === 'all' || e.scope === key), packages: d.packages.filter(e => e.scope === 'all' || e.scope === key),
+    const extra = overlay ? overlayEntries(overlay, key) : { sites: [], packages: [] };
+    return { key, sites: [...d.sites.filter(e => e.scope === 'all' || e.scope === key), ...extra.sites], packages: [...d.packages.filter(e => e.scope === 'all' || e.scope === key), ...extra.packages],
       lookup: this.lookup, now: this.now, home: this.home };
   }
 
@@ -294,17 +349,7 @@ export class PermissionLists {
   }
 
   addSite({ host, access = 'pages', pin = null, scope = 'all', subdomains, by = 'you' } = {}) {
-    const h = String(host ?? '').trim().toLowerCase();
-    if (!validHost(h)) throw new ListsError('Type just the site\'s name, like fda.gov: no https://, port, path or odd characters.');
-    if (!['pages', 'downloads'].includes(access)) throw new ListsError('Pages or downloads.');
-    let p = null;
-    if (pin != null && String(pin).trim() !== '') {
-      p = String(pin).trim().toLowerCase().replace(/\/+$/, '');
-      if (!/^(\/[\w.~-]+){1,6}$/.test(p) || p.split('/').some(x => x === '.' || x === '..')) throw new ListsError('A pinned path looks like /owner/repo.');
-    }
-    const open = isOpenHost(h);
-    if (access === 'downloads' && open && !p) throw new ListsError(`${h} serves anyone's files: pin downloads to one path, like /owner/repo.`);
-    const sub = p ? false : subdomains === false ? false : !open;
+    const { host: h, pin: p, subdomains: sub } = cleanSite({ host, access, pin, subdomains });
     const sc = this.scopeOf(scope);
     const d = this.data;
     const same = d.sites.find(e => e.host === h && (e.pin || null) === p && e.scope === sc);
@@ -320,14 +365,10 @@ export class PermissionLists {
   // baseMajor / baseMinor: the version Matt saw when approving (the baseline for a fresh project). revision: a Hugging
   // Face model is approved at one pinned revision (a full 40-character commit); another revision comes to Matt.
   addPackage({ eco, name, scope = 'all', baseMajor = null, baseMinor = null, revision = null, by = 'you' } = {}) {
-    if (!ECOSYSTEMS[eco]) throw new ListsError('npm, pip or Hugging Face.');
-    const n = eco === 'pip' ? pipName(String(name ?? '').trim()) : String(name ?? '').trim();
-    if (!validPackage(eco, n)) throw new ListsError(eco === 'huggingface' ? 'A Hugging Face model looks like organisation/name.' : 'That is not a plain package name (no versions, paths, addresses or spaces).');
-    const rev = eco === 'huggingface' ? String(revision ?? '').trim().toLowerCase() : null;
-    if (eco === 'huggingface' && !/^[0-9a-f]{40}$/.test(rev)) throw new ListsError('A model is approved at one revision: give the full 40-character commit.');
+    const c = cleanPackage({ eco, name, baseMajor, baseMinor, revision });
     const sc = this.scopeOf(scope), d = this.data;
-    if (d.packages.some(e => e.eco === eco && sameName(eco, e.name, n) && e.scope === sc)) throw new ListsError(`${n} is already on the list.`);
-    const e = { id: newId('p'), eco, name: n, baseMajor: Number.isInteger(baseMajor) ? baseMajor : null, baseMinor: Number.isInteger(baseMinor) ? baseMinor : null, ...(rev ? { revision: rev } : {}), scope: sc, by: String(by).slice(0, 80), at: new Date(this.now()).toISOString() };
+    if (d.packages.some(e => e.eco === eco && sameName(eco, e.name, c.name) && e.scope === sc)) throw new ListsError(`${c.name} is already on the list.`);
+    const e = { id: newId('p'), ...c, scope: sc, by: String(by).slice(0, 80), at: new Date(this.now()).toISOString() };
     this.save({ ...d, packages: [...d.packages, e] });
     return e;
   }
