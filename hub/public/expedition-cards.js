@@ -39,11 +39,9 @@ export function draftCard(ev, closed = null, st = null) {
   const lines = String(ev.question || ev.brief || '').trim();
   const parts = [n.command && `${n.command} command`, n.checklist && `${n.checklist} checklist`, n.outside && `${n.outside} not run here`].filter(Boolean).join(' · ');
   const hasWarn = n.outside > 0 ? warn('Some items cannot run here: the report will ask you to paste those results.') : '';
-  const tiles = `<div class="xc-tiles">
-      <div class="xc-tile"><span class="xc-k">Success test</span><b>${plural(items.length, 'item')} ${hasWarn}</b><small>${esc(parts || 'none written')}</small></div>
-      <div class="xc-tile"><span class="xc-k">Envelope</span><b>${ic('clock')}${esc(env.hours ?? 6)} h ${ic('coin')}${esc(env.percent ?? 7)} %</b><small>${usd != null ? `about ${esc(money(usd))} of the week` : 'no dollar cap yet'}</small></div>
-      <div class="xc-tile"><span class="xc-k">Pre-approved</span><b>${ic('globe')}${sites} ${ic('box')}${pkgs}</b><small>sites · packages</small></div>
-    </div>`;
+  // The ask, the envelope and the team are what you see; a test or pre-approvals, if the orchestrator wrote any, are one quiet line.
+  const extra = [items.length && `${plural(items.length, 'success test item')}${parts ? ` (${parts})` : ''}`, (sites + pkgs) && `${plural(sites, 'site')} and ${plural(pkgs, 'package')} pre-approved`].filter(Boolean).join(' · ');
+  const tiles = `<div class="xc-tiles one"><div class="xc-tile"><span class="xc-k">Envelope</span><b>${ic('clock')}${esc(env.hours ?? 6)} h ${ic('coin')}${esc(env.percent ?? 7)} %</b><small>${usd != null ? `about ${esc(money(usd))} of the week` : 'the time limit applies'}</small></div></div>${extra ? `<p class="xc-extra">${esc(extra)} ${hasWarn}</p>` : ''}`;
   const team = `<div class="xc-team"><span class="xc-k">Team</span><span class="xc-roles">${ROLE_LIST.map(r => `<i style="--mh:${hueOf(d.roles[r.key].model) || '#8792ad'}" title="${esc(r.label)}">${ic(r.key)}</i>`).join('')}</span><span class="xc-teamnote">${edited ? 'edited' : 'default'} · ${tot.total} agents at most</span></div>`;
   return `<article class="card xcard xdraft ${state}" data-xdraft="${esc(ev.id)}">
     <div class="card-head"><span class="xc-kk">Expedition draft</span><span class="xc-tag ${state}">${tag}</span>

@@ -8,7 +8,7 @@ import { family, hueOf, modelLabel, pips } from '../public/models.js';
 
 const ST = { defaults: { envelope: { hours: 6, percent: 7 }, dollarsPerPercent: 2.7, gatherers: 3, roles: { verifier: { model: 'claude-opus-5-5', effort: 'high' }, builder: { model: 'claude-sonnet-5-5', effort: 'medium' }, lead: { model: 'claude-opus-5-5', effort: 'medium' } } }, launch: { ok: true }, budgetNote: '' };
 const ctx = (o = {}) => ({ level: 'auto', check: 'on', st: ST, family, ...o });
-const ready = () => { const d = startDraft(ST, { question: 'Which is faster?' }); d.success[0].text = 'Both parse the sample'; d.sites.push({ host: 'docs.example.org', access: 'pages' }); return d; };
+const ready = () => { const d = startDraft(ST, { question: 'Which is faster?' }); d.success.push({ text: 'Both parse the sample', judge: 'checklist', command: '' }); d.sites.push({ host: 'docs.example.org', access: 'pages' }); return d; };
 const h = { family, hueOf, modelLabel, pips, modelPicker: () => '', effortPicker: () => '' };
 
 test('the draft starts from the hub defaults: 6 h, 7%, 3 gatherers, seven roles', () => {
@@ -33,8 +33,9 @@ test('Launch is blocked, with a reason, for each refusal the hub makes; warnings
   assert.ok(ids(ready(), ctx({ level: 'standard' })).includes('ask'));
   assert.ok(ids(ready(), ctx({ running: true })).includes('running'));
   const empty = startDraft(ST);
-  assert.deepEqual(ids(empty, ctx()), ['question'], 'no success test is only a warning: the question alone is enough to start');
-  assert.ok(problems(empty, ctx()).some(p => p.id === 'test' && p.level === 'warn'));
+  assert.deepEqual(ids(empty, ctx()), ['question'], 'the question alone is enough to start: no test, sites or packages needed');
+  const one = startDraft(ST, { question: 'Q?' });
+  assert.deepEqual(ids(one, ctx()), [], 'nothing else blocks');
   const same = ready(); same.roles.verifier.model = same.roles.builder.model;
   assert.ok(ids(same, ctx()).includes('same'), 'Verifier on the Builder\'s model');
   const warn = problems(ready(), ctx({ check: 'off', st: { ...ST, defaults: { ...ST.defaults, dollarsPerPercent: null }, budgetNote: 'Held by time only.' } }));
@@ -60,7 +61,9 @@ test('launchBody matches the hub\'s route: brief, question, test files, envelope
   assert.equal(b.project, 'demo-app');
   assert.equal(b.brief, 'Which is faster?', 'the brief is the question alone');
   const bare = launchBody('p', startDraft(ST, { question: 'Q?' }), ST);
-  assert.deepEqual(Object.keys(bare.test), ['CHECKLIST.md'], 'no items written: a default checklist item, so the hub has a test');
+  assert.equal('test' in bare, false, 'no items written: only the question goes, the team writes the test while it plans');
+  assert.equal(bare.brief, 'Q?');
+  assert.deepEqual(bare.preApprovals, { sites: [], packages: [] });
   assert.equal(b.question, 'Which is faster?');
   assert.deepEqual(Object.keys(b.test).sort(), ['CHECKLIST.md', 'run.json']);
   assert.deepEqual(b.envelope, { hours: 6, percent: 7, dollars: 18.9 });
@@ -92,7 +95,7 @@ const DRAFT = { id: 'd1', type: 'expedition_draft', thread: 'orchestrator', ques
 test('the draft card: brief, test count, envelope, team strip, Launch / Edit; closed states have neither button', () => {
   const open = draftCard(DRAFT, null, ST);
   assert.match(open, /Which of two libraries is faster &lt;b&gt;\?/, 'escaped');
-  assert.match(open, /4 items/); assert.match(open, /6 h/); assert.match(open, /about \$19 of the week/); assert.match(open, /default · 9 agents at most/);
+  assert.match(open, /4 success test items/); assert.match(open, /6 h/); assert.match(open, /about \$19 of the week/); assert.match(open, /default · 9 agents at most/);
   assert.match(open, /data-xdraft-launch="d1"/); assert.match(open, /data-xdraft-edit="d1"/); assert.match(open, /data-xdraft-dismiss="d1"/);
   const done = draftCard(DRAFT, { status: 'launched' }, ST);
   assert.doesNotMatch(done, /data-xdraft-launch|data-xdraft-edit/);

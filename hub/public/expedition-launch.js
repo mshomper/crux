@@ -72,7 +72,8 @@ export function startDraft(state = null, seed = {}) {
   const success = seed.success || testItems(seed.test);
   return {
     question: String(seed.question || ''),
-    success: success.length ? success : [{ text: '', judge: 'checklist', command: '' }],
+    success,   // optional: none written means the team writes the test itself while it plans
+    more: success.length > 0 || !!(seed.preApprovals?.sites?.length || seed.preApprovals?.packages?.length),   // the fold opens when it holds something
     hours: HOURS.includes(Number(env.hours)) ? Number(env.hours) : DEFAULT_ENVELOPE.hours,
     percent: PERCENTS.includes(Number(env.percent)) ? Number(env.percent) : DEFAULT_ENVELOPE.percent,
     sites: (seed.preApprovals?.sites || []).map(s => ({ host: String(s.host || s), access: s.access || 'pages' })),
@@ -134,7 +135,6 @@ export function problems(d, ctx = {}) {
   if (!d.question.trim()) out.push({ id: 'question', level: 'block', text: 'Write the question first.' });
   if (fam(d.roles.verifier.model) && fam(d.roles.verifier.model) === fam(d.roles.builder.model)) out.push({ id: 'same', level: 'block', text: 'The Verifier and the Builder run on the same model. The Verifier must be a different model from the Builder: change one of them.' });
   const items = d.success.filter(t => t.text.trim());
-  if (!items.length) out.push({ id: 'test', level: 'warn', text: 'No success test written: the team will judge the work by whether the question is answered in the report, with its evidence.' });
   const noJudge = items.filter(t => t.judge === 'command' && !t.command.trim()).length;
   if (noJudge) out.push({ id: 'nojudge', level: 'warn', text: `${noJudge === 1 ? 'One item is' : `${noJudge} items are`} set to a command with no command written. Without one nothing judges ${noJudge === 1 ? 'it' : 'them'}.` });
   if (ctx.check && ctx.check !== 'on') out.push({ id: 'check', level: 'warn', text: 'The permission check is off in this project: anything the hub cannot settle by itself is parked, never asked.' });
@@ -150,8 +150,6 @@ export function problems(d, ctx = {}) {
 // Matt (2026-11-16): the brief is one plain ask to the Lead, so it is the question alone. The test, limits and approvals
 // travel in their own fields.
 export const briefText = d => d.question.trim();
-// With no success items written, the team still has something to judge by: that the question is answered with its evidence.
-export const DEFAULT_ITEM = { text: 'The question is answered in the report, with the evidence and sources behind it', judge: 'checklist', command: '' };
 
 // What POST /api/expedition receives (the route is the backend's; this is the front end's side of it).
 export function launchBody(project, d, st = null) {
@@ -162,7 +160,7 @@ export function launchBody(project, d, st = null) {
     project,
     brief: briefText(d),
     question: d.question.trim(),
-    test: testFiles(d.success.some(t => t.text.trim()) ? d.success : [DEFAULT_ITEM]),
+    ...(Object.keys(testFiles(d.success)).length ? { test: testFiles(d.success) } : {}),   // none written: only the question goes; the team writes the test while it plans
     envelope: { hours: d.hours, percent: d.percent, ...(dollars != null ? { dollars } : {}) },
     gatherers: d.gatherers,
     roles,
@@ -218,16 +216,19 @@ export function panelHtml(d, ctx, h) {
     <div class="xp-sub"><span class="xp-proj">${esc(ctx.project || '')}</span>${ctx.level ? `<span class="xp-lvl" title="This project's permission level">${esc({ standard: 'Ask', auto: 'Auto', trusted: 'Trusted' }[ctx.level] || '')}</span>` : ''}</div>
     <div class="xp-cols">
       <div class="xp-col xp-scope">
-        <section><h3 class="xp-h">Question ${help(tips.question)}</h3>
-          <textarea class="xp-in xp-q" data-xp-q rows="3" placeholder="What should the team find out?" aria-label="Question" spellcheck="true">${esc(d.question)}</textarea></section>
-        <section><h3 class="xp-h">Success test ${help(tips.test)}</h3>
-          <ul class="xp-tests">${d.success.map(judge).join('')}</ul>
-          <button type="button" class="xp-add" data-xp-add-test>${ic('plus')}Add an item</button></section>
+        <section><h3 class="xp-h">What do you want done or answered? ${help(tips.question)}</h3>
+          <textarea class="xp-in xp-q" data-xp-q rows="4" placeholder="Say it in your own words. The team plans the rest." aria-label="What you want done or answered" spellcheck="true">${esc(d.question)}</textarea></section>
         <section><h3 class="xp-h">Envelope ${help(tips.envelope)}</h3>
           <div class="xp-env"><span class="xp-eico" title="Time limit">${ic('clock')}</span><span class="xp-seg" role="radiogroup" aria-label="Time limit">${HOURS.map(v => segBtn('hours', v, `${v} h`, d.hours === v)).join('')}</span></div>
           <div class="xp-env"><span class="xp-eico" title="Share of your plan">${ic('coin')}</span><span class="xp-seg" role="radiogroup" aria-label="Share of your plan">${PERCENTS.map(v => segBtn('percent', v, `${v} %`, d.percent === v)).join('')}</span><span class="xp-usd" title="${usd == null ? 'No dollar figure is confirmed yet' : 'The dollar cap the hub enforces: this share of the plan at the confirmed rate'}">${usd == null ? 'no dollar cap yet' : `≈ ${money(usd)}`}</span></div></section>
-        <section><h3 class="xp-h">Pre-approved ${help(tips.pre)}${ctx.level === 'auto' && !d.sites.length ? warnMark(warns.filter(p => p.id === 'web')) : ''}</h3>
-          <div class="xp-chips">${chips}</div>${addForm}</section>
+        <details class="xp-more" data-xp-more ${d.more ? 'open' : ''}><summary><span>More</span><em>${d.more ? '' : 'a success test, pre-approved sites and packages (optional)'}</em></summary>
+          <section><h3 class="xp-h">Success test ${help(tips.test)}</h3>
+            <p class="xp-opt-note">Optional. Leave it empty and the team writes one while it plans.</p>
+            <ul class="xp-tests">${d.success.map(judge).join('')}</ul>
+            <button type="button" class="xp-add" data-xp-add-test>${ic('plus')}Add an item</button></section>
+          <section><h3 class="xp-h">Pre-approved ${help(tips.pre)}${ctx.level === 'auto' && !d.sites.length ? warnMark(warns.filter(p => p.id === 'web')) : ''}</h3>
+            <div class="xp-chips">${chips}</div>${addForm}</section>
+        </details>
       </div>
       <div class="xp-col xp-team">
         <section><h3 class="xp-h">Team ${help(tips.team)}</h3>
@@ -282,6 +283,7 @@ export class ExpeditionPanel {
       dlg.addEventListener('click', e => this.click(e));
       dlg.addEventListener('input', e => this.input(e));
       dlg.addEventListener('change', e => this.change(e));
+      dlg.addEventListener('toggle', e => { if (this.d && e.target.matches?.('[data-xp-more]')) this.d.more = e.target.open; }, true);   // the fold remembers itself across redraws
       dlg.addEventListener('close', () => { dlg.classList.remove('exp-panel'); this.d = null; });
     }
     dlg.querySelector('.hc-x')?.setAttribute('title', 'Close without launching');
@@ -299,7 +301,7 @@ export class ExpeditionPanel {
     if ((b = q('[data-xp-hours]'))) d.hours = Number(b.dataset.xpHours);
     else if ((b = q('[data-xp-percent]'))) d.percent = Number(b.dataset.xpPercent);
     else if ((b = q('[data-xp-judge]'))) { const [i, k] = b.dataset.xpJudge.split(':'); d.success[Number(i)].judge = k; }
-    else if ((b = q('[data-xp-rm-test]'))) { d.success.splice(Number(b.dataset.xpRmTest), 1); if (!d.success.length) d.success.push({ text: '', judge: 'checklist', command: '' }); }
+    else if ((b = q('[data-xp-rm-test]'))) { d.success.splice(Number(b.dataset.xpRmTest), 1); }
     else if (q('[data-xp-add-test]')) d.success.push({ text: '', judge: 'checklist', command: '' });
     else if ((b = q('[data-xp-rm-site]'))) d.sites.splice(Number(b.dataset.xpRmSite), 1);
     else if ((b = q('[data-xp-rm-pkg]'))) d.packages.splice(Number(b.dataset.xpRmPkg), 1);
