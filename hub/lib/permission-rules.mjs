@@ -495,7 +495,10 @@ const SCRIPT_HOME_CRUX = /~[\\/]+crux\b/i;
 const SCRIPT_LIVE_HUB = /:(?:4747|4748)\b|(?:localhost|127\.0\.0\.1|::1|0\.0\.0\.0)[:\s'",]*(?:4747|4748)\b|\bport\W{0,12}(?:4747|4748)\b/i;
 const SCRIPT_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|unlink(?:Sync)?|rename(?:Sync)?|copyFile(?:Sync)?|cp(?:Sync)?|mkdir(?:Sync)?|createWriteStream|symlink(?:Sync)?|truncate(?:Sync)?|rmtree|shutil|Remove-Item|Set-Content|Out-File|Copy-Item|Move-Item|New-Item)\b/;
 // kind: 'shell' for .sh, .ps1, .bat and the like (the text is the commands), else code ('js').
-export function scanScriptText(text, { kind = 'js' } = {}) {
+// test: the file is under hub/test/ (or *.test.mjs): it is full of strings about git push and ~/.ssh because it tests the rules,
+// so a stop there needs a real spawn of a stop command (a spawn / exec call whose own arguments are the command); every
+// other stop is a doubt.
+export function scanScriptText(text, { kind = 'js', test = false } = {}) {
   const raw = String(text || '');
   const open = psOpen(raw).replace(/[`\[\]{}+]/g, ' ');
   const both = [raw, open];
@@ -526,6 +529,28 @@ export function scanScriptText(text, { kind = 'js' } = {}) {
   if (both.some(t => SCRIPT_WRITE.test(t))) {
     seeIn(/\.\.[\\/]|homedir|userprofile|\$HOME|%APPDATA%|[A-Za-z]:[\\/]|['"`]\/(?!tmp\b)[A-Za-z]/i, doubts, 'it writes or deletes with a path that leaves the folder it runs in');
     seeIn(/node_modules/i, doubts, 'it writes or deletes near node_modules, which may be a link to the main project\'s packages');
+  }
+  // A shell script that runs git, npm or pip at all, or uses eval, is a doubt (a built-up command or a hidden push is not
+  // something the patterns above can place in a script made of commands).
+  if (kind === 'shell') {
+    seeIn(/(^|[\s;&|(@])(?:git|npm|pnpm|yarn|pip3?|pipx|uv|winget|choco)(?:\.exe)?\s/im, doubts, 'it runs git, npm or pip');
+    seeIn(/(^|[\s;&|(])(?:eval|iex|Invoke-Expression)(\s|\()/im, doubts, 'it evaluates text as commands (eval or iex)');
+  }
+  if (test && stops.length) {
+    // real spawns only: the first arguments of a spawn / exec call, up to the end of the statement
+    const real = [];
+    // (a bare `.exec(` is a regular expression's, not a process: only exec( on its own, or a method of the process module)
+    for (const m of raw.matchAll(/(?<![.\w])(?:spawn(?:Sync)?|exec(?:Sync|File|FileSync)?|fork)\s*\(([^;]{0,240})|\.\s*(?:spawn(?:Sync)?|exec(?:Sync|File|FileSync)|fork)\s*\(([^;]{0,240})/g)) {
+      m[1] ??= m[2];
+      // a call written inside a quoted string (a test's data: '... .execSync("git push") ...') is text, not a spawn
+      const before = raw.slice(raw.lastIndexOf('\n', m.index) + 1, m.index).replace(/\\./g, '');
+      if (['\'', '"', '`'].some(q => (before.split(q).length - 1) % 2 === 1)) continue;
+      const slice = psOpen(m[1] || '').replace(/[`\[\]{}+]/g, ' ');
+      for (const re of SCRIPT_COMMANDS) { const hit = re.exec(slice); if (hit) { const why = `it runs "${quote(hit)}", a hard stop`; if (!real.includes(why)) real.push(why); } }
+    }
+    const moved = stops.filter(s => !real.includes(s));
+    stops.length = 0; stops.push(...real);
+    for (const s of moved) { const why = `${s.replace(/, a hard stop$/, '')} (in a test file; only a real spawn of a stop command is a stop there)`; if (!doubts.includes(why)) doubts.push(why); }
   }
   return { stops, doubts };
 }

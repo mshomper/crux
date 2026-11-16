@@ -462,6 +462,10 @@ export function loadsUnseen(text, { python = false, dir = '', skipRuns = false, 
     }
   }
   if (spawns(t, python) && (!inline || [...t.matchAll(SCRIPT_LITERAL)].length)) add(inline ? 'starts another script' : 'starts another program or script, which is not attached');
+  // Review of #95: loading the process module at all (aliased, destructured, cp['exec' + 'Sync'], `import subprocess as sp`)
+  // makes the script unread. The call forms above are only the ones the hub can see; what it starts through an alias or a
+  // built-up name it cannot. (Inline one-liners keep the narrower rule above: execSync('git status') is a plain command.)
+  if (!inline && (python ? /^[ \t]*(?:import|from)[ \t]+[^\n]*\bsubprocess\b/m.test(t) : /['"`](?:node:)?child_process(?:\/promises)?['"`]/.test(t))) add('can start other programs (it loads the process module), and what it starts is not attached');
   if (/^\s*(?:source|\.)\s+[^\s=]/m.test(t) || /^\s*\.\s+["'$]/m.test(t)) add('sources another script');
   if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|\[scriptblock\]|\[System\.Reflection|\[Reflection\./i.test(t)) add('evals text');
   if (/\bImport-Module\s+\S/i.test(t) || /\bInvoke-Command\b[^\n]*-FilePath/i.test(t)) add('loads another script or module');
