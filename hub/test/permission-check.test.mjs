@@ -14,7 +14,7 @@ import { HubSettings } from '../lib/settings.mjs';
 import { settingsNeed, stepUpNeed } from '../lib/guard.mjs';
 import { cardsFor } from '../lib/push.mjs';
 import {
-  PROMPT, CHECK_MODEL, CHECK_NAME, SCRIPT_LIMIT, PermissionCheck, buildPrefix, buildSuffix, parseAnswer, applyRules,
+  PROMPT, JUNCTION_FACT, JSON_ONLY, CHECK_MODEL, CHECK_NAME, SCRIPT_LIMIT, PermissionCheck, buildPrefix, buildSuffix, parseAnswer, applyRules,
   scriptPaths, scriptsFor, loadsUnseen, isProjectScript, sdkCall, apiCall, listCost
 } from '../lib/permission-check.mjs';
 
@@ -33,6 +33,28 @@ test('the prefix is the appendix prompt, with the project facts, the level and t
   assert.ok(!/<(project|dir|posix dir|temp|level|id|rules body)>/.test(s), 'every marker is filled');
   assert.ok(PROMPT.includes('"answer": "allow" | "deny" | "escalate" | "consult"'));
   assert.equal(buildPrefix(FACTS), s, 'the same text every time, so it caches');
+});
+
+test('the prefix states the node_modules junction plainly, after the plan\'s facts and before the rules, and closes with JSON only (B7)', () => {
+  const s = buildPrefix(FACTS);
+  assert.ok(s.includes(JUNCTION_FACT));
+  for (const bit of ['hub/node_modules (and any node_modules or .venv there) is a junction to the main project\'s own packages', 'Deleting, moving, mirroring or overwriting it', 'rm, robocopy /MIR, fs.rm', 'changes the main project, not the worktree', 'Treat it as outside the worktree: escalate.']) assert.ok(s.includes(bit), bit);
+  assert.ok(s.indexOf('finding them is your main job.') < s.indexOf(JUNCTION_FACT), 'in the project facts');
+  assert.ok(s.indexOf(JUNCTION_FACT) < s.indexOf('THE PROJECT\'S RULES'), 'not in the rules text');
+  assert.ok(s.endsWith(`\n${JSON_ONLY}`), 'the last line');
+  assert.match(JSON_ONLY, /JSON object only: no text before it, no text after it/);
+  // the plan's appendix is otherwise untouched: take the two additions out and it is the plan's text with the markers filled
+  assert.ok(!PROMPT.includes('junction to the main') && !PROMPT.includes(JSON_ONLY), 'PROMPT itself is the plan\'s text');
+  const back = s.replace(`\n${JUNCTION_FACT}`, '').replace(`\n${JSON_ONLY}`, '');
+  assert.ok(back.startsWith('You answer one permission request from a worker agent in the Crux Hub project "proj"') && back.endsWith('"reason": "<one plain line, at most 25 words>"}'));
+  assert.equal(back.split('\n').length, PROMPT.split('\n').length);
+  assert.ok(buildPrefix({ ...FACTS, rulesBody: 'the junction rule $& stays as written' }).includes('the junction rule $& stays as written'));
+});
+
+test('parseAnswer stays strict: reasoning followed by the JSON is still no answer', () => {
+  assert.equal(parseAnswer('The command deletes node_modules, so I should escalate.\n{"answer":"escalate","reason":"junction"}'), null);
+  assert.equal(parseAnswer('{"answer":"escalate","reason":"junction"}\nThat is my answer.'), null);
+  assert.deepEqual(parseAnswer('{"answer":"escalate","reason":"junction"}'), { answer: 'escalate', reason: 'junction' });
 });
 
 test('the suffix: worker, goal, tool, the full input, the folder, the doubts; request text sits between per-call markers', () => {
