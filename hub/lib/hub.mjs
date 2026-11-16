@@ -683,7 +683,7 @@ export class Hub {
         else {
           // Shadow mode changes nothing live: the request goes to the orchestrator at once, as today, with no note about the
           // check. What the hub's own scan finds is only logged, in check_shadow (scanStops, scanDoubts).
-          try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd)); }
+          try { p.agents.get(route.to).send(this.permissionMessage(p, p.agents.get(route.to), id, agent, toolName, input, route.rules, route.unsure, route.cwd), [], { approval: id }); }
           catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
           if (route.shadow) this.runShadow(id, entry);
         }
@@ -823,7 +823,7 @@ export class Hub {
     this.logAnswer(a, id, 'consult', reason, CHECK_NAME, extra);
     a.routedTo = orch.name;
     const said = fallbackWhy ? `${fallbackWhy}, so it comes to you.` : `The permission check could not settle it and asks you to decide: ${reason}`;
-    try { orch.send(this.permissionMessage(a.p, orch, id, a.agent, a.toolName, a.input, a.route.rules, a.route.unsure, a.route.cwd, said)); }
+    try { orch.send(this.permissionMessage(a.p, orch, id, a.agent, a.toolName, a.input, a.route.rules, a.route.unsure, a.route.cwd, said), [], { approval: id }); }
     catch (e) { this.escalate(id, `Could not reach the orchestrator: ${e.message}`, 'hub'); }
   }
 

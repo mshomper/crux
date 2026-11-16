@@ -110,6 +110,7 @@ export class Agent {
   // successor is never reminded of a brief it never had.
   noteDelivered(meta) {
     if (meta?.request) this.project.log.append('brief_delivered', { request: meta.request, agent: this.name });
+    if (meta?.approval) this.project.log.append('approval_delivered', { approval: meta.approval, agent: this.name });
   }
 
   // Notes the hub wants this agent to read, without waking it for them: they ride in front of its next message.

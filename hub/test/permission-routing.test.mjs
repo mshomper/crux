@@ -14,7 +14,7 @@ import { CommandPolicy } from '../lib/permissions.mjs';
 import { cardsFor } from '../lib/push.mjs';
 
 const sent = [];
-Agent.prototype.send = function (t) { sent.push([this.name, t]); this.state = 'working'; };
+Agent.prototype.send = function (t, a, meta) { sent.push([this.name, t, meta]); this.state = 'working'; };
 Agent.prototype.close = function () { this.q = null; };
 
 const RULES = 'The orchestrator may ALLOW project work. ALWAYS goes to Matt: pushing to main.';
@@ -46,6 +46,19 @@ test('a worker request with no hard stop goes to the running orchestrator, with 
   assert.equal(to, orch.name);
   for (const bit of [`[Permission request ${ap.approval}]`, 'Worker: builder', "Worker's goal: Build permission routing", 'Tool: Bash', 'npm run build', 'answer_permission', 'R001']) assert.ok(msg.includes(bit), bit);
   assert.deepEqual(cardsFor({ ...ap, project: 'proj' }), [], 'no phone push while the orchestrator has it');
+});
+
+test('the request carries its approval id as meta, and the log shows when the orchestrator took it in', () => {
+  const { hub, p, orch, w } = setup();
+  ask(hub, p, w, 'npm run build');
+  const id = last(p, 'approval').approval;
+  assert.deepEqual(sent[0][2], { approval: id });
+  assert.equal(p.log.ofType('approval_delivered').length, 0, 'not logged while it only sits in the inbox');
+  orch.noteDelivered(sent[0][2]);   // what the Inbox does when Claude Code takes the message in
+  const ev = last(p, 'approval_delivered');
+  assert.equal(ev.approval, id);
+  assert.equal(ev.agent, orch.name);
+  assert.ok(ev.ts, 'the log stamps the time');
 });
 
 test('the orchestrator allows: the worker goes ahead and the answer is logged as one line in its thread', async () => {
