@@ -1,6 +1,7 @@
 // In-process MCP tools that connect an agent to the board, the memory layers and the hub.
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES } from './expedition.mjs';
 
 const text = s => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 const list = z.array(z.string()).optional().default([]);
@@ -166,6 +167,33 @@ export function cruxTools(hub, project, agent) {
     );
   }
 
+  // The Expedition module (decision 68 C, spec 4.1): the Lead gets four of the orchestrator's tools, limited by the hub to
+  // its own expedition. They never reach another expedition's agents, a plain worker or the orchestrator, and start_worker
+  // starts only the five hub roles with the expedition stamped by the hub. No settings, scheduling or trigger tools.
+  if (agent.expeditionRole === 'lead') {
+    const attempt = (what, f) => async args => { try { return out(f(args)); } catch (e) { return out(`${what}: ${e.message}`); } };
+    tools.push(
+      tool('list_agents', 'List the agents of your expedition (its Advisor, Synthesizer, Skeptic, Builder and Verifier, whichever you have started): state, context %, model and effort; and how many gatherer subagents are running. Nobody else is shown.', {},
+        attempt('Not listed', () => hub.leadAgents(project, agent))),
+
+      tool('message_agent', 'Send a message to one agent of your expedition: instructions, defects to fix, the next step. Only your own team.',
+        { to: z.string().describe('The agent\'s name from list_agents.'), text: z.string() },
+        attempt('Not sent', ({ to, text: msg }) => { hub.leadMessage(project, agent, to, msg); return `Sent to ${to}.`; })),
+
+      tool('retire_worker', 'Retire an agent of your expedition whose job is finished: it stops and leaves the team. No handoff, no successor.',
+        { name: z.string(), reason: z.string().max(200).describe('One plain line, e.g. "verdict written".') },
+        attempt('Not retired', ({ name, reason }) => hub.leadRetire(project, agent, name, reason))),
+
+      tool('start_worker', 'Start one hub agent of your expedition by role type: expedition-advisor, expedition-synthesizer, expedition-skeptic, expedition-builder or expedition-verifier. The hub sets its model and effort from the launch screen; give it its task as a full briefing. Gatherers are not started this way: call them with the Agent tool.',
+        {
+          type: z.enum(EXPEDITION_HUB_ROLES.filter(r => r !== 'lead').map(r => EXPEDITION_ROLES[r].type)),
+          goal: z.string().max(120).optional().describe('One plain line, under 80 characters: what this agent is for.'),
+          task: z.string().describe('The full task as its briefing.')
+        },
+        attempt('Not started', ({ type, goal, task }) => { const w = hub.leadStart(project, agent, { type, goal, task }); return `Started ${w.name} (${hub.describeSettings(w)}).`; }))
+    );
+  }
+
   return createSdkMcpServer({ name: 'crux', version: '0.3.0', tools });
 }
 
@@ -208,5 +236,6 @@ export function cruxToolNames(agent) {
   if (agent.predecessor) names.push('ask_predecessor');
   if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'handoff_worker', 'answer_permission', 'mark_entry_done');
   if (agent.role === 'orchestrator') names.push('restart_hub', 'reply_to_conductor');   // decisions 47 and 62
+  if (agent.expeditionRole === 'lead') names.push('list_agents', 'message_agent', 'retire_worker', 'start_worker');   // decision 68 C: scoped to its expedition (hub.leadAgents and the like)
   return names.map(n => `mcp__crux__${n}`);
 }

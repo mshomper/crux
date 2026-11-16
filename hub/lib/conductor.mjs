@@ -22,6 +22,7 @@ import { openQuestions as openAsked } from '../public/questions.js';   // on eve
 import { CONNECTOR_SERVERS } from './permission-rules.mjs';
 import { liftSpoken, sentences } from './voice-speech.mjs';
 import { summaryReply } from './tools.mjs';
+import { Expedition } from './expedition.mjs';
 
 export const CONDUCTOR = '~conductor';          // its place name in URLs and live events; never a project folder's name
 export const CONDUCTOR_THREAD = 'conductor';
@@ -817,7 +818,7 @@ ${lines.join('\n')}`;
           waiting: { total: w.count, permissions: w.approvals.length, questions: w.questions.length, decisions: w.decisions.length, lessons: w.lessons.length },
           orchestrator: o ? { name: o.name, state: o.state, context_pct: o.contextPct ?? null } : null,
           workers: live.filter(a => a.role === 'worker' && !a.expedition).length,   // an expedition's agents are one cluster, not workers (plan 2a)
-          working: live.filter(a => ['working', 'starting'].includes(a.state)).length
+          working: live.filter(a => !a.expedition && ['working', 'starting'].includes(a.state)).length   // an expedition's agents are one cluster, not workers
         };
       }),
       plan_usage: this.hub.usage?.view?.() || null
@@ -825,9 +826,12 @@ ${lines.join('\n')}`;
   }
 
   agents(p) {
-    return [...p.agents.values()].filter(a => a.state !== 'retired').map(a => ({
+    const list = [...p.agents.values()].filter(a => a.state !== 'retired' && !a.expedition).map(a => ({
       name: a.name, role: a.role, state: a.state, goal: a.goal || '', context_pct: a.contextPct ?? null, runs_as: this.hub.describeSettings(a)
     }));
+    // An expedition is one entry (its agents report to their Lead, not to anyone above it), not a worker per agent.
+    for (const x of Expedition.all(p).filter(x => x.phase !== 'ended')) list.push({ name: `expedition ${x.id}`, role: 'expedition', state: x.phase, goal: 'runs under its own Lead and reports once, at the end', context_pct: null, runs_as: 'expedition' });
+    return list;
   }
 
   // profile_read for the Conductor: the core, the conventions, or a pack. Never the private section.

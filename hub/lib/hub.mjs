@@ -8,7 +8,7 @@ import { DecisionsDesk } from './decisions-desk.mjs';
 import { Agent, cleanEnv as checkEnv } from './agent.mjs';
 import { Memory, VISUAL_TYPES } from './memory.mjs';
 import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool } from './permission-rules.mjs';
@@ -25,7 +25,7 @@ import { PermissionCheck, CHECK_NAME, CHECK_MODEL, scriptsFor, parseCommand, sdk
 import { totalsOf, sumCost } from '../public/usage.js';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
-import { Expedition, ROLES as EXPEDITION_ROLES, ID_PATTERN as EXPEDITION_ID } from './expedition.mjs';
+import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
 
 export class Project {
   constructor(dir) {
@@ -60,6 +60,14 @@ export function settingsDirection(from, to) {
   const e = x => (x ? EFFORTS.indexOf(x) : EFFORTS.indexOf('medium'));
   if (e(from.effort) === e(to.effort)) return null;
   return e(to.effort) > e(from.effort) ? 'raise' : 'lower';
+}
+
+// An expedition agent's plain write to a Claude Code settings file (.claude/settings.json, settings.local.json): never allowed
+// (spec lesson 9: a subagent once created a stray scheduled task). A first line, not a guarantee; phase 4 widens the path rules.
+const SETTINGS_FILE = /(^|\/)\.claude\/settings[^/]*\.json$/i;
+export function writesSettingsFile(toolName, input) {
+  if (!['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName)) return false;
+  return SETTINGS_FILE.test(String(input?.file_path || input?.notebook_path || input?.path || '').replace(/\\/g, '/'));
 }
 
 // Decision 66: what the pause says to a request's card, and to the agents (hub.setPaused).
@@ -365,6 +373,8 @@ export class Hub {
     const a = name === 'orchestrator' ? p.orchestrator() : p.agents.get(name);
     if (!a) throw new Error(`No agent called ${name}`);
     if (a.state === 'retired') throw new Error(`${name} has retired.`);
+    const stay = this.orchestratorStaysOut(p, a, by);
+    if (stay) throw new Error(stay);
     // The Conductor (decision 55) changes model and effort only: an agent type would bring its own tools and
     // instructions, which it must never have. Its tools are fixed in lib/conductor.mjs whatever is recorded here.
     if (a.role === CONDUCTOR_ROLE && 'type' in changes) {
@@ -444,6 +454,126 @@ export class Hub {
     return [...p.agents.values()].findLast(a => a.expedition === id && a.expeditionRole === 'lead' && a.state !== 'retired' && a.retiring !== 'overlap') || null;
   }
 
+  // ---------- the orchestrator stays out; the Lead's scoped tools; launching (decisions 68 to 71, phase 2) ----------
+  // Any agent of an expedition: it never reaches the orchestrator or a card, whatever it is asked or asks (decision 71).
+  isExpeditionAgent(agent) { return !!agent?.expedition; }
+
+  // The orchestrator does not message, retire, hand on or re-set an expedition's members: the expedition reports to it
+  // once, at the end, and the user stops it from the map. A refusal in plain words, or null. by: the actor's name (or the
+  // agent itself); 'you' and 'hub' are not orchestrators, so the user keeps every control.
+  orchestratorStaysOut(p, agent, by) {
+    if (!agent?.expedition) return null;
+    const actor = typeof by === 'string' ? p.agents.get(by) : by;
+    if (actor?.role !== 'orchestrator') return null;
+    return `${agent.name} belongs to expedition ${agent.expedition}: its Lead runs it and the orchestrator stays out until the one summary at the end.`;
+  }
+
+  // The Lead's own expedition (and a refusal for anyone who is not a Lead).
+  leadScope(p, lead) {
+    if (lead?.expeditionRole !== 'lead' || !lead.expedition) throw new Error("Only an expedition's Lead can do that.");
+    return this.expeditionOf(p, lead);
+  }
+
+  // A member of the Lead's expedition by name. Anything else (an agent of another expedition, a plain worker, the
+  // orchestrator, a retired member, a name that does not exist) is the same plain refusal, so it says nothing about them.
+  leadMember(p, lead, name) {
+    this.leadScope(p, lead);
+    const a = p.agents.get(String(name ?? '').trim());
+    if (!a || a.expedition !== lead.expedition || a.expeditionRole === 'lead' || a.role !== 'worker' || a.state === 'retired') throw new Error(`No agent called ${name} in your expedition. list_agents shows your team.`);
+    return a;
+  }
+
+  // The Lead's list_agents: its own team, nobody else.
+  leadAgents(p, lead) {
+    const ex = this.leadScope(p, lead), s = ex.state();
+    return {
+      expedition: ex.id, phase: s.phase,
+      gatherers: { running: ex.runningSubagents(), limit: GATHERER_LIMIT, note: `Gatherers are subagents you call with the Agent tool: at most ${GATHERER_LIMIT} at once, and one second round of the same size for gaps they flagged.` },
+      team: p.workers({ expedition: ex.id }).filter(w => w.expeditionRole !== 'lead').map(w => ({
+        name: w.name, role: w.expeditionRole, state: w.state, goal: w.goal, context_pct: w.contextPct ?? null,
+        model: w.model || w.modelSeen || null, effort: w.effort || null, type: w.type || null
+      }))
+    };
+  }
+
+  leadMessage(p, lead, to, text) {
+    const w = this.leadMember(p, lead, to);
+    p.log.append('message', { thread: w.thread, from: lead.name, text });
+    w.send(`[From the Lead, ${lead.name}]\n${text}`);
+    return w;
+  }
+
+  leadRetire(p, lead, name, reason = '') {
+    const w = this.leadMember(p, lead, name);
+    return this.retireFinished(p, w.name, lead.name, reason);
+  }
+
+  // The Lead starts one of the five hub roles. Only those types; the expedition and role are stamped here (the Lead cannot
+  // pass them); model and effort are the launch screen's picks for that role (stored in expedition_started), never the Lead's.
+  leadStart(p, lead, { type, goal = '', task }) {
+    const ex = this.leadScope(p, lead), s = ex.state();
+    if (!s.started || !['planning', 'running'].includes(s.phase)) throw new Error(`Expedition ${ex.id} is ${s.phase === 'new' ? 'not started' : s.phase}: no new agents can be started.`);
+    const role = expeditionRoleOfType(String(type ?? '').trim());
+    const allowed = EXPEDITION_HUB_ROLES.filter(r => r !== 'lead');
+    if (!role || !allowed.includes(role)) throw new Error(`An expedition starts only these roles, by type: ${allowed.map(r => EXPEDITION_ROLES[r].type).join(', ')}. Gatherers (expedition-gatherer) are not started: call them with the Agent tool.`);
+    const brief = String(task ?? '').trim();
+    if (!brief) throw new Error('Give the agent its task.');
+    const pick = s.started.roles?.[role] || {};
+    const settings = { type: EXPEDITION_ROLES[role].type, model: pick.model || undefined, effort: pick.effort || undefined, expedition: ex.id, expeditionRole: role };
+    // The Verifier is never on the Builder's model (spec section 3): checked on what each would really run as.
+    if (role === 'verifier') {
+      const b = s.started.roles?.builder || {};
+      const mine = this.resolveSettings(p, 'worker', settings).model, theirs = this.resolveSettings(p, 'worker', { type: EXPEDITION_ROLES.builder.type, model: b.model || undefined, effort: b.effort || undefined }).model;
+      if (mine && mine === theirs) throw new Error(`The Verifier and the Builder both run on ${mine}. The Verifier must be a different model from the Builder.`);
+    }
+    const label = EXPEDITION_ROLES[role].label;
+    const header = `You are the ${label} of expedition ${ex.id} in ${p.name} (type ${settings.type}); your Lead is ${lead.name}. The expedition's files are in .crux/expeditions/${ex.id}/ (the build worktree is .claude/worktrees/exp-${ex.id}, branch expedition/${ex.id}). Your post_summary goes to the Lead, as text, and nothing else is read by anyone: nobody can answer a question during an expedition, so ask the Lead (it replies by message), decide inside your task, or say what you left out and why. Never merge, never use scheduling or trigger tools, never edit settings files.\n\n---\n\n`;
+    return this.startWorker(p, `exp-${role}`, header + brief, lead.name, String(goal || '').trim().slice(0, 90) || `${label} of ${ex.id}`, settings);
+  }
+
+  // Launch (spec section 5; phase 5 adds the screen and the endpoint). Refuses, in plain words and before anything is
+  // written, when: the brief is empty, an expedition already runs in this project, the project is at Ask, an agent type is
+  // missing, or the Verifier would run on the Builder's model. test: files for test/ by name ({ 'CHECKLIST.md': '...' }).
+  launchExpedition(p, { brief, question = '', test = {}, envelope = {}, roles = {}, gatherers = 3 } = {}, by = 'you') {
+    const text = String(brief ?? '').trim();
+    if (!text) throw new Error('The brief is empty: write the question, the scope and the success test first.');
+    const running = Expedition.all(p).find(x => x.phase !== 'ended');
+    if (running) throw new Error(`Expedition ${running.id} is still ${running.phase === 'stopped' ? 'writing up' : running.phase}: one expedition runs per project at a time.`);
+    if (this.permissionMode(p) === 'standard') throw new Error('This project is at Ask. An expedition needs Auto or Trusted: at Ask every request that is more than a read would wait for an orchestrator, and an expedition has nobody to ask. Raise the level on the project card first.');
+    const types = this.agentTypes(p), merged = {};
+    for (const [role, d] of Object.entries(expeditionDefaultRoles())) {
+      const t = types.get(d.type);
+      if (!t) throw new Error(`The agent type ${d.type} is not set up. Copy the expedition-*.md files from agent-types/starter into ~/.claude/agents (or this project's .claude/agents).`);
+      const o = roles[role] || {};
+      merged[role] = { type: d.type, model: modelId(o.model) || t.model || modelId(d.model), effort: effortLevel(o.effort) || t.effort || d.effort };
+    }
+    const problem = Expedition.rolesProblem(merged);
+    if (problem) throw new Error(problem);
+    // The test files are plain names (no folders, no .., not BRIEF.md): checked before anything is written.
+    for (const name of Object.keys(test || {})) {
+      if (!/^[A-Za-z0-9][\w.-]*$/.test(name) || name.includes('..') || /^BRIEF\.md$/i.test(name)) throw new Error(`"${name}" is not a name for a success-test file: use a plain file name such as CHECKLIST.md or run.json.`);
+    }
+    const dir = join(p.dir, '.crux', 'expeditions');
+    const taken =[...Expedition.all(p).map(x => x.id), ...(existsSync(dir) ? readdirSync(dir) : [])];
+    const id = Expedition.makeId(question || text.split('\n')[0], { taken });
+    const ex = new Expedition(p, id).init();
+    ex.write('BRIEF.md', `${text}\n`);
+    for (const [name, body] of Object.entries(test || {})) ex.write(`test/${name}`, body);
+    const hours = Number(envelope.hours) > 0 ? Number(envelope.hours) : undefined;
+    const limit = Math.min(GATHERER_LIMIT, Math.max(1, Math.round(Number(gatherers)) || 3));
+    ex.start({ envelope: { ...envelope, ...(hours ? { hours } : {}), gatherers: limit }, roles: merged, planStart: null });   // the plan-meter readings at the start are phase 3's (the watchdog)
+    const e = ex.state().started.envelope;
+    const task = [
+      `You are the Lead of expedition ${id} in ${p.name}. Its folder is .crux/expeditions/${id}/ : BRIEF.md (the question, scope and envelope) and test/ (the success test) are there; everything you and your team write goes in that folder.`,
+      `Envelope: ${e.hours} hours${e.dollars != null ? ` and about $${e.dollars}` : ''}, about ${e.percent}% of the week's plan; the hub enforces it and tells you at 90%. The build goes in the worktree .claude/worktrees/exp-${id} on the branch expedition/${id} (the Builder creates it from the main branch if it is not there).`,
+      `Gatherers: up to ${limit} at once with the Agent tool (type expedition-gatherer), and one second round of the same size, only for gaps they flagged. Hard limit ${GATHERER_LIMIT}.`,
+      `Your tools: start_worker (type one of expedition-advisor, expedition-synthesizer, expedition-skeptic, expedition-builder, expedition-verifier), message_agent, retire_worker and list_agents, all limited to this expedition, plus the Agent tool. Nobody is available to answer questions: decide inside the brief or park the line of work.`,
+      '', 'The brief:', '', text
+    ].join('\n');
+    const lead = this.startWorker(p, 'exp-lead', task, by, `Expedition ${id}`.slice(0, 90), { type: merged.lead.type, model: merged.lead.model, effort: merged.lead.effort, expedition: id, expeditionRole: 'lead' });
+    return { id, lead: lead.name, expedition: ex.state().started };
+  }
+
   startWorker(p, name, task, by = 'you', goal = '', settings = {}) {
     if (!goal) goal = String(task).split('\n')[0].slice(0, 90);
     const w = this.createAgent(p, { name, role: 'worker', task, goal, settings });
@@ -482,6 +612,8 @@ export class Hub {
   orchestratorToWorker(p, orch, to, text) {
     const w = p.agents.get(to);
     if (!w || w.role !== 'worker' || w.state === 'retired') throw new Error(`No active worker ${to}`);
+    const stay = this.orchestratorStaysOut(p, w, orch);
+    if (stay) throw new Error(stay);
     p.log.append('message', { thread: w.thread, from: orch.name, text });
     w.send(`[From the orchestrator, ${orch.name}]\n${text}`);
   }
@@ -687,31 +819,38 @@ export class Hub {
   // Decision 21 A: a worker's request goes to the orchestrator first, unless the hub's own matcher finds a hard stop
   // in the permission rules (or cannot read it), routing is off, there is no rules entry, or no orchestrator is
   // running. Then it is a card for you, as before. If the orchestrator escalates or does not answer in time, too.
-  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, warmed } = {}) {
+  requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, agentID, warmed } = {}) {
     // A10: an install of approved packages waits (up to about 5 seconds) for the registry's answer before it is judged.
     const warm = warmed ? null : this.lists?.warm(toolName, input, p.dir);
-    if (warm) return warm.then(() => signal?.aborted ? { behavior: 'deny', message: 'Cancelled' } : this.requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, warmed: true }));
+    if (warm) return warm.then(() => signal?.aborted ? { behavior: 'deny', message: 'Cancelled' } : this.requestApproval(p, agent, toolName, input, { signal, title, description, suggestions, toolUseID, agentID, warmed: true }));
     const auto = this.autoAnswer(p, agent, toolName, input, agent.cwdFor?.(toolUseID) || p.dir);
     if (auto) return Promise.resolve(auto);
+    // The Expedition module (decision 71): a gatherer's request arrives as its Lead's, so this says which subagent asked.
+    const subagent = agent.expedition ? agent.subagentFor?.(toolUseID, agentID) || null : null;
+    // An expedition agent's settings files are never written (spec lesson 9): denied at every level, logged, not parked.
+    if (agent.expedition && writesSettingsFile(toolName, input)) return Promise.resolve(this.denyQuiet(p, agent, toolName, input, 'it edits a Claude Code settings file, which an expedition never changes', { subagent }));
     // Decision 66: while work in this project is paused, every new request that is not a plain read comes to you as a
     // card, whatever the level or the check would have said (workers are told to stop; a request already waiting
     // with the orchestrator or the check carries on).
     const paused = this.isPaused(p);
     // The Expedition module (plan 2a, route 8): while paused an expedition's request is never a card (decision 71). It is
     // denied with "wait", logged in the agent's own thread, and not parked.
-    if (paused && this.upwardOf(p, agent).to !== 'orchestrator') {
+    if (paused && agent.expedition) {
       const i = input || {};
       p.log.append('permission_answer', { thread: agent.thread, approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'deny', reason: 'paused, wait', by: 'hub', expedition: agent.expedition });
       return Promise.resolve({ behavior: 'deny', message: 'Work in this project is paused: wait until it is resumed, then ask again. This is not parked.' });
     }
     // Decision 64: a merge you already said yes to in a card goes through at once, logged (lib/merge-pass.mjs).
-    const pass = paused ? null : findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
+    // (An expedition agent never has a merge pass: merging is blocked outright, spec 4.6.)
+    const pass = paused || agent.expedition ? null : findPass(p.log.events, toolName, input, { dir: p.dir, agent: agent.name, ...(this.gitOrigin ? { origin: this.gitOrigin } : {}) });
     if (pass) {
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(input?.command || '').slice(0, 400), answer: 'allow', reason: this.memory.personalize(`pre-approved by {{who}}'s answer on ${pass.card} (${pass.asker})`), by: 'hub', pass: pass.pass, passNumber: pass.number });
       return Promise.resolve({ behavior: 'allow', updatedInput: input });
     }
     // Decision 64 A: the checker starts in the folder this tool call runs in (toolUseID -> the hook's cwd).
     const route = paused ? this.pausedRoute(p, agent, toolName, input, toolUseID) : this.routeFor(p, agent, toolName, input, toolUseID);
+    // The Expedition module (decision 71): a request that would be a card, or go to the orchestrator, is parked instead.
+    if (route.parked) return Promise.resolve(this.parkRequest(p, agent, toolName, input, route.parked, { subagent }));
     if (route.logged) {
       const i = input || {};
       p.log.append('permission_answer', { thread: 'orchestrator', approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'allow', reason: `Auto mode, its own request: not fully readable (${route.logged.join('; ')}), no hard stop in it`, by: 'hub' });
@@ -721,14 +860,58 @@ export class Hub {
     this.startsOf = null;
     const noteStarts = () => { agent.testHubs ||= new Set(); for (const port of starts) agent.testHubs.add(port); };
     // Decision 67: with the check on or in shadow, Auto's "it runs a script inside the project" is looked at first (below).
-    if (route.allow && route.scriptGate) return this.gateScript(p, agent, toolName, input, route, { signal, title, description, suggestions, noteStarts });
+    if (route.allow && route.scriptGate) return this.gateScript(p, agent, toolName, input, route, { signal, title, description, suggestions, noteStarts, subagent });
     if (route.allow) { noteStarts(); return Promise.resolve({ behavior: 'allow', updatedInput: input }); }   // auto mode, contained (decision 34)
+    // An expedition's request the check is to judge: asked on the spot, with no card and no waiting entry (decision 71).
+    if (agent.expedition && route.check) return this.quietCheck(p, agent, toolName, input, route, { signal, noteStarts, subagent });
     return this.openApproval(p, agent, toolName, input, route, { signal, title, description, suggestions, noteStarts });
+  }
+
+  // ---------- an expedition's requests: no card, no orchestrator (decision 71; the full parking rules are phase 4) ----------
+  // A request that would have been a card or gone to the orchestrator is denied with "parked" and logged twice: the answer
+  // (in the agent's own thread) and an expedition_parked event the report lists. Repeats of the same request are one line.
+  // subagent: { id, type } when a gatherer inside the Lead asked (plan 2b item 4).
+  parkRequest(p, agent, toolName, input, reasons, { subagent = null } = {}) {
+    const why = [].concat(reasons).filter(Boolean).join('; ') || 'the hub could not settle it';
+    const i = input || {};
+    const command = String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400);
+    p.log.append('permission_answer', { thread: agent.thread, approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command, answer: 'deny', reason: `parked: ${why}`, by: 'hub', expedition: agent.expedition, ...(subagent ? { subagent } : {}) });
+    const text = `${toolName}: ${command}`;
+    const ex = this.expeditionOf(p, agent);
+    try {
+      if (!ex.state().parked.some(e => e.kind === 'request' && e.text === text)) ex.park({ text, reason: why, maker: agent.name, kind: 'request', tool: toolName, ...(subagent ? { subagent } : {}) });
+    } catch { /* the expedition is not started yet: the answer above is the record */ }
+    return { behavior: 'deny', message: `Parked, not allowed: ${why}. Nobody is available to approve it during an expedition: work around it inside the brief, or stop that line of work and say so in your summary. It is listed in the report.` };
+  }
+
+  // A refusal that is not parked: logged in the agent's own thread, no card, nothing for the report to propose.
+  denyQuiet(p, agent, toolName, input, why, { subagent = null } = {}) {
+    const i = input || {};
+    p.log.append('permission_answer', { thread: agent.thread, approval: null, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || i.file_path || i.notebook_path || i.url || JSON.stringify(i)).slice(0, 400), answer: 'deny', reason: why, by: 'hub', expedition: agent.expedition, ...(subagent ? { subagent } : {}) });
+    return { behavior: 'deny', message: `Not allowed: ${why}.` };
+  }
+
+  // The one-shot permission check on an expedition's request (decision 66 where the check is on). Allow and deny settle it;
+  // anything else (escalate, consult, no valid answer) is parked. The orchestrator is never asked and no card opens.
+  async quietCheck(p, agent, toolName, input, route, { signal, noteStarts = () => {}, subagent = null } = {}) {
+    const id = randomUUID();
+    const a = { p, agent, toolName, input, route, routedTo: CHECK_NAME, subagent };
+    let res;
+    try { res = await this.checker.run(await this.checkRequest(a)); }
+    catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
+    try { this.logCheckUsage(p, id, res, false, agent.expedition); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
+    if (signal?.aborted) return { behavior: 'deny', message: 'Cancelled' };
+    const extra = { model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}) };
+    if (res.valid && res.answer === 'allow') { this.logAnswer(a, id, 'allow', res.reason, CHECK_NAME, extra); noteStarts(); return { behavior: 'allow', updatedInput: input }; }
+    if (res.valid && res.answer === 'deny') { this.logAnswer(a, id, 'deny', res.reason, CHECK_NAME, extra); return { behavior: 'deny', message: `The permission check declined: ${res.reason}` }; }
+    return this.parkRequest(p, agent, toolName, input, res.valid ? `the permission check could not settle it: ${res.reason}` : `the permission check gave no valid answer (${res.error})`, { subagent });
   }
 
   // The card, its waiting entry and its timer: a request that is not settled on the spot. waitedMs: time already spent on
   // this request (the script look-up of decision 67), so the 5 minutes still run from the original request.
   openApproval(p, agent, toolName, input, route, { signal, title, description, suggestions, waitedMs = 0, noteStarts = () => {} } = {}) {
+    // Belt and braces (decision 71): no path may open a card or wait for the orchestrator for an expedition's agent.
+    if (agent.expedition) return Promise.resolve(this.parkRequest(p, agent, toolName, input, route.stops?.length ? route.stops : 'it would have been a card'));
     return new Promise(resolvePromise => {
       const id = randomUUID();
       const always = CommandPolicy.alwaysRules(toolName, input, suggestions);
@@ -842,10 +1025,11 @@ export class Hub {
 
   // The check's usage: one `usage` event, filed under the type "check" in the usage panel (role check). `via` says
   // whether it went through the SDK (plan usage) or the API (money); listUSD is the list-price estimate of either.
-  logCheckUsage(p, id, res, shadow) {
+  // expedition: the id when the request was an expedition agent's, so its spend counts toward the expedition's budget.
+  logCheckUsage(p, id, res, shadow, expedition = null) {
     if (!res?.modelUsage || !Object.keys(res.modelUsage).length) return;
     const models = totalsOf(res.modelUsage);
-    p.log.append('usage', { agent: CHECK_NAME, project: p.name, agentType: 'check', role: 'check', model: res.model || CHECK_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null, approval: id, ...(shadow ? { shadow: true } : {}) });
+    p.log.append('usage', { agent: CHECK_NAME, project: p.name, agentType: 'check', role: 'check', model: res.model || CHECK_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null, approval: id, ...(shadow ? { shadow: true } : {}), ...(expedition ? { expedition } : {}) });
   }
 
   // The check answered (or failed) for a request it holds: apply it. A request you answered, or that timed out or was
@@ -921,7 +1105,7 @@ export class Hub {
       // have escalated without a call), so the study sees what the model says on exactly the dangerous cases.
       try { res = await this.checker.run({ ...(await this.checkRequest(a)), shadow: true }); }
       catch (e) { res = { valid: false, error: e?.message || String(e), model: CHECK_MODEL }; }
-      try { this.logCheckUsage(a.p, id, res, true); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
+      try { this.logCheckUsage(a.p, id, res, true, a.agent.expedition || null); } catch (e) { console.warn('Check usage not logged:', e?.message || e); }
       const i = a.input || {};
       // No thread: it is a log line for the study tool, not a message, so it never counts as unread in any thread.
       // answer: what the check ends up saying (an allow on an unread script is a consult); rawAnswer: what the model said.
@@ -929,7 +1113,7 @@ export class Hub {
         approval: id, worker: a.agent.name, tool: a.toolName,
         command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400),
         valid: !!res.valid, answer: res.valid ? res.answer : null, rawAnswer: res.valid ? (res.raw === undefined ? res.answer : res.raw) : null, reason: res.valid ? res.reason : res.error,
-        model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}),
+        model: res.model || CHECK_MODEL, ...(res.downgraded ? { downgraded: true } : {}), ...(res.unread ? { unread: true } : {}), ...(a.agent.expedition ? { expedition: a.agent.expedition } : {}),
         ...(res.scan?.stops?.length ? { scanStops: res.scan.stops.slice(0, 5) } : {}), ...(res.scan?.doubts?.length ? { scanDoubts: res.scan.doubts.slice(0, 5) } : {}), ...(res.scan?.notes?.length ? { scanNotes: res.scan.notes.slice(0, 8) } : {}), ms: res.ms ?? null
       });
     } catch (e) { console.warn('Shadow check failed:', e?.message || e); }
@@ -937,7 +1121,7 @@ export class Hub {
 
   // The orchestrator hears of the check's denials and escalations at its next turn (it does not wake for them).
   noteCheck(p, what, a, reason) {
-    if (this.upwardOf(p, a.agent).to !== 'orchestrator') return;   // an expedition's denials go to the agent that asked and to the log only
+    if (a.agent.expedition) return;   // an expedition's denials go to the agent that asked and to the log only
     const orch = p.orchestrator();
     if (!orch || (orch.notes?.length || 0) >= 40) return;
     const i = a.input || {};
@@ -991,7 +1175,8 @@ export class Hub {
     // Files it downloads: running one in a later request is a stop too (review of decision 64 A). The newest 200.
     for (const d of c.downloaded || []) { agent.downloads.delete(d); agent.downloads.add(d); }
     while (agent.downloads.size > 200) agent.downloads.delete(agent.downloads.values().next().value);
-    if (route === 'human') return { to: null, stops: reasons, rules: rules?.entryId || null };
+    // The Expedition module (decision 71): what would be a card is parked. A hard stop is never run, only logged and parked.
+    if (route === 'human') return agent.expedition ? { parked: reasons.length ? reasons : ['a hard stop'] } : { to: null, stops: reasons, rules: rules?.entryId || null };
     if (route === 'allow' && this.autoLike(p)) return this.scriptGateFor(p, agent, toolName, input, cwd, rules) || { allow: true };
     // The orchestrator's own unclear requests have no one to route to: in auto mode, with no hard stop in them,
     // they are allowed and logged in its thread for Matt to audit.
@@ -1005,6 +1190,12 @@ export class Hub {
       || (c.unsure.some(u => /^Runs commands the hub cannot read/.test(u)) && c.unsure.some(u => /^(Uses a variable|An argument in brackets|Command substitution)/.test(u)));
     if (route === 'unsure' && agent.role === 'orchestrator' && this.autoLike(p) && !opaqueRun && !connectorTool(toolName) && !/^mcp__(?!crux__)/.test(toolName)) return { allow: true, logged: unsure };
     if (agent.role !== 'worker') return { to: null, stops: [], rules: null };
+    // An expedition's unclear request goes to the one-shot check where it is on, and is otherwise parked: never to the
+    // orchestrator (it stays out) and never to a card. Not for connectors or other MCP tools, as for everyone.
+    if (agent.expedition) {
+      const checked = this.checkMode(p) === 'on' && !connectorTool(toolName) && !/^mcp__/.test(toolName) && this.settings.get('routePermissions') && rules;
+      return checked ? { to: CHECK_NAME, check: true, stops: [], rules: rules.entryId, unsure, cwd } : { parked: unsure.length ? unsure : ['the hub could not settle it at this level'] };
+    }
     if (!this.settings.get('routePermissions') || !rules) return { to: null, stops: [], rules: rules?.entryId || null };
     // A resting orchestrator (asleep since a restart, or between turns) is woken by the request, so the card does not
     // jump to your phone just because it was asleep. It still comes to you on escalate or after the timeout.
@@ -1040,7 +1231,7 @@ export class Hub {
   // Decision 67. Committed and unchanged scripts (and nothing else unread) stay allowed at once. A worker-written, changed
   // or unread chain: with the check on, it is asked like any request the hub could not settle (the 5 minutes run from the
   // request); in shadow mode it is allowed as today and the check reads it and writes a check_shadow line.
-  async gateScript(p, agent, toolName, input, route, { signal, title, description, suggestions, noteStarts = () => {} } = {}) {
+  async gateScript(p, agent, toolName, input, route, { signal, title, description, suggestions, noteStarts = () => {}, subagent = null } = {}) {
     const g = route.scriptGate;
     let scripts = null;
     try {
@@ -1055,12 +1246,15 @@ export class Hub {
       // Allowed as today. The check reads it beside, and the allow is logged under the same request id so the study can compare.
       const id = randomUUID();
       const i = input || {};
-      p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || '').slice(0, 400), answer: 'allow', reason: 'Auto mode: it runs a script inside the project (the check reads it in shadow mode only)', by: 'hub' });
+      // An expedition agent's line is filed in its own thread and tagged, never in the orchestrator's (decision 71).
+      p.log.append('permission_answer', { thread: agent.expedition ? agent.thread : 'orchestrator', approval: id, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || '').slice(0, 400), answer: 'allow', reason: 'Auto mode: it runs a script inside the project (the check reads it in shadow mode only)', by: 'hub', ...(agent.expedition ? { expedition: agent.expedition, ...(subagent ? { subagent } : {}) } : {}) });
       this.runShadow(id, { p, agent, toolName, input, route: { unsure, cwd: g.cwd, rules: g.rules, scripts } });
       noteStarts();
       return { behavior: 'allow', updatedInput: input };
     }
-    return this.openApproval(p, agent, toolName, input, { to: CHECK_NAME, check: true, stops: [], rules: g.rules, unsure, cwd: g.cwd, scripts }, { signal, title, description, suggestions, waitedMs: Date.now() - g.since, noteStarts });
+    const checkRoute = { to: CHECK_NAME, check: true, stops: [], rules: g.rules, unsure, cwd: g.cwd, scripts };
+    if (agent.expedition) return this.quietCheck(p, agent, toolName, input, checkRoute, { signal, noteStarts, subagent });   // no card, no waiting entry
+    return this.openApproval(p, agent, toolName, input, checkRoute, { signal, title, description, suggestions, waitedMs: Date.now() - g.since, noteStarts });
   }
 
   // While paused: a card for you. If the request is also a hard stop, its reasons stay on the card next to the pause, so
@@ -1274,7 +1468,10 @@ export class Hub {
   // extra: more fields for the line (the check adds its model, and downgraded when it was turned from allow to consult).
   logAnswer(a, id, answer, reason, by, extra = {}) {
     const i = a.input || {};
-    a.p.log.append('permission_answer', { thread: 'orchestrator', approval: id, worker: a.agent.name, workerThread: a.agent.thread, tool: a.toolName, command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400), answer, reason, by, ...(by === CHECK_NAME ? { model: CHECK_MODEL } : {}), ...(answer === 'allow' ? listable(a.toolName, i) : {}), ...extra });
+    // An expedition agent's answers are logged in its own thread, never the orchestrator's (decision 71), tagged with the
+    // expedition and, when a gatherer inside the Lead asked, with which subagent (plan 2b item 4).
+    const ex = a.agent.expedition ? { expedition: a.agent.expedition, ...(a.subagent ? { subagent: a.subagent } : {}) } : {};
+    a.p.log.append('permission_answer', { thread: a.agent.expedition ? a.agent.thread : 'orchestrator', approval: id, worker: a.agent.name, workerThread: a.agent.thread, tool: a.toolName, command: String(i.command || i.file_path || i.notebook_path || i.url || i.query || JSON.stringify(i)).slice(0, 400), answer, reason, by, ...(by === CHECK_NAME ? { model: CHECK_MODEL } : {}), ...(answer === 'allow' ? listable(a.toolName, i) : {}), ...ex, ...extra });
   }
 
   // The card comes to you: escalated by the orchestrator, timed out, or routing switched off. It buzzes your phone.
@@ -1617,6 +1814,8 @@ export class Hub {
     reason = String(reason || '').trim().replace(/\s+/g, ' ');
     const a = name === 'orchestrator' ? p.orchestrator() : p.agents.get(name);
     if (!a) return /^orchestrator(-\d+)?$/.test(name) ? this.workerHandoffBlock(p, { role: 'orchestrator' }) : `No worker called ${name}. Names are in list_agents.`;
+    const stay = this.orchestratorStaysOut(p, a, by);
+    if (stay) return stay;
     const blocked = this.workerHandoffBlock(p, a);
     if (blocked) return blocked;
     if (!reason) return 'Give a one-line reason, then call it again.';
@@ -1634,6 +1833,8 @@ export class Hub {
   retireFinished(p, name, by = 'you', reason = '') {
     const a = p.agents.get(name);
     if (!a || a.role !== 'worker') throw new Error(`No worker called ${name}`);
+    const stay = this.orchestratorStaysOut(p, a, by);
+    if (stay) throw new Error(stay);
     if (a.state === 'retired') return `${name} has already retired.`;
     if (a.retiring) return `${name} is already handing off.`;
     if ([...this.approvals.values()].some(x => x.agent === a)) return `${name} is waiting on a permission card; answer or deny it first.`;
