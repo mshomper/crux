@@ -396,10 +396,12 @@ export class Agent {
       for (const b of blocks.filter(b => b.type === 'tool_use')) {
         this.hub.emit({ type: 'activity', project: this.project.name, thread: this.thread, agent: this.name, text: describeTool(b) });
       }
+      if (q) this.checkContextMidTurn(q);   // not awaited: the read must not hold the message stream up
     } else if (m.type === 'rate_limit_event') {
       this.hub.usage?.rateLimit(m.rate_limit_info, this.project);
     } else if (m.type === 'result') {
       this.quietTurn = false;
+      this.warnedThisTurn = false;
       // The turn that just ended: its start, and whether it ended in an error (no reminder then).
       // A turn the watchdog interrupted ends in an error result by design: not an error, and no notice for it.
       const cut = this.interrupted && m.terminal_reason === 'aborted_streaming';
@@ -422,6 +424,21 @@ export class Agent {
       // Retired by the Lead mid-turn: its usage is logged now, so it can close.
       if (this.finishWhenIdle) this.hub.finishRetire(this.project, this);
     }
+  }
+
+  // Mid-turn context read: the SDK's context-usage call, after an assistant message, at most once every 20 seconds and
+  // never two at once. Stops reading for the turn once the warning has gone. The hub then decides on the warning.
+  async checkContextMidTurn(q, minGapMs = 20000) {
+    if (this.warnedThisTurn || this.ctxReading || this.role === 'conductor' || typeof q.getContextUsage !== 'function') return;
+    const now = Date.now();
+    if (this.lastCtxRead && now - this.lastCtxRead < minGapMs) return;
+    this.lastCtxRead = now;
+    this.ctxReading = true;
+    try {
+      const pct = Math.round((await q.getContextUsage()).percentage);
+      if (Number.isFinite(pct) && this.q === q && this.inTurn) { this.contextPct = pct; this.hub.midTurnWarn?.(this.project, this); }
+    } catch { /* older CLI, or the turn just ended */ }
+    finally { this.ctxReading = false; }
   }
 
   // The Expedition module (decision 68 C, plan 2b item 5): the Lead's gatherers are Claude Code subagents inside its query.
