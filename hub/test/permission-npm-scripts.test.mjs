@@ -24,6 +24,7 @@ pkg({
   start: 'node server.mjs',
   loop: 'npm run loop', indirect: 'npm run deploy', both: 'echo a && npm run build',
   inline: `node -e "console.log(1+1)"`,
+  pushit: 'git push origin',
 });
 
 const at = (command, extra = {}) => classify({ tool: 'Bash', input: { command }, projectDir: project, tmp, home, agent: 'builder', ...extra });
@@ -36,6 +37,17 @@ const human = (c, x) => is('human', c, x);
 test('a script that force-pushes main is a hard stop, whichever way it is run', () => {
   for (const c of ['npm run deploy', 'npm run-script deploy', 'yarn run deploy', 'pnpm run deploy', 'bun run deploy', 'npm run deploy --silent', 'npm run indirect']) human(c);
   human('npm run deploy -- --dry-run');
+});
+
+test('words after the script name go to the script with or without -- (npm 7+)', () => {
+  human('npm run pushit main');                       // runs: git push origin main
+  human('npm run pushit --silent main');
+  human('npm run pushit -- main');
+  human('yarn run pushit main');
+  human('pnpm run pushit main');
+  allow('npm run pushit feat/x');                     // a feature branch push is a feature push
+  allow('npm test --prefix .');                       // npm's own folder option is not a script word
+  allow('npm run build --silent');
 });
 
 test('a pre or post hook that holds the push is a hard stop, though the named script is harmless', () => {

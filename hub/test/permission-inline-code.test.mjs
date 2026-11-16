@@ -52,6 +52,15 @@ test('a heredoc read by a program as its script is code too; one read by cat or 
   allow(`git commit -m "$(cat <<'EOF'\nfix it\nEOF\n)"`.replace('git commit -m', 'echo'));
 });
 
+test('node with more than one -e or -p runs the last: a known string in front vouches for nothing', () => {
+  unsure(`node -p "process.version" -e "require('fs').writeFileSync('x','y')"`);
+  unsure(`node -e "console.log(require('os').tmpdir())" -e "console.log(1)"`);
+  unsure(`node -e "console.log(1)" -p "process.version"`);
+  unsure(`node --eval "console.log(1)" --print "process.version"`);
+  human(`node -p "process.version" -e "require('fs').writeFileSync('C:/Users/me/x.txt','y')"`);   // every one is read: the write outside is a stop
+  allow(`node -p "process.version"`);
+});
+
 test('the exact known read-only strings still pass', () => {
   allow(`node -e "console.log(require('os').tmpdir())"`);
   allow(`node -p "require('os').tmpdir()"`);

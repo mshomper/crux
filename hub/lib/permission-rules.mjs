@@ -2425,8 +2425,16 @@ class Check {
   }
 
   node(args, cwd = this.projectDir) {
-    const i = args.findIndex(x => /^(-e|-p|--eval|--print)$/.test(x));
-    if (i >= 0) return this.script(this.blockText(args[i + 1] || ''));
+    // node runs the last -e/-p/--eval/--print: every one is read as code, and more than one is a doubt (the exact-string
+    // allow never applies to a command that names two).
+    const evals = args.map((x, i) => (/^(-e|-p|--eval|--print|-pe|-ep)$/.test(x) || /^--(eval|print)=/.test(x) ? i : -1)).filter(i => i >= 0);
+    if (evals.length > 1) {
+      this.unsure('node with more than one -e or -p: it runs the last one, the hub reads none of them as a known string', true);
+      for (const i of evals) this.script(/^--/.test(args[i]) && args[i].includes('=') ? args[i].slice(args[i].indexOf('=') + 1) : this.blockText(args[i + 1] || ''));
+      return;
+    }
+    const i = evals[0] ?? -1;
+    if (i >= 0) return this.script(/^--(eval|print)=/.test(args[i]) ? args[i].slice(args[i].indexOf('=') + 1) : this.blockText(args[i + 1] || ''));
     const file = args.find(x => !x.startsWith('-'));
     if (file && /^(server|restart)\.mjs$/.test(basename(file))) {
       // restart.mjs stops whatever listens on its port before it starts: only a port this agent started a hub on, or one
@@ -2803,8 +2811,15 @@ class Check {
       if (!scripts || typeof scripts !== 'object' || typeof scripts[name] !== 'string') {
         return this.unsure(`A package script the hub cannot read (${tool} ${name}: package.json missing, unreadable or with no such script)`, true);
       }
-      const dd = args.indexOf('--');
-      const extra = dd >= 0 ? args.slice(dd + 1) : tool === 'npm' ? [] : args.slice(Math.max(0, args.indexOf(name) + 1));
+      // Every word after the script name goes to the script, with or without -- (npm 7+: `npm run pushit main` runs
+      // `<script> main`), except the package-folder options npm itself takes; the -- itself is dropped.
+      const subAt = args.indexOf(sub);
+      const nameAt = runs ? args.indexOf(name, subAt + 1) : subAt;
+      const extra = [];
+      args.slice(nameAt + 1).forEach((x, i, rest) => {
+        if (/^--?(prefix|C|dir|cwd)$/.test(x) || /^--?(prefix|C|dir|cwd)$/.test(rest[i - 1] || '') || /^--(prefix|dir|cwd)=/.test(x) || x === '--') return;
+        extra.push(x);
+      });
       const quoted = extra.map(x => `'${String(x).replace(/'/g, `'\\''`)}'`).join(' ');
       // The settings in front of this request (CRUX_HUB_DATA=... npm start) reach the script too.
       const envText = [...this.env()].filter(([k, v]) => /^[A-Za-z_]\w*$/.test(k) && typeof v === 'string').map(([k, v]) => `${k}='${v.replace(/'/g, `'\\''`)}' `).join('');
