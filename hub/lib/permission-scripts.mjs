@@ -452,6 +452,11 @@ export function loadsUnseen(text, { python = false, dir = '', skipRuns = false, 
   if (/\b(?:import|export)\b[^'"`;]*?\bfrom\s*['"](?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:|file:|#)/.test(t) || /^\s*import\s*['"](?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:|file:|#)/m.test(t)) add('imports another file');
   if (/\b(?:require|import)\s*\(\s*['"`](?:\.{1,2}[\\/]?|[\\/]|[A-Za-z]:|file:|#)/.test(t)) add('requires another file');
   if (/\b(?:require|import)\s*\(\s*[^'"`)\s]/.test(t)) add('loads a file named at run time');
+  // Review of #99: anything but ONE plain string literal inside require( / import( is a name built at run time:
+  // require('child' + '_process'), a template string with ${}, a variable, two strings joined.
+  for (const m of t.matchAll(/\b(?:require|import)\s*\(\s*(?=['"`])/g)) {
+    if (!/^(?:'[^'\\\n]*'|"[^"\\\n]*"|`[^`$\\]*`)\s*\)/.test(t.slice(m.index + m[0].length))) { add('loads a file named at run time'); break; }
+  }
   if (/\b(?:eval|execScript)\s*\(|\bnew\s+Function\b|\bFunction\s*\(/.test(t) && !python) add('evals text');
   if (python) {
     if (/\b(?:exec|eval|__import__|compile)\s*\(|\brunpy\b|\bimportlib\b/.test(t)) add('runs text or loads a file named at run time');
@@ -462,6 +467,10 @@ export function loadsUnseen(text, { python = false, dir = '', skipRuns = false, 
     }
   }
   if (spawns(t, python) && (!inline || [...t.matchAll(SCRIPT_LITERAL)].length)) add(inline ? 'starts another script' : 'starts another program or script, which is not attached');
+  // Review of #95: loading the process module at all (aliased, destructured, cp['exec' + 'Sync'], `import subprocess as sp`)
+  // makes the script unread. The call forms above are only the ones the hub can see; what it starts through an alias or a
+  // built-up name it cannot. (Inline one-liners keep the narrower rule above: execSync('git status') is a plain command.)
+  if (!inline && (python ? /^[ \t]*(?:import|from)[ \t]+[^\n]*\bsubprocess\b/m.test(t) : /['"`](?:node:)?child_process(?:\/promises)?['"`]/.test(t))) add('can start other programs (it loads the process module), and what it starts is not attached');
   if (/^\s*(?:source|\.)\s+[^\s=]/m.test(t) || /^\s*\.\s+["'$]/m.test(t)) add('sources another script');
   if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|\[scriptblock\]|\[System\.Reflection|\[Reflection\./i.test(t)) add('evals text');
   if (/\bImport-Module\s+\S/i.test(t) || /\bInvoke-Command\b[^\n]*-FilePath/i.test(t)) add('loads another script or module');
@@ -585,6 +594,18 @@ export async function isProjectScript(file, opts = {}) {
     }
   }
   return true;
+}
+
+// One of the project's own tests: its REAL path (a link or junction is followed) is inside the project and under hub/test/, in the
+// project itself or in one of its worktrees (.claude/worktrees/<name>/hub/test/). The scan treats words about git push and ~/.ssh
+// in such a file as the test data they are (permission-rules.mjs scanScriptText, test). A path that only looks like one does not count.
+export function isProjectTest(file, projectDir) {
+  try {
+    if (!projectDir) return false;
+    const real = norm(realpathSync(file)), root = norm(realpathSync(projectDir));
+    if (!real.startsWith(root + '/')) return false;
+    return /^(?:\.claude\/worktrees\/[^/]+\/)?hub\/test\//i.test(real.slice(root.length + 1));
+  } catch { return false; }
 }
 
 function expandGlob(path) {
@@ -736,7 +757,7 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     // package.json is data: the commands in it are read in turn (above), so they are not "loaded" from here.
     const data = /^package\.json$/i.test(basename(it.path));
     // scanText: more of a long script than the model is sent (up to 256 KB), so the hard-stop scan in code reads past the cut
-    out.push({ path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, ...(cutOff ? { scanText: buf.subarray(0, 256 * 1024).toString('utf8') } : {}), loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) });
+    out.push({ path: it.path, kind: 'attached', text, bytes: buf.length, cutOff, test: isProjectTest(it.path, projectDir), ...(cutOff ? { scanText: buf.subarray(0, 256 * 1024).toString('utf8') } : {}), loads: data ? [] : loadsUnseen(cutOff ? buf.toString('utf8') : text, { python: py, dir: dirname(it.path) }) });
   }
   // The files an attached script imports by relative path (importsOf resolves them), read for the hub's own text scan: up to
   // 12 files and 256 KB each. Committed, unchanged files are the project's reviewed code and are followed but not scanned.
@@ -754,7 +775,7 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
       seenImp.add(norm(r));
       let text;
       try { const b = readFileSync(r); if (b.subarray(0, 4096).includes(0)) continue; text = b.subarray(0, 256 * 1024).toString('utf8'); } catch { continue; }
-      if (!(await isCommittedFile(r, opts))) imports.push({ path: r, text });
+      if (!(await isCommittedFile(r, opts))) imports.push({ path: r, text, test: isProjectTest(r, projectDir) });
       if (/\.(mjs|cjs|js|jsx|ts|tsx|py)$/i.test(r)) todo.push({ path: r, text });
     }
   }
