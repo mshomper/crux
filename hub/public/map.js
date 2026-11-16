@@ -311,17 +311,17 @@ export class LiveMap {
     this.warnEl.hidden = !cl || !cl.parked;
     if (!cl) return;
     const cap = clusterCaption(cl);
-    const html = `${esc(cap.title)}|${esc(cap.time)}|${esc(cap.budget)}|${cl.amber}`;
+    const html = `${esc(cap.title)}|${esc(cap.time)}|${esc(cap.budget)}|${esc(cap.ending || '')}|${cl.amber}`;
     if (this.expEl.dataset.html !== html) {
       this.expEl.dataset.html = html;
       this.expEl.querySelector('.ex-t').textContent = cap.title;
-      this.expEl.querySelector('.ex-s').innerHTML = `<span>${esc(cap.time)}</span><span>${esc(cap.budget)}</span>`;
+      this.expEl.querySelector('.ex-s').innerHTML = `<span>${esc(cap.time)}</span><span>${esc(cap.budget)}</span>${cap.ending ? `<span>${esc(cap.ending)}</span>` : ''}`;
       this.expEl.classList.toggle('amber', cl.amber);
       const stop = this.expEl.querySelector('.ex-stop');
       stop.title = 'Stop the expedition and write it up';
       stop.setAttribute('aria-label', 'Stop the expedition and write it up');
     }
-    this.expEl.querySelector('.ex-stop').hidden = !this.stopExpedition;   // no Stop until the app has something to stop it with
+    this.expEl.querySelector('.ex-stop').hidden = !this.stopExpedition || cl.stopped || !!cl.ending;   // nothing to stop once it is writing up; no Stop until the app has something to stop it with
     if (cl.parked) { const tip = PARKED_TIP(cl.parked); if (this.warnEl.title !== tip) { this.warnEl.title = tip; this.warnEl.setAttribute('aria-label', tip); } }
   }
 

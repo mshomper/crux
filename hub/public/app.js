@@ -1,8 +1,10 @@
 // Crux hub interface: plain ES module, no build step.
 import { LiveMap } from './map.js';
 import { expeditionCluster, clusterLine, liveMembers } from './expedition-map.js';
+import { ExpeditionPanel } from './expedition-launch.js';
+import { draftCard, finishedCard, closedOf, draftSeed, draftBody, proposalSeed } from './expedition-cards.js';
 import { initPhone } from './phone.js';
-import { EFFORTS, hueOf, modelOf, modelLabel, pips, describe } from './models.js';
+import { EFFORTS, hueOf, family, modelOf, modelLabel, pips, describe } from './models.js';
 import { robot } from './robots.js';
 import { hudBoot, openPanel, closePanel } from './hud.js';
 import { isYesNo, repeatsIn, pageAsk } from './questions.js';
@@ -72,13 +74,12 @@ const fineMq = matchMedia('(pointer: fine)');
 const focusIfDesk = el => { if (fineMq.matches && !phoneMq.matches && el && !el.disabled && !el.closest('[hidden]')) el.focus(); };
 // The seam between the list and the conversation widens the list on a desk with a mouse (side-width.js).
 new SideResizer({ app: $('#app'), grip: $('#side-grip'), canResize: matchMedia('(min-width: 721px) and (pointer: fine)'), onResize: () => placeModelMenu() });
-const EXPEDITION_STOP_READY = false;   // phase 5 adds POST /api/expedition/stop
+const EXPEDITION_STOP_READY = true;   // phase 5: POST /api/expedition/stop
 const map = new LiveMap($('#hud'), {
   open: t => t === 'board' ? ($('#board').hidden = false, render()) : selectThread(t),
   // a project on the All projects map (decision 57 C): its thread, in that project
   openIn: (name, t) => { const p = S.projects.find(x => x.name === name); if (p) openThreadIn(p, t); },
-  // The Expedition module: Stop sends the expedition straight to its report (spec 5). Asks first. The hub's endpoint comes
-  // with the end sequence (phase 5): until then there is no Stop button (set EXPEDITION_STOP_READY when it lands).
+  // The Expedition module: Stop sends the expedition straight to its report (spec 5). Asks first, then tells the hub.
   stopExpedition: !EXPEDITION_STOP_READY ? null : async id => {
     const p = proj();
     if (!p || !await hubConfirm({ k: 'Expedition', title: 'Stop this expedition and write it up?', body: 'The team stops where it is and the Lead writes the report from what exists. Nothing is merged.', ok: 'Stop and write up' })) return;
@@ -442,7 +443,7 @@ function waitingIn(p, t) {
 }
 // The HUD frame's boot readout (decision 33), once, when the hub opens.
 function bootReadout() {
-  const p = proj(), live = p ? p.agents.filter(a => a.state !== 'retired' && !a.expedition) : [];   // an expedition is one cluster, not agents
+  const p = proj(), live = p ? p.agents.filter(a => a.state !== 'retired' && !a.expedition) : [];   // a running expedition is one cluster, not agents
   hudBoot({ project: p?.name, agents: live.length, working: live.filter(a => ['working', 'starting'].includes(a.state)).length, waiting: p ? needsCount(p) : 0 });
 }
 
@@ -546,9 +547,11 @@ function renderThreads() {
   if (!p) { const l = $('#threads'); l.innerHTML = ''; delete l.dataset.html; return; }
   const needs = needsCount(p);
   const orch = orchestrator(p);
-  const workers = p.agents.filter(a => a.role === 'worker' && !a.expedition);   // an expedition's agents are one row below
-  const active = workers.filter(a => a.state !== 'retired');
   const exp = expeditionCluster(p);
+  // A running expedition's agents are one row below; after its end they are ordinary agents again, so any still alive stay
+  // reachable and the retired ones sit in Retired (M049 item 1).
+  const workers = p.agents.filter(a => a.role === 'worker' && (!a.expedition || a.expedition !== exp?.id));
+  const active = workers.filter(a => a.state !== 'retired');
   const expLead = exp && p.agents.find(a => a.name === exp.lead.id);
   // A thread on screen in a column is being read: no unread dot for it.
   const dot = (a, t) => `<span class="dot ${!cols.visible(t) && unread(p, t) ? 'unread' : a?.state || ''}"></span>`;
@@ -1025,6 +1028,9 @@ function feedFor(t) {
         case 'check_audit': return `<div class="notice"><details><summary>Permission check: ${ev.items.length} of its ${ev.total} allows this week, to look over</summary><ul>${ev.items.map(i => `<li><code>${esc(i.command)}</code> · ${esc(i.worker)} · ${esc(i.reason)}</li>`).join('')}</ul></details></div>`;
         case 'handoff_qa': return '';
         case 'project_settings': return levelUndo(p, ev);
+        // The Expedition module (phase 5): the draft card with Launch / Edit, and the one finished card. Neither counts as waiting.
+        case 'expedition_draft': return draftCard(ev, closedOf(p.events, ev.id), p.expedition);
+        case 'expedition_finished': return finishedCard(ev, (p.expedition?.proposals || []).filter(x => x.expedition === ev.expedition));
         default: return '';
       }
     }).join('');
@@ -1721,6 +1727,27 @@ async function columnAction(name, c) {
       act(() => api('/api/retire', { project: proj().name, agent: orch ? undefined : t }));
   }
 }
+// The Expedition module (decision 70 A): one panel, opened from the sidebar button, a draft card's Edit and Launch on a
+// proposed next expedition. The hub decides at launch; the panel only shows why it would refuse.
+const expPanel = new ExpeditionPanel({
+  api: (path, body) => api(path, body),
+  toast: (m, tone) => toast(m, tone),
+  project: () => proj(),
+  modelPicker, effortPicker, hueOf, family, modelLabel, pips, get models() { return S.models; },
+  openPanel, closePanel,
+  afterLaunch: () => load().catch(() => { })
+});
+$('#new-expedition').addEventListener('click', () => { $('#app').classList.remove('show-side'); expPanel.open(); });
+document.addEventListener('click', e => {
+  const q = s => e.target.closest(s), p = proj();
+  let b;
+  if ((b = q('[data-xdraft-edit]'))) { const ev = p?.events.find(x => x.id === b.dataset.xdraftEdit); if (ev) expPanel.open(draftSeed(ev)); }
+  else if ((b = q('[data-xdraft-launch]'))) {
+    const ev = p?.events.find(x => x.id === b.dataset.xdraftLaunch);
+    if (ev && !b.disabled) { b.disabled = true; act(async () => { try { await api('/api/expedition', draftBody(p.name, ev)); toast('The expedition has started. Its Lead is planning; you will get one card when it finishes.', 'info'); } finally { await load(); } }); }
+  } else if ((b = q('[data-xdraft-dismiss]'))) { const id = b.dataset.xdraftDismiss; if (p) act(async () => { await api('/api/expedition/dismiss', { project: p.name, draft: id }); await load(); }); }
+  else if ((b = q('[data-xprop-launch]'))) { const pr = p?.expedition?.proposals?.find(x => x.id === b.dataset.xpropLaunch); if (pr) expPanel.open(proposalSeed(pr)); }
+});
 // New agent: a type fills in its model and effort; either can then be changed.
 function fillAgentPickers(model = '', effort = '') {
   $('#agent-model').innerHTML = modelPicker('model', model);
