@@ -235,7 +235,7 @@ test('an expedition request that would be a card is parked or denied; the one-sh
   let answer = { valid: true, answer: 'allow', reason: 'a public page, read only', model: 'claude-sonnet-5-5' };
   env2.hub.checkerMade = { run: async () => answer };
   const mark2 = quietMark(env2);
-  const q = () => env2.hub.requestApproval(env2.p, w2.lead, 'WebFetch', { url: `https://example.org/${Math.random()}`, prompt: 'p' }, { toolUseID: 'tu-9', agentID: 'agent-9' });
+  const q = () => env2.hub.requestApproval(env2.p, w2.lead, 'WebFetch', { url: `http://example.org/${Math.random()}`, prompt: 'p' }, { toolUseID: 'tu-9', agentID: 'agent-9' });
   w2.lead.noteSubagent({ tool_use_id: 'tu-9', agent_id: 'agent-9', agent_type: 'expedition-gatherer' });
   assert.equal((await q()).behavior, 'allow');
   const allowed = env2.p.log.ofType('permission_answer').at(-1);
@@ -372,6 +372,39 @@ test('the Lead\'s session carries every tool its gatherers need (web search and 
   // Only tools the Lead lacks are borrowed (a tool it already has is not listed twice or taken from it).
   const bash = lead.leadTools(['Read', 'Write'], { x: { tools: ['Bash', 'Read'] }, y: { tools: ['Bash', 'WebFetch'] } });
   assert.deepEqual(bash, { all: ['Read', 'Write', 'Bash', 'WebFetch'], borrowed: ['Bash', 'WebFetch'] });
+});
+
+test('research reads: an unlisted https page is allowed for a gatherer, the Skeptic and the Verifier while the expedition runs; not for the Lead, not after it, and downloads stay parked', async () => {
+  const { A, plain, hub, p, env } = world();
+  const lead = A.agents.lead, verifier = A.agents.verifier, builder = A.agents.builder;
+  const mark = quietMark(env);
+  const page = { url: 'https://www.khronos.org/opengl/wiki/Marching_Cubes', prompt: 'the table' };
+  const asGatherer = (url = page.url) => { lead.noteSubagent({ tool_use_id: 'tu-g', agent_id: 'agent-g', agent_type: 'expedition-gatherer' }); return hub.requestApproval(p, lead, 'WebFetch', { ...page, url }, { toolUseID: 'tu-g', agentID: 'agent-g' }); };
+  const parked = r => assert.match(r.message, /^Parked, not allowed/);
+  // A gatherer subagent (the Lead's request, tagged with the subagent behind it) and the Verifier: allowed, no card, nothing parked.
+  assert.equal((await asGatherer()).behavior, 'allow');
+  assert.equal((await hub.requestApproval(p, verifier, 'WebFetch', page)).behavior, 'allow');
+  assert.equal(p.log.ofType('expedition_parked').length, 0);
+  assert.deepEqual(quietProblems(env, mark, sent), []);
+  // Still the strict gate: http, a port, an IP address, user info, a machine-local name.
+  for (const url of ['http://www.khronos.org/x', 'https://www.khronos.org:8443/x', 'https://192.168.1.5/admin', 'https://user@www.khronos.org/x', 'https://nas.local/x', 'https://localhost/x']) parked(await asGatherer(url));
+  // The Lead's own read, the builder's, and a plain worker's: the usual rules (parked in an expedition, a card outside).
+  parked(await hub.requestApproval(p, lead, 'WebFetch', page));
+  parked(await hub.requestApproval(p, builder, 'WebFetch', page));
+  hub.requestApproval(p, plain, 'WebFetch', page);
+  assert.equal(hub.approvals.size, 1, 'a plain worker outside an expedition still gets a card');
+  for (const a of hub.approvals.values()) a.finish({ behavior: 'deny', message: 'test' }, 'denied');
+  // A download by a gatherer is another tool and stays parked; so does a POST by shell.
+  parked(await hub.requestApproval(p, lead, 'Bash', { command: 'curl -L -o /tmp/stl-parser.zip https://example.org/stl-parser.zip' }, { toolUseID: 'tu-g', agentID: 'agent-g' }));
+  parked(await hub.requestApproval(p, lead, 'Bash', { command: 'curl -X POST -d x=1 https://example.org/form' }, { toolUseID: 'tu-g', agentID: 'agent-g' }));
+  // After the stop: a gatherer or the Skeptic is refused; the Verifier's report pass may still read. After the end: nobody.
+  A.ex.stop({ reason: 'passed', totals: {} });
+  parked(await asGatherer());
+  assert.equal((await hub.requestApproval(p, verifier, 'WebFetch', page)).behavior, 'allow');
+  for (const s of ['report', 'commit', 'push', 'pr', 'card', 'summary']) A.ex.step(s);
+  assert.equal(A.ex.state().phase, 'ended');
+  parked(await asGatherer());
+  parked(await hub.requestApproval(p, verifier, 'WebFetch', page));
 });
 
 test('a gatherer\'s request is tagged with the subagent behind it (hook agent_id and type, or the SDK\'s agentID); the Lead\'s own is not', () => {

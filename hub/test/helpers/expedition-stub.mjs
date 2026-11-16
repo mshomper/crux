@@ -210,7 +210,7 @@ export class StubExpedition {
     const ask = (agent, tool, input, opts) => this.answers.push(hub.requestApproval(p, agent, tool, input, opts));
     lead.noteSubagent({ tool_use_id: 'tu-1', agent_id: 'agent-1', agent_type: ROLES.gatherer.type });
     ask(builder, 'Bash', { command: 'git push --force origin main' });
-    ask(lead, 'WebFetch', { url: 'https://example.org/benchmarks', prompt: 'the numbers' }, { toolUseID: 'tu-1', agentID: 'agent-1' });
+    ask(lead, 'WebFetch', { url: 'http://example.org/benchmarks', prompt: 'the numbers' }, { toolUseID: 'tu-1', agentID: 'agent-1' });
     ask(builder, 'Write', { file_path: join(p.dir, '.claude', 'settings.local.json'), content: '{}' });
     ask(builder, 'Edit', { file_path: join(this.ex.root, 'test', 'CHECKLIST.md'), old_string: '1.', new_string: '0.' });   // phase 4: the frozen test is refused, not parked
     ask(builder, 'Bash', { command: 'git status' });
