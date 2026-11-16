@@ -12,7 +12,7 @@ const heading = what => z.array(z.string()).min(1).describe(`${what}. Write "non
 function integrityText(ex, r) {
   const names = r.changed?.length ? ` (${r.changed.slice(0, 8).join(', ')}${r.changed.length > 8 ? `, and ${r.changed.length - 8} more` : ''})` : '';
   return r.restored
-    ? `test/ no longer matched the hash logged at the gate${names}. The hub restored it from its copy in .crux/expeditions/${ex.id}/frozen/ and logged it.`
+    ? `test/ no longer matched the hash logged at the gate${names}. The hub restored it from its copy in .crux/expeditions/.frozen/${ex.id}/ and logged it.`
     : `test/ no longer matched the hash logged at the gate${names}, and the hub could not restore it (${r.why || 'unknown reason'}). Nothing run against it can be trusted.`;
 }
 
@@ -211,7 +211,7 @@ export function cruxTools(hub, project, agent) {
         { text: z.string().describe('What was parked, in one plain sentence.'), reason: z.string().describe('Why it is outside the brief.') },
         attempt('Not parked', ({ text: what, reason }) => { hub.expeditionOf(project, agent).park({ text: what, reason, maker: agent.name }); return 'Parked; it is listed in the report.'; })),
 
-      tool('expedition_close_gate', 'Close the plan gate, once: after the Advisor has reviewed the plan and you have amended test/ as needed. The hub hashes test/, keeps a copy of it outside the worktree (.crux/expeditions/<id>/frozen/) and logs the Advisor\'s verdict and your amendments. From here test/ is locked by the hub: plain writes into it are refused, and at every expedition_loop_result and at expedition_finish the hub compares test/ with the logged hash. If anything differs it restores test/ from its copy, logs it, and counts that as a Verifier FAIL.',
+      tool('expedition_close_gate', 'Close the plan gate, once: after the Advisor has reviewed the plan and you have amended test/ as needed. The hub hashes test/, keeps a copy of it outside the worktree (.crux/expeditions/.frozen/<id>/) and logs the Advisor\'s verdict and your amendments. From here test/ is locked by the hub: plain writes into it are refused, and at every expedition_loop_result and at expedition_finish the hub compares test/ with the logged hash. If anything differs it restores test/ from its copy, logs it, and counts that as a Verifier FAIL. Caches a test run leaves beside it (__pycache__, *.pyc, .pytest_cache, node_modules) are not compared; the Verifier runs a scratch copy of the stored copy, in verify/run-N/.',
         { verdict: z.string().describe('The Advisor\'s verdict in a line, e.g. "approve with changes".'), amendments: z.array(z.string()).optional().default([]).describe('The amendments made to the test at the gate, one line each. Empty if none.') },
         attempt('Gate not closed', ({ verdict, amendments }) => `Gate closed. The hub logged the test's hash (${hub.expeditionOf(project, agent).gate({ verdict, amendments }).testHash.slice(0, 12)}) and kept a copy of test/ outside the worktree. test/ is locked from here: writes into it are refused, and the hub checks it against that copy at every loop result and at the finish, restoring it (and counting a Verifier FAIL) if it changed. The Verifier runs the stored copy. Building and verifying can start.`)),
 

@@ -3,8 +3,8 @@
 // end sequence (phase 5) use it. Private to the project like events.jsonl (kept out of git); the report is copied onto
 // the branch at the end.
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, statSync, lstatSync, readlinkSync, rmSync, cpSync } from 'node:fs';
-import { join, posix } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, statSync, lstatSync, readlinkSync, rmSync, cpSync, renameSync } from 'node:fs';
+import { join, posix, basename } from 'node:path';
 import { normalizeOverlay } from './permission-lists.mjs';
 
 // ---------- roles (spec section 3) ----------
@@ -44,17 +44,23 @@ const pad2 = n => String(n).padStart(2, '0');
 const sha = data => createHash('sha256').update(data).digest('hex');
 const text = (v, what) => { const s = String(v ?? '').trim(); if (!s) throw new Error(`${what} is needed.`); return s; };
 
-// The files an agent may write by name; test/ holds anything under it. frozen/ and the rest are the hub's.
+// The files an agent may write by name; test/ holds anything under it. The rest (and the frozen copy, which lives in .crux/expeditions/.frozen/) are the hub's.
 const FIXED = ['BRIEF.md', 'PLAN.md', 'DECISIONS.md', 'synthesis.md', 'skeptic.md', 'REPORT.md', 'verify/VERDICT.md'];
 const NOTES = /^notes-[A-Za-z0-9][\w-]*\.md$/;
 
 // ---------- the freeze (spec 4.5) ----------
 // Every entry under dir as { rel (forward slashes, sorted), file, link }. A link (a symlink or a Windows junction) is an
 // entry of its own and is never followed, so a planted link cannot make test/ hash like something it is not.
+// Running a test leaves caches beside it (Python's bytecode, pytest's and npm's folders). They are not part of the test, so
+// they are left out of the hash, the diff and the stored copy: a run must never look like tampering. The Verifier also runs
+// a scratch copy (verify/run-N/), so this is the second line for a run that happens in test/ anyway.
+export const IGNORED_NAMES = ['__pycache__', '.pytest_cache', 'node_modules'];
+export const ignoredName = name => IGNORED_NAMES.includes(name) || /\.pyc$/i.test(name);
 function tree(dir) {
   const out = [];
   const walk = (d, rel) => {
     for (const name of readdirSync(d)) {
+      if (ignoredName(name)) continue;
       const f = join(d, name), r = rel ? `${rel}/${name}` : name, st = lstatSync(f);
       if (st.isSymbolicLink()) out.push({ rel: r, file: f, link: readlinkSync(f) });
       else if (st.isDirectory()) walk(f, r);
@@ -153,12 +159,14 @@ export class Expedition {
   get testDir() { return join(this.root, 'test'); }
   // The copy kept at the gate, outside the worktree (spec 4.5). Only the hub writes it; the Track A rule denies plain
   // writes there and the hash check below is what really guards test/.
-  get frozenDir() { return join(this.root, 'frozen'); }
-  // Copy test/ to frozen/ (replacing any earlier copy) and return the hash both now have. Throws if the copy differs.
+  // Kept outside the expedition's own folder, so that one rm of that folder cannot take test/ and its copy together.
+  get frozenRoot() { return join(this.project.dir, '.crux', 'expeditions', '.frozen'); }
+  get frozenDir() { return join(this.frozenRoot, this.id); }
+  // Copy test/ to the frozen copy (replacing any earlier one) and return the hash both now have. Throws if the copy differs.
   freeze() {
     const want = this.testHash();
     rmSync(this.frozenDir, { recursive: true, force: true });
-    cpSync(this.testDir, this.frozenDir, { recursive: true, verbatimSymlinks: true });
+    cpSync(this.testDir, this.frozenDir, { recursive: true, verbatimSymlinks: true, filter: src => !ignoredName(basename(src)) });
     if (treeHash(this.frozenDir) !== want) throw new Error('The frozen copy of test/ does not match test/, so the gate stays open: try again.');
     return want;
   }
@@ -175,12 +183,23 @@ export class Expedition {
     let restored = false, why = null;
     if (treeHash(this.frozenDir) !== want) why = 'the frozen copy itself no longer matches the logged hash';
     else {
+      // Copy the good files to a folder beside test/ first, then swap it in by renames: if anything holds a file open (so
+      // that test/ cannot be moved), test/ is left exactly as found, never half-deleted, and the swap is tried again next time.
+      const fresh = join(this.root, `.test-restore-${process.pid}`), old = join(this.root, `.test-old-${process.pid}`);
+      let moved = false;
       try {
-        rmSync(this.testDir, { recursive: true, force: true });
-        cpSync(this.frozenDir, this.testDir, { recursive: true, verbatimSymlinks: true });
+        rmSync(fresh, { recursive: true, force: true }); rmSync(old, { recursive: true, force: true });
+        cpSync(this.frozenDir, fresh, { recursive: true, verbatimSymlinks: true });
+        if (treeHash(fresh) !== want) throw new Error('the copy made for the swap does not match the logged hash');
+        if (existsSync(this.testDir) || rootLink(this.testDir) != null) { renameSync(this.testDir, old); moved = true; }
+        renameSync(fresh, this.testDir);
         restored = treeHash(this.testDir) === want;
-        if (!restored) why = 'test/ still differs after the copy';
-      } catch (e) { why = e?.message || String(e); }
+        if (!restored) why = 'test/ still differs after the swap';
+      } catch (e) {
+        why = `${e?.message || String(e)}; test/ was left as found`;
+        if (moved && !existsSync(this.testDir)) { try { renameSync(old, this.testDir); } catch { /* the old one stays beside it */ } }
+      }
+      for (const d of [fresh, old]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* best effort: a leftover is harmless */ } }
     }
     this.record('expedition_integrity', { at, restored, changed: changed.slice(0, 20), changedCount: changed.length, expectedHash: want, foundHash: found, ...(why ? { why } : {}) });
     return { checked: true, ok: false, restored, changed, why };
@@ -218,7 +237,7 @@ export class Expedition {
 
   // The plan gate closes: the Advisor's verdict, the amendments to the test, and the hash that freezes it (spec 4.5).
   // Amendments are possible only before this; a second gate is refused.
-  // Phase 4: closing it also keeps the copy of test/ outside the worktree (frozen/), the reference for every later check.
+  // Phase 4: closing it also keeps the copy of test/ outside the worktree and the expedition's folder (.crux/expeditions/.frozen/<id>), the reference for every later check.
   gate({ verdict, amendments = [] } = {}) {
     this.need('planning');
     const said = text(verdict, 'The Advisor\'s verdict');

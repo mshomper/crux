@@ -6,7 +6,7 @@
 // Agents are stubbed: nothing starts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync, mkdirSync, symlinkSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, mkdirSync, symlinkSync, readdirSync, openSync, closeSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { recordAgents, stubHub, StubExpedition, quietMark, quietProblems } from './helpers/expedition-stub.mjs';
 import { cruxTools } from '../lib/tools.mjs';
@@ -36,9 +36,12 @@ const answers = p => p.log.ofType('permission_answer');
 // ---------- 1. the copy and the hash ----------
 test('the gate keeps a copy of test/ outside the worktree, hashes both alike, and logs the hash once', () => {
   const { ex, p } = world();
-  assert.deepEqual(ex.files().filter(f => f.startsWith('frozen/')), ['frozen/CHECKLIST.md', 'frozen/run.json']);
+  assert.deepEqual(readdirSync(ex.frozenDir).sort(), ['CHECKLIST.md', 'run.json']);
   assert.equal(readFileSync(join(ex.frozenDir, 'CHECKLIST.md'), 'utf8'), readFileSync(join(ex.testDir, 'CHECKLIST.md'), 'utf8'));
   assert.equal(ex.frozenDir.startsWith(ex.worktree), false, 'the copy is not inside the build worktree');
+  assert.equal(ex.frozenDir, join(p.dir, '.crux', 'expeditions', '.frozen', ex.id));
+  assert.equal(ex.frozenDir.startsWith(ex.root), false, 'nor inside the expedition\'s own folder: one rm of that cannot take test/ and its copy together');
+  assert.equal(ex.files().some(f => f.includes('.frozen')), false);
   assert.equal(ex.state().gate.testHash, ex.testHash());
   assert.deepEqual(ex.checkFrozen('loop'), { checked: true, ok: true });
   assert.equal(p.log.ofType('expedition_integrity').length, 0, 'a clean check logs nothing');
@@ -96,6 +99,71 @@ test('a link planted where test/ was is not followed: it hashes as a link, and i
   assert.deepEqual(ex.checkFrozen('finish'), { checked: true, ok: true });
 });
 
+// ---------- review round 1 of #108 ----------
+test('MEDIUM: caches a test run leaves beside the test are not tampering (known answer: __pycache__ next to test_x.py)', async () => {
+  sent.length = 0;
+  const env = stubHub({ level: 'auto' });
+  const se = new StubExpedition(env, { question: 'Which JSON library is faster in Python' });
+  const ex = se.ex;
+  ex.write('BRIEF.md', '# q\n'); ex.write('test/test_x.py', 'def test_x():\n    assert 1 == 1\n');
+  mkdirSync(join(ex.testDir, '__pycache__')); writeFileSync(join(ex.testDir, '__pycache__', 'test_x.cpython-312.pyc'), 'old bytecode');   // there already at the gate: not copied
+  ex.start();
+  se.startRole('lead', env.orch.name);
+  ex.gate({ verdict: 'ok' });
+  assert.deepEqual(readdirSync(ex.frozenDir), ['test_x.py'], 'the stored copy holds the test only');
+  const call = async (n, a) => (await cruxTools(env.hub, env.p, se.agents.lead).instance._registeredTools[n].handler(a, {})).content[0].text;
+  // A run in test/ leaves its usual files.
+  mkdirSync(join(ex.testDir, '__pycache__'), { recursive: true });
+  writeFileSync(join(ex.testDir, '__pycache__', 'test_x.cpython-312.pyc'), 'new bytecode');
+  writeFileSync(join(ex.testDir, '__pycache__', 'other.pyc'), 'x');
+  writeFileSync(join(ex.testDir, 'stray.pyc'), 'x');
+  mkdirSync(join(ex.testDir, '.pytest_cache', 'v', 'cache'), { recursive: true }); writeFileSync(join(ex.testDir, '.pytest_cache', 'v', 'cache', 'lastfailed'), '{}');
+  mkdirSync(join(ex.testDir, 'node_modules', 'm'), { recursive: true }); writeFileSync(join(ex.testDir, 'node_modules', 'm', 'index.js'), 'x');
+  assert.deepEqual(ex.checkFrozen('loop'), { checked: true, ok: true });
+  assert.equal(await call('expedition_loop_result', { passing: 1 }), 'Loop 1: 1 passing, progress.');
+  assert.equal(await call('expedition_loop_result', { passing: 2 }), 'Loop 2: 2 passing, progress.');
+  assert.equal(env.p.log.ofType('expedition_integrity').length, 0, 'no false alarm, so no no-progress stop from one either');
+  // Real changes still count: a changed source file, a new .py, a name that only looks like a cache.
+  for (const [what, tamper] of [['a changed test file', () => writeFileSync(join(ex.testDir, 'test_x.py'), 'def test_x():\n    pass\n')], ['a new .py', () => writeFileSync(join(ex.testDir, 'test_y.py'), 'x')],
+    ['a look-alike name', () => writeFileSync(join(ex.testDir, 'pycache.py'), 'x')], ['a .pyc-looking name that is not one', () => writeFileSync(join(ex.testDir, 'x.pyc.py'), 'x')], ['node_modules.js', () => writeFileSync(join(ex.testDir, 'node_modules.js'), 'x')]]) {
+    tamper();
+    assert.equal(ex.checkFrozen('loop').ok, false, what);
+  }
+  assert.equal(ex.testHash(), ex.state().gate.testHash);
+});
+
+test('LOW: a restore swaps a prepared copy in by rename, so a file held open cannot leave test/ half-deleted', () => {
+  const { ex, p } = world();
+  const orig = readFileSync(join(ex.testDir, 'CHECKLIST.md'), 'utf8');
+  writeFileSync(join(ex.testDir, 'CHECKLIST.md'), '1. trivially true\n');
+  writeFileSync(join(ex.testDir, 'extra.md'), 'x');
+  const held = openSync(join(ex.testDir, 'extra.md'), 'r');   // a process still has a file of test/ open (Windows refuses to move the folder)
+  let r;
+  try { r = ex.checkFrozen('loop'); } finally { closeSync(held); }
+  if (r.restored) {
+    assert.equal(ex.testHash(), ex.state().gate.testHash, 'where the system lets the folder move, it is restored whole');
+  } else {
+    assert.equal(r.ok, false);
+    assert.match(r.why, /test\/ was left as found/);
+    assert.equal(readFileSync(join(ex.testDir, 'CHECKLIST.md'), 'utf8'), '1. trivially true\n', 'not half-deleted: every file is still there, as found');
+    assert.deepEqual(readdirSync(ex.testDir).sort(), ['CHECKLIST.md', 'extra.md', 'run.json']);
+    assert.equal(p.log.ofType('expedition_integrity').at(-1).restored, false);
+    assert.equal(ex.checkFrozen('loop').restored, true, 'and the next check, with nothing open, restores it');
+  }
+  assert.equal(readFileSync(join(ex.testDir, 'CHECKLIST.md'), 'utf8'), orig);
+  assert.deepEqual(readdirSync(ex.root).filter(n => n.startsWith('.test-')), [], 'no leftover temporary folders');
+  assert.deepEqual(readdirSync(ex.testDir).sort(), ['CHECKLIST.md', 'run.json']);
+});
+
+test('LOW: removing the whole expedition folder does not take the stored copy with it, and the rule refuses the .frozen folder too', async () => {
+  const { ex, p, builder, hub } = world();
+  rmSync(ex.root, { recursive: true, force: true });
+  assert.equal(readdirSync(ex.frozenDir).length, 2, 'the copy survives');
+  assert.deepEqual(hub.frozenDirs(p, builder).map(d => d.replace(/\\/g, '/').split('/.crux/')[1]), [`expeditions/${ex.id}/test`, 'expeditions/.frozen']);
+  const r = await hub.requestApproval(p, builder, 'Bash', { command: 'rm -rf .crux/expeditions/.frozen' });
+  assert.match(r.message, /^Not allowed: Writes into the frozen success test/);
+});
+
 test('if the frozen copy itself was changed nothing can be restored, and that is said', () => {
   const { ex } = world();
   writeFileSync(join(ex.frozenDir, 'CHECKLIST.md'), 'copy tampered');
@@ -111,7 +179,7 @@ test('if the frozen copy itself was changed nothing can be restored, and that is
 function paths() {
   const { ex, p } = world();
   const t = ex.testDir, f = ex.frozenDir, wt = ex.worktree;
-  return { ex, p, dirs: [t, f], t, f, wt, project: p.dir, id: ex.id };
+  return { ex, p, dirs: [t, ex.frozenRoot], t, f, wt, project: p.dir, id: ex.id };   // as hub.frozenDirs: test/ and the folder of stored copies
 }
 const sh = (command, tool = 'Bash') => ({ tool, input: { command } });
 
@@ -172,7 +240,7 @@ test('shell: redirections and mv, rm, sed -i, tee, cp, touch, Set-Content into t
   const chk = (c, o = {}) => frozenWrite(o.tool || 'Bash', { command: c }, { dirs, cwd: o.cwd || project, projectDir: project });
   const refused = [
     `echo x > ${T}/a.md`, `echo x >> ${T}/CHECKLIST.md`, `echo x>${T}/a.md`, `echo x 2> ${T}/e.log`, `echo x &> ${T}/e.log`, `cat a.md > "${T}/a b.md"`, `printf hi > '${T}/a.md'`,
-    `echo x | tee ${T}/a.md`, `echo x | tee -a ${T}/CHECKLIST.md`, `mv a.md ${T}/a.md`, `mv ${T}/CHECKLIST.md /tmp/x`, `mv -f ${T} /tmp/gone`, `rm ${T}/run.json`, `rm -rf ${T}`, `rm -rf ${T}/`, `rm -f ${F}/CHECKLIST.md`,
+    `echo x | tee ${T}/a.md`, `echo x | tee -a ${T}/CHECKLIST.md`, `mv a.md ${T}/a.md`, `mv ${T}/CHECKLIST.md /tmp/x`, `mv -f ${T} /tmp/gone`, `rm ${T}/run.json`, `rm -rf ${T}`, `rm -rf ${T}/`, `rm -f ${F}/CHECKLIST.md`, `rm -rf .crux/expeditions/.frozen`, `rm -rf .crux/expeditions/.frozen/20250101-another-one`, `echo x > .crux/expeditions/.frozen/${id}/run.json`,
     `sed -i s/a/b/ ${T}/CHECKLIST.md`, `sed -i'' s/a/b/ ${T}/CHECKLIST.md`, `sed -i.bak s/a/b/ ${T}/CHECKLIST.md`, `sed -Ei s/a/b/ ${T}/CHECKLIST.md`, `sed --in-place s/a/b/ ${T}/CHECKLIST.md`,
     `cp a.md ${T}/a.md`, `cp -r build ${T}/`, `cp a.md ${F}/a.md`, `touch ${T}/a.md`, `mkdir ${T}/sub`, `truncate -s 0 ${T}/CHECKLIST.md`,
     `echo ok && echo x > ${T}/a.md`, `ls; rm ${T}/run.json`, `true || echo x > ${T}/a.md`, `echo x > ./${T}/../test/a.md`,
@@ -265,8 +333,8 @@ test('keyed on the hub\'s own record of the agent: another expedition\'s agent h
   const b2 = se2.startRole('builder', se2.agents.lead.name);
   assert.deepEqual(hub.frozenDirs(p, b2), [], 'its gate is still open');
   se2.ex.gate({ verdict: 'ok' });
-  assert.deepEqual(hub.frozenDirs(p, b2), [se2.ex.testDir, se2.ex.frozenDir]);
-  assert.deepEqual(hub.frozenDirs(p, builder), [ex.testDir, ex.frozenDir]);
+  assert.deepEqual(hub.frozenDirs(p, b2), [se2.ex.testDir, se2.ex.frozenRoot]);
+  assert.deepEqual(hub.frozenDirs(p, builder), [ex.testDir, ex.frozenRoot]);
   assert.equal((await hub.requestApproval(p, b2, 'Write', { file_path: join(se2.ex.testDir, 'CHECKLIST.md'), content: 'x' })).behavior, 'deny');
   assert.doesNotMatch((await hub.requestApproval(p, b2, 'Write', { file_path: join(ex.testDir, 'CHECKLIST.md'), content: 'x' })).message, /frozen success test/, 'not this agent\'s expedition: the hash check of that one is its guard');
   const hook = b2.options().hooks.PreToolUse[0].hooks[0];
@@ -312,7 +380,7 @@ test('tamper-and-restore: an edit the deny rule misses is found at the next loop
   writeFileSync(join(ex.testDir, 'CHECKLIST.md'), '1. nothing to check\n');
   writeFileSync(join(ex.testDir, 'extra.md'), 'x');
   const said = await call('expedition_loop_result', { passing: 5 });
-  assert.match(said, /^Loop 2: FAIL\. test\/ no longer matched the hash logged at the gate \(CHECKLIST\.md \(changed\), extra\.md \(added\)\)\. The hub restored it from its copy in \.crux\/expeditions\/.*\/frozen\/ and logged it\. The 5 passing you reported do not count: this loop is a Verifier FAIL with no progress\. Run the loop again against the restored test\.$/);
+  assert.match(said, /^Loop 2: FAIL\. test\/ no longer matched the hash logged at the gate \(CHECKLIST\.md \(changed\), extra\.md \(added\)\)\. The hub restored it from its copy in \.crux\/expeditions\/\.frozen\/.*\/ and logged it\. The 5 passing you reported do not count: this loop is a Verifier FAIL with no progress\. Run the loop again against the restored test\.$/);
   assert.equal(readFileSync(join(ex.testDir, 'CHECKLIST.md'), 'utf8'), '1. a table\n2. a benchmark\n');
   assert.equal(ex.exists('test/extra.md'), false);
   const loop = p.log.ofType('expedition_loop').at(-1);
@@ -372,7 +440,8 @@ test('close_gate\'s tool text says the real lock, not an agreement; the Lead is 
   const d = rt.expedition_close_gate.description;
   assert.doesNotMatch(d, /by agreement|later phase/);
   assert.match(d, /keeps a copy of it outside the worktree/);
-  assert.match(d, /\.crux\/expeditions\/<id>\/frozen\//);
+  assert.match(d, /\.crux\/expeditions\/\.frozen\/<id>\//);
+  assert.match(d, /__pycache__.*verify\/run-N\//);
   assert.match(d, /restores test\/ from its copy.*Verifier FAIL/);
   assert.match(rt.expedition_loop_result.description, /checks test\/ against the frozen copy/);
   assert.match(rt.expedition_finish.description, /unchanged from the frozen copy/);

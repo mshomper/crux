@@ -601,14 +601,14 @@ export class Hub {
   }
 
   // ---------- phase 4: the frozen test and the launch's pre-approvals ----------
-  // The folders of the agent's own expedition that are frozen from the plan gate on: test/ and its stored copy. Read from the
+  // The folders frozen from the plan gate on: the agent's own test/ and the folder holding the stored copies. Read from the
   // hub's own record of which expedition the agent belongs to (agent.expedition, set at creation and read back from the log),
   // never from anything the agent says or writes. [] for a plain agent, and for an expedition before its gate.
   frozenDirs(p, agent) {
     if (!agent?.expedition) return [];
     try {
       const ex = this.expeditionOf(p, agent);
-      return ex.state().gate ? [ex.testDir, ex.frozenDir] : [];
+      return ex.state().gate ? [ex.testDir, ex.frozenRoot] : [];   // frozenRoot: every stored copy, so one rm cannot take them
     } catch { return []; }
   }
 
