@@ -1,0 +1,94 @@
+{
+ "id": 68,
+ "slug": "expedition-agents",
+ "title": "Where does an expedition's team run: as hub agents under a Lead, or inside one agent?",
+ "date": "2026-11-16",
+ "mode": "quick",
+ "lenses": [
+  "architecture"
+ ],
+ "status": "open",
+ "lead": "Should each expedition role run as its own hub agent, started by a Lead with a few scoped tools, rather than as hidden helpers inside one agent? I recommend hub agents, as your spec does: you see the whole team on the map and the report's figures are measured, not guessed.",
+ "for_you": [
+  "Each running expedition shows as one cluster on the live map and one folded row in the thread list; you can open any member",
+  "Time, tokens and cost per role in the report come from the log, so the budget stop and the figures are real",
+  "The orchestrator stays out of it until the one summary at the end",
+  {
+   "text": "Nothing to set up; the seven role files ship with the hub's starter types",
+   "kind": "setup"
+  }
+ ],
+ "context": "Matt's Expedition module spec (2026-11-15, memo M044) leaves this open (section 12) and recommends a hub worker with scoped tools (section 4.1). The reference run used Claude Code subagents. Scoping (2026-11-16) found the subagent route can't meet two of the spec's own guarantees: usage per role (the SDK reports usage per model, not per subagent) and per-agent permission and freeze rules. The advisor checkpoint agreed with A.",
+ "depends_on": [
+  20,
+  65,
+  66
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Hub agents under a Lead",
+   "summary": "The orchestrator starts the Lead; the Lead starts the other roles as normal hub agents with four tools limited to its own expedition (start, message, retire, list). Every role has a thread, logs its own usage and goes through the permission check.",
+   "pros": [
+    "Whole team visible on the map; measured cost per role; per-agent rules for the frozen test and no-merge"
+   ],
+   "cons": [
+    "The largest build (phase 2 of 6); 7 to 10 agents per run need folding in the thread list"
+   ],
+   "effort": "Large: about two modules",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Helpers inside one agent",
+   "summary": "One hub agent, the Lead, runs every role as a Claude Code subagent, as in the reference run.",
+   "pros": [
+    "Least hub work"
+   ],
+   "cons": [
+    "Roles invisible on the map; cost per role can't be measured; every permission request lands on the Lead"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Mixed",
+   "summary": "Hub agents for Builder, Verifier, Skeptic and Advisor; gatherers as helpers inside the Lead.",
+   "pros": [
+    "Fewer threads"
+   ],
+   "cons": [
+    "The gatherers are the ones browsing the web, so their requests and spend are the part you most want separated"
+   ],
+   "effort": "Medium",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "A, as the spec recommends: it is the only option that keeps the budget stop and the per-role figures honest.",
+ "confidence": "firm",
+ "change_mind": "If the phase 2 build turns out far larger than planned, a short B spike could come first, but not as the version you rely on.",
+ "chosen": null,
+ "reason": null,
+ "decided_on": null,
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "multi-agent job structure",
+   "value": "a long-running team job runs each role as a visible hub agent under a lead with tools scoped to its own team"
+  }
+ ],
+ "images": [
+  {
+   "from": ".crux/scratch/expedition/png/map-cluster-desktop.png",
+   "caption": "An expedition on the live map: the Lead with its team around it, two thin arcs for time and budget",
+   "option": "A",
+   "kind": "mockup",
+   "missing": "not found"
+  }
+ ]
+}

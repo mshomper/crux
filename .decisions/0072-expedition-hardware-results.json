@@ -1,0 +1,75 @@
+{
+ "id": 72,
+ "slug": "expedition-hardware-results",
+ "title": "When part of the test can only run on Matt's machine, how do those results get into the report?",
+ "date": "2026-11-16",
+ "mode": "quick",
+ "lenses": [
+  "research and product"
+ ],
+ "status": "open",
+ "lead": "Should the expedition finish as usual and, when you paste back the results from your machine, a short follow-up job update the report and its pull request? I recommend that: the expedition never waits on you, and the report still ends up with the real-hardware numbers.",
+ "for_you": [
+  "The report lists what to run yourself (often one small local page) with a results block to copy",
+  "Paste the block into the thread or use 'Paste results' on the finished card; a few minutes later the PR carries the real result",
+  "The follow-up has its own small budget, separate from the expedition's"
+ ],
+ "context": "Spec section 12, question 3 (memo M044). The reference run's GPU test needed Matt's RTX card: within one float step of the CPU, with 85% of the pipeline time on the CPU side, found only on real hardware. Scoping and the advisor checkpoint (2026-11-16) agree on B, built after phase 5.",
+ "depends_on": [
+  68
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Report only",
+   "summary": "The report lists what to run; what you do with the result is up to you.",
+   "pros": [
+    "Nothing to build"
+   ],
+   "cons": [
+    "The report stays wrong on exactly the items it couldn't run"
+   ],
+   "effort": "None",
+   "source": "claude"
+  },
+  {
+   "key": "B",
+   "name": "Short follow-up job after you paste",
+   "summary": "One small verifier job reads your pasted results and the report, updates the build status and how-it-ran sections, and pushes to the same draft PR.",
+   "pros": [
+    "The expedition never waits; the report ends up right"
+   ],
+   "cons": [
+    "One more small piece to build, after phase 5"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  },
+  {
+   "key": "C",
+   "name": "Keep the expedition open until you paste",
+   "summary": "The Lead stays alive and the run waits for your results.",
+   "pros": [
+    "One run, start to finish"
+   ],
+   "cons": [
+    "Breaks the time and budget envelope; holds a Lead for hours or days"
+   ],
+   "effort": "Small",
+   "source": "claude"
+  }
+ ],
+ "criteria": [],
+ "recommended": "B",
+ "recommendation": "B: the report gets the real numbers without holding the expedition open.",
+ "confidence": "firm",
+ "change_mind": "If you rarely paste results back, A is enough.",
+ "chosen": null,
+ "reason": null,
+ "decided_on": null,
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [],
+ "images": []
+}
