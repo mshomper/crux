@@ -345,7 +345,10 @@ const DEP_FILES = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|
 // trailing dots and spaces from a name (Get-Content .env. reads .env), so every path part is trimmed before the test.
 const trimParts = s => String(s).split('/').map(x => (x === '.' || x === '..' ? x : x.replace(/[. ]+$/, ''))).join('/');
 const trimmed = re => ({ test: s => re.test(trimParts(s)) || re.test(s), source: re.source });
-const SECRET = trimmed(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub(?!\/voice(?:\/(?!\.\.?(?:\/|$))[^/]+)*\/?$))(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i);
+// More places that hold a login or what was typed (review of PR #89 round 1): GitHub CLI's hosts file, the process
+// environment, Docker, kubectl, Azure and Google Cloud logins (their token files and databases), and every shell's history.
+const SECRET_MORE = String.raw`(^|\/)(\.config\/gh|gh\/hosts\.yml|\.docker\/config\.json|\.kube|\.azure|\.config\/gcloud|gcloud|\.gcloud|\.oci|\.config\/doctl)(\/|$)|(^|\/)(credentials\.db|access_tokens\.db|legacy_credentials|application_default_credentials\.json|accesstokens\.json|msal_token_cache\.(json|bin)|service_principal_entries\.json|azureprofile\.json|docker-credentials\w*)$|(^|\/)proc\/[^/]+\/(environ|cmdline|fd(\/|$))|(^|\/)(environ|\.claude\.json|state\.vscdb(-journal)?|login data(-journal)?|(github )?cli\/hosts\.yml)$|(^|\/)(google\/chrome|chromium|microsoft\/edge|bravesoftware\/brave-browser)\/user data(\/|$)|(^|\/)\.[\w-]*_history$|(^|\/)(ConsoleHost_history\.txt|\.viminfo|\.lesshst|\.python_history|history\.sqlite)$`;
+const SECRET = trimmed(new RegExp(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub(?!\/voice(?:\/(?!\.\.?(?:\/|$))[^/]+)*\/?$))(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/.source + '|' + SECRET_MORE, 'i'));
 const KNOWN_TOOLS = new Set(['Task', 'Agent', 'TodoWrite', 'TaskStop', 'KillShell', 'KillBash', 'BashOutput', 'ToolSearch', 'Skill',
   'EnterPlanMode', 'ExitPlanMode', 'WebSearch', 'LS']);
 // Path and system variables are not secrets: reading them is fine. Names that look secret are hard stops.
@@ -424,6 +427,10 @@ function classifyWith(c, tool, input) {
   return { route: 'allow', reasons: [], unsure: [] };
 }
 
+// PowerShell methods that only compute from the object they are called on (strings, numbers, dates, hashtables).
+const PS_SAFE_METHODS = new Set(['tostring', 'tolower', 'toupper', 'tolowerinvariant', 'toupperinvariant', 'trim', 'trimstart', 'trimend', 'split', 'replace', 'substring', 'contains', 'startswith', 'endswith',
+  'indexof', 'lastindexof', 'padleft', 'padright', 'equals', 'compareto', 'gettype', 'adddays', 'addhours', 'addminutes', 'addseconds', 'addmilliseconds', 'addmonths', 'addyears', 'toshortdatestring',
+  'tolongdatestring', 'tolocaltime', 'touniversaltime', 'containskey', 'containsvalue', 'ismatch', 'tochararray', 'normalize', 'insert', 'remove', 'format', 'join', 'round', 'floor', 'ceiling', 'abs', 'min', 'max', 'pow']);
 // Real hard-stop shapes, looked for in text the hub could not read in full. Only the actual subcommands count:
 // "git merge-base" and "git merge-tree" only read, so they do not match.
 const RISKY_PATTERNS = [
@@ -434,7 +441,9 @@ const RISKY_PATTERNS = [
   /\b(stop-process|taskkill|killall|pkill)\b|(^|[\s;&|(])kill\s/i,
   // rm -rf of the root, home, a drive or ../, but not of a named folder in Git Bash's /tmp (with no .. in it).
   /\brm\s+-\w*[rf]\w*\s+(\/(?!tmp\/(?![^\s;&|]*\.\.)[\w-])|~|\.\.|[a-z]:)/i, /\bremove-item\b[^;|\n]*(\.\.|~|[a-z]:\\)/i,
-  /\.env\b|\.ssh\b|\.crux-hub\b|\bid_(rsa|ed25519)\b|\bcredentials?\b|\bpassword\b|\bsecret\b|api[_-]?key/i
+  /\.env\b|\.ssh\b|\.crux-hub\b|\bid_(rsa|ed25519)\b|\bcredentials?\b|\bpassword\b|\bsecret\b|api[_-]?key/i,
+  // logins and what was typed, read from text the hub could not read in full (a $(...), an eval, a script)
+  /gcloud|\.gcloud\b|\.kube\b|\.azure\b|hosts\.yml|\.claude\.json|state\.vscdb|login data|\.docker[\\/]config|proc[\\/][^\\/\s]+[\\/]environ|_history\b|ConsoleHost_history|HistorySavePath|\bGet-(StoredCredential|AzAccessToken|AzKeyVaultSecret|PSReadLineOption)\b|\b(cmdkey|vaultcmd)\b|\bjq\b[^;&|\n]*\b(\$ENV|env)\b|\baccess[_-]?token|\btoken\.json|[\\/]dev[\\/](tcp|udp)[\\/]/i
 ];
 // PowerShell text with its quotes and commas opened ('push','origin' -> push origin), for the risky-word scan.
 const psOpen = t => String(t).replace(/'((?:''|[^'])*)'|"((?:""|`.|[^"`])*)"/g, (m, a, b) => ` ${a ?? b} `).replace(/[,()@]/g, ' ');
@@ -670,20 +679,45 @@ class Check {
         return "'SHORTCUT'";
       });
       this.tempListings(cmd, start);
+      this.methodCalls(cmd);
     }
     // Port 4747: reading the hub (a GET) is fine; stopping, restarting or changing it is a hard stop (see curl, KILL, hubPort).
     // A commit message passed through a quoted heredoc is plain text: $(cat <<'EOF' ... EOF)
-    let s = cmd.replace(/\$\(\s*cat\s+<<-?\s*'(\w+)'[^\n]*\n([\s\S]*?)\n\s*\1\s*\n?\s*\)/g, (all, tag, body) => block(body, true));
-    // PowerShell here-strings: literal when single-quoted
-    s = s.replace(/@'\r?\n([\s\S]*?)\r?\n'@/g, (all, body) => block(body, true));
-    s = s.replace(/@"\r?\n([\s\S]*?)\r?\n"@/g, (all, body) => {
-      if (!/\$[\w({]/.test(body)) return block(body, true);
-      this.unsure('A here-string with variables the hub cannot read');
-      for (const inner of substitutions(body)) { bit(inner); if (this.mayMoveBranch(inner, ps)) this.branchUnknown = true; }   // $( ... ) inside it runs
-      return block(body, false);
+    // Only where the marker really opens one (review of PR #89): a heredoc is bash's, a here-string is PowerShell's, and neither
+    // opens inside quotes or after a # comment, where the lines after it are commands like any other.
+    // The quote and comment state at a marker is read from the text in front of it with the bodies already taken out left
+    // out (their quotes are data), and a second marker after one body was taken out is a doubt: the hub cannot be sure
+    // which markers open one (review round 2 of PR #89: it echo it\'s '<<B' / cat <<A ... echo '<<B' shapes).
+    let taken = 0;
+    const another = () => { if (taken++) this.unsure('A second heredoc or here-string after one already taken out: the hub cannot tell which markers open one', true); };
+    let s = ps ? cmd : replaceWithPrefix(cmd, /\$\(\s*cat\s+<<-?\s*'(\w+)'[^\n]*\n([\s\S]*?)\n\s*\1\s*\n?\s*\)/g, (m, pre) => {
+      const at = contextAt(pre, false);
+      if (at === 'sq' || at === 'comment') return m[0];   // inside "...", $(cat <<'EOF' is the usual commit message
+      another();
+      return block(m[2], true);
     });
-    // Other heredocs: a script fed to node or python is checked as a script; anything else is data.
-    s = s.replace(/^([^\n]*?)<<-?\s*(['"]?)(\w+)\2([^\n]*)\n([\s\S]*?)\n\s*\3\s*(?=\n|$)/gm, (all, before, q, tag, after, body) => {
+    // PowerShell here-strings: literal when single-quoted
+    if (ps) {
+      s = replaceWithPrefix(s, /@'\r?\n([\s\S]*?)\r?\n'@/g, (m, pre) => {
+        if (contextAt(pre, true)) return m[0];
+        another();
+        return block(m[1], true);
+      });
+      s = replaceWithPrefix(s, /@"\r?\n([\s\S]*?)\r?\n"@/g, (m, pre) => {
+        if (contextAt(pre, true)) return m[0];
+        another();
+        if (!/\$[\w({]/.test(m[1])) return block(m[1], true);
+        this.unsure('A here-string with variables the hub cannot read');
+        for (const inner of substitutions(m[1])) { bit(inner); if (this.mayMoveBranch(inner, ps)) this.branchUnknown = true; }   // $( ... ) inside it runs
+        return block(m[1], false);
+      });
+    }
+    // Other heredocs: a script fed to node or python is checked as a script; anything else is data. Not <<< (a here-string
+    // of bash), not << inside (( )) (a shift), not in quotes or after a # (see above).
+    if (!ps) s = replaceWithPrefix(s, /^([^\n]*?)(?<!<)<<(?!<)-?\s*(['"]?)(\w+)\2([^\n]*)\n([\s\S]*?)\n\s*\3\s*(?=\n|$)/gm, (m, pre) => {
+      const [all, before, q, tag, after, body] = m;
+      if (contextAt(pre + before, false) || (/\(\(/.test(before) && !/\)\)/.test(before))) return all;
+      another();
       if (!q && /\$\(|`/.test(body)) {
         this.unsure('A heredoc with commands inside');
         for (const inner of substitutions(body)) { bit(inner); if (this.mayMoveBranch(inner, ps)) this.branchUnknown = true; }
@@ -746,6 +780,32 @@ class Check {
       }
     }
     this.pipedIn = piped;
+  }
+
+  // PowerShell: a method called on an object the hub cannot see ($_.Kill(), $p.Terminate(), $f.Delete($true), $f.CopyTo(path),
+  // $x.Invoke(), .Where({ }), .ForEach({ })) does what the object's type lets it, nothing the hub read. Only a short list of
+  // methods on strings, numbers, dates and the like is read. Looked for in the whole command, inside "$( )" in a string too;
+  // text in single quotes is not run.
+  methodCalls(cmd) {
+    // A method named by a quoted string or a variable ($_.'Kill'(), $_."Kill"(), $_.$m(), [IO.File]::$m()) is read for
+    // what it is not: the name is only known at run time. A doubt, whatever the name holds.
+    if (/(?:[\w$\])}]|\bnew\b)\s*\.\s*(?:'[^'\n]*'|"[^"\n]*"|\$\{?\w+\}?)\s*\(|::\s*(?:'[^'\n]*'|"[^"\n]*"|\$\{?\w+\}?)\s*\(/.test(String(cmd))) {
+      this.unsure('Calls a method whose name the hub cannot read (a quoted name or a variable after the dot)');
+      return;
+    }
+    const text = String(cmd).replace(/'(?:''|[^'])*'/g, "''");
+    for (const m of text.matchAll(/(?:[\w$\])}]|\bnew\b)\s*\.\s*([A-Za-z_]\w*)\s*\(/g)) {
+      if (PS_SAFE_METHODS.has(m[1].toLowerCase())) continue;
+      // .Delete() with no argument is judged where it runs (run(): only (Get-Item X).Delete() or a variable set once to one
+      // Get-Item, A8); one with an argument ($f.Delete($true)) stays a doubt here.
+      // The pipeline object ($_, $PSItem) is never exempt: nothing judges it.
+      if (m[1].toLowerCase() === 'delete' && /^\s*\)/.test(text.slice(m.index + m[0].length))) {
+        const recv = /\$(\w+)$/.exec(text.slice(0, m.index + 1));
+        if (m[0][0] === ')' || (recv && !/^(_|psitem)$/i.test(recv[1]))) continue;
+      }
+      this.unsure(`Calls a method on an object the hub cannot read (.${m[1]}())`);
+      return;
+    }
   }
 
   // The head (program name) of one part of a command, as pipeRuns and the substitution check read it.
@@ -1449,6 +1509,11 @@ class Check {
 
   run(head, args, words, cwd) {
     this.noteFilters(head, args);
+    // ForEach-Object / % given a member name (% Kill, ForEach-Object -MemberName Delete) calls that method on every object
+    if (this.ps && /^(foreach-object|%)$/.test(head) && args.some(a => !a.startsWith('-') || /^-(mem|par|asj)/i.test(a))) return this.unsure(`ForEach-Object that calls a method by name (${args.join(' ').slice(0, 40)})`);
+    // .ToString("o"), .AddDays(1): a method of a string, number or date (the words in it are read like any other); any other
+    // method was already passed on by methodCalls()
+    if (this.ps && /^\.([a-z_]\w*)\(/i.test(head) && PS_SAFE_METHODS.has(/^\.([a-z_]\w*)\(/i.exec(head)[1].toLowerCase())) return;
     if (/^\$(_|psitem)\b/i.test(head) || /^-(and|or|not|eq|ne|gt|lt|ge|le|like|match)$/i.test(head)) return; // a PowerShell filter expression
     if (this.ps && !args.length && (/^\$(null|true|false)$/i.test(head) || /^cruxval\d+$/.test(head))) return;   // a bare value (a catch { $null } body) prints at most
     if (this.ps) {
@@ -1511,9 +1576,14 @@ class Check {
       const i = args.findIndex(a => /^\/\/?c$/i.test(a));   // //c is how Git Bash passes /c
       let inner = i >= 0 ? args.slice(i + 1) : [];
       if (inner.length === 1) inner = tokens(inner[0]).map(w => w.text);
-      if (/^(rmdir|rd)$/i.test(inner[0] || '') && !inner.some(a => /^\/s$/i.test(a))) {
+      // /s in any spelling: /s, /S /Q, /s/q, /q/s, /sq is not a switch of rd, but /s/q is two (a recursive delete, whatever else it says)
+      if (/^(rmdir|rd)$/i.test(inner[0] || '') && !inner.slice(1).map(a => a.replace(/\/\//g, '/')).some(a => /^(\/[a-z?]+)+$/i.test(a) && /\/[a-z?]*s/i.test(a))) {
         const targets = inner.slice(1).filter(a => !a.startsWith('/'));
         if (targets.length) return this.run('rmdir', targets, words, cwd);
+      } else if (/^(rmdir|rd)$/i.test(inner[0] || '')) {
+        // recursive: not the empty-folder-or-junction removal above. Where it points is still a delete like any other.
+        const folders = inner.slice(1).filter(a => !/^(\/\/?[a-z?]+)+$/i.test(a));
+        if (folders.length) this.deletes(folders, cwd, `rd ${folders.join(' ')} (recursive)`);
       }
       // cmd /c mklink /J LINK TARGET: a junction made inside the project (a worktree's node_modules) that points
       // inside the project. Made outside is a write outside; pointing outside is left as before (unsure).
@@ -1663,7 +1733,9 @@ class Check {
     if (/^(pip3?)$/.test(head)) return this.pip(words[0].text, args, cwd);
     if (INSTALL.has(head)) return this.stop(SYSTEM_WIDE.has(head) ? `Installs software system-wide (${head})` : `Installs software (${head})`);
     if (head === 'uv' || head === 'poetry') return this.pyProject(head, args, cwd);
-    if (/^(env|printenv|set|get-credential|get-secret)$/.test(head)) return this.stop(`Reads environment variables or credentials (${head})`);
+    if (/^(env|printenv|set|get-credential|get-secret|get-storedcredential|get-azaccesstoken|get-azkeyvaultsecret|get-psreadlineoption|cmdkey|vaultcmd)$/.test(head)) return this.stop(`Reads environment variables or credentials (${head})`);
+    // jq can read the whole environment: jq -n env, jq -n '$ENV', jq 'env.PATH'
+    if (head === 'jq' && args.some(a => /(^|[^\w.])(\$ENV|env)(?![\w])/.test(a))) return this.stop('Reads environment variables (jq env)');
     // sh -c 'SCRIPT', bash -lc "SCRIPT" and eval "SCRIPT": the script is read like any command, so a hard stop inside
     // (curl URL | sh, git push --force) is caught. The whole thing still goes to the orchestrator, as before.
     if (/^(sh|bash|zsh|dash)$/.test(head)) {
@@ -1898,7 +1970,12 @@ class Check {
   envNames(head) { return [...new Set([...this.env().keys(), ...(/^(curl|wget)$/.test(head) ? [...(this.assigned || [])].filter(k => DOWNLOADER_READS.test(k)) : [])])]; }
 
   word(w, cwd, pattern = false) {
+    // bash opens a network connection from a redirection to /dev/tcp/HOST/PORT or /dev/udp/HOST/PORT
+    if (/[\\/]dev[\\/](tcp|udp)[\\/]/i.test(w.text)) { this.stop(`Reaches the network (${w.text.slice(0, 60)})`); return; }
     // A PowerShell hashtable (one word, as written): every word inside it is checked like any other.
+    // A calculated property (@{ n = 'x'; e = { ... } }) runs its script block for every object: the hub reads the block like
+    // any command or, when it cannot, passes on it.
+    if (w.hashtable && /=\s*\{/.test(w.text.replace(/'(?:''|[^'])*'|"(?:""|[^"])*"/g, "''"))) this.unsure('A calculated property with a script block the hub cannot read');
     if (w.hashtable) { for (const x of tokens(w.text.replace(/^@\{|\}$/g, ' ').replace(/[;=]/g, ' '))) this.word(x, cwd); return; }
     const t = w.text;
     if (w.vars) {
@@ -1996,6 +2073,9 @@ class Check {
     }
     // git merge merges into the branch checked out where it runs: a card only when that is main, master or another
     // shared branch, or cannot be told (THE MERGE RULE, decision 64 A).
+    // git mv SRC DEST renames or moves files: every path is a write like mv's (a manifest or lockfile named as either end is
+    // "Changes dependencies"; .git, .crux and Claude Code's settings and outside the project are stops too).
+    if (sub === 'mv') for (const t of rest.filter(x => !x.startsWith('-'))) this.path(t, cwd, { write: true });
     if (sub === 'merge') return this.merge('Merges branches (git merge)', otherRepo ? null : cwd);
     if (!otherRepo) this.noteBranch(sub, rest, cwd);
     if (sub === 'push') return this.push(rest, cwd, otherRepo);
@@ -2881,6 +2961,46 @@ function splitHostFields(v) {
   return out;
 }
 
+// str.replace(re, ...) where fn(match, pre) also gets pre: the text in front of the match as it stands after the earlier
+// replacements (a body taken out is gone from it, so its quotes cannot be mistaken for the command's own).
+function replaceWithPrefix(str, re, fn) {
+  let out = '', pre = '', last = 0, m;
+  re.lastIndex = 0;
+  while ((m = re.exec(str))) {
+    const gap = str.slice(last, m.index);
+    pre += gap; out += gap;
+    const rep = fn(m, pre);
+    pre += rep; out += rep;
+    last = m.index + m[0].length;
+    if (!m[0].length) re.lastIndex++;
+  }
+  return out + str.slice(last);
+}
+
+// What the end of this text sits in: 'sq' (single quotes), 'dq' (double quotes), 'comment' (a # comment, or a PowerShell <# #>
+// block) or null (plain code). Used to tell a heredoc or here-string marker that opens one from a "<<EOF" in a string or a comment.
+export function contextAt(prefix, ps = false) {
+  let st = null;
+  const t = String(prefix);
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (st === 'comment') { if (c === '\n') st = null; continue; }
+    if (st === 'block') { if (c === '#' && t[i + 1] === '>') { i++; st = null; } continue; }
+    if (st === 'sq') { if (c === "'") { if (ps && t[i + 1] === "'") i++; else st = null; } continue; }
+    if (st === 'dq') {
+      if (ps ? c === '`' : c === '\\') { i++; continue; }
+      if (c === '"') { if (ps && t[i + 1] === '"') i++; else st = null; }
+      continue;
+    }
+    if (c === (ps ? '`' : '\\')) { i++; continue; }
+    if (c === "'") st = 'sq';
+    else if (c === '"') st = 'dq';
+    else if (c === '#' && (i === 0 || /[\s;&|(]/.test(t[i - 1]))) st = 'comment';
+    else if (ps && c === '<' && t[i + 1] === '#') { st = 'block'; i++; }
+  }
+  return st === 'block' ? 'comment' : st;
+}
+
 // The text inside every command or process substitution in s: $( ... ), <( ... ), >( ... ) and `...`, nested ones
 // included, skipping single-quoted text (which the shell leaves alone).
 export function substitutions(s) {
@@ -2968,12 +3088,18 @@ export function splitParts(s, ps = false, withOps = false) {
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
     if (q) { cur += c; if (c === q && (q === "'" || prev(i) !== '\\')) q = null; continue; }
+    // A # at the start of a word is a comment (to the end of the line; in PowerShell also <# ... #>): what it holds is never
+    // run, and a quote inside it opens nothing (echo x # it's / git push origin main on the next line is a push).
+    if (c === '#' && ht === 0 && (i === 0 || /[\s;&|]/.test(s[i - 1]))) { while (i + 1 < s.length && s[i + 1] !== '\n') i++; continue; }
+    if (ps && c === '<' && s[i + 1] === '#' && ht === 0) { const e = s.indexOf('#>', i + 2); i = e < 0 ? s.length : e + 1; cur += ' '; continue; }
     if (c === '"' || c === "'") { q = c; cur += c; continue; }
     // A PowerShell hashtable @{ a = 1; b = 2 } is one value: its ; and } do not end the command, so the options
     // after it (-Method Post) stay with the command they belong to.
     if (ps && c === '{' && prev(i) === '@') { ht++; cur += c; continue; }
     if (ht > 0) { if (c === '}') ht--; cur += c; continue; }
     if (c === '\\' && !ps && s[i + 1] === '\n') { i++; continue; } // line continuation
+    // In bash a \ outside quotes makes the next character plain text: \' and \" open no quote (echo it\'s '<<B').
+    if (c === '\\' && !ps && i + 1 < s.length) { cur += c + s[i + 1]; i++; continue; }
     // PowerShell ( ... ) or @( ... ) after a command word is that command's argument: kept in the part whole, its
     // inside noted (groups) so the hub reads it as a command too and counts the argument as unreadable.
     if (ps && (c === '(' || (c === '@' && s[i + 1] === '(')) && /[\s,=]/.test(prev(i)) && psArgument(cur)) {
@@ -3083,11 +3209,11 @@ export function gitTop(dir) {
 // ~/.crux-hub counts (the voice folder too, which classify reads on its resolved path), a glob is matched against the
 // files it would really read from cwd (the folder the agent runs in), and a glob or ../ after a cd goes to classify,
 // which follows the cd (review of decision 64 A).
-const SECRET_STRICT = trimmed(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub)(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/i);
+const SECRET_STRICT = trimmed(new RegExp(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub)(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/.source + '|' + SECRET_MORE, 'i'));
 // ---------- recursive reads near secrets (M039 5) ----------
 // Folders whose every file is a secret. A recursive read or copy rooted at the home folder, above it, or at a folder
 // that holds one of these reads them all.
-const SECRET_DIRS = ['.ssh', '.aws', '.gnupg', '.crux-hub', '.credentials.json'];   // and ~/.claude's login file (review round 1)
+const SECRET_DIRS = ['.ssh', '.aws', '.gnupg', '.crux-hub', '.credentials.json', '.kube', '.azure', '.docker'];   // and ~/.claude's login file (review round 1)
 export function secretTree(dir, home = homedir()) {
   if (typeof dir !== 'string' || ['null', 'outside', 'tmp'].includes(dir)) return false;
   const d = norm(dir), h = norm(longPath(home) ?? home);
@@ -3217,7 +3343,7 @@ export function touchesSecrets(tool, input = {}, cwd = null) {
     return false;
   }
   const cmd = String(input.command || '');
-  if (/\$env:(?!te?mp\b)/i.test(cmd) || /\b(printenv|get-credential|get-secret)\b/i.test(cmd) || /(^|[\s;&|])env(\s|$)/.test(cmd)) return true;
+  if (/\$env:(?!te?mp\b)/i.test(cmd) || /\b(printenv|get-credential|get-secret|get-storedcredential|get-azaccesstoken|get-azkeyvaultsecret|get-psreadlineoption|cmdkey|vaultcmd)\b/i.test(cmd) || /\bjq\b[^;&|\n]*(^|[^\w.])(\$ENV|env)(?![\w])/.test(cmd) || /(^|[\s;&|])env(\s|$)/.test(cmd)) return true;
   const parts = splitParts(cmd, tool === 'PowerShell');
   const moves = parts.some(p => /^(cd|pushd|chdir|set-location|sl|push-location)(\s|$)/i.test(p.trim()));
   // A program that can read or copy a whole tree (any spelling of its recursive option: grep --rec, --dir=recurse,
