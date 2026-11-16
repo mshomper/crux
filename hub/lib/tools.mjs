@@ -182,6 +182,8 @@ export function settingsChanges({ model, effort, type } = {}) {
 // and the agent is told so, with where such lines belong.
 export function summaryReply(r) {
   const n = r?.notes?.length || 0;
+  // An expedition raises no question card (decision 71): its questions went to the Lead as text, or were held.
+  if (r?.held) return 'Summary posted. Nobody is available to answer questions during an expedition, so yours were not asked: decide inside the brief, or park the line of work with the reason.';
   if (!n) return 'Summary posted.';
   return `Summary posted. ${n === 1 ? 'One line' : `${n} lines`} under questions had no question mark, so ${n === 1 ? 'it shows' : 'they show'} as a plain line in your summary, not as a question card: ${r.notes.map(x => `"${String(x).slice(0, 80)}"`).join('; ')}. Put status lines in done or next_step, and end real questions with "?".`;
 }

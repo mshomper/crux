@@ -816,7 +816,7 @@ ${lines.join('\n')}`;
           name: p.name, level: { standard: 'Ask', auto: 'Auto', trusted: 'Trusted' }[this.hub.permissionMode(p)],
           waiting: { total: w.count, permissions: w.approvals.length, questions: w.questions.length, decisions: w.decisions.length, lessons: w.lessons.length },
           orchestrator: o ? { name: o.name, state: o.state, context_pct: o.contextPct ?? null } : null,
-          workers: live.filter(a => a.role === 'worker').length,
+          workers: live.filter(a => a.role === 'worker' && !a.expedition).length,   // an expedition's agents are one cluster, not workers (plan 2a)
           working: live.filter(a => ['working', 'starting'].includes(a.state)).length
         };
       }),
