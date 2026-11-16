@@ -583,6 +583,10 @@ class Check {
     // Any repo's settings or hooks, nested or in temp (git init sub && ... > sub/.git/config): git runs what they
     // name (core.fsmonitor, hooks), so a later read-only git there would run it (review round 1).
     if (write && w !== 'null' && /(^|\/)\.git\/(config|hooks)(\/|$)/.test(norm(this.abs(p, cwd)))) this.stop(`Writes a git repo's settings or hooks (${p})`);
+    // A file written into any node_modules or .venv folder (a Write or Edit, cp, mv, Copy-Item, Set-Content, a redirect,
+    // tee; also through a worktree's junction, whose path still names node_modules) is code the next run executes:
+    // a hard stop, like an install (plan A8).
+    if (write && w !== 'null' && typeof this.abs(p, cwd) === 'string' && /(^|\/)(node_modules|\.venv)\/[^/]/i.test(norm(this.abs(p, cwd)))) this.stop(`Writes into a packages folder (${p}): installed code runs on the next start`);
     if (write && w === 'inside') {
       // From the full path abs() reads (short names expanded: CLAUDE~1/SETTIN~1.JSO is .claude/settings.local.json).
       const rel = norm(this.abs(p, cwd)).slice(norm(this.projectDir).length + 1);
@@ -695,6 +699,9 @@ class Check {
     s = this.readSubs(s, ps, start);
     if (/`/.test(s.replace(/'[^']*'/g, ''))) { this.unsure(ps ? 'Backtick escapes the hub cannot read' : 'Command substitution (backticks)'); if (ps) this.scanAll = true; }
     if (/\$\(|<\(|>\(/.test(s.replace(/'[^']*'/g, ''))) this.unsure('Command substitution the hub cannot read');
+    // Bash's old $[ expr ] is arithmetic like $(( )): it evaluates a name or a value inside (and runs a command in an
+    // array subscript). Literal numbers and operators only; anything else is a doubt.
+    if (!ps && /\$\[(?![\d\s+\-*/%<>=!&|^()]*\])/.test(s.replace(/'[^']*'/g, ''))) this.unsure('Arithmetic ($[ ]) with a name or value the hub cannot read');
     // What runs inside $( ), <( ), >( ) and backticks: read by the scan, and it may switch the branch (branchIn).
     for (const inner of substitutions(s)) { bit(inner); if (this.mayMoveBranch(inner, ps)) this.branchUnknown = true; }
     // iex("..."), Invoke-Expression("..."), [scriptblock]::Create("..."), InvokeScript("..."): text run as a command.
@@ -893,6 +900,11 @@ class Check {
   newVal() { this.valN = (this.valN || 0) + 1; return `CRUXVAL${this.valN}`; }
   // inner qualifies (every command only reads, and nothing the checks stop or doubt) -> true; else null.
   valInner(inner, ps, cwd) {
+    // A comment inside $( ): the shell skips its text (a ')' or a quote in it means nothing), but the hub's own scan of
+    // where the substitution ends does not, so it could end it early and read the lines after it as quoted text. A #
+    // at a word start (or <# in PowerShell) anywhere inside makes the substitution unreadable. Quotes are not looked at:
+    // a false hit is only a doubt.
+    if (/(^|[\s;|&(])#/.test(inner) || (ps && /<#/.test(inner))) return null;
     if (/`|<\(|>\(/.test(inner.replace(/'[^']*'/g, ''))) return null;
     let text = this.readSubs(inner, ps, cwd);
     if (text.includes('$(')) return null;
@@ -1078,7 +1090,7 @@ class Check {
   pathValueOk(val) {
     if (this.homeChanged) return false;   // $HOME / $USERPROFILE this command sets itself name some other folder
     const dirs = String(val).replace(/^["']|["']$/g, '').split(':');
-    return dirs.length >= 2 && /^\$\{?path\}?$/i.test(dirs.pop()) && dirs.every(d => PATH_DIR.test(d));
+    return dirs.length >= 2 && /^\$\{?path\}?$/i.test(dirs.pop()) && dirs.every(d => !d.includes('%') && PATH_DIR.test(d));
   }
   // A2: $env:Path = "<known tool folder>;$env:Path": this session's search path only, with a folder from PATH_DIR in front.
   pathPrepend(words) {
@@ -1095,7 +1107,8 @@ class Check {
     const dirs = val.split(';');
     if (dirs.length < 2 || !/^\$\{?env:path\}?$/i.test(dirs.pop())) return false;
     const mine = ['.cargo\\bin', 'AppData\\Roaming\\npm'].map(x => norm(join(this.home, x)));
-    return dirs.every(d => PATH_DIR.test(d.trim()) || mine.includes(norm(d.trim())));
+    // %VAR% is cmd syntax: PowerShell leaves it as text, so the entry would be a folder named "%USERPROFILE%\..." here.
+    return dirs.every(d => !d.includes('%') && (PATH_DIR.test(d.trim()) || mine.includes(norm(d.trim()))));
   }
   // Where an unknown value (CRUXVALn) goes in this one command. Called by simple() when a word holds one.
   valUse(head, words, cwd) {
@@ -1125,7 +1138,7 @@ class Check {
       // A value is allowed only as the pattern of grep given with -e / --regexp or after --: anywhere else it may be a path
       // (a secret), an option, or several words (an unquoted value splits: head -n $(cat f) x).
       const grep = /^(grep|egrep|fgrep)$/.test(head);
-      const bad = texts.findIndex((t, i) => i > 0 && VAL.test(t) && !(grep && (/^(-e|--regexp)$/.test(texts[i - 1] || '') || texts.slice(1, i).includes('--')) && /^CRUXVAL\d+$/.test(t)));
+      const bad = texts.findIndex((t, i) => i > 0 && VAL.test(t) && !(grep && (/^(-e|--regexp)$/.test(texts[i - 1] || '') || texts.slice(1, i).includes('--')) && /^CRUXVAL\d+$/.test(t) && words[i].quoted));   // unquoted, the value splits into words (a path of a secret among them)
       if (bad >= 0) return this.unsure(`Reads a path the hub cannot read, or an option it cannot tell (${head} with a command substitution)`, true);
       return;
     }
@@ -1221,7 +1234,11 @@ class Check {
         if (m && words[1]?.text === '=' && /^(get-item|gi)$/i.test(words[2]?.text || '')) {
           const n = m[1].toLowerCase();
           const sets = (this.cmdText.match(new RegExp(String.raw`\$${m[1]}\s*[-+*/]?=(?!=)`, 'gi')) || []).length;
-          const loops = new RegExp(String.raw`\b(foreach|for)\s*\(\s*\$${m[1]}\b|\bparam\b[^)]*\$${m[1]}\b|-(out|pipeline|error|warning)variable\s*:?\s*${m[1]}\b|\$${m[1]}\s*\[\s*ref|\[ref\]\s*\$${m[1]}`, 'i').test(this.cmdText);
+          // The name may appear only in this one assignment and in .Delete() and plain property reads of it: any other
+          // mention (-ov i, -OutVar i, Tee-Object -Variable i, Set-Variable i, sv i, foreach, [ref], a second
+          // assignment form) could give it another value, and so is a doubt.
+          const left = this.cmdText.replace(new RegExp(String.raw`\$${m[1]}\s*=(?!=)`, 'i'), '').replace(new RegExp(String.raw`\$${m[1]}\.(delete\(\)|linktype\b|name\b|fullname\b|target\b|attributes\b|exists\b)`, 'gi'), '');
+          const loops = new RegExp(String.raw`(?<![\w\\/.-])\$?\{?${m[1]}\b`, 'i').test(left);
           const t = this.itemArgs(words.slice(3).map(w => w.text));
           if (sets === 1 && !loops && t.length === 1) (this.itemVars ||= new Map()).set(n, t[0]); else this.itemVars?.delete(n);
         }
@@ -1995,6 +2012,14 @@ class Check {
       const web = this.trusted && /^https:\/\/[\w.-]+\//i.test(pos[0] || '');
       if (pos[0] && !web && !/^[\w.-]+$/.test(pos[0]) && !/^(https:\/\/|git@)github\.com[/:]/i.test(pos[0])) return this.stop(`Fetches from an address the hub cannot check (${pos[0]})`);
       if (sub === 'clone' && pos[1] && this.outside(pos[1], cwd)) return this.stop(`Clones outside the project folder (${pos[1]})`);
+      // git fetch . HEAD:main with -u / --update-head-ok moves the checked-out branch; a refspec with a destination
+      // (src:dst: a bare branch name, refs/heads/*, refs/remotes/*) writes that ref whatever the checkout. A hard stop.
+      if (sub === 'fetch' || sub === 'pull') {
+        const upd = rest.find(x => /^--update-head-ok$|^-[a-zA-Z]*u[a-zA-Z]*$/.test(x));
+        if (upd) return this.stop(`git ${sub} ${upd}: it may overwrite the checked-out branch`);
+        const into = pos.slice(1).find(x => /:./.test(x));
+        if (into) return this.stop(`git ${sub} with a refspec that writes a branch or remote-tracking ref (${into})`);
+      }
       // A clone from the web is a download: running anything from it later is a stop (M039 4).
       if (sub === 'clone' && pos[0] && /:\/\/|^[\w.-]+@[\w.-]+:/.test(pos[0])) {   // dest: pos[1], else the repo's name
         this.markDown(pos[1] || pos[0].replace(/[\\/]+$/, '').replace(/\.git$/i, '').split(/[\\/:]/).pop(), cwd);
@@ -2121,6 +2146,16 @@ class Check {
       const other = /get-ciminstance|get-wmiobject|\bgcim\b|\bgwmi\b|get-process|\bgps\b|win32_process|\.terminate\s*\(|invoke-cimmethod|\bwmic\b|process\.kill|\btaskkill\b|\bpkill\b|\bkillall\b|\bkill\b/i;
       if ((this.cmdFilters || []).length || !/^(stop-process|spps)$/.test(head) || other.test(this.cmdText)) {
         return this.unsure('Stops processes picked by a port together with another way of picking them: the port alone cannot vouch for it', true);
+      }
+      // Every Stop-Process in the command must sit inside one of the two exact shapes below, fed by Get-NetTCPConnection
+      // with -LocalPort naming only ports this agent started. Take those shapes out; any Stop-Process left (fed by no
+      // -LocalPort, -RemotePort, -OwningProcess, Get-NetUDPEndpoint, Get-Content, a variable) is a doubt.
+      const flags = String.raw`(?:\s+-Force|\s+-ErrorAction\s+\w+|\s+-Confirm:\$false)*`;
+      const net = String.raw`Get-NetTCPConnection(?:\s+-State\s+\w+|\s+-ErrorAction\s+\w+)*\s+-LocalPort\s+(\d+(?:\s*,\s*\d+)*)(?:\s+-State\s+\w+|\s+-ErrorAction\s+\w+)*`;
+      const feed = String.raw`(?:\s*\|\s*Select(?:-Object)?\s+-ExpandProperty\s+OwningProcess)?\s*\|\s*(?:ForEach-Object|foreach|%)\s*\{\s*Stop-Process\s+-Id\s+\$_(?:\.OwningProcess)?${flags}\s*;?\s*\}`;
+      const left = this.cmdText.replace(new RegExp(net + feed, 'gi'), (all, list) => list.split(',').every(p => this.judgePort(p.trim()) === 'ok') ? '' : all);
+      if (/\b(stop-process|spps)\b/i.test(left)) {
+        return this.unsure('A Stop-Process not fed by Get-NetTCPConnection -LocalPort on a port this agent started', true);
       }
     }
     if (verdicts.includes('unsure')) {
@@ -2636,6 +2671,11 @@ class Check {
     if (/\b(fetch|https?|net|dgram|tls|http2|XMLHttpRequest|WebSocket|urllib|requests|socket)\b/.test(reach)) this.stop('An inline script that could reach the network');
     if (/\b(child_process|execSync|execFileSync|spawn|spawnSync|exec\(|execFile|subprocess|os\.system|os\.popen)\b/.test(code)) this.unsure('An inline script that runs other programs');
     if (/\b(rmSync|unlinkSync|rmdirSync|rm\(|unlink\(|rmdir\(|os\.remove|os\.unlink|shutil\.rmtree)\b/.test(code)) this.scriptDeletes(code);
+    // Any kill token (process.kill, process['kill'], a destructured kill, Reflect.apply(process.kill ...), taskkill) is a
+    // doubt, even next to the one allowed shape below; so is reaching process by a computed name, which could spell it.
+    if (/(?<![A-Za-z])kill|taskkill/i.test(code) || /\bprocess\s*\[|\}\s*=\s*process\b|=\s*process\s*[;,)]|\bReflect\b|\bglobalThis\b|\beval\s*\(|\bnew\s+Function\b/.test(code)) {
+      this.unsure('An inline script that could stop a process (a kill, or a way to spell one)', true);
+    }
     if (/\b(stopTree|pidsOnPort|process\.kill|taskkill)\b/.test(code)) {
       if (/474[78]/.test(code)) this.stop("An inline script that stops processes and names the live hub's port (4747 or 4748)");
       else {   // A7: by port is "whatever listens there": only the one shape below, on a port this agent started a test hub on
