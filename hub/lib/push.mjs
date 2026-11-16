@@ -42,6 +42,11 @@ export function cardsFor(ev, { decisionOpen = () => true } = {}) {
   if (ev.type === 'project_settings' && ev.permissionMode === 'trusted' && ev.raised) {
     return [{ kind: 'level', card: `level:${ev.id}`, project, thread: 'orchestrator', title: `${project} was raised to Trusted`, body: project, always: true, actions: ['undo'] }];
   }
+  // The Expedition module's one finished card (spec 4.8, decision 71): a notice that it is done, with nothing to answer. Its
+  // words carry no part of the report (C001: kind, a short title and the card id only). Nothing else an expedition does notifies.
+  if (ev.type === 'expedition_finished') {
+    return [{ kind: 'expedition', card: `expedition:${ev.expedition}`, project, thread: 'orchestrator', title: 'Expedition finished', body: project }];
+  }
   if (ev.type !== 'summary') return [];
   const out = [];
   for (const n of ev.decisions_needed || []) {
@@ -114,7 +119,7 @@ export function stillOpen(card, state) {
   if (card.kind === 'approval') return approvals.has(card.card.slice('approval:'.length));
   if (card.kind === 'decision') return decisionOpen(Number(card.card.slice('decision:'.length)));
   if (card.kind === 'question') return questionOpen(events, card.askedAt, { decisionStatus, decisions, decisionNotified });
-  if (card.kind === 'level' || card.kind === 'digest' || card.kind === 'restart') return true;   // notices, not cards that get settled
+  if (card.kind === 'level' || card.kind === 'digest' || card.kind === 'restart' || card.kind === 'expedition') return true;   // notices, not cards that get settled
   return false;
 }
 
@@ -375,7 +380,7 @@ export class Push {
 
   // Does the card still wait for you (answered, picked, settled elsewhere)?
   open(card, ctx) {
-    if (card.kind === 'digest' || card.kind === 'restart') return true;   // notices of their own; a digest's cards are checked when it is drawn
+    if (card.kind === 'digest' || card.kind === 'restart' || card.kind === 'expedition') return true;   // notices of their own; a digest's cards are checked when it is drawn
     const o = this.askOpts(card.project, ctx);
     return stillOpen(card, { approvals: ctx.approvals, decisionOpen: id => ctx.decisionOpen(card.project, id), ...o, events: ctx.events(card.project) });
   }
@@ -419,7 +424,7 @@ export class Push {
       if (desk && !looking) this.toDesk(card, { follow: false });
       return this.routed(card, id, 'phone', 'always told', `${id}: phone${desk && !looking ? ' and PC' : ''} (always told)`);
     }
-    const follows = this.subs.length > 0 && card.kind !== 'digest' && card.kind !== 'restart';   // digest and restart notices have no phone follow-up
+    const follows = this.subs.length > 0 && card.kind !== 'digest' && card.kind !== 'restart' && card.kind !== 'expedition';   // digest, restart and finished-expedition notices have no phone follow-up
     if (looking) {
       // Held while you look at it, but not dropped: if it still waits 3 minutes on and you have gone, the phone gets it.
       if (follows) this.armFollow(card, true);

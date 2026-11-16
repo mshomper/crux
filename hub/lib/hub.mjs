@@ -11,7 +11,7 @@ import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { extname } from 'node:path';
 import { CommandPolicy } from './permissions.mjs';
-import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite } from './permission-rules.mjs';
+import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite, expeditionFolderWrite } from './permission-rules.mjs';
 import { normalizeOverlay } from './permission-lists.mjs';
 import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
 import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './settings.mjs';
@@ -27,7 +27,9 @@ import { totalsOf, sumCost } from '../public/usage.js';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
 import { ExpeditionWatchdog, HUB_STOPS as EXPEDITION_HUB_STOPS } from './expedition-watchdog.mjs';
-import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
+import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, DEFAULT_ENVELOPE, runJsonProblem, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
+import { ExpeditionEnd } from './expedition-end.mjs';
+import { isProposal, proposalsOf } from './expedition-report.mjs';
 
 export class Project {
   constructor(dir) {
@@ -140,6 +142,7 @@ export class Hub {
     // counted message. Nothing launches an expedition yet, so until phase 5 it finds nothing to watch. A live hub makes its
     // first check only after resumeAll (below), so a Lead cannot get both a resume message and its final message from one
     // start; a test hub has no resume and checks at once.
+    this.expeditionEnd = new ExpeditionEnd(this);   // the end's logged steps (phase 5); the watchdog's check sweeps it. Its clock is the real one (log times are real); tests set end.now
     this.expeditionWatch = new ExpeditionWatchdog(this, expeditionWatch);   // tests pass { now, timers, checkMs, stopWaitMs }
     this.expeditionWatch.start({ firstCheck: this.noAgents });
     // Decision 64 A raised a shorter saved permission wait to 5 minutes, once: said once in each orchestrator thread.
@@ -203,6 +206,9 @@ export class Hub {
     for (const m of this.undelivered(p, now)) messages.set(m.thread, [...(messages.get(m.thread) || []), m]);
     for (const a of p.agents.values()) {
       if (a.state === 'retired' || (a.role === 'orchestrator' && a !== p.orchestrator())) continue;
+      // M049 5: a hub stop (time, budget, the user's Stop) whose final message was not sent yet is finished by the watchdog's
+      // first check after this plan, and that message is what wakes the agent: a resume message first would be a second one.
+      if (a.expedition && this.expeditionStopPending(p, a)) continue;
       const ms = messages.get(a.thread) || [];
       const b = busy.get(a.name);
       for (const m of ms) plan.push({ agent: a.name, thread: a.thread, why: 'message', message: m, wasWorking: !!b?.busy && Date.parse(b.ts) >= Date.parse(m.ts) });
@@ -550,47 +556,209 @@ export class Hub {
   // missing, or the Verifier would run on the Builder's model. test: files for test/ by name ({ 'CHECKLIST.md': '...' }).
   // preApprovals (phase 4; the launch panel fills it in phase 5): { sites, packages } for this expedition's agents only. Checked
   // before anything is written, kept in the start event, never added to the user's own lists.
-  launchExpedition(p, { brief, question = '', test = {}, envelope = {}, roles = {}, gatherers = 3, preApprovals = null } = {}, by = 'you') {
-    const text = String(brief ?? '').trim();
-    if (!text) throw new Error('The brief is empty: write the question, the scope and the success test first.');
-    const running = Expedition.all(p).find(x => x.phase !== 'ended');
-    if (running) throw new Error(`Expedition ${running.id} is still ${running.phase === 'stopped' ? 'writing up' : running.phase}: one expedition runs per project at a time.`);
-    if (this.permissionMode(p) === 'standard') throw new Error('This project is at Ask. An expedition needs Auto or Trusted: at Ask every request that is more than a read would wait for an orchestrator, and an expedition has nobody to ask. Raise the level on the project card first.');
-    const types = this.agentTypes(p), merged = {};
-    for (const [role, d] of Object.entries(expeditionDefaultRoles())) {
-      const t = types.get(d.type);
-      if (!t) throw new Error(`The agent type ${d.type} is not set up. Copy the expedition-*.md files from agent-types/starter into ~/.claude/agents (or this project's .claude/agents).`);
-      const o = roles[role] || {};
-      merged[role] = { type: d.type, model: modelId(o.model) || t.model || modelId(d.model), effort: effortLevel(o.effort) || t.effort || d.effort };
-    }
-    const problem = Expedition.rolesProblem(merged);
-    if (problem) throw new Error(problem);
-    // The test files are plain names (no folders, no .., not BRIEF.md): checked before anything is written.
-    for (const name of Object.keys(test || {})) {
-      if (!/^[A-Za-z0-9][\w.-]*$/.test(name) || name.includes('..') || /^BRIEF\.md$/i.test(name)) throw new Error(`"${name}" is not a name for a success-test file: use a plain file name such as CHECKLIST.md or run.json.`);
-    }
-    try { normalizeOverlay(preApprovals, { strict: true }); } catch (e) { throw new Error(e.message); }   // before the folder exists
+  launchExpedition(p, input = {}, by = 'you') {
+    const plan = this.prepareLaunch(p, input);   // every refusal is here, before anything is written
+    const { text, question, test, envelope, merged, limit, preApprovals, origin } = plan;
     const dir = join(p.dir, '.crux', 'expeditions');
-    const taken =[...Expedition.all(p).map(x => x.id), ...(existsSync(dir) ? readdirSync(dir) : [])];
+    const taken = [...Expedition.all(p).map(x => x.id), ...(existsSync(dir) ? readdirSync(dir) : [])];
     const id = Expedition.makeId(question || text.split('\n')[0], { taken });
     const ex = new Expedition(p, id).init();
     ex.write('BRIEF.md', `${text}\n`);
-    for (const [name, body] of Object.entries(test || {})) ex.write(`test/${name}`, body);
-    const hours = Number(envelope.hours) > 0 ? Number(envelope.hours) : undefined;
-    const limit = Math.min(GATHERER_LIMIT, Math.max(1, Math.round(Number(gatherers)) || 3));
+    for (const [name, body] of Object.entries(test)) ex.write(`test/${name}`, body);
     // planStart: the 7-day meter's reading at launch, as a record (it can be minutes old; null under an API key or before the
     // meters load). Spend measure 2 counts from the first fresh reading after the launch, which the watchdog logs itself.
-    ex.start({ envelope: { ...envelope, ...(hours ? { hours } : {}), gatherers: limit }, roles: merged, planStart: this.expeditionWatch.planStart(), preApprovals });
+    ex.start({ envelope: { ...envelope, gatherers: limit }, roles: merged, planStart: this.expeditionWatch.planStart(), preApprovals, question: question || text.split('\n')[0], ...(origin ? { origin } : {}) });
+    if (input.draft) p.log.append('expedition_draft_closed', { draft: String(input.draft), status: 'launched', expedition: id });
     const e = ex.state().started.envelope;
     const task = [
       `You are the Lead of expedition ${id} in ${p.name}. Its folder is .crux/expeditions/${id}/ : BRIEF.md (the question, scope and envelope) and test/ (the success test) are there; everything you and your team write goes in that folder.`,
       `Envelope: ${e.hours} hours${e.dollars != null ? ` and about $${e.dollars}` : ''}, about ${e.percent}% of the week's plan; the hub enforces it and tells you at 90%. The build goes in the worktree .claude/worktrees/exp-${id} on the branch expedition/${id} (the Builder creates it from the main branch if it is not there).`,
+      Object.keys(test).length
+        ? `The success test came with the launch: it is in test/ (${Object.keys(test).join(', ')}). Keep it; the Advisor reviews it with your plan at the gate.`
+        : 'No success test came with the launch, only the question. While you plan, draft it yourself in test/: CHECKLIST.md (numbered items, each saying how it is judged) and test/run.json where commands help (see your agent file for its shape). The Advisor reviews it at the plan gate, and the gate freezes it.',
       `Gatherers: up to ${limit} at once with the Agent tool (type expedition-gatherer), and one second round of the same size, only for gaps they flagged. Hard limit ${GATHERER_LIMIT}.`,
       `Your tools: start_worker (type one of expedition-advisor, expedition-synthesizer, expedition-skeptic, expedition-builder, expedition-verifier), message_agent, retire_worker and list_agents, all limited to this expedition, plus the Agent tool. Nobody is available to answer questions: decide inside the brief or park the line of work.`,
+      `The end: when the success test passes call expedition_finish; when your report (REPORT.md) is written and the Verifier's claims pass is applied, call expedition_report_ready. The hub then copies the report onto the branch, pushes it, opens a draft pull request and posts the finished card, and tells you when to send your one post_summary. You never merge.`,
       '', 'The brief:', '', text
     ].join('\n');
     const lead = this.startWorker(p, 'exp-lead', task, by, `Expedition ${id}`.slice(0, 90), { type: merged.lead.type, model: merged.lead.model, effort: merged.lead.effort, expedition: id, expeditionRole: 'lead' });
-    return { id, lead: lead.name, expedition: ex.state().started };
+    return { id, lead: lead.name, expedition: ex.state().started, dollarCap: this.dollarCap(e, input.envelope) };
+  }
+
+  // ---------- phase 5: defaults, the dollar cap, drafts and the launch ----------
+  // hub.json: { "defaults": { "expedition": { "envelope": { "hours", "percent", "dollars" }, "dollarsPerPercent": 9, "gatherers": 3,
+  //   "roles": { "builder": { "model": "sonnet", "effort": "medium" } } } } }. Read once at start (spec 11).
+  expeditionConfig() { const c = this.defaults?.expedition; return c && typeof c === 'object' ? c : {}; }
+
+  // Decision 69 C: the ONE confirmed figure, dollars of estimated spend per 1% of the week's plan, from hub.json. Nothing
+  // else supplies it and none is invented: without it there is no dollar cap, and a launch runs on time and the meter only.
+  dollarsPerPercent() { const n = Number(this.expeditionConfig().dollarsPerPercent); return Number.isFinite(n) && n > 0 ? n : null; }
+
+  // The envelope a launch starts from: built-ins (6 h, 7%), then hub.json, then this launch's own picks. dollars: this launch's
+  // figure, else hub.json's, else percent x the confirmed dollars-per-percent, else null (no cap).
+  expeditionEnvelope(over = {}) {
+    const cfg = this.expeditionConfig().envelope || {};
+    const pos = v => (Number(v) > 0 ? Number(v) : null);
+    const hours = pos(over.hours) ?? pos(cfg.hours) ?? DEFAULT_ENVELOPE.hours;
+    const percent = pos(over.percent) ?? pos(cfg.percent) ?? DEFAULT_ENVELOPE.percent;
+    // The hub's own confirmed figure always wins over a dollar figure a page sends along (decision 69 C); with none confirmed,
+    // a figure the user typed is theirs and stands, and otherwise there is no dollar cap.
+    const per = this.dollarsPerPercent();
+    const dollars = per ? Math.round(percent * per * 100) / 100 : (pos(over.dollars) ?? pos(cfg.dollars) ?? null);
+    return { hours, percent, dollars };
+  }
+
+  // What the launch screen says about the budget. meterGuard: the 7-day meter guard exists (it hides under an API key).
+  // confirmed: only the dollars-per-percent figure in hub.json is "the confirmed figure" (decision 69 C). source says where the cap
+  // came from: 'figure' (percent x that figure), 'typed' (a figure typed at this launch: it counts as the user's own confirmation
+  // for this run), 'hub.json envelope' (a dollar figure in hub.json's envelope alone: a cap, but not a confirmed figure), or null.
+  // over: the envelope the launch itself sent.
+  dollarCap(envelope = this.expeditionEnvelope(), over = {}) {
+    const per = this.dollarsPerPercent(), meterGuard = this.usage?.available !== false;
+    const typed = Number(over?.dollars) > 0, cfgDollars = Number(this.expeditionConfig().envelope?.dollars) > 0;
+    const source = envelope.dollars == null ? null : per ? 'figure' : typed ? 'typed' : cfgDollars ? 'hub.json envelope' : null;
+    const note = envelope.dollars != null
+      ? (per && envelope.dollars === Math.round(envelope.percent * per * 100) / 100 ? `${envelope.percent}% of the week is about $${envelope.dollars} (at $${per} per 1%, the figure in hub.json). The run stops at that dollar figure or when the 7-day meter rises ${envelope.percent} points, whichever comes first.` : `The run stops at about $${envelope.dollars}${source === 'hub.json envelope' ? ' (a dollar figure in hub.json\'s envelope, not a confirmed dollars-per-percent figure)' : ''}${meterGuard ? ` or when the 7-day meter rises ${envelope.percent} points, whichever comes first` : ' (the meters are hidden under an API key, so only this and the time limit hold)'}.`)
+      : `No dollars-per-percent figure is confirmed yet, so there is no dollar cap: this run is held by the time limit${meterGuard ? ` and the 7-day meter (up ${envelope.percent} points)` : ' only (the meters are hidden under an API key)'}. Set defaults.expedition.dollarsPerPercent in hub.json: dollars of estimated spend per 1% of the week.`;
+    return { confirmed: per != null, dollarsPerPercent: per, dollars: envelope.dollars, source, meterGuard, note };
+  }
+
+  // The role table a launch starts from, and what the launch screen shows: the agent type files, then hub.json's
+  // defaults.expedition.roles, then the built-ins; a pick on the launch screen wins over all of them.
+  expeditionRoleDefaults(p) {
+    const types = this.agentTypes(p), cfg = this.expeditionConfig().roles || {}, out = {};
+    for (const [role, d] of Object.entries(EXPEDITION_ROLES)) {
+      const t = types.get(d.type), c = cfg[role] || {};
+      out[role] = { type: d.type, model: modelId(c.model) || t?.model || modelId(d.model), effort: effortLevel(c.effort) || t?.effort || d.effort, runs: d.runs, label: d.label, installed: !!t };
+    }
+    return out;
+  }
+
+  // Would a launch be accepted now, as to the project itself (not the content)? A plain-words reason, or null.
+  launchBlock(p) {
+    const running = Expedition.all(p).find(x => x.phase !== 'ended');
+    if (running) return `Expedition ${running.id} is still ${running.phase === 'stopped' ? 'writing up' : running.phase}: one expedition runs per project at a time.`;
+    if (this.permissionMode(p) === 'standard') return 'This project is at Ask. An expedition needs Auto or Trusted: at Ask every request that is more than a read would wait for an orchestrator, and an expedition has nobody to ask. Raise the level on the project card first.';
+    const types = this.agentTypes(p);
+    for (const d of Object.values(expeditionDefaultRoles())) if (!types.get(d.type)) return `The agent type ${d.type} is not set up. Copy the expedition-*.md files from agent-types/starter into ~/.claude/agents (or this project's .claude/agents).`;
+    return null;
+  }
+
+  // Every check a launch makes, in this order, before anything is written (D0071: the launch is the OK, so nothing may be
+  // half done). draft: a thread draft checks the content only (the project may be busy now and free when its Launch is pressed).
+  // -> the plan to write: { text, question, test, envelope, merged (roles), limit, preApprovals, origin }
+  prepareLaunch(p, input = {}, { draft = false } = {}) {
+    const { brief, question = '', test = {}, envelope = {}, roles = {}, gatherers, preApprovals = null } = input;
+    // The ask is the only thing a launch needs: the brief may be just the question.
+    const text = String(brief || question || '').trim();
+    if (!text) throw new Error('The ask is empty: write the question the expedition should answer.');
+    if (!draft) { const block = this.launchBlock(p); if (block) throw new Error(block); }
+    const def = this.expeditionRoleDefaults(p), merged = {};
+    for (const [role, d] of Object.entries(def)) {
+      const o = roles?.[role] || {};
+      if (o.effort && !effortLevel(o.effort)) throw new Error(`The ${d.label}'s effort must be one of ${EFFORTS.join(', ')}.`);
+      merged[role] = { type: d.type, model: modelId(o.model) || d.model, effort: effortLevel(o.effort) || d.effort };
+    }
+    const problem = Expedition.rolesProblem(merged);
+    if (problem) throw new Error(problem);
+    // The test files are plain names (no folders, no .., not BRIEF.md): checked before anything is written.
+    const files = {};
+    for (const [name, body] of Object.entries(test || {})) {
+      if (!/^[A-Za-z0-9][\w.-]*$/.test(name) || name.includes('..') || /^BRIEF\.md$/i.test(name)) throw new Error(`"${name}" is not a name for a success-test file: use a plain file name such as CHECKLIST.md or run.json.`);
+      if (String(body ?? '').trim()) files[name] = String(body);
+    }
+    const pre = preApprovals ? { ...preApprovals, packages: this.coercePackages(preApprovals.packages) } : null;
+    try { normalizeOverlay(pre, { strict: true }); } catch (e) { throw new Error(e.message); }   // before the folder exists
+    // No test is needed at launch (Matt, 2026-11-16: a launch is one plain ask): the Lead drafts CHECKLIST.md, and run.json where
+    // commands help, in test/ while planning, and the plan gate freezes it. One that does come is checked here, not at the gate.
+    if (files['run.json']) { const bad = runJsonProblem(files['run.json']); if (bad) throw new Error(bad); }
+    const env = this.expeditionEnvelope(envelope || {});
+    if (this.usage?.available === false && env.dollars == null) throw new Error('Under an API key the plan meters are hidden, so the only budget guard is a dollar cap, and none is set. Give the envelope a dollar figure, or set defaults.expedition.dollarsPerPercent in hub.json.');
+    const cfgG = Number(this.expeditionConfig().gatherers);
+    const limit = Math.min(GATHERER_LIMIT, Math.max(1, Math.round(Number(gatherers ?? cfgG)) || 3));
+    let origin = null;
+    if (input.draft && !draft) {
+      const d = p.log.events.find(e => e.type === 'expedition_draft' && e.id === String(input.draft));
+      if (!d) throw new Error('That draft is no longer here.');
+      if (p.log.events.some(e => e.type === 'expedition_draft_closed' && e.draft === d.id)) throw new Error('That draft was already launched or dismissed.');
+    }
+    if (input.proposal && !draft) {
+      const { expedition: from, parked: pid } = input.proposal || {};
+      const e = p.log.events.find(x => x.id === String(pid) && x.expedition === from && isProposal(x));
+      if (!e) throw new Error('That proposed expedition is no longer here.');
+      if (p.log.events.some(x => x.type === 'expedition_started' && x.origin?.parked === e.id)) throw new Error('That proposed expedition was already launched.');
+      origin = { expedition: from, parked: e.id };
+    }
+    return { text, question: String(question || '').trim(), test: files, envelope: env, merged, limit, preApprovals: pre, origin };
+  }
+
+  // Package pre-approvals from the launch panel (M049 8): the baseline version can come as numbers, numeric strings, or the
+  // version the user saw ("3.4.1"); permission-lists' cleanPackage reads it. Anything else is left for it to refuse.
+  coercePackages(list) { return Array.isArray(list) ? list.map(x => (x && typeof x === 'object' ? { ...x } : x)) : list; }
+
+  // The orchestrator's draft (decision 70 A): one card in its thread with Launch and Edit. It checks the content like a
+  // launch does, so a draft that could never launch is refused to the orchestrator, in plain words, and nothing is logged.
+  draftExpedition(p, agent, args = {}) {
+    const input = {
+      brief: args.brief, question: args.question, test: Array.isArray(args.test_files) ? Object.fromEntries(args.test_files.map(f => [String(f?.name ?? ''), f?.content])) : (args.test || {}),
+      envelope: { ...(args.hours ? { hours: args.hours } : {}), ...(args.percent ? { percent: args.percent } : {}) }, gatherers: args.gatherers,
+      preApprovals: args.sites || args.packages ? { sites: args.sites || [], packages: args.packages || [] } : null, roles: args.roles || {}
+    };
+    const plan = this.prepareLaunch(p, input, { draft: true });
+    const ev = p.log.append('expedition_draft', { thread: 'orchestrator', from: agent.name, question: plan.question || plan.text.split('\n')[0].slice(0, 200), brief: plan.text, test: plan.test, envelope: input.envelope, roles: input.roles, gatherers: plan.limit, preApprovals: plan.preApprovals });
+    return { id: ev.id, blocked: this.launchBlock(p) };
+  }
+
+  // Close a draft card without launching it (the Dismiss on the card).
+  dismissExpeditionDraft(p, id) {
+    const d = p.log.events.find(e => e.type === 'expedition_draft' && e.id === String(id));
+    if (!d) throw new Error('That draft is no longer here.');
+    if (p.log.events.some(e => e.type === 'expedition_draft_closed' && e.draft === d.id)) return { ok: true };
+    p.log.append('expedition_draft_closed', { draft: d.id, status: 'dismissed' });
+    return { ok: true };
+  }
+
+  // Every project's expedition on the state feed (decisions 69 to 72): what the launch screen, the map's Stop, the sidebar row,
+  // the thread card and the Launch on parked items read. See the shape in the phase 5 checkpoint.
+  expeditionView(p) {
+    const env = this.expeditionEnvelope(), cap = this.dollarCap(env), cfgG = Number(this.expeditionConfig().gatherers);
+    const all = Expedition.all(p), evs = p.log.events;
+    const live = id => [...p.agents.values()].filter(a => a.expedition === id && a.state !== 'retired').length;
+    const prOf = ex => { const s = ex.stepEvent('pr'); return s?.ok ? { url: s.url || null, number: s.number ?? null, draft: s.draft !== false } : null; };
+    const brief = x => {
+      const ex = this.expeditionOf(p, x.id), s = ex.state();
+      return { ex, s, id: x.id, question: s.started?.question || x.id, phase: x.phase, stopReason: s.stopped?.reason || null };
+    };
+    const open = all.filter(x => x.phase !== 'ended' || live(x.id) > 0).at(-1);
+    let current = null;
+    if (open) {
+      const { ex, s, id, question, phase, stopReason } = brief(open);
+      current = { id, name: question, question, phase, stopReason, startedAt: s.started?.ts || null, envelope: s.started?.envelope || null, roles: s.started?.roles || null, lead: this.expeditionLead(p, id)?.name || null, liveAgents: live(id), steps: [...s.steps], branch: ex.branch, pr: prOf(ex), answer: s.finished?.answer || null };
+    }
+    const launchedFrom = new Set(evs.filter(e => e.type === 'expedition_started' && e.origin).map(e => e.origin.parked));
+    const ended = all.filter(x => x.phase === 'ended').reverse();
+    const past = ended.slice(0, 10).map(x => {
+      const { ex, s, id, question, stopReason } = brief(x), f = s.finished;
+      return { id, question, stopReason, answer: f?.answer || null, branch: ex.branch, pr: f?.pr || prOf(ex), pushed: !!f?.pushed, problem: f?.problem || null, decisions: s.decisions.length, parked: f?.parked ?? proposalsOf(evs, id).length, loops: s.loops.length, passing: f?.passing ?? null, claimsChecked: !!f?.claimsChecked, finishedAt: f?.ts || s.stopped?.ts || null };
+    });
+    const proposals = ended.slice(0, 5).flatMap(x => proposalsOf(evs, x.id, this.expeditionOf(p, x.id).state().started?.question || '')).filter(q => !launchedFrom.has(q.id));
+    const closed = new Set(evs.filter(e => e.type === 'expedition_draft_closed').map(e => e.draft));
+    const drafts = evs.filter(e => e.type === 'expedition_draft' && !closed.has(e.id)).map(({ id, ts, from, question, brief: b, test, envelope, roles, gatherers, preApprovals }) => ({ id, ts, from, question, brief: b, test, envelope, roles, gatherers, preApprovals }));
+    return {
+      defaults: { envelope: { hours: env.hours, percent: env.percent }, dollarsPerPercent: cap.dollarsPerPercent, dollars: cap.dollars, meterGuard: cap.meterGuard, gatherers: Math.min(GATHERER_LIMIT, Math.max(1, Math.round(cfgG) || 3)), gathererLimit: GATHERER_LIMIT, roles: this.expeditionRoleDefaults(p) },
+      budgetNote: cap.note, launch: (() => { const reason = this.launchBlock(p); return { ok: !reason, reason }; })(),
+      current, past, drafts, proposals
+    };
+  }
+
+  // A hub stop is logged but its final message to the Lead is not: the watchdog sends it at its next check (after a restart,
+  // the first one). Every member of that expedition is left asleep until then; the members are retired by the sequence and the
+  // Lead is woken by the final message.
+  expeditionStopPending(p, agent) {
+    try {
+      const s = this.expeditionOf(p, agent).state();
+      return !!(s.stopped && EXPEDITION_HUB_STOPS.includes(s.stopped.reason) && !s.finalNote);
+    } catch { return false; }
   }
 
   // An expedition agent whose expedition is in its last stretch (the 90% note has gone, or it has stopped): no handoff.
@@ -627,11 +795,15 @@ export class Hub {
   // canUseTool; a hook's deny is the one place that still sees them. The same narrow rule as classify's (frozenWrite), logged
   // like any refusal. A plain-words reason, or null. hookInput: { tool_name, tool_input, cwd, tool_use_id, agent_id }.
   expeditionFrozenBlock(p, agent, hookInput) {
+    if (!agent?.expedition || !hookInput?.tool_name) return null;
     const dirs = this.frozenDirs(p, agent);
-    if (!dirs.length || !hookInput?.tool_name) return null;
     const input = hookInput.tool_input || {};
+    const cwd = hookInput.cwd || agent.cwdFor?.(hookInput.tool_use_id) || null;
     let why = null;
-    try { why = frozenWrite(hookInput.tool_name, input, { dirs, cwd: hookInput.cwd || agent.cwdFor?.(hookInput.tool_use_id) || null, projectDir: p.dir }); } catch { why = null; }   // never break the agent's call: the hash check is the real guard
+    if (dirs.length) { try { why = frozenWrite(hookInput.tool_name, input, { dirs, cwd, projectDir: p.dir }); } catch { why = null; } }   // never break the agent's call: the hash check is the real guard
+    // Review round 1: the file tools under .crux may write only in the agent's own expedition folder (acceptEdits never asks
+    // canUseTool for them, so classify's rule is not seen): the same rule, asked here.
+    if (!why) { try { why = expeditionFolderWrite(hookInput.tool_name, input, { root: this.expeditionOf(p, agent).root, projectDir: p.dir, cwd }); } catch { why = null; } }
     if (!why) return null;
     const subagent = agent.subagentFor?.(hookInput.tool_use_id, hookInput.agent_id) || null;
     return this.denyQuiet(p, agent, hookInput.tool_name, input, why, { subagent }).message;
@@ -646,11 +818,16 @@ export class Hub {
     return stopped && EXPEDITION_HUB_STOPS.includes(stopped.reason) ? `The expedition was stopped by the hub (${stopped.reason}): no gatherer can be started now. Write the report from what exists and say the claims were not checked.` : null;
   }
 
-  // The user's Stop (reason 'Matt'): the watchdog's stop sequence for one expedition (spec 4.4 and 4.8). Nothing calls it
-  // yet: phase 5 adds POST /api/expedition/stop and turns on the map's Stop button (M045).
-  stopExpedition(p, id, reason = 'Matt') {
+  // The user's Stop (reason 'Matt'): the watchdog's stop sequence for one expedition (spec 4.4 and 4.8). POST /api/expedition/stop
+  // calls it (M049 2). id: the expedition's, or left out for the one that is running.
+  stopExpedition(p, id = null, reason = 'Matt') {
     if (!['Matt', 'time', 'budget'].includes(reason)) throw new Error(`The hub stops an expedition for Matt, time or budget; "${reason}" is the Lead's to log (expedition_finish, expedition_loop_result).`);
-    return this.expeditionWatch.stopNow(p, id, reason);
+    if (!id) {
+      const open = Expedition.all(p).findLast(x => x.phase === 'planning' || x.phase === 'running');
+      if (!open) throw new Error(`No expedition is running in ${p.name}.`);
+      id = open.id;
+    }
+    return this.expeditionWatch.stopNow(p, String(id), reason);
   }
 
   startWorker(p, name, task, by = 'you', goal = '', settings = {}) {
@@ -1249,7 +1426,7 @@ export class Hub {
     const known = new Set([...downloadsFrom(p.log.events), ...marks]);
     // Phase 4: an expedition agent's classify also gets its frozen folders, and its launch's pre-approvals as an overlay on
     // Matt's lists (never saved into them). Both come from the hub's own record of the agent's expedition.
-    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir, this.expeditionOverlay(p, agent)), frozen: this.frozenDirs(p, agent) });
+    const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir, this.expeditionOverlay(p, agent)), frozen: this.frozenDirs(p, agent), expeditionRoot: agent.expedition ? this.expeditionOf(p, agent).root : null });
     if (c.frozen) return { denied: c.reasons[0] };
     for (const d of c.downloaded || []) if (!known.has(d)) p.log.append('download', { path: d, agent: agent.name, thread: agent.thread, ...(c.downloads?.find(x => x.path.toLowerCase().replace(/\\/g, '/') === d) || {}) });
     const { route, tempMade } = c;
@@ -1611,6 +1788,9 @@ export class Hub {
       return;
     }
     if (agent.retiring === 'overlap') return;
+    // Phase 5: a Lead's turn ending is when its expedition's end can start (after a stop) and when every expedition agent
+    // retires (after its summary). The watchdog's check sweeps the same thing every 30 seconds and after a restart.
+    if (agent.expedition) { try { this.expeditionEnd.consider(p, agent.expedition); } catch (e) { console.warn('Expedition end:', e?.message || e); } }
     // Decision 35: drafts the orchestrator wrote into the decisions worktree are committed and pushed now.
     if (agent.role === 'orchestrator') {
       try { p.desk.commitPending(`Record drafts from ${agent.name}`); }
@@ -1751,8 +1931,10 @@ export class Hub {
         return `- ${w.name} (${w.state}): ${w.goal || w.task.slice(0, 80)}. ${s ? `Last summary (${when(s.ts)}): ${clip(s.next_step || toList(s.done)[0] || 'posted', 300)}` : 'No summary yet'}. ${lastInstruction(w, INSTRUCTION_MAX)}`;
       }) : ['- none']));
       // An expedition is one line, not workers with summaries and cards: it reports to its Lead until its end.
-      const ex = Expedition.all(p).filter(x => x.phase !== 'ended');
-      if (ex.length) lines.push('Expeditions (run by their own Lead; they report here once, at the end):', ...ex.map(x => `- expedition ${x.id} ${{ new: 'not started', planning: 'planning', running: 'running', stopped: 'writing up' }[x.phase]}`));
+      // M049 1: one that has ended stays listed until every one of its agents has retired.
+      const liveOf = id => [...p.agents.values()].filter(a => a.expedition === id && a.state !== 'retired').length;
+      const ex = Expedition.all(p).filter(x => x.phase !== 'ended' || liveOf(x.id) > 0);
+      if (ex.length) lines.push('Expeditions (run by their own Lead; they report here once, at the end):', ...ex.map(x => `- expedition ${x.id} ${{ new: 'not started', planning: 'planning', running: 'running', stopped: 'writing up', ended: `ended, ${liveOf(x.id)} agent${liveOf(x.id) === 1 ? '' : 's'} still retiring` }[x.phase]}`));
     }
 
     lines.push(...gitLines(this.gitState(p), { summaries: summaries.filter(e => !orchNames.has(e.from)), events: evs, tagged }));
@@ -1961,7 +2143,8 @@ export class Hub {
       // Decision 44 B: the handoff numbers in force here, and the project's own (null = the hub default).
       handoff: this.handoffNumbers(p),
       ownHandoff: this.ownHandoffNumbers(p),
-      retireAt: this.retireAtFor(p)
+      retireAt: this.retireAtFor(p),
+      expedition: this.expeditionView(p)   // phase 5: defaults, what is running, past ones, drafts and proposed next expeditions
     }));
   }
 }

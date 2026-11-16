@@ -34,12 +34,39 @@ export const DEFAULT_ENVELOPE = { hours: 6, percent: 7, dollars: null };
 
 // ---------- the event kinds (spec 4.3, plus the plan's three) ----------
 // expedition_integrity (phase 4): the frozen test/ no longer matched its hash at a loop or the finish, and was restored.
-export const EVENT_KINDS = ['expedition_started', 'expedition_gate', 'expedition_decision', 'expedition_parked', 'expedition_loop', 'expedition_stopped', 'expedition_note', 'expedition_step', 'expedition_subagent', 'expedition_integrity'];
+// expedition_finished (phase 5): the one finished card (spec 4.8 step 3), logged by the end's card step.
+export const EVENT_KINDS = ['expedition_started', 'expedition_gate', 'expedition_decision', 'expedition_parked', 'expedition_loop', 'expedition_stopped', 'expedition_note', 'expedition_step', 'expedition_subagent', 'expedition_integrity', 'expedition_finished'];
 export const STOP_REASONS = ['passed', 'time', 'budget', 'no-progress', 'Matt'];
 // The end (spec 4.8), as logged steps: each is skipped if its event exists, so the end never runs twice.
 export const END_STEPS = ['report', 'commit', 'push', 'pr', 'card', 'summary'];
 
-export const ID_PATTERN = /^\d{8}-[a-z0-9]+(-[a-z0-9]+)*$/;
+// ---------- the runnable part of a success test: test/run.json (settled in phase 5; written into the Lead's and Verifier's files) ----------
+//   { "checks": [ { "name": "the benchmark runs", "command": "node bench.mjs", "cwd": ".", "timeout": 60 } ] }
+// name: what the item is called in the verdict (defaults to the command); command: one shell command, run by the Verifier in its
+// scratch copy; cwd: a folder inside the build worktree or the copy, never absolute or "..", default "."; timeout: seconds
+// (default 120, at most 3600). The spec's single form, { "command", "cwd", "timeout" }, is read as one check. Items that cannot
+// run here belong in CHECKLIST.md, marked "(not run here: the user pastes the results)".
+export const RUN_JSON_SHAPE = '{ "checks": [ { "name": "...", "command": "...", "cwd": ".", "timeout": 60 } ] }';
+export function runChecks(textOrObject) {
+  let j = textOrObject;
+  if (typeof j === 'string') { try { j = JSON.parse(j); } catch { return { checks: [], problem: `run.json is not valid JSON. Its shape is ${RUN_JSON_SHAPE}.` }; } }
+  const list = Array.isArray(j?.checks) ? j.checks : j && typeof j.command === 'string' ? [j] : null;
+  if (!list || !list.length) return { checks: [], problem: `run.json needs at least one check: ${RUN_JSON_SHAPE}.` };
+  const checks = [];
+  for (const [i, c] of list.entries()) {
+    const command = typeof c?.command === 'string' ? c.command.trim() : '';
+    if (!command) return { checks: [], problem: `run.json check ${i + 1} has no "command".` };
+    const cwd = c.cwd == null || c.cwd === '' ? '.' : String(c.cwd).replace(/\\/g, '/');
+    if (/^([A-Za-z]:|\/)/.test(cwd) || cwd.split('/').includes('..')) return { checks: [], problem: `run.json check ${i + 1}: "cwd" is a folder inside the build (like "." or "bench"), never absolute or "..".` };
+    const timeout = c.timeout == null ? 120 : Number(c.timeout);
+    if (!(timeout > 0 && timeout <= 3600)) return { checks: [], problem: `run.json check ${i + 1}: "timeout" is a number of seconds, up to 3600.` };
+    checks.push({ name: String(c.name || command).trim().slice(0, 120), command, cwd, timeout });
+  }
+  return { checks, problem: null };
+}
+export const runJsonProblem = text => runChecks(text).problem;
+
+export const ID_PATTERN =/^\d{8}-[a-z0-9]+(-[a-z0-9]+)*$/;
 const pad2 = n => String(n).padStart(2, '0');
 const sha = data => createHash('sha256').update(data).digest('hex');
 const text = (v, what) => { const s = String(v ?? '').trim(); if (!s) throw new Error(`${what} is needed.`); return s; };
@@ -227,13 +254,16 @@ export class Expedition {
   // [{ eco, name, baseMajor, baseMinor, revision }] } for this expedition's agents only. Checked with the same rules as
   // Matt's own lists and stored in the start event, which is where the hub reads it back (it survives a restart and ends
   // at expedition_stopped); never written to his settings.
-  start({ envelope = {}, roles = {}, planStart = null, preApprovals = null } = {}) {
+  // Phase 5: question (the one line the sidebar and the card name it by) and origin ({ expedition, parked } when it was
+  // launched from a proposed next expedition, so that proposal leaves the list).
+  start({ envelope = {}, roles = {}, planStart = null, preApprovals = null, question = '', origin = null } = {}) {
     this.need('new');
     const merged = Object.fromEntries(Object.entries(defaultRoles()).map(([r, d]) => [r, { ...d, ...(roles[r] || {}) }]));
     const problem = Expedition.rolesProblem(merged);
     if (problem) throw new Error(problem);
     const pre = normalizeOverlay(preApprovals, { strict: true });
-    return this.record('expedition_started', { briefHash: this.briefHash(), envelope: { ...DEFAULT_ENVELOPE, ...envelope }, roles: merged, planStart, branch: this.branch, preApprovals: pre });
+    const q = String(question ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    return this.record('expedition_started', { briefHash: this.briefHash(), envelope: { ...DEFAULT_ENVELOPE, ...envelope }, roles: merged, planStart, branch: this.branch, preApprovals: pre, ...(q ? { question: q } : {}), ...(origin ? { origin } : {}) });
   }
 
   // The plan gate closes: the Advisor's verdict, the amendments to the test, and the hash that freezes it (spec 4.5).
@@ -313,13 +343,21 @@ export class Expedition {
       decisions: of('expedition_decision'), parked: of('expedition_parked'), loops: of('expedition_loop'), notes: of('expedition_note'), subagents: of('expedition_subagent'), integrity: of('expedition_integrity'),
       steps: new Set(of('expedition_step').map(e => e.step))
     };
+    s.stepEvents = new Map(of('expedition_step').map(e => [e.step, e]));
     s.reserveNote = s.notes.find(e => (e.kind || 'reserve') === 'reserve') || null;
     s.finalNote = s.notes.find(e => e.kind === 'final') || null;
+    // Phase 5: the Lead said its report is done (expedition_report_ready), and the hub told it the end is done and its one
+    // summary may go (logged before it is sent, so a restart never sends it twice).
+    s.reportReadyNote = s.notes.find(e => e.kind === 'report-ready') || null;
+    s.summaryGoNote = s.notes.find(e => e.kind === 'summary-go') || null;
+    s.finished = of('expedition_finished')[0] || null;
     s.phase = !s.started ? 'new' : s.steps.has('summary') ? 'ended' : s.stopped ? 'stopped' : s.gate ? 'running' : 'planning';
     this.cache = { n: events.length, s };
     return s;
   }
   hasStep(step) { return this.state().steps.has(step); }
+  // The logged event of one end step (its data: commit hash, push result, pull request), or null.
+  stepEvent(step) { return this.state().stepEvents.get(step) || null; }
   // The Lead's one summary may go to the orchestrator once the report, branch and card are done (phase 5 order), and only once.
   summaryDue() { const s = this.state(); return s.phase === 'stopped' && s.steps.has('card'); }
   // Gatherers running right now, from the started/ended events (a count for the map's badge).

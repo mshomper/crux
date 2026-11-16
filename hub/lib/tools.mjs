@@ -130,6 +130,26 @@ export function cruxTools(hub, project, agent) {
         },
         async ({ request_id, text: msg, for_matt }) => out(hub.conductor ? hub.conductor.replyFrom(project, agent, request_id, msg, { forMatt: !!for_matt }) : 'This hub has no Conductor.')),
 
+      // Decisions 63 and 70 A, spec 5: "run an expedition on X" (said to you, or routed by the Conductor, which only routes) becomes
+      // one card in your thread with Launch and Edit. That card is the only confirmation: you never start the Lead yourself.
+      tool('draft_expedition', t('Draft an expedition for {{who}} to launch: a self-running research-and-build job with a team, a time and budget envelope, and a frozen success test. It posts ONE card in your thread with Launch and Edit; nothing runs until {{who}} presses Launch, and you never start the Lead yourself. Only the question is needed: keep it plain and short. The brief may add scope. A success test is optional: when you leave it out, the Lead drafts one while planning and the plan gate freezes it. Give test files only when {{who}} named the test: CHECKLIST.md (numbered items, each saying how it is judged: read, run, or "not run here: the user pastes the results") and/or run.json ({"checks": [{"name": "...", "command": "...", "cwd": ".", "timeout": 60}]}). Leave the envelope out for the defaults (6 hours, 7% of the week). Pre-approve sites and packages only when the brief needs them. Checked like a launch: a draft that could never launch is refused here.'),
+        {
+          question: z.string().min(3).max(300).describe('The question, in one plain line (it names the expedition).'),
+          brief: z.string().optional().describe('Optional extra scope: what is in and out. Leave out to use the question alone.'),
+          test_files: z.array(z.object({ name: z.string().describe('CHECKLIST.md or run.json (a plain file name).'), content: z.string() })).optional().describe('Only when the user named the test. Otherwise leave out: the Lead drafts it.'),
+          hours: z.number().positive().optional().describe('Time limit in hours. Leave out for the default.'),
+          percent: z.number().positive().optional().describe('Budget as a percent of the week\'s plan. Leave out for the default.'),
+          gatherers: z.number().int().min(1).max(4).optional().describe('How many gatherers at once (up to 4).'),
+          sites: z.array(z.object({ host: z.string(), access: z.enum(['pages', 'downloads']).optional(), pin: z.string().optional().describe('A path like /owner/repo, required to allow downloads from an open host.') })).optional().describe('Sites the expedition may read without asking.'),
+          packages: z.array(z.object({ eco: z.enum(['npm', 'pip', 'huggingface']), name: z.string(), baseMajor: z.number().int().optional(), revision: z.string().optional().describe('Hugging Face only: the full 40-character commit.') })).optional().describe('Packages the expedition may install without asking.')
+        },
+        async args => {
+          try {
+            const r = hub.draftExpedition(project, agent, args);
+            return out(`Drafted: the card is in your thread with Launch and Edit.${r.blocked ? ` Note, it cannot launch right now: ${r.blocked}` : ''} Tell the user it is there, and stop: nothing runs until they press Launch.`);
+          } catch (e) { return out(`Not drafted: ${e.message}`); }
+        }),
+
       tool('message_agent','Send a message to a worker: answers, fixes, or the next step.',
         { to: z.string(), text: z.string() },
         async ({ to, text: msg }) => { hub.orchestratorToWorker(project, agent, to, msg); return out(`Sent to ${to}.`); }),
@@ -231,7 +251,7 @@ export function cruxTools(hub, project, agent) {
             : `Loop ${ev.number}: ${passing} passing, ${progress ? 'progress' : 'no progress'}.`;
           if (!stuck) return line;
           ex.stop({ reason: 'no-progress', totals: howItRan(project.log.events, ex.id).totals });
-          return `${line} Two loops in a row made no progress, so the hub has stopped the expedition (no-progress). Write the report now; the Verifier can still check it.`;
+          return `${line} Two loops in a row made no progress, so the hub has stopped the expedition (no-progress). Write the report now; the Verifier can still check it. When it is written and corrected, call expedition_report_ready and end your turn.`;
         })),
 
       tool('expedition_finish', 'End the expedition because the success test passes. Only while it is running (the gate is closed) and after at least one build-verify loop was logged, and with test/ unchanged from the frozen copy (the hub checks; if it changed it restores it and refuses: that is a Verifier FAIL). It records the stop; it does not retire anyone (everyone but you is retired only at the hub\'s time or budget stop). Then write REPORT.md and have the Verifier check it. The hub\'s end step (report copied to the branch, push, draft PR, the card) is done by the hub later; send your one summary only when it tells you so. No-progress, time, budget and the user\'s Stop come from the hub, not from you.',
@@ -243,7 +263,19 @@ export function cruxTools(hub, project, agent) {
           const integrity = ex.checkFrozen('finish');
           if (integrity.ok === false) throw new Error(`${integrityText(ex, integrity)} This counts as a Verifier FAIL, so it is not finished as passed: have the Verifier run the restored test in another build-verify loop first.`);
           ex.stop({ reason: 'passed', totals: howItRan(project.log.events, ex.id).totals });
-          return 'Stopped (passed). Write REPORT.md now and have the Verifier check it. The hub\'s own end step comes later.';
+          return 'Stopped (passed). Write REPORT.md now (sections 1 to 6 and 8; the hub adds the claims check line and "how it ran"), have the Verifier check its numbers and claims and apply its corrections, then call expedition_report_ready and end your turn.';
+        })),
+
+      // Phase 5: the signal that starts the hub's end (report copied to the branch, push, draft PR, finished card). For a hub
+      // stop (time, budget, the user's Stop) the end of the final turn does the same, so this is optional there.
+      tool('expedition_report_ready', 'Say that REPORT.md is written and the Verifier\'s claims corrections are applied (or that there was no time for them). Only after the expedition has stopped. The hub then copies REPORT.md onto the branch expedition/<id>, commits what the Builder left, pushes, opens a DRAFT pull request, posts the finished card for the user, and tells you when to send your one post_summary. It starts when your turn ends, so end your turn after calling this. It never merges.',
+        {},
+        attempt('Not recorded', () => {
+          const ex = hub.expeditionOf(project, agent), s = ex.state();
+          if (s.phase !== 'stopped') throw new Error(`The expedition is ${s.phase === 'new' ? 'not started' : s.phase}: the end starts after it has stopped (expedition_finish, a time or budget limit, or the user's Stop).`);
+          if (!ex.exists('REPORT.md')) throw new Error('REPORT.md is not there yet: write it first (a short one is fine if time ran out).');
+          if (!s.reportReadyNote) ex.note('report ready', { kind: 'report-ready', by: agent.name });
+          return 'Recorded. End your turn now: the hub copies the report onto the branch, pushes it, opens a draft pull request and posts the finished card, then tells you when to send your one post_summary.';
         }))
     );
   }
@@ -288,8 +320,8 @@ export function markEntryDone(board, id, from, note = '') {
 export function cruxToolNames(agent) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
   if (agent.predecessor) names.push('ask_predecessor');
-  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'handoff_worker', 'answer_permission', 'mark_entry_done');
+  if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'handoff_worker', 'answer_permission', 'mark_entry_done', 'draft_expedition');
   if (agent.role === 'orchestrator') names.push('restart_hub', 'reply_to_conductor');   // decisions 47 and 62
-  if (agent.expeditionRole === 'lead') names.push('list_agents', 'message_agent', 'retire_worker', 'start_worker', 'expedition_decide', 'expedition_park', 'expedition_close_gate', 'expedition_loop_result', 'expedition_finish');   // decision 68 C: scoped to its expedition (hub.leadAgents and the like)
+  if (agent.expeditionRole === 'lead') names.push('list_agents', 'message_agent', 'retire_worker', 'start_worker', 'expedition_decide', 'expedition_park', 'expedition_close_gate', 'expedition_loop_result', 'expedition_finish', 'expedition_report_ready');   // decision 68 C: scoped to its expedition (hub.leadAgents and the like)
   return names.map(n => `mcp__crux__${n}`);
 }

@@ -66,7 +66,9 @@ export function quietProblems(env, mark, sent) {
   const got = sent.filter(([name]) => name === orch.name);
   if (got.length) bad.push(`the orchestrator was sent ${got.length} message(s): ${got.map(([, t]) => String(t).split('\n')[0]).join(' | ')}`);
   if (orch.notes?.length) bad.push(`the orchestrator was left ${orch.notes.length} note(s) for its next turn: ${orch.notes[0]}`);
-  const inThread = p.log.events.filter(e => e.thread === 'orchestrator').length - mark.threadEvents;
+  // The one finished card (phase 5) is in the orchestrator's thread by design; nothing else is.
+  const finished = p.log.events.filter(e => e.type === 'expedition_finished').length;
+  const inThread = p.log.events.filter(e => e.thread === 'orchestrator' && e.type !== 'expedition_finished').length - mark.threadEvents;
   if (inThread) bad.push(`${inThread} event(s) were logged in the orchestrator's thread`);
   if (hub.approvals.size) bad.push(`${hub.approvals.size} permission card(s) are open`);
   const kinds = p.log.events.filter(e => ['approval', 'approval_escalated', 'lesson_proposed'].includes(e.type)).map(e => e.type);
@@ -76,9 +78,10 @@ export function quietProblems(env, mark, sent) {
   if (openQuestions(p.log.events, {}).length) bad.push('Needs you holds an open question');
   if (hub.pendingLessons(p).length) bad.push('a lesson waits for the user');
   const cards = p.log.events.flatMap(e => cardsFor({ ...e, project: p.name }, { decisionOpen: () => true }).map(c => `${e.type}:${c.kind}`));
-  if (cards.length) bad.push(`events would raise notices: ${cards.join(', ')}`);
-  if (pushed.length) bad.push(`${pushed.length} phone notice(s) were pushed`);
-  if (desk.length) bad.push(`${desk.length} PC notice(s) were shown`);
+  const stray = cards.filter(c => c !== 'expedition_finished:expedition');
+  if (stray.length) bad.push(`events would raise notices: ${stray.join(', ')}`);
+  // Exactly the finished card notifies (to the PC or the phone, once each), and only after the end's card step.
+  if (pushed.length + desk.length !== finished) bad.push(`${pushed.length} phone and ${desk.length} PC notice(s) were shown; ${finished} finished card(s) were logged, so that many (and no more) are expected`);
   return bad;
 }
 
@@ -191,7 +194,10 @@ export class StubExpedition {
     const { hub, p, ex } = this;
     if (retire) for (const role of ['advisor', 'synthesizer', 'skeptic', 'builder', 'verifier']) hub.retireFinished(p, this.agents[role].name, 'hub', 'expedition ended');
     ex.write('REPORT.md', `# Report\n\n${howItRanMarkdown(howItRan(p.log.events, this.id))}\n`);
-    for (const step of ['report', 'commit', 'push', 'pr', 'card']) ex.step(step, step === 'card' ? { title: `Expedition finished: ${this.question}` } : {});
+    for (const step of ['report', 'commit', 'push', 'pr', 'card']) {
+      if (step === 'card') ex.record('expedition_finished', { thread: 'orchestrator', title: `Expedition finished: ${this.question}`, answer: this.question, stopReason: ex.state().stopped?.reason || null, branch: ex.branch, pushed: true, pr: null });
+      ex.step(step, step === 'card' ? { title: `Expedition finished: ${this.question}` } : {});
+    }
     return this;
   }
 

@@ -58,9 +58,12 @@ export function howItRan(events, id) {
     totals,
     elapsedMs: started && stopped ? Math.max(0, Date.parse(stopped.ts) - Date.parse(started.ts)) : null,
     stopReason: stopped?.reason || null,
-    loops: mine.filter(e => e.type === 'expedition_loop').map(e => ({ number: e.number, passing: e.passing, progress: !!e.progress })),
+    loops: mine.filter(e => e.type === 'expedition_loop').map(e => ({ number: e.number, passing: e.passing, progress: !!e.progress, tampered: !!e.tampered })),
+    // Phase 4 and 5: each time the hub found test/ changed after the freeze (at a loop or the finish) and what it did about it.
+    integrity: mine.filter(e => e.type === 'expedition_integrity').map(e => ({ at: e.at, restored: !!e.restored, changed: e.changed || [], changedCount: e.changedCount ?? (e.changed || []).length, why: e.why || null })),
     decisions: mine.filter(e => e.type === 'expedition_decision').length,
-    parked: mine.filter(e => e.type === 'expedition_parked' && e.kind !== 'lesson').length,
+    parked: mine.filter(e => e.type === 'expedition_parked' && e.kind !== 'lesson').length,   // outside the brief, and requests that were not allowed
+    requests: mine.filter(e => e.type === 'expedition_parked' && e.kind === 'request').length,   // of those, the requests
     lessons: mine.filter(e => e.type === 'expedition_parked' && e.kind === 'lesson').length,
     notes: ordered.some(r => r.role === 'lead') ? [NOT_SPLIT_NOTE] : []
   };
@@ -78,6 +81,76 @@ export function howItRanMarkdown(r) {
   for (const x of r.rows) out.push(`| ${x.label} | ${x.agents.length} | ${x.turns} | ${dur(x.workMs)} | ${tok(x.tokens.input + x.tokens.cacheRead + x.tokens.cacheCreation)} / ${tok(x.tokens.output)} | ${usd(x.costUSD)} |`);
   out.push(`| **Total** | | ${r.totals.turns} | ${dur(r.totals.workMs)} | ${tok(r.totals.tokens.input + r.totals.tokens.cacheRead + r.totals.tokens.cacheCreation)} / ${tok(r.totals.tokens.output)} | ${usd(r.totals.costUSD)} |`);
   for (const n of r.notes) out.push('', n);
-  out.push('', `Build-verify loops: ${r.loops.length ? r.loops.map(l => `${l.number} (${l.passing} passing${l.progress ? '' : ', no progress'})`).join('; ') : 'none'}. Decisions made on the user's behalf: ${r.decisions}. Parked: ${r.parked}.${r.lessons ? ` Core lessons held: ${r.lessons}.` : ''}`);
+  out.push('', `Build-verify loops: ${r.loops.length ? r.loops.map(l => `${l.number} (${l.passing} passing${l.tampered ? ', test/ was changed: a Verifier FAIL' : l.progress ? '' : ', no progress'})`).join('; ') : 'none'}. Decisions made on the user's behalf: ${r.decisions}. Parked: ${r.parked}${r.requests ? ` (${r.requests} of them requests that were not allowed)` : ''}.${r.lessons ? ` Core lessons held: ${r.lessons}.` : ''}`);
+  // Phase 5 (asked for by phase 4's builder): every time the hub found the frozen test changed, one line each.
+  const tampered = r.loops.filter(l => l.tampered).length;
+  if (r.integrity?.length || tampered) {
+    out.push('', `Test integrity: test/ was found changed after the freeze ${r.integrity.length} time${r.integrity.length === 1 ? '' : 's'}; ${tampered} loop${tampered === 1 ? ' was' : 's were'} counted as a Verifier FAIL because of it.`);
+    for (const i of r.integrity) {
+      const names = i.changed.length ? `${i.changed.slice(0, 6).join(', ')}${i.changedCount > 6 ? `, and ${i.changedCount - 6} more` : ''}` : 'no names recorded';
+      out.push(`- at the ${i.at || 'check'}: ${names}; ${i.restored ? 'restored from the stored copy' : `not restored${i.why ? ` (${i.why})` : ''}`}.`);
+    }
+  }
+  out.push('', 'Spend figures here are the results\' logged usage. While a turn runs, the hub\'s watchdog counts an upper-bound estimate that each result replaces (memo M046), so a limit may trip a little early, never late.');
   return out.join('\n');
+}
+
+// ---------- phase 5: the end ----------
+// The marker the hub's generated part of REPORT.md starts at. The Lead writes sections 1 to 6 and 8 above it; the hub writes
+// what only the log knows. Running the report step again cuts at the marker first, so the part is never doubled.
+export const GENERATED_MARK = '<!-- hub-generated: everything below this line is written by the hub from the event log -->';
+const flat = s => String(s ?? '').replace(/\s+/g, ' ').trim();
+export const clipText = (s, n) => { const t = flat(s); return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t; };
+
+// The report's one-line answer: the first plain line under its Answer heading ("## Answer", "## 1. Answer"). null if there is none.
+export function answerLine(md) {
+  const lines = String(md ?? '').split(/\r?\n/);
+  const i = lines.findIndex(l => /^#{1,4}\s*(\d+[.)]?\s*)?answer\b/i.test(l.trim()));
+  if (i < 0) return null;
+  for (const l of lines.slice(i + 1)) {
+    const t = l.trim();
+    if (!t) continue;
+    if (/^#{1,6}\s/.test(t)) return null;
+    return clipText(t.replace(/^[-*>\d.)\s]+/, '').replace(/[*_`]/g, ''), 200) || null;
+  }
+  return null;
+}
+
+// Parked lines of one expedition that can become a next expedition (outside the brief; not a refused request or a held lesson).
+export const isProposal = e => e.type === 'expedition_parked' && (e.kind === undefined || e.kind === 'parked');
+// The brief a Launch action pre-fills for a parked item.
+export function proposalBrief({ expedition, question, text, reason }) {
+  return [`Follow-up to expedition ${expedition}${question ? ` ("${clipText(question, 120)}")` : ''}.`, '', `Question: ${flat(text)}`, '', `Why it was parked there: ${flat(reason)}`, '', 'Write the success test before you launch: what would show this is answered?'].join('\n');
+}
+// Proposed next expeditions from an expedition's parked events, each with a short brief.
+export function proposalsOf(events, id, question = '') {
+  return events.filter(e => e.expedition === id && isProposal(e)).map(e => ({ id: e.id, expedition: id, question: flat(text0(e.text)), text: flat(e.text), reason: flat(e.reason), brief: proposalBrief({ expedition: id, question, text: e.text, reason: e.reason }) }));
+}
+const text0 = t => clipText(t, 140);
+
+// The hub's part of REPORT.md: sections 6 and 7 from the log, and what the hub knows about the claims check.
+// claims: 'checked' | 'not checked'. hubStop: the stop was the hub's (time, budget or the user's Stop).
+export function generatedReport({ events, id, question = '', claims, hubStop, leadWrote }) {
+  const r = howItRan(events, id);
+  const parked = events.filter(e => e.expedition === id && e.type === 'expedition_parked');
+  const next = parked.filter(isProposal), requests = parked.filter(e => e.kind === 'request'), lessons = parked.filter(e => e.kind === 'lesson');
+  const out = [GENERATED_MARK, ''];
+  if (!leadWrote) out.push('> The Lead did not write REPORT.md before the end, so sections 1 to 5 and 8 are missing. Read the notes, the synthesis and the verdict in the expedition folder.', '');
+  out.push(`## Claims check`, '', claims === 'checked'
+    ? 'The Verifier\'s claims pass ran (verify/VERDICT.md has a claims or corrections section).'
+    : `Claims not checked${hubStop ? ': the hub stopped the expedition before the Verifier finished its claims pass' : ': verify/VERDICT.md has no claims or corrections section'}. Treat the numbers and claims above as the Lead's, not verified.`, '');
+  out.push('## Parked, as proposed next expeditions', '');
+  out.push(...(next.length ? next.map((e, i) => `${i + 1}. ${flat(e.text)} (why parked: ${flat(e.reason)}). Launch pre-fills a brief from this line.`) : ['None.']), '');
+  if (requests.length) out.push('## Requests that were not allowed', '', ...requests.slice(0, 15).map(e => `- ${clipText(e.text, 160)} (${clipText(e.reason, 120)})`), ...(requests.length > 15 ? [`- and ${requests.length - 15} more in the log`] : []), '');
+  if (lessons.length) out.push('## Core lessons held for you', '', ...lessons.map(e => `- ${clipText(e.text, 300)} (${e.maker || 'an agent'})`), '');
+  out.push(howItRanMarkdown(r), '');
+  return out.join('\n');
+}
+// REPORT.md as the end leaves it: what the Lead wrote (without any earlier generated part) plus the hub's part.
+export function assembleReport({ leadText, ...rest }) {
+  const lead = String(leadText ?? '');
+  const cut = lead.indexOf(GENERATED_MARK);
+  const body = (cut >= 0 ? lead.slice(0, cut) : lead).trimEnd();
+  const leadWrote = !!body.trim();
+  return `${leadWrote ? body : '# Report'}\n\n${generatedReport({ ...rest, leadWrote })}`;
 }

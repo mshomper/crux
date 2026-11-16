@@ -354,6 +354,9 @@ const trimmed = re => ({ test: s => re.test(trimParts(s)) || re.test(s), source:
 // environment, Docker, kubectl, Azure and Google Cloud logins (their token files and databases), and every shell's history.
 const SECRET_MORE = String.raw`(^|\/)(\.config\/gh|gh\/hosts\.yml|\.docker\/config\.json|\.kube|\.azure|\.config\/gcloud|gcloud|\.gcloud|\.oci|\.config\/doctl)(\/|$)|(^|\/)(credentials\.db|access_tokens\.db|legacy_credentials|application_default_credentials\.json|accesstokens\.json|msal_token_cache\.(json|bin)|service_principal_entries\.json|azureprofile\.json|docker-credentials\w*)$|(^|\/)proc\/[^/]+\/(environ|cmdline|fd(\/|$))|(^|\/)(environ|\.claude\.json|state\.vscdb(-journal)?|login data(-journal)?|(github )?cli\/hosts\.yml)$|(^|\/)(google\/chrome|chromium|microsoft\/edge|bravesoftware\/brave-browser)\/user data(\/|$)|(^|\/)\.[\w-]*_history$|(^|\/)(ConsoleHost_history\.txt|\.viminfo|\.lesshst|\.python_history|history\.sqlite)$`;
 const SECRET = trimmed(new RegExp(/(^|\/)(\.env(\.[\w-]+)?|\.npmrc|\.netrc|\.git-credentials|\.pypirc|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.?credentials(\.json)?|secrets?(\.\w+)?|vapid\.json|[\w-]*token\.json)$|(^|\/)(\.ssh|\.aws|\.gnupg|\.crux-hub(?!\/voice(?:\/(?!\.\.?(?:\/|$))[^/]+)*\/?$))(\/|$)|\.(pem|key|pfx|p12)$|(^|\/)env:/.source + '|' + SECRET_MORE, 'i'));
+// Does a path (relative to a repo, or absolute) name a secret or a credential store, by the same pattern the permission rules use
+// everywhere? The expedition end uses it so that `git add -A` never commits one (phase 5, review round 1).
+export const secretFileName = name => SECRET.test(norm(name));
 const KNOWN_TOOLS = new Set(['Task', 'Agent', 'TodoWrite', 'TaskStop', 'KillShell', 'KillBash', 'BashOutput', 'ToolSearch', 'Skill',
   'EnterPlanMode', 'ExitPlanMode', 'WebSearch', 'LS']);
 // Path and system variables are not secrets: reading them is fine. Names that look secret are hard stops.
@@ -400,7 +403,9 @@ export function mergeNeedsOwner({ level = 'auto', into = null } = {}) {   // esl
 // frozen (phase 4): the folders of the asking agent's expedition that are frozen (test/ and its stored copy), as full paths, or
 // []. A plain write into one is a stop of its own: { route: 'human', frozen: true }, whatever the level and the lists. The
 // hub turns it into a refusal for an expedition agent (it has no card to send it to). See frozenWrite for how narrow it is.
-export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], hubs = [], level = 'auto', lists = null, frozen = [] }) {
+// expeditionRoot (phase 5): the asking agent's own expedition folder, .crux/expeditions/<id>/. Writes there are not "the hub's
+// own log" stops (see Check.inExpeditionFolder); the rest of .crux still is.
+export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdir(), home = homedir(), agent = '', madeTemp = [], downloaded = [], hubs = [], level = 'auto', lists = null, frozen = [], expeditionRoot = null }) {
   if (frozen?.length) {
     let why = null;
     try { why = frozenWrite(tool, input, { dirs: frozen, cwd, projectDir, home }); } catch { why = null; }   // a first line only: if it cannot read a request, the hash check is still there
@@ -410,6 +415,7 @@ export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdi
   c.startedHubs = new Set([...hubs].map(Number));
   c.hubsNow = new Set();
   c.level = level;
+  c.expeditionRoot = expeditionRoot ? norm(resolve(String(expeditionRoot))) : null;   // M049 7: the asking expedition agent's own folder
   c.trusted = level === 'trusted';
   c.agent = String(agent || '').toLowerCase();
   c.madeTemp = new Set([...madeTemp].map(norm));
@@ -505,6 +511,27 @@ export function frozenWrite(tool, input = {}, { dirs = [], cwd = null, projectDi
     if (hit) return why(hit.text);
   }
   return null;
+}
+
+// ---------- an expedition's own folder, for the file tools (phase 5, review round 1) ----------
+// Workers run in acceptEdits mode: Claude Code approves a Write, Edit or MultiEdit inside the working folder itself and never
+// asks the permission callback, so classify's rule about .crux (Check.inExpeditionFolder) is not seen for them. The PreToolUse
+// hook asks this instead, the same rule: inside the project's .crux, a file tool may write only inside the asking agent's own
+// expedition folder (root), and there not BRIEF.md (the user's) or the hub's swap folders. Everything else under .crux (the event
+// log, other expeditions, the stored copy of the test in .frozen) is refused. Paths outside .crux are not this rule's business.
+// -> a plain-words reason, or null.
+export function expeditionFolderWrite(tool, input = {}, { root = '', projectDir = '', cwd = null } = {}) {
+  if (!root || !['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(tool)) return null;
+  const f = input.file_path ?? input.notebook_path ?? input.path;
+  let s = String(f ?? '').trim();
+  if (!s || /[$%`]/.test(s)) return null;
+  s = homeAndDevice(s, homedir());
+  const abs = resolve(isAbsolute(s) || /^[a-z]:/i.test(s) ? s : join(cwd || projectDir || process.cwd(), s));
+  const a = norm(longPath(abs) || abs), crux = norm(resolve(projectDir, '.crux')), r = norm(resolve(root));
+  if (!(a === crux || a.startsWith(`${crux}/`))) return null;
+  const rel = a.startsWith(`${r}/`) ? a.slice(r.length + 1) : null;
+  if (rel !== null && !/(^|\/)\.\.(\/|$)/.test(rel) && rel !== 'brief.md' && !/^\.test-(restore|old)/.test(rel)) return null;
+  return `Writes outside your own expedition folder (${String(f).slice(0, 120)}). Inside .crux you may write only in .crux/expeditions/<your id>/, and not BRIEF.md: the event log, other expeditions and the stored test are the hub's`;
 }
 
 // PowerShell methods that only compute from the object they are called on (strings, numbers, dates, hashtables).
@@ -934,7 +961,7 @@ class Check {
       const rel = norm(this.abs(p, cwd)).slice(norm(this.projectDir).length + 1);
       if (DEP_FILES.test(rel) && !this.trusted) this.stop(`Changes dependencies (${basename(rel)})`);   // Trusted: the project's own packages
       if (/^\.git(\/|$)/.test(rel)) this.stop('Writes inside .git (history)');
-      if (/^\.crux(\/|$)/.test(rel)) this.stop("Writes the hub's own log (.crux)");
+      if (/^\.crux(\/|$)/.test(rel) && !this.inExpeditionFolder(norm(this.abs(p, cwd)))) this.stop("Writes the hub's own log (.crux)");
       if (/(^|\/)\.claude\/settings/.test(rel)) this.stop("Changes Claude Code's permission settings");
     }
     return w;
@@ -1551,6 +1578,15 @@ class Check {
   }
   // A write into a temp folder that does not exist yet: this agent is making it, so it may delete it later.
   // dir: the path itself is a folder being made (mkdir, New-Item), so it is tracked too, however deep (R005).
+  // An expedition agent's own folder, .crux/expeditions/<id>/ (classify's expeditionRoot, from the hub's record of the agent):
+  // what it writes there is the work itself (notes, the synthesis, verify/run-N/ and so on), not the hub's log. Not BRIEF.md
+  // (the user's) and not the hub's own swap folders. test/ is the frozen folder's business (frozenWrite runs first).
+  inExpeditionFolder(abs) {
+    const r = this.expeditionRoot;
+    if (!r || !abs.startsWith(r + '/')) return false;
+    const rel = abs.slice(r.length + 1);
+    return !/(^|\/)\.\.(\/|$)/.test(rel) && rel !== 'brief.md' && !/^\.test-(restore|old)/.test(rel);
+  }
   noteTemp(p, cwd, dir = false) {
     const top = this.tempTop(p, cwd);
     if (top && this.fresh?.has(norm(top))) return;   // made by $(mktemp) in this command: its real name is not known
