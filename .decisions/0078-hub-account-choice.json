@@ -89,5 +89,34 @@
    "value": "chosen in the hub's UI (plan sign-in or API key), one account for the hub; API key kept in the OS's per-user protected storage, never in a project or repo; switching restarts the hub"
   }
  ],
- "images": []
+ "images": [
+  {
+   "from": "2111a1c740fc3ff5af60b565ffbdbdd6",
+   "caption": "A: Account card on a plan sign-in (built, fake data)",
+   "option": "A",
+   "kind": "screenshot",
+   "missing": "not found"
+  },
+  {
+   "from": "6892365fd28a03f5fd4a2345317eadbb",
+   "caption": "A: Account card on an API key (built, fake key)",
+   "option": "A",
+   "kind": "screenshot",
+   "missing": "not found"
+  },
+  {
+   "from": "6098aa68b461b7169b4f648f05080a7b",
+   "caption": "A: the card on a phone, plan sign-in",
+   "option": "A",
+   "kind": "screenshot",
+   "missing": "not found"
+  },
+  {
+   "from": "1eb865e1ba0d186d1a48de0d7b2151ac",
+   "caption": "A: usage panel on an API key: tokens and dollars instead of plan meters",
+   "option": "A",
+   "kind": "screenshot",
+   "missing": "not found"
+  }
+ ]
 }
