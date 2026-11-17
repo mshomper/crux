@@ -24,6 +24,7 @@ import { IMG_TYPES, fileChip, plainName } from './files.js';
 import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
 import { UsageUI } from './usage-ui.js';
+import { AccountCard } from './account.js';
 import { md } from './markdown.js';
 import { retiredView, RETIRED_RECENT_DAYS } from './retired-list.js';
 import { SideResizer } from './side-width.js';
@@ -98,6 +99,7 @@ const map = new LiveMap($('#hud'), {
 
 // Decision 36: plan meters in the strip (not on the core) and the usage panel behind them.
 const usageUI = new UsageUI($('#hud'), {
+  onAccount: () => accountCard.show(),   // decision 78 A: the Account card, from the usage panel
   source: () => ({
     rows: [...S.projects, ...(S.cplace ? [{ name: 'Conductor', events: S.cplace.events }] : [])].flatMap(p => p.events.filter(e => ['usage', 'summary', 'agent_created', 'agent_settings', 'raise'].includes(e.type)).map(ev => ({ project: p.name, ev }))),
     bootAt: S.bootAt, multi: S.projects.length > 1
@@ -121,7 +123,8 @@ async function api(path, body) {
 $('#pair-btn').addEventListener('click', () => guardUI.openPair());
 
 async function load() {
-  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, bootAt, setup, voice, stream } = await api('/api/state');
+  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, account, bootAt, setup, voice, stream } = await api('/api/state');
+  S.account = account || null;   // which account the agents run on (decision 78 A); never more of a key than its last four characters
   S.voice = voice || null;   // decision 61 A: the voice switch and helper; canSetup is true on the hub's own PC
   // Decisions 52 and 54: the desktop app's first run (no key, no folders or no Claude Code yet) opens the setup
   // screen. Closing it there comes back here for this visit; with no project folder at all there is nothing to show.
@@ -133,6 +136,7 @@ async function load() {
   S.version ||= version;
   S.boot = boot;
   S.bootAt = bootAt;
+  usageUI.setAccount(S.account);
   usageUI.setPlan(usage);
   map.retireAt = retireAt;
   S.retireAt = retireAt;
@@ -144,6 +148,7 @@ async function load() {
   // coming, it goes back and resumes from here.
   if (afterStateRead(S, stream) && es) connect();
   setConductor(conductor);
+  if (usageUI.keyMode) usageUI.draw();   // an API key's strip shows today's spend, read from the events just loaded
   // An open brief whose decision was picked elsewhere loses its pick buttons (decision 50).
   briefPop.sync((pj, id) => projects.find(p => p.name === pj)?.board?.decisions?.find(d => String(d.id) === String(id))?.status);
   S.pending = new Set(projects.flatMap(p => p.pendingApprovals));
@@ -321,10 +326,13 @@ const phoneCheck = new PhoneCheck({ version: () => S.version || '' });
 if (PhoneCheck.wanted()) phoneCheck.start();
 function closeHubMenu() { if (!S.hubMenu) return; S.hubMenu = null; renderHubMenu(); }
 
-async function restartHub() {
+const restartHub = () => restartWith(() => api('/api/restart', {}));
+// call() asks the hub to restart and answers { boot, log }; an error from it (the Account card's key was refused) is thrown
+// to the caller before the page starts waiting.
+async function restartWith(call) {
   closeHubMenu();
   const old = S.boot;
-  const r = await api('/api/restart', {});
+  const r = await call();
   S.restarting = true;
   es?.close();
   showRestarting('Restarting the hub…', 'This page reconnects by itself.');
@@ -563,6 +571,11 @@ function renderHubSwitches() {
 // card (project-settings.js), which also holds connectors and the handoff numbers (decision 44 B).
 const modeWord = p => (LEVEL_INFO[p.permissionMode] || LEVEL_INFO.standard).word;
 // Plan v3 A10: Matt's trusted sites and approved packages, opened from the project settings card.
+// Decision 78 A: choose the account the agents run on. Switching restarts the hub, as the hub menu's Restart does.
+const accountCard = new AccountCard({
+  api, account: () => S.account, sideRect: () => $('#side')?.getBoundingClientRect(),
+  switchTo: body => restartWith(() => api('/api/account', body))
+});
 const listsCard = new ListsCard({ api, toast: (m, tone) => toast(m, tone) });
 const settingsCards = new SettingsCards({
   api, reload: () => load(), toast: m => toast(m),

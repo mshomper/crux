@@ -16,6 +16,7 @@ import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
 import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp, dataDir, isolateNonLiveData } from './lib/relaunch.mjs';
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, saveDollarCap, readHubConfig, pickFolder } from './lib/setup.mjs';
+import { Account, openSignInWindow, NO_PROTECT } from './lib/account.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
 import { searchLog } from './lib/archive.mjs';
@@ -76,10 +77,12 @@ if (existsSync(cfg)) {
 }
 if (!projects.length && (!noAgents || tempHome)) projects = (hubCfg.projects || []).map(p => resolve(p)).filter(p => existsSync(p) || !BUNDLED);
 if (!projects.length && !BUNDLED) projects = [process.cwd()];
-// The saved API key (setup screen) becomes the agents' key, unless one is already set in the environment. Only on
-// the desktop app's own hub: a hub run from a clone never switches from its login to a key someone saved.
+// The account the agents run on (decision 78 A): the Account card's choice, Plan sign-in or API key. An API key set in the
+// environment wins; else the saved key is used when API key is chosen (or, on the desktop app's own hub, when a key was saved
+// on its setup screen and nothing was chosen). A hub run from a clone stays on the login until someone chooses a key.
 const secrets = new Secrets();
-let keySource = BUNDLED ? secrets.apply() : null;
+const account = new Account({ secrets });
+account.applyAtStart({ bundled: BUNDLED });
 
 // Hub settings (decision 21: routePermissions, permissionTimeoutSec; decision 44 B: the handoff defaults) start from
 // hub.json and the --retire-at flag, and are saved in ~/.crux-hub; a change made in the page wins from then on.
@@ -110,7 +113,7 @@ function setupState(local) {
   const folders = [...hub.projects.values()].map(p => p.dir);
   return {
     bundled: BUNDLED, local, testHub: hub.noAgents, needed: BUNDLED && (!hasKey || !folders.length || !ccReady),
-    key: { saved: hasKey, from: hasKey ? (keySource === 'environment' ? 'environment' : 'saved') : null, end: local && hasKey ? keyEnd(process.env.ANTHROPIC_API_KEY) : '' },
+    key: { saved: hasKey, from: hasKey ? (account.source === 'environment' ? 'environment' : 'saved') : null, end: local && hasKey ? keyEnd(process.env.ANTHROPIC_API_KEY) : '' },
     folders, configFolders: (readHubConfig(cfg).projects || []),
     claude: { source: cc.source, ready: ccReady, fallback: cc.source === 'previous' || cc.source === 'installed', version: claudeExp?.version || null, path: local ? cc.path : null, sizeMB: claudeExp ? Math.round(claudeExp.size / 1048576) : null, download }
   };
@@ -272,7 +275,7 @@ const routes = {
   // The conductor alone (its events change often; the page reads this instead of the whole state), and one entry's words.
   'GET /api/conductor': () => ({ conductor: hub.conductor?.view() || null, seq: streamSeq }),
   'GET /api/entry': ({ project, id }) => hub.entryBody(project, id),
-  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
+  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: account.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/older': ({ project, thread, before, ts }) => hub.older(project, thread, before, ts),
   // Search chat and summaries in a project's log, archive included: words must all appear. { hits: [{ id, ts, type, thread, from, snippet }] }
@@ -293,10 +296,36 @@ const routes = {
     const check = hub.noAgents ? 'unchecked' : await checkKey(k);
     if (check === 'refused') throw new Error('Anthropic did not accept this key. Check that it was copied whole and is still active in console.anthropic.com.');
     secrets.save(k);
-    process.env.ANTHROPIC_API_KEY = k;
-    process.env.CRUX_HUB_USE_API_KEY = '1';
-    keySource = 'saved';
+    account.setMode('key');
+    account.useSaved();
     return { check, setup: setupState(true) };
+  },
+  // ---------- decision 78 A: the Account card ----------
+  // What the card shows: which account is in use, whether a key is saved (its last four characters only), who is signed in.
+  'GET /api/account': () => account.view(),
+  // Switch: { mode: 'plan' } or { mode: 'key', apiKey? } (a pasted key, or the one already saved). The key is shape-checked,
+  // asked of Anthropic (a free list of models; a test hub never calls out), protected and saved; never logged, never sent
+  // back. Then the hub restarts onto the choice; agents carry on after it, as after any restart.
+  'POST /api/account': async ({ mode, apiKey }) => {
+    if (mode === 'plan') account.choosePlan();
+    else if (mode === 'key') {
+      const k = String(apiKey || '').trim();
+      if (k) {
+        if (!KEY_SHAPE.test(k)) throw new Error('That does not look like an Anthropic API key. It starts with sk-ant- (copy it from console.anthropic.com, API keys).');
+        if (!account.canProtect) throw new Error(NO_PROTECT);
+        if (!hub.noAgents && await checkKey(k) === 'refused') throw new Error('Anthropic did not accept this key. Check that it was copied whole and is still active in console.anthropic.com.');
+      }
+      account.chooseKey(k);
+    } else throw new Error('Choose Plan sign-in or API key.');
+    setTimeout(restart, 300);
+    return { restarting: true, boot: BOOT, account: account.view() };
+  },
+  // "Sign in as someone else": a terminal window on this PC runs Claude Code's own sign-in (it opens the browser). The card
+  // then asks GET /api/account until the name changes. This PC only; a test hub opens nothing.
+  'POST /api/account/signin': (_, ctx) => {
+    if (!ctx.local) throw new GuardError('Signing in opens a window on the PC the hub runs on. Do it there.', 403);
+    if (hub.noAgents) return { opened: false, test: true };
+    return { opened: openSignInWindow({ hubDir: here }), command: 'claude auth login' };
   },
   // Download the exact Claude Code this hub's SDK expects; the page follows its progress through GET /api/setup.
   'POST /api/setup/claude': async (_, ctx) => { pcOnly(ctx); await claudeDownload.start(); return setupState(true); },
@@ -735,7 +764,7 @@ function restart() {
   for (const res of clients) { try { res.end(); } catch { } }
   clients.clear();
   stopAgents();
-  try { startDetached(launchSpec({ port })); }
+  try { startDetached(launchSpec({ port }), { env: account.restartEnv() }); }   // without a saved key this hub put in its environment: the next hub reads the choice afresh
   catch (e) { console.error(`Could not start the new hub: ${e.message}`); restarting = false; hub.stopping = false; server.listen(port, '127.0.0.1'); remoteServer?.listen(remotePort, '127.0.0.1'); return; }
   setTimeout(() => process.exit(0), 300);
 }

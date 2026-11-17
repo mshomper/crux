@@ -8,6 +8,7 @@
 import { hueOf, modelLabel, MODEL_HUES } from './models.js';
 import { meterList, aggregate, routingStats, fmtTokens, fmtCost, fmtLeft } from './usage.js';
 import { nameHtml, nameParts } from './agent-name.js';
+import { accountLine } from './account.js';
 
 export const STALE_MS = 15 * 60 * 1000;   // a snapshot older than this is shown dimmed, with when it was read
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -36,8 +37,23 @@ export function metersLabel(list, plan, now = Date.now()) {
 
 const rowTokens = r => `in ${fmtTokens(r.input)} · out ${fmtTokens(r.output)}${r.cacheRead ? ` · cache ${fmtTokens(r.cacheRead)}` : ''}`;
 
-// The panel's body. state: { plan, rows, bootAt, range: 'today' | 'session', multi, now }
-export function panelHtml({ plan, rows, bootAt, range = 'today', multi = false, now = Date.now() }) {
+const USER_I = '<svg class="hud-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.5 20c.6-4 3.6-6.2 7.5-6.2s6.9 2.2 7.5 6.2"/></svg>';
+const KEY_I = '<svg class="hud-i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4.2"/><circle cx="8" cy="12" r="1.2"/><path d="M12.2 12H21M17.5 12v3.2M20.5 12v2.4"/></svg>';
+export const HELP_URL = 'https://github.com/mshomper/crux/blob/main/hub/README.md#choosing-the-account';
+const acctSub = a => a.mode === 'key' ? (a.source === 'environment' ? 'Set in the environment variables' : 'Saved with Windows\' protection') : 'This PC\'s Claude Code sign-in';
+
+// The account in use, as a line at the top of the panel with a button to the Account card (decision 78 A).
+export function accountBlock(account) {
+  if (!account) return '';
+  return `<div class="up-acct">${account.mode === 'key' ? KEY_I : USER_I}<div><b>${esc(accountLine(account))}</b><i>${esc(acctSub(account))}</i></div>
+    <button type="button" data-up-account title="Choose which account the agents run on">Account</button></div>`;
+}
+
+// The panel's body. state: { plan, rows, bootAt, range: 'today' | 'session', multi, now, account }
+// With an API key there are no plan limits: tokens and dollars are the whole picture.
+export function panelHtml({ plan: planIn, rows, bootAt, range = 'today', multi = false, now = Date.now(), account = null }) {
+  const keyMode = account?.mode === 'key';
+  const plan = keyMode ? null : planIn;
   const list = meterList(plan);
   const stale = isStale(plan, now);
   const win = m => `<div class="up-win t-${m.tone}${m.idle ? ' idle' : ''}"${m.model ? ` style="--mh:${hueOf(`claude-${m.model}`) || MODEL_HUES.fable}"` : ''}>
@@ -78,16 +94,20 @@ export function panelHtml({ plan, rows, bootAt, range = 'today', multi = false, 
     <h4>By agent</h4><ul class="up-list">${agg.agents.map(agentRow).join('')}</ul>`}
     ${routing}`;
 
-  return `<header class="up-head"><span class="hud-k">Usage</span><b>${plan?.subscription ? esc(`${plan.subscription[0].toUpperCase()}${plan.subscription.slice(1)} plan`) : 'Plan'}</b><button class="up-x" data-up-close aria-label="Close" title="Close">${X}</button></header>
-    <div class="up-body"><h3>Plan limits</h3>${plans}<h3>Estimated spend</h3>${spend}
-    <p class="up-note">Spend is estimated at list prices, not a bill. Plan percentages come from your Claude plan.</p></div>`;
+  const title = keyMode ? 'API key' : plan?.subscription ? `${plan.subscription[0].toUpperCase()}${plan.subscription.slice(1)} plan` : 'Plan';
+  return `<header class="up-head"><span class="hud-k">Usage</span><b>${esc(title)}</b><button class="up-x" data-up-close aria-label="Close" title="Close">${X}</button></header>
+    <div class="up-body">${accountBlock(account)}${account ? `<a class="up-help" href="${HELP_URL}" target="_blank" rel="noopener" title="How to switch the account without this page: the environment variables and claude login">How to switch outside the app</a>` : ''}
+    ${keyMode ? '' : `<h3>Plan limits</h3>${plans}`}<h3>Estimated spend</h3>${spend}
+    <p class="up-note">${keyMode ? 'Spend is estimated at list prices, not a bill: Anthropic bills the tokens to your API key.' : 'Spend is estimated at list prices, not a bill. Plan percentages come from your Claude plan.'}</p></div>`;
 }
 
 export class UsageUI {
   // slot: the strip's slot (#hud). source(): { rows: [{ project, ev }], bootAt, multi }.
-  constructor(slot, { source }) {
+  constructor(slot, { source, onAccount = null }) {
     this.slot = slot;
     this.source = source;
+    this.onAccount = onAccount;   // opens the Account card (account.js)
+    this.account = null;          // { mode: 'plan' | 'key', planName, keyEnd, ... } from the hub (lib/account.mjs view)
     this.plan = null;
     this.range = 'today';
     this.key = '';
@@ -108,6 +128,7 @@ export class UsageUI {
     this.el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.toggle(); } });
     this.pop.addEventListener('click', e => {
       if (e.target.closest('[data-up-close]')) return this.close(true);
+      if (e.target.closest('[data-up-account]')) { this.close(); return void this.onAccount?.(); }
       const r = e.target.closest('[data-range]');
       if (r) { this.range = r.dataset.range; this.drawPanel(); }
     });
@@ -121,20 +142,33 @@ export class UsageUI {
 
   // view: { plan, available } from the hub; null plan hides the meters.
   setPlan(view) { this.plan = view?.plan || null; this.draw(); }
+  setAccount(view) { this.account = view || null; this.draw(); }
+  get keyMode() { return this.account?.mode === 'key'; }
+
+  // With an API key there are no plan limits (an old snapshot in the log is ignored): the strip shows today's dollars and
+  // tokens instead, so there is still something to click to reach the panel and the Account card.
+  keyHtml() {
+    const s = this.source();
+    const agg = aggregate(s.rows, { since: new Date().setHours(0, 0, 0, 0) });
+    return `<span class="um-key" title="API key ending ...${esc(this.account.keyEnd)}: ${esc(fmtCost(agg.total.cost))} estimated today, ${esc(fmtTokens(agg.total.input + agg.total.output))} tokens">
+      <b>${esc(fmtCost(agg.total.cost))}</b><i>${esc(fmtTokens(agg.total.input + agg.total.output))} tokens</i><i>key ...${esc(this.account.keyEnd)}</i></span>`;
+  }
 
   draw() {
     const now = Date.now();
-    const list = meterList(this.plan);
-    const on = list.length > 0;
+    const key = this.keyMode;
+    const list = key ? [] : meterList(this.plan);
+    const on = key || list.length > 0 || !!this.account;   // with the account known the strip always has something to click
     this.slot.classList.toggle('has-usage', on);
     // tells the map that, on a phone, the row under its lane is taken (map-layout.js stripLane)
     if (on) this.slot.dataset.underRow = '1'; else delete this.slot.dataset.underRow;
     this.el.hidden = !on;
     this.el.classList.toggle('stale', on && isStale(this.plan, now));
     if (on) {
-      const html = metersHtml(list, now);
+      const who = !key && this.account ? `<span class="um-who" title="${esc(accountLine(this.account))}">${USER_I}<span>${esc(this.account.planName || 'Plan sign-in')}</span></span>` : '';
+      const html = key ? this.keyHtml() : metersHtml(list, now) + who;
       if (html !== this.key) { this.key = html; this.el.innerHTML = html; }
-      const label = metersLabel(list, this.plan, now);
+      const label = key ? `${accountLine(this.account)}. Estimated spend today and tokens. Click for details.` : list.length ? metersLabel(list, this.plan, now) : `${accountLine(this.account)}. No plan numbers right now. Click for details.`;
       this.el.setAttribute('aria-label', label);
       this.el.title = label;
     } else { this.key = ''; if (this.isOpen) this.close(); }
@@ -143,7 +177,7 @@ export class UsageUI {
 
   drawPanel() {
     const s = this.source();
-    const html = panelHtml({ plan: this.plan, rows: s.rows, bootAt: s.bootAt, multi: s.multi, range: this.range });
+    const html = panelHtml({ plan: this.plan, rows: s.rows, bootAt: s.bootAt, multi: s.multi, range: this.range, account: this.account });
     if (html !== this.panelKey) {
       const keep = this.pop.querySelector('.up-body')?.scrollTop || 0;
       this.panelKey = html;

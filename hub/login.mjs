@@ -16,5 +16,17 @@ if (!bin || !existsSync(bin)) {
 }
 
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|ANTHROPIC_)/.test(k)));
-console.log('Opening Claude Code. Type /login, sign in with your Claude plan, then /exit.\n');
-spawn(bin, [], { stdio: 'inherit', env }).on('exit', code => process.exit(code ?? 0));
+// --signin: the hub's Account card opens this in a terminal window ("Sign in as someone else"): it runs Claude Code's own
+// sign-in, then waits for Enter so the result can be read. The hub re-reads who is signed in by itself.
+if (process.argv.includes('--signin')) {
+  console.log('Signing in to Claude Code. A browser tab opens; sign in as the person you want the hub\'s agents to use.');
+  console.log('This also switches your other Claude Code sessions on this PC.\n');
+  spawn(bin, ['auth', 'login'], { stdio: 'inherit', env }).on('exit', code => {
+    console.log(code ? '\nSign-in did not finish. Nothing changed.' : '\nDone. The hub shows the new name in a moment.');
+    console.log('Press Enter to close this window.');
+    process.stdin.once('data', () => process.exit(code ?? 0)); process.stdin.resume();
+  });
+} else {
+  console.log('Opening Claude Code. Type /login, sign in with your Claude plan, then /exit.\n');
+  spawn(bin, [], { stdio: 'inherit', env }).on('exit', code => process.exit(code ?? 0));
+}

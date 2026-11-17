@@ -126,24 +126,33 @@ test('an installed Claude Code is found in the usual Windows places, and only wh
   assert.equal(installedBinary({ env: { PATH: 'C:/tools' }, home, exists: () => false }), null);
 });
 
-test('the key is shape-checked, kept in secrets.json in the hub data folder, and applied unless the environment has one', () => {
+// A stand-in for Windows' protection, so this runs anywhere: the key is reversed and wrapped, never kept as it was.
+const fakeProtector = { scheme: 'fake', protect: s => 'sealed:' + [...s].reverse().join(''), unprotect: d => [...d.slice(7)].reverse().join('') };
+
+test('the key is shape-checked and kept protected in secrets.json in the hub data folder, never as typed', () => {
   const dir = temp('crux-key-');
   try {
     const env = { CRUX_HUB_DATA: dir };
-    const s = new Secrets({ env });
+    const s = new Secrets({ env, protector: fakeProtector });
     assert.throws(() => s.save('hello'), /sk-ant-/);
     assert.ok(KEY_SHAPE.test(KEY));
-    s.save(`  ${KEY}\n`);
-    assert.equal(JSON.parse(readFileSync(join(dir, 'secrets.json'), 'utf8')).anthropicApiKey, KEY);
+    s.save(`  ${KEY}
+`);
+    const text = readFileSync(join(dir, 'secrets.json'), 'utf8');
+    assert.ok(!text.includes(KEY), 'the key is not in the file as typed');
+    assert.equal(JSON.parse(text).anthropicApiKeyEnd, 'WXYZ');
+    assert.equal(s.apiKey, KEY);
+    assert.equal(s.savedEnd, 'WXYZ');
     assert.ok(!existsSync(join(dir, 'settings.json')), 'never in the hub settings');
     assert.equal(keyEnd(KEY), 'WXYZ');
-    const agentEnv = {};
-    assert.equal(s.apply(agentEnv), 'saved');
-    assert.equal(agentEnv.ANTHROPIC_API_KEY, KEY);
-    assert.equal(agentEnv.CRUX_HUB_USE_API_KEY, '1');
-    const own = { ANTHROPIC_API_KEY: 'sk-ant-own', CRUX_HUB_USE_API_KEY: '1' };
-    assert.equal(s.apply(own), 'environment');
-    assert.equal(own.ANTHROPIC_API_KEY, 'sk-ant-own', 'a key set in the environment wins');
+    // where nothing can protect it, saving is refused in plain words
+    assert.throws(() => new Secrets({ env, file: join(dir, 'other.json'), protector: null }).save(KEY), /cannot protect/);
+    // a key an earlier version saved in the clear is still read, and replaced by a protected one at the next save
+    writeFileSync(join(dir, 'old.json'), JSON.stringify({ anthropicApiKey: KEY }));
+    const old = new Secrets({ env, file: join(dir, 'old.json'), protector: fakeProtector });
+    assert.equal(old.apiKey, KEY); assert.equal(old.savedEnd, 'WXYZ');
+    old.save(KEY);
+    assert.ok(!readFileSync(join(dir, 'old.json'), 'utf8').includes(KEY));
   } finally { removeTmp(dir); }
 });
 
@@ -211,7 +220,7 @@ test('a hub run from a clone never takes up a saved key: it stays on its own log
   } finally { removeTmp(dir); }
 });
 
-test('a test hub playing the desktop app starts with no project, asks for setup, and takes the key from this PC only', async () => {
+test('a test hub playing the desktop app starts with no project, asks for setup, and takes the key from this PC only', { skip: process.platform !== 'win32' && 'saving a key needs Windows protection' }, async () => {
   const dir = temp('crux-setup-hub-'), port = 4796;
   mkdirSync(join(dir, 'home')); writeFileSync(join(dir, 'home', 'hub.json'), '{}');
   const { call, stop } = await startHub(port, dir, { env: { CRUX_HUB_BUNDLED: '1' } });
@@ -228,7 +237,8 @@ test('a test hub playing the desktop app starts with no project, asks for setup,
     assert.equal(saved.json.check, 'unchecked', 'a test hub never calls Anthropic');
     assert.equal(saved.json.setup.key.end, 'WXYZ');
     assert.ok(!JSON.stringify(saved.json).includes(KEY), 'the key never comes back');
-    assert.equal(JSON.parse(readFileSync(join(dir, 'data', 'secrets.json'), 'utf8')).anthropicApiKey, KEY);
+    assert.ok(!readFileSync(join(dir, 'data', 'secrets.json'), 'utf8').includes(KEY), 'kept protected, never as typed');
+    assert.equal(JSON.parse(readFileSync(join(dir, 'data', 'secrets.json'), 'utf8')).anthropicApiKeyEnd, 'WXYZ');
     // From anywhere but this PC (a request carrying a proxy header, as Tailscale sends): refused.
     const remote = (await call('GET', '/api/setup', { extra: { 'x-forwarded-for': '100.64.0.2' } })).json;
     assert.equal((await call('POST', '/api/setup/key', { body: { apiKey: KEY }, extra: { 'x-forwarded-for': '100.64.0.2' } })).status >= 400, true, 'no key from a remote device');

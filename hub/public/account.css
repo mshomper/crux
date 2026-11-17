@@ -1,0 +1,57 @@
+/* The Account card (decision 78 A, account.js). It reuses the project cards' plates and head (project-settings.css); this
+   file holds only what they do not have: the "in use now" line, the key field and the account line in the usage panel. */
+.ac-now{display:flex;align-items:center;gap:12px;padding:11px 12px;border:1px solid var(--hud-line);border-radius:2px;background:rgba(18,26,37,.6)}
+.ac-now .ps-hex{background:var(--hud-cyan);color:#06141b}
+.ac-now div{display:grid;gap:2px;min-width:0}
+.ac-now b{font:600 14px/1.3 var(--mono);letter-spacing:.02em;color:var(--hud-ice);overflow-wrap:anywhere}
+.ac-sub{font-size:12px;color:var(--muted)}
+.ac-env{margin-top:10px}
+.ac-locked{opacity:.5;pointer-events:none}
+.ac-who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.ac-who .icon{width:15px;height:15px;color:var(--hud-dim);flex:none}
+.ac-who b{color:var(--text);font-weight:600}
+.ac-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ac-field{width:100%;margin:2px 0 0;font:500 14px/1.2 var(--mono);color:var(--hud-ice);background:var(--hud-deep);border:1px solid var(--hud-edge);border-radius:2px;padding:10px 11px;letter-spacing:.04em}
+.ac-field::placeholder{color:rgba(150,232,255,.38);letter-spacing:.02em}
+.ac-field:focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.22),0 0 18px -6px rgba(111,227,255,.5)}
+.ac-lock{display:flex;align-items:flex-start;gap:7px;margin:2px 0 0;font-size:12.5px;line-height:1.35;color:var(--muted)}
+.ac-lock .icon{width:13px;height:13px;margin-top:2px;flex:none;color:var(--hud-cyan)}
+.ac-err{margin:10px 0 0}
+.ac-restart{display:flex;align-items:flex-start;gap:7px}
+.ac-restart .icon{width:13px;height:13px;margin-top:2px;flex:none;color:var(--hud-amber,#f3b955);filter:drop-shadow(0 0 4px rgba(243,185,85,.45))}
+.acard .ps-foot .btn{flex:none}
+.acard .btn:disabled{opacity:.45;cursor:default}
+
+/* the account line in the strip (under the plan meters, or in place of them for a key) */
+.um-who{display:flex;align-items:center;gap:5px;min-width:0;font-size:10px;letter-spacing:.04em;color:var(--hud-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.um-who .hud-i{width:11px;height:11px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.um-who span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.um-key{display:grid;gap:3px;font-size:10.5px;line-height:13px;letter-spacing:.02em;white-space:nowrap}
+.um-key b{font-weight:600;font-size:13px;color:var(--hud-ice)}
+.um-key i{font-style:normal;color:var(--hud-dim);overflow:hidden;text-overflow:ellipsis}
+.strip-tight .um-who{display:none}
+@media (max-width:720px){
+  .um-who{display:none}
+  .usage-meters>.um-key{flex:1 1 0;display:flex;gap:8px;align-items:center}
+  .um-key b{font-size:10.5px}
+}
+
+/* the account line in the usage panel */
+.up-acct{display:flex;align-items:center;gap:10px;margin:12px 0 4px;padding:9px 10px;border:1px solid var(--hud-line);border-radius:6px;background:rgba(111,227,255,.04)}
+.up-acct .hud-i{width:16px;height:16px;flex:none;fill:none;stroke:var(--hud-cyan);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.up-acct div{flex:1;min-width:0;display:grid;gap:1px}
+.up-acct b{font-size:12px;font-weight:600;letter-spacing:.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.up-acct i{font-style:normal;font-size:10.5px;color:var(--hud-dim)}
+.up-acct button{font:inherit;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;padding:6px 10px;border-radius:999px;cursor:pointer;color:var(--hud-ice);background:rgba(111,227,255,.1);border:1px solid var(--hud-dim)}
+.up-acct button:hover{border-color:var(--hud-cyan);box-shadow:0 0 12px -4px var(--hud-cyan)}
+.up-help{display:inline-flex;align-items:center;gap:5px;margin:2px 0 8px;font-size:11px;color:var(--hud-dim);text-decoration:none;border-bottom:1px dotted var(--hud-faint)}
+.up-help:hover{color:var(--hud-ice)}
+
+@media (max-width:720px){
+  .acard{width:100%}
+  .ac-field{min-height:46px;font-size:16px}
+  .acard .ps-foot .ac-restart{order:0}
+  .acard .ps-foot [data-ac-switch]{order:1}
+  .acard .ps-foot .btn.ghost{order:2}
+  .acard .ps-foot .btn{justify-content:center;min-height:46px;width:100%}
+}

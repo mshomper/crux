@@ -1,0 +1,179 @@
+// The Account card (decision 78 A): which account the agents run on, Plan sign-in or API key, chosen here instead of
+// environment variables and a terminal. Opened from the usage panel (usage-ui.js). Same HUD plates as the project cards
+// (project-settings.css). The page only ever knows the last four characters of a key; a pasted key goes to the hub in
+// one same-origin request and is dropped from the page at once.
+//   accountLine(v)       the one line that says what is in use ("Plan sign-in: Alex Doe", "API key ending ...a1b2")
+//   accountCard(v, d)    the card as an HTML string (testable without a browser)
+//   AccountCard          the pop-up: host { api(path, body), switchTo(body), account() }
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ic = (id, cls = '') => `<svg class="icon ${cls}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
+
+export const accountLine = v => v?.mode === 'key' ? `API key ending ...${v.keyEnd || '????'}` : `Plan sign-in${v?.planName ? `: ${v.planName}` : ''}`;
+export const KEY_HINT = 'Paste your API key (sk-ant-...)';
+export const PROTECT_NOTE = 'Kept in Windows\' protected storage for your user, not in any project folder.';
+
+// Whether Switch is on, and what it says.
+export function switchState(v, d) {
+  if (!v || v.envLocked) return { ok: false, word: 'Switch' };
+  const typed = String(d.key || '').trim().length > 0;
+  if (d.pick === 'plan') return { ok: v.mode !== 'plan', word: 'Switch' };
+  if (!v.canProtect) return { ok: false, word: 'Switch' };
+  if (v.mode === 'key') return { ok: typed, word: 'Replace key' };
+  return { ok: typed || !!v.savedEnd, word: 'Switch' };
+}
+
+function planPlate(v, d) {
+  const on = d.pick === 'plan', cur = v.mode === 'plan';
+  const who = v.planName ? `Signed in as <b>${esc(v.planName)}</b>` : 'No one is signed in on this PC yet.';
+  return `<div class="ps-lv ${on ? 'on' : ''}" role="radio" aria-checked="${on}" tabindex="${on ? 0 : -1}" data-ac-pick="plan">
+    <div class="ps-lv-top"><span class="ps-hex">${ic('user')}</span><span class="ps-lv-name">Plan sign-in</span>${cur ? `<span class="ps-mark">${ic('check')}In use</span>` : ''}</div>
+    <div class="ps-lv-sub">Agents use the Claude plan this PC is signed in to, and draw on its limits.</div>
+    ${on ? `<div class="ps-lv-body">
+      <div class="ac-who">${ic('user')}<span>${who}</span></div>
+      <div class="ac-row"><button type="button" class="btn" data-ac-signin ${d.busy ? 'disabled' : ''}>${ic('external')}Sign in as someone else</button>
+        ${d.waiting ? `<span class="ps-dflt">Waiting for the sign-in window... <button type="button" class="ps-reset" data-ac-recheck>${ic('reset')}Check again</button></span>` : ''}</div>
+      <p class="ps-lv-warn">${ic('warn')}<span>This also switches your other Claude Code sessions on this PC.</span></p>
+      ${d.signinNote ? `<p class="ps-dflt">${esc(d.signinNote)}</p>` : ''}
+    </div>` : ''}
+  </div>`;
+}
+function keyPlate(v, d) {
+  const on = d.pick === 'key', cur = v.mode === 'key';
+  return `<div class="ps-lv ${on ? 'on' : ''}" role="radio" aria-checked="${on}" tabindex="${on ? 0 : -1}" data-ac-pick="key">
+    <div class="ps-lv-top"><span class="ps-hex">${ic('key')}</span><span class="ps-lv-name">API key</span>${cur ? `<span class="ps-mark">${ic('check')}In use</span>` : ''}</div>
+    <div class="ps-lv-sub">Pay per use: Anthropic bills the tokens the agents use to your key. The strip shows tokens and dollars.</div>
+    ${on ? `<div class="ps-lv-body">
+      ${!v.canProtect ? `<p class="ps-lv-warn">${ic('warn')}<span>This computer cannot protect a saved key (Windows only). Set ANTHROPIC_API_KEY and CRUX_HUB_USE_API_KEY=1 in the environment instead; the README shows how.</span></p>` : `
+      ${v.savedEnd ? `<div class="ac-who">${ic('key')}<span>A key ending <b>...${esc(v.savedEnd)}</b> is saved. Paste a new one to replace it.</span></div>` : ''}
+      <input class="ac-field" type="password" name="crux-api-key" autocomplete="off" autocapitalize="off" spellcheck="false" data-ac-key placeholder="${esc(KEY_HINT)}" aria-label="API key" value="">
+      <p class="ac-lock">${ic('lock')}<span>${esc(PROTECT_NOTE)}</span></p>`}
+    </div>` : ''}
+  </div>`;
+}
+
+export function accountCard(v, d) {
+  const sw = switchState(v, d);
+  return `<div class="ps-head"><h2 id="ps-title">Account</h2><button type="button" class="ps-x" data-ac-close aria-label="Close without changing anything" title="Close without changing anything">${ic('x')}</button></div>
+  <div class="ps-body">
+    <section class="ps-sec"><div class="ps-sec-head">In use now</div>
+      <div class="ac-now"><span class="ps-hex on">${ic(v.mode === 'key' ? 'key' : 'user')}</span>
+        <div><b>${esc(accountLine(v))}</b><span class="ac-sub">${v.mode === 'key' ? 'Pay per use, billed to this key.' : 'Drawing on this plan\'s limits.'}</span></div></div>
+      ${v.envLocked ? `<p class="ps-lv-warn ac-env">${ic('warn')}<span>This key comes from the environment variables ANTHROPIC_API_KEY and CRUX_HUB_USE_API_KEY. They win over this card: remove them and restart the hub to choose here.</span></p>` : ''}
+    </section>
+    <section class="ps-sec ps-last"><div class="ps-sec-head">Choose</div>
+      <div class="ps-levels ${v.envLocked ? 'ac-locked' : ''}" role="radiogroup" aria-label="Account">${planPlate(v, d)}${keyPlate(v, d)}</div>
+      ${d.error ? `<p class="ps-dflt warn ac-err" role="alert">${ic('warn')}${esc(d.error)}</p>` : ''}
+    </section>
+  </div>
+  <div class="ps-foot">
+    <p class="ps-note ac-restart">${ic('warn')}<span>Switching restarts the hub. This page reconnects by itself, and agents carry on after it.</span></p>
+    <button type="button" class="btn ghost" data-ac-close>Cancel</button>
+    <button type="button" class="btn primary ps-done" data-ac-switch ${sw.ok && !d.busy ? '' : 'disabled'}>${ic('restart')}${sw.word}</button>
+  </div>`;
+}
+
+export class AccountCard {
+  constructor(host) {
+    this.host = host;
+    this.el = document.createElement('dialog');
+    this.el.className = 'pset acard';
+    this.el.setAttribute('aria-labelledby', 'ps-title');
+    document.body.append(this.el);
+    this.el.addEventListener('pointerdown', e => { this.downOutside = e.target === this.el; });
+    this.el.addEventListener('click', e => this.click(e));
+    this.el.addEventListener('input', e => { if (e.target.matches?.('[data-ac-key]')) { this.d.key = e.target.value; this.d.error = ''; this.refreshSwitch(); } });
+    this.el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches?.('[data-ac-key]')) { e.preventDefault(); this.go(); } });
+    this.el.addEventListener('close', () => { this.stopWatching(); if (this.d) this.d.key = ''; this.d = null; this.opener?.focus?.({ preventScroll: true }); });
+    addEventListener('resize', () => this.place());
+  }
+  get open() { return this.el.open; }
+  get view() { return this.v || this.host.account() || { mode: 'plan', canProtect: false }; }
+
+  show() {
+    this.v = null;
+    const v = this.view;
+    this.d = { pick: v.mode, key: '', error: '', busy: false, waiting: false, signinNote: '' };
+    this.opener = document.activeElement;
+    this.render();
+    if (!this.el.open) this.el.showModal();
+    this.place();
+    this.el.querySelector('.ps-lv.on')?.focus({ preventScroll: true });
+  }
+  render() {
+    if (!this.d) return;
+    const keep = this.el.querySelector('.ps-body')?.scrollTop || 0;
+    this.el.innerHTML = accountCard(this.view, this.d);
+    const body = this.el.querySelector('.ps-body'); if (body) body.scrollTop = keep;
+  }
+  refreshSwitch() {
+    const b = this.el.querySelector('[data-ac-switch]'); if (!b) return;
+    const s = switchState(this.view, this.d);
+    b.disabled = !(s.ok && !this.d.busy);
+    b.lastChild.textContent = s.word;
+  }
+  // Same place as the project cards: beside the thread list on a desk, the whole screen on a phone.
+  place() {
+    if (!this.el.open) return;
+    const r = this.host.sideRect?.();
+    if (!r || matchMedia('(max-width: 720px)').matches) { this.el.style.left = ''; this.el.style.top = ''; return; }
+    const left = Math.round(r.right + 16);
+    this.el.style.left = `${left}px`;
+    this.el.style.setProperty('--ps-left', `${left}px`);
+    this.el.style.top = '56px';
+  }
+  close() { if (this.el.open) this.el.close(); }
+
+  click(e) {
+    if (e.target === this.el) { const out = this.downOutside; this.downOutside = false; return out ? this.close() : undefined; }
+    if (e.target.closest('[data-ac-close]')) return this.close();
+    if (e.target.closest('[data-ac-switch]')) return void this.go();
+    if (e.target.closest('[data-ac-signin]')) return void this.signIn();
+    if (e.target.closest('[data-ac-recheck]')) return void this.refresh();
+    const pick = e.target.closest('[data-ac-pick]');
+    if (pick && !this.view.envLocked && this.d.pick !== pick.dataset.acPick) {
+      this.d.pick = pick.dataset.acPick; this.d.error = '';
+      this.render();
+      this.el.querySelector('[data-ac-key]')?.focus({ preventScroll: true });
+    }
+  }
+
+  async go() {
+    const s = switchState(this.view, this.d);
+    if (!s.ok || this.d.busy) return;
+    const body = this.d.pick === 'plan' ? { mode: 'plan' } : { mode: 'key', ...(this.d.key.trim() ? { apiKey: this.d.key.trim() } : {}) };
+    this.d.busy = true; this.d.error = ''; this.render();
+    try {
+      await this.host.switchTo(body);   // restarts the hub and waits for it to come back
+      this.close();
+    } catch (e) {
+      if (!this.d) return;
+      this.d.busy = false; this.d.error = e.message || 'The account was not changed.'; this.render();
+    } finally { body.apiKey = ''; }
+  }
+
+  // "Sign in as someone else": the hub opens a terminal window on this PC; then the card re-reads who is signed in.
+  async signIn() {
+    this.d.busy = true; this.d.signinNote = ''; this.render();
+    try {
+      const r = await this.host.api('/api/account/signin', {});
+      this.d.busy = false;
+      if (r.opened) { this.d.waiting = true; this.watch(); }
+      else this.d.signinNote = r.test ? 'A test hub opens no sign-in window.' : `Open a terminal on this PC and run: ${r.command || 'claude auth login'}`;
+    } catch (e) { this.d.busy = false; this.d.error = e.message; }
+    this.render();
+  }
+  async refresh() {
+    try {
+      const was = this.view.planName;
+      this.v = await this.host.api('/api/account');
+      if (this.d?.waiting && this.v.planName && this.v.planName !== was) { this.d.waiting = false; this.stopWatching(); }
+      this.render();
+    } catch { /* the hub is busy: the next check tries again */ }
+  }
+  watch() {
+    this.stopWatching();
+    const until = Date.now() + 3 * 60 * 1000;
+    this.timer = setInterval(() => { if (Date.now() > until) { if (this.d) { this.d.waiting = false; this.render(); } return this.stopWatching(); } this.refresh(); }, 3000);
+  }
+  stopWatching() { clearInterval(this.timer); this.timer = null; }
+}
