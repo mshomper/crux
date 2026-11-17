@@ -23,6 +23,7 @@ import { snapNames } from './lib/voice-names.mjs';
 import { dictate } from './lib/voice-punct.mjs';
 import { Guard, GuardError, OPEN_POSTS, NOT_PAIRED, stepUpNeed, scopeHas, projectScope, guardOff, fromThisPC, addressOf, cleanLabel, makeAlert, pairAlert, dropUnbackedTrusted, makeRestartHub, pcRedirect } from './lib/guard.mjs';
 import { randomUUID } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { refreshPages } from '../crux/scripts/build.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -198,9 +199,15 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const clients = new Set();
 hub.on(ev => { const line = `data: ${JSON.stringify(ev)}\n\n`; for (const res of clients) res.write(line); });
 
+// Text answers over 1 KB go out gzipped when the page accepts it: the state feed is JSON and shrinks about tenfold, which is
+// most of the wait on a phone over Tailscale (phone speed, 2026-11-16).
+const SQUEEZE = /^(application\/(json|javascript)|text\/|image\/svg)/;
 function send(res, code, body, type = 'application/json', extra = {}) {
-  res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...extra });
-  res.end(type === 'application/json' ? JSON.stringify(body) : body);
+  let data = type === 'application/json' ? JSON.stringify(body) : body;
+  const head = { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...extra };
+  if (SQUEEZE.test(type) && data.length > 1024 && /\bgzip\b/.test(res.req?.headers['accept-encoding'] || '')) { data = gzipSync(data, { level: 5 }); head['content-encoding'] = 'gzip'; head.vary = 'accept-encoding'; }
+  res.writeHead(code, head);
+  res.end(data);
 }
 function serveFile(res, file, extra = {}) {
   if (!existsSync(file) || !statSync(file).isFile()) return send(res, 404, { error: 'Not found' });
@@ -224,6 +231,7 @@ const routes = {
   // conductor (decision 55): the hub-wide agent's state and its thread's events (lib/conductor.mjs view()), or null.
   'GET /api/state': (_, { local }) => ({ voice: { ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
+  'GET /api/older': ({ project, thread, before }) => hub.older(project, thread, before),
   'GET /api/brief': ({ project, id }) => {
     const b = hub.project(String(project || '')).board.brief(id);
     if (!b) throw new Error(`No decision ${id}`);

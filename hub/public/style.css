@@ -165,6 +165,7 @@ label{display:grid;gap:5px;font-size:13px;color:var(--muted);margin-bottom:12px}
 .hm-confirm b{font-size:13.5px}
 .hm-confirm p{margin:0;font-size:12.5px;line-height:1.45}
 /* while the hub restarts: a small panel, the page reconnects on its own */
+.older-row{display:flex;justify-content:center;padding:6px 0 10px}
 .restarting{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:rgba(6,11,18,.62);backdrop-filter:blur(2px)}
 .rs-panel{display:flex;gap:14px;align-items:center;max-width:min(440px,calc(100vw - 24px));padding:16px 14px 16px 18px;border-radius:14px;
   background:linear-gradient(165deg,#141c27,#0b1017);border:1px solid var(--hud-faint);box-shadow:0 0 0 1px rgba(0,0,0,.4),0 0 40px -8px rgba(111,227,255,.35)}

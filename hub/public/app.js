@@ -57,6 +57,7 @@ const S = {
   // thread that used to be "the" current one.
   seen: store.get('seen', {}),
   open: new Set(), // expanded messages, answered approvals and task lines
+  restored: new Map(), // id -> full event, for older messages fetched with "Show older" (the feed sends them as stubs)
   activity: {},
   pending: new Set(),
   drafts: store.get('drafts', {}),   // answers typed in Needs you, by "<summary id>:<question place>"
@@ -130,6 +131,7 @@ async function load() {
   S.retireAt = retireAt;
   S.settings = settings || {};
   S.models = models || [];
+  for (const p of projects) p.events = p.events.map(e => (e.old && S.restored.get(e.id)) || e);
   S.projects = projects;
   setConductor(conductor);
   // An open brief whose decision was picked elsewhere loses its pick buttons (decision 50).
@@ -1009,7 +1011,11 @@ function feedFor(t) {
   } else {
     const evs = threadEvents(p, t), once = AP.decisionCardsOnce(evs);   // one card per decision in a thread
     const reps = repeatsIn(p.events, pageAsk(p));   // repeats of a card still open elsewhere
-    const html = evs.map(ev => {
+    // Older events arrive as stubs (lib/window.mjs); "Show older" fetches them back a page at a time.
+    const stubs = evs.filter(e => e.old).length;
+    const olderBtn = stubs ? `<div class="older-row"><button type="button" class="btn ghost" data-older="${esc(t)}">Show ${stubs > 150 ? '150 of ' : ''}${stubs} older ${stubs === 1 ? 'item' : 'items'}</button></div>` : '';
+    const html = olderBtn + evs.map(ev => {
+      if (ev.old) return '';
       switch (ev.type) {
         case 'message': return messageEl(p, ev, t);
         case 'summary': return summaryCard(p, ev, once(ev), reps.get(ev.id));
@@ -1742,7 +1748,19 @@ $('#new-expedition').addEventListener('click', () => { $('#app').classList.remov
 document.addEventListener('click', e => {
   const q = s => e.target.closest(s), p = proj();
   let b;
-  if ((b = q('[data-xdraft-edit]'))) { const ev = p?.events.find(x => x.id === b.dataset.xdraftEdit); if (ev) expPanel.open(draftSeed(ev)); }
+  if ((b = q('[data-older]'))) {
+    const t = b.dataset.older; if (!p || b.disabled) return;
+    b.disabled = true;
+    // The newest stub of this thread is where the page of older items ends.
+    const before = threadEvents(p, t).findLast(x => x.old)?.id || '';
+    act(async () => {
+      const { events } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}`);
+      for (const ev of events) S.restored.set(ev.id, ev);
+      const byId = new Map(events.map(x => [x.id, x]));
+      p.events = p.events.map(x => byId.get(x.id) || x);
+      render();
+    });
+  } else if ((b = q('[data-xdraft-edit]'))) { const ev = p?.events.find(x => x.id === b.dataset.xdraftEdit); if (ev) expPanel.open(draftSeed(ev)); }
   else if ((b = q('[data-xdraft-launch]'))) {
     const ev = p?.events.find(x => x.id === b.dataset.xdraftLaunch);
     if (ev && !b.disabled) { b.disabled = true; act(async () => { try { await api('/api/expedition', draftBody(p.name, ev)); toast('The expedition has started. Its Lead is planning; you will get one card when it finishes.', 'info'); } finally { await load(); } }); }

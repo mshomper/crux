@@ -30,6 +30,7 @@ import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs
 import { ExpeditionWatchdog, HUB_STOPS as EXPEDITION_HUB_STOPS } from './expedition-watchdog.mjs';
 import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, DEFAULT_ENVELOPE, runJsonProblem, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
 import { ExpeditionEnd } from './expedition-end.mjs';
+import { windowed, olderPage } from './window.mjs';
 import { isProposal, proposalsOf } from './expedition-report.mjs';
 
 export class Project {
@@ -2165,12 +2166,18 @@ export class Hub {
   }
 
   // ---------- views ----------
+  // What the page gets of a project's log: the newest events per thread in full, older ones as small stubs (lib/window.mjs).
+  windowOf(p) { const w = windowed(p.log.events); return { events: w.events, older: w.older }; }
+
+  // "Show older" in a thread: the full events behind its stubs, a page at a time.
+  older(project, thread, before) { return olderPage(this.project(String(project || '')).log.events, String(thread || '-'), String(before || '')); }
+
   state() {
     return [...this.projects.values()].map(p => ({
+      ...this.windowOf(p),
       name: p.name, dir: p.dir,
       agents: [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor, type: a.type, model: a.model, effort: a.effort, modelSeen: a.modelSeen, restartPending: a.restartWhenIdle, ...(a.expedition ? { expedition: a.expedition, expeditionRole: a.expeditionRole } : {}) })),
       types: this.agentTypes(p).list().map(({ name, description, model, effort, tools, source }) => ({ name, description, model, effort, tools, source })),
-      events: p.log.events,
       board: p.board.snapshot(),
       pack: this.memory.packName(p.name),
       pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id),
