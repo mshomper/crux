@@ -13,7 +13,6 @@ const BULK = {
   summary: ['done', 'handoff_notes', 'next_step', 'changed', 'open_questions', 'blocked_on', 'approvals'],
   approval: ['input', 'summary', 'description', 'stops'],
   permission_answer: ['command', 'reason'],
-  entry: ['body'],
   notice: ['text'],
   visual: []
 };

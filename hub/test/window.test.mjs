@@ -38,6 +38,12 @@ test('a thread idle for days still keeps its newest few in full', () => {
   assert.equal(orch.filter(e => !e.old).length, KEEP);
 });
 
+test('board entries are never stubbed (they have no thread of their own to page back)', () => {
+  const full = [ev('entry', { from: 'w1', body: 'text', entryId: 'M1' }), ...log()];
+  const e = windowed(full).events[0];
+  assert.ok(!e.old && e.body);
+});
+
 test('telemetry the page never reads is not sent', () => {
   const w = windowed(log());
   assert.ok(!w.events.some(e => ['plan_usage', 'agent_busy', 'check_shadow'].includes(e.type)));

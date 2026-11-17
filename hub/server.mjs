@@ -211,8 +211,17 @@ function send(res, code, body, type = 'application/json', extra = {}) {
 }
 function serveFile(res, file, extra = {}) {
   if (!existsSync(file) || !statSync(file).isFile()) return send(res, 404, { error: 'Not found' });
-  send(res, 200, readFileSync(file), TYPES[extname(file)] || 'application/octet-stream', extra);
+  const type = TYPES[extname(file)] || 'application/octet-stream', st = statSync(file);
+  // Page files are gzipped once per change (path plus modification time), not on every request.
+  if (SQUEEZE.test(type) && st.size > 1024 && /\bgzip\b/.test(res.req?.headers['accept-encoding'] || '')) {
+    let hit = GZ.get(file);
+    if (!hit || hit.mtime !== st.mtimeMs || hit.size !== st.size) { hit = { mtime: st.mtimeMs, size: st.size, data: gzipSync(readFileSync(file), { level: 9 }) }; GZ.set(file, hit); }
+    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-encoding': 'gzip', vary: 'accept-encoding', ...extra });
+    return res.end(hit.data);
+  }
+  send(res, 200, readFileSync(file), type, extra);
 }
+const GZ = new Map();
 // Uploads carry a file (or a voice clip) as base64 text (about 4/3 of its size); everything else stays small.
 const BODY_LIMIT = { '/api/attach': Math.ceil(MAX_UPLOAD * 4 / 3) + 64 * 1024, '/api/voice/listen': Math.ceil(CLIP_LIMIT_S * LISTEN_RATE * 2 * 4 / 3) + 4096 };
 const TOO_BIG = { '/api/attach': `Attachments must be ${MAX_UPLOAD / 1024 / 1024} MB or less (images 10 MB).`, '/api/voice/listen': `Clips can be up to ${MAX_CLIP_S} seconds.` };

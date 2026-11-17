@@ -50,6 +50,7 @@ const store = {
   set(k, v) { try { localStorage.setItem('crux-hub:' + k, JSON.stringify(v)); } catch { } }
 };
 
+const SLIMMED = new Set(['message', 'summary', 'approval', 'permission_answer', 'notice']);   // the kinds the hub may send as stubs (lib/window.mjs)
 const S = {
   projects: [],
   current: store.get('project', null),
@@ -131,6 +132,8 @@ async function load() {
   S.retireAt = retireAt;
   S.settings = settings || {};
   S.models = models || [];
+  // Whatever this page already has in full stays in full: a refresh never turns messages you were reading into stubs.
+  for (const p of S.projects) for (const e of p.events) if (!e.old && SLIMMED.has(e.type)) S.restored.set(e.id, e);
   for (const p of projects) p.events = p.events.map(e => (e.old && S.restored.get(e.id)) || e);
   S.projects = projects;
   setConductor(conductor);
@@ -1014,8 +1017,10 @@ function feedFor(t) {
     // Older events arrive as stubs (lib/window.mjs); "Show older" fetches them back a page at a time.
     const stubs = evs.filter(e => e.old).length;
     const olderBtn = stubs ? `<div class="older-row"><button type="button" class="btn ghost" data-older="${esc(t)}">Show ${stubs > 150 ? '150 of ' : ''}${stubs} older ${stubs === 1 ? 'item' : 'items'}</button></div>` : '';
-    const html = olderBtn + evs.map(ev => {
-      if (ev.old) return '';
+    // Everything before the newest stub waits behind the button too (the picks and notices there would hang alone above the gap).
+    const gap = evs.findLastIndex(e => e.old);
+    const html = olderBtn + evs.map((ev, i) => {
+      if (i <= gap) return '';
       switch (ev.type) {
         case 'message': return messageEl(p, ev, t);
         case 'summary': return summaryCard(p, ev, once(ev), reps.get(ev.id));
@@ -1753,12 +1758,18 @@ document.addEventListener('click', e => {
     b.disabled = true;
     // The newest stub of this thread is where the page of older items ends.
     const before = threadEvents(p, t).findLast(x => x.old)?.id || '';
+    const feed = b.closest('.feed'), top = feed?.scrollTop || 0, height = feed?.scrollHeight || 0;
     act(async () => {
       const { events } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}`);
+      // Nothing came back: the page was out of step with the hub (that stub is no longer one), so read the state again.
+      if (!events.length) return load();
       for (const ev of events) S.restored.set(ev.id, ev);
       const byId = new Map(events.map(x => [x.id, x]));
       p.events = p.events.map(x => byId.get(x.id) || x);
       render();
+      // What you were reading stays where it is: the older items come in above it.
+      const now = [...document.querySelectorAll('[data-older]')].find(x => x.dataset.older === t)?.closest('.feed') || feed;
+      if (now && top > 0) now.scrollTop = top + (now.scrollHeight - height);
     });
   } else if ((b = q('[data-xdraft-edit]'))) { const ev = p?.events.find(x => x.id === b.dataset.xdraftEdit); if (ev) expPanel.open(draftSeed(ev)); }
   else if ((b = q('[data-xdraft-launch]'))) {
