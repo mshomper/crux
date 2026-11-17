@@ -2,6 +2,8 @@
 // Only expedition-*.md, and only a copy that is still exactly an earlier shipped version (listed by hash in
 // agent-types/starter/previous-hashes.json): that copy was not edited, so it is replaced by the current file. An edited copy
 // is left alone and one line says so. A file that is not installed is not added. Line endings do not count as an edit.
+// WHEN YOU EDIT an expedition-*.md in agent-types/starter, add the hashOf() of its text on main BEFORE the edit to
+// previous-hashes.json (git show origin/main:agent-types/starter/<file>), or installed copies are never refreshed (PR 127 missed it).
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';

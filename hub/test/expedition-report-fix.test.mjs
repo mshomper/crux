@@ -119,4 +119,13 @@ test('start-up refresh: an unedited older copy is replaced, an edited one is kep
   // The shipped history really lists the previous Lead and Verifier (what Matt's installed copies are).
   assert.ok(prev['expedition-lead.md'].length && prev['expedition-verifier.md'].length);
   assert.ok(!prev['expedition-lead.md'].includes(hashOf(current('expedition-lead.md'))), 'the current file is not its own history');
+  // The versions before decision 75 (PR 127) are listed, so those installed copies are refreshed.
+  assert.ok(prev['expedition-lead.md'].includes('86e88e6c9d35b66d'));
+  assert.deepEqual(prev['expedition-gatherer.md'], ['8d9024bd6a95be17']);
+  // Every entry is a list of 16-character hashes of a file that exists, and none is the file's own current text.
+  for (const [f, list] of Object.entries(prev)) {
+    assert.ok(existsSync(join(STARTER, f)), `${f} is a starter file`);
+    for (const h of list) assert.match(h, /^[0-9a-f]{16}$/, f);
+    assert.ok(!list.includes(hashOf(current(f))), `${f}: the current text is not in its own history`);
+  }
 });
