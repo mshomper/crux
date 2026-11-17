@@ -18,6 +18,7 @@ import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, t
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
+import { searchLog } from './lib/archive.mjs';
 import { Voice, SpeechCache, decodeClip, MAX_CLIP_S, CLIP_LIMIT_S, LISTEN_RATE } from './lib/voice.mjs';
 import { snapNames } from './lib/voice-names.mjs';
 import { dictate } from './lib/voice-punct.mjs';
@@ -270,7 +271,9 @@ const routes = {
   'GET /api/entry': ({ project, id }) => hub.entryBody(project, id),
   'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
-  'GET /api/older': ({ project, thread, before }) => hub.older(project, thread, before),
+  'GET /api/older': ({ project, thread, before, ts }) => hub.older(project, thread, before, ts),
+  // Search chat and summaries in a project's log, archive included: words must all appear. { hits: [{ id, ts, type, thread, from, snippet }] }
+  'GET /api/search': ({ project, q, thread, limit }) => ({ hits: searchLog(hub.project(String(project || '')).log.dir, q, { limit: Math.min(200, Number(limit) || 50), thread: thread || null }) }),
   'GET /api/brief': ({ project, id }) => {
     const b = hub.project(String(project || '')).board.brief(id);
     if (!b) throw new Error(`No decision ${id}`);

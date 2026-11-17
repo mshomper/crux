@@ -162,6 +162,13 @@ export function repeatsIn(events, opts) {
   return out;
 }
 
+// The places (1-based, in `events`) of the messages that closed a legacy summary (one asked before the cutover, closed by
+// someone else writing in its thread). The log archive (lib/archive.mjs) keeps those messages beside the summaries, so
+// that dropping the rest of the chat leaves the same cards open.
+export function legacyClosers(events) {
+  return readCards(events).asked.filter(s => s.answered && s.when).map(s => s.when);
+}
+
 export function questionOpen(events, id, opts) { return openQuestions(events, opts).some(q => q.id === id); }
 
 // Decision 64, for notices only: for each question still open in card `id`, the earlier summaries (other threads)
