@@ -2408,9 +2408,11 @@ export class Hub {
     if (this.summarising) return this.summarising;
     const run = (async () => {
       for (const p of this.projects.values()) {
-        // The choice is made here, per project: a project whose switch allows a set-up provider is summarised by it, and by
-        // nothing else (a failure leaves the month for the next tick; it never drops to Claude). Otherwise Claude, as before.
-        const outside = this.offload?.plan(p.dir) || null;
+        // The choice is made here, per project: a project that has opted in to outside month summaries (a separate setting,
+        // off by default) and whose switch allows a set-up provider is summarised by it, and by nothing else (a failure
+        // leaves the month for the next tick; it never drops to Claude). Otherwise Claude, as before: allowing outside jobs
+        // does not send archived chat outside.
+        const outside = this.settings.outsideSummaries?.(p.dir) ? (this.offload?.plan(p.dir) || null) : null;
         const onUsage = res => {
           if (!res?.modelUsage || !Object.keys(res.modelUsage).length) return;
           if (res.via === 'outside') { this.offload.logUsage(p, res, { agent: 'month summaries', agentType: 'summary', role: 'summary', purpose: 'month summary' }); return; }

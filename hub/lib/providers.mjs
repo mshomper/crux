@@ -39,6 +39,17 @@ export const IMAGE_PRICES = {
   'gemini-3.1-flash-image': { perImage: 0.067, inPerM: 0.50, outPerM: 60.00 },
   'gemini-2.5-flash-image': { perImage: 0.039, inPerM: 0.30, outPerM: 30.00 }
 };
+// What an outside call counts as against the daily dollar cap when its real cost is unknown (a model not in a price table, a
+// price that has ended, OpenAI pictures): never 0, so the cap still holds. A picture counts at least 5 cents, or the dearest
+// listed picture price; text counts its tokens at the dearest listed text price (flat 1 cent when the counts are missing).
+export function fallbackCostUSD(purpose, tokens = null) {
+  if (purpose === 'make_image') return Math.max(0.05, ...Object.values(IMAGE_PRICES).map(p => p.perImage));
+  const input = Number(tokens?.input) || 0, output = Number(tokens?.output) || 0;
+  if (!input && !output) return 0.01;
+  const top = Object.values(PRICES);
+  return (input * Math.max(...top.map(p => p.input)) + output * Math.max(...top.map(p => p.output))) / 1e6;
+}
+
 // Aspect ratios the make_image tool accepts. The docs show "1:1" and "16:9"; the rest are the usual ones and Google refuses
 // one the model does not take (a plain 'refused').
 export const ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];
@@ -58,6 +69,9 @@ export const ERROR_MESSAGES = {
   'rate-limit': 'The outside model is rate-limited right now.',
   'no-key': 'No key is saved for the outside model.',
   refused: 'The outside model refused the request.',
+  'key-rejected': 'The provider did not accept the saved key.',
+  'unknown-model': 'The provider does not know that model name.',
+  'local-only': 'This project is set to Local only, and the hub\'s provider is not on this computer.',
   'bad-answer': 'The outside model gave an answer the hub could not read.',
   off: 'Outside models are off for this project.',
   network: 'The outside model could not be reached.',
@@ -165,7 +179,8 @@ export class ProviderClient {
       const ra = Number(res.headers?.get?.('retry-after'));
       return this.fail('rate-limit', { status: s, retryAfterSec: Number.isFinite(ra) && ra >= 0 ? ra : null });
     }
-    if (s === 401 || s === 403) return this.fail('refused', { status: s });
+    if (s === 401 || s === 403) return this.fail('key-rejected', { status: s });
+    if (s === 404) return this.fail('unknown-model', { status: s });
     if (s >= 500) return this.fail('network', { status: s });
     return this.fail('refused', { status: s });
   }

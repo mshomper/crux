@@ -78,6 +78,7 @@ export class HubSettings {
   project(dir) { return this.projects[projectKey(dir)] || null; }
   // The project's outside-models switch: 'off' when unset or anything else.
   outsideLimits(dir) { const p = this.project(dir) || {}; return { callsPerHour: p.outsideCallsPerHour ?? 30, usdPerDay: p.outsideUsdPerDay ?? 0.50 }; }
+  outsideSummaries(dir) { return this.project(dir)?.outsideSummaries === true; }
   outsideMode(dir) { const m = this.project(dir)?.outsideModels; return OUTSIDE_MODES.includes(m) ? m : 'off'; }
   // A handoff number for one project: its own when set, else the hub default.
   projectNumber(dir, k) {
@@ -97,6 +98,9 @@ export class HubSettings {
     if (CHECK_MODES.includes(changes.permissionCheck)) { cur.permissionCheck = changes.permissionCheck; changed = true; }
     if (typeof changes.paused === 'boolean') { cur.paused = changes.paused; changed = true; }
     if (OUTSIDE_MODES.includes(changes.outsideModels)) { cur.outsideModels = changes.outsideModels; changed = true; }
+    // Month summaries stay on Claude unless this separate opt-in is set (default off): archived chat does not go outside
+    // just because a project allows outside jobs. No box on the card; set in hub settings.
+    if (typeof changes.outsideSummaries === 'boolean') { cur.outsideSummaries = changes.outsideSummaries; changed = true; }
     // the agent tool's allowance per project: calls per hour and estimated dollars per day (null clears to the default)
     for (const n of ['outsideCallsPerHour', 'outsideUsdPerDay']) {
       if (!(n in changes)) continue;

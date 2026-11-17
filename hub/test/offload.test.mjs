@@ -72,7 +72,7 @@ function world(t, { events = oldLog(), switchTo = 'any', keySaved = true, timeou
   writeFileSync(join(dir, '.crux', 'events.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
   const settings = new HubSettings({ file: null });
   if (provider) settings.set({ outsideProvider: provider });
-  if (switchTo) settings.setProject(dir, { outsideModels: switchTo });
+  if (switchTo) settings.setProject(dir, { outsideModels: switchTo, outsideSummaries: true });   // month summaries outside are a separate opt-in
   const keys = keysIn(data, keySaved);
   const offload = new Offload({ settings, keys, baseUrls: { openai: MOCK, google: MOCK, openrouter: MOCK }, timeoutMs, vramReader });
   const claude = async () => { claude.calls++; throw new Error('Claude must not be called'); };
@@ -170,7 +170,7 @@ test('E. key hygiene: the one dummy key is in no event, page view, summary file,
   reset('echo401');
   const errors = [];
   for (const run of [() => w.offload.chat(w.dir, { system: 's', user: 'u' }), () => new ProviderClient({ provider: 'openai', model: 'm', apiKey: DUMMY_KEY, baseUrl: MOCK }).image({ prompt: 'p' })]) {
-    try { await run(); assert.fail('should have been refused'); } catch (e) { assert.ok(e instanceof ProviderError); assert.equal(e.kind, 'refused'); errors.push(e.message, e.stack || '', JSON.stringify(e), String(e)); }
+    try { await run(); assert.fail('should have been refused'); } catch (e) { assert.ok(e instanceof ProviderError); assert.equal(e.kind, 'key-rejected'); errors.push(e.message, e.stack || '', JSON.stringify(e), String(e)); }
   }
   assert.ok(mock.requests.some(r => r.headers.authorization === `Bearer ${DUMMY_KEY}`), 'the key was sent to the mock (it is what the echo returned)');
   const tool = await cruxTools(w.hub, w.p, agentOf).instance._registeredTools.ask_outside_model.handler({ question: 'q' }, {});

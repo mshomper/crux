@@ -124,7 +124,7 @@ async function api(path, body) {
 $('#pair-btn').addEventListener('click', () => guardUI.openPair());
 
 async function load() {
-  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, account, profile, bootAt, setup, voice, stream } = await api('/api/state');
+  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, account, profile, bootAt, setup, voice, stream, outsideKeys } = await api('/api/state');
   S.profile = profile || null;   // decision 79 A: whether a profile exists, and whether to show the first-run prompt
   S.account = account || null;   // which account the agents run on (decision 78 A); never more of a key than its last four characters
   S.voice = voice || null;   // decision 61 A: the voice switch and helper; canSetup is true on the hub's own PC
@@ -143,6 +143,7 @@ async function load() {
   map.retireAt = retireAt;
   S.retireAt = retireAt;
   S.settings = settings || {};
+  S.outsideKeys = outsideKeys || {};   // decision 80: which outside providers have a saved key, and its last four characters
   S.models = models || [];
   keepHeld(S.projects, projects, S.held);
   S.projects = projects;
@@ -609,7 +610,7 @@ const listsCard = new ListsCard({ api, toast: (m, tone) => toast(m, tone) });
 const settingsCards = new SettingsCards({
   api, reload: () => load(), toast: m => toast(m),
   openLists: p => listsCard.show(p),
-  hubSettings: () => S.settings || {},
+  hubSettings: () => ({ ...(S.settings || {}), outsideKeys: S.outsideKeys || {} }),
   sideRect: () => $('#side')?.getBoundingClientRect()
 });
 

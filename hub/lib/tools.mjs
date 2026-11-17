@@ -98,8 +98,8 @@ export function cruxTools(hub, project, agent) {
       { instructions: z.string().max(DRAFT_MAX_INSTRUCTIONS).describe('What to write: the kind of document, audience, length, headings.'), source: z.string().max(DRAFT_MAX_SOURCE).optional().describe('The facts to draw on, pasted as text.') },
       async ({ instructions, source }) => text(await draftOutside(hub.offload, project, agent, { instructions, source }))));
     // Pictures need the project set to Any; the tool is listed only then (the handler checks again on every call).
-    if (hub.offload.mode(project.dir) === 'any') {
-      tools.push(tool('make_image', 'Make one picture with the outside image model (Google) from a prompt and an aspect ratio. The hub makes the call with its own saved key and saves the picture like post_visual: it shows in your thread and its id works in post_summary visuals and in a decision\'s images. It costs real money (a few cents each) and counts against the project\'s allowance; use it for pictures worth having, not for drafts. Describe the picture in plain words; never put secrets or private text in the prompt.',
+    if (outsideImages(hub, project, agent)) {
+      tools.push(tool('make_image', 'Make one picture with the outside provider\'s image model from a prompt and an aspect ratio. The hub makes the call with its own saved key and saves the picture like post_visual: it shows in your thread and its id works in post_summary visuals and in a decision\'s images. It costs real money (a few cents each) and counts against the project\'s allowance; use it for pictures worth having, not for drafts. Describe the picture in plain words; never put secrets or private text in the prompt.',
         { prompt: z.string().max(IMAGE_MAX_PROMPT), aspect_ratio: z.enum(ASPECT_RATIOS).optional().default('1:1') },
         async ({ prompt, aspect_ratio }) => text(await makeImage(hub.offload, project, agent, { prompt, aspect_ratio }, (buf, caption) => hub.postImage(project, agent, buf, caption)))));
     }
@@ -337,11 +337,12 @@ export function markEntryDone(board, id, from, note = '') {
   } catch (e) { return `Not marked: ${e.message}`; }
 }
 
-export const outsideListed = (hub, project, agent) => !!project && agent?.role !== 'conductor' && !project.hubWide && !!hub?.offload && hub.offload.mode(project.dir) !== 'off';
+export const outsideListed = (hub, project, agent) => !!project && agent?.role !== 'conductor' && !project.hubWide && !!hub?.offload && !!hub.offload.plan(project.dir);   // switch on and a provider this project may reach (not Local only with a cloud provider)
+const outsideImages = (hub, project, agent) => outsideListed(hub, project, agent) && hub.offload.plan(project.dir).mode === 'any';
 
 export function cruxToolNames(agent, hub = null, project = null) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
-  if (outsideListed(hub, project, agent)) names.push('ask_outside_model', 'draft_with_outside_model', ...(hub.offload.mode(project.dir) === 'any' ? ['make_image'] : []));
+  if (outsideListed(hub, project, agent)) names.push('ask_outside_model', 'draft_with_outside_model', ...(outsideImages(hub, project, agent) ? ['make_image'] : []));
   if (agent.predecessor) names.push('ask_predecessor');
   if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'handoff_worker', 'answer_permission', 'mark_entry_done', 'draft_expedition');
   if (agent.role === 'orchestrator') names.push('restart_hub', 'reply_to_conductor');   // decisions 47 and 62

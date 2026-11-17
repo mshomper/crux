@@ -140,6 +140,14 @@ export const PROVIDERS = [['google', 'Google'], ['openai', 'OpenAI'], ['openrout
 export const TERMS = [['unknown', 'Not sure'], ['free', 'Free plan'], ['paid', 'Paid plan']];
 const TERMS_TIP = 'Paid plan: the provider does not train on or keep what the hub sends. Not sure or Free plan: projects set to Any send nothing. Google\'s picture models are paid only.';
 
+// Under the provider: whether a key is saved on this computer (never more than its last four characters). Ollama needs none.
+export function keyLine(provider, keys = {}) {
+  if (provider === 'ollama') return '<p class="ps-keyline">No key needed: it runs on this computer.</p>';
+  const k = keys?.[provider];
+  return k?.saved ? `<p class="ps-keyline ok">${ic('check')}Key saved${k.end ? `, ends ${esc(k.end)}` : ''}</p>`
+    : `<p class="ps-keyline warn">${ic('warn')}No key yet. Run the live-check tool in the hub folder to save one.</p>`;
+}
+
 const head = (iconId, title) => `<header class="ps-head">${ic(iconId)}<h2 id="ps-title">${esc(title)}</h2>
   <button type="button" class="ps-x" data-ps-close aria-label="Close without changing anything" title="Close without changing anything">${ic('x')}</button></header>`;
 const foot = note => `<footer class="ps-foot"><p class="ps-note">${note}</p><button type="button" class="btn primary ps-done" data-ps-done>${ic('check')}Done</button></footer>`;
@@ -180,7 +188,7 @@ export function hubPanel(d) {
     <section class="ps-sec"><h3 class="ps-sec-head">When the orchestrator may hand a worker on</h3>
       <div class="ps-nums">${[WORKER_FLOOR, WORKER_MARK].map(f => numRow(f, d.nums[f.k], null, d.errors?.[f.k], 'h')).join('')}</div></section>
     <section class="ps-sec ps-last"><h3 class="ps-sec-head">Outside provider ${help('Which service answers when a project that has Outside models turned on hands off a job. One for the whole hub. The key is saved on this computer by the live-check tool, never typed here. Each project\'s own switch is on its settings card.')}</h3>
-      <div class="ps-conn" data-ps-provider>${segN(d.provider, 'provider', PROVIDERS)}</div>
+      <div class="ps-conn" data-ps-provider>${segN(d.provider, 'provider', PROVIDERS)}${keyLine(d.provider, d.keys)}</div>
       <div class="ps-row"><span class="ps-num-l"><label class="ps-num-label" for="ps-h-model"><span>Model for text</span></label>${help('The model that writes answers and drafts, exactly as the provider names it, for example gemini-3.5-flash-lite. Pictures use the provider\'s picture model, chosen by the hub.')}</span>
         <input id="ps-h-model" class="ps-model" type="text" autocomplete="off" spellcheck="false" maxlength="120" data-ps-model value="${esc(d.model)}">${d.errors?.model ? `<span class="ps-dflt warn" style="grid-column:1/-1">${ic('warn')}${esc(d.errors.model)}</span>` : ''}</div>
       <div class="ps-row"><span class="ps-num-l"><span class="ps-num-label"><span>Your plan with them</span></span>${help(TERMS_TIP)}</span>${segN(d.terms, 'terms', TERMS)}</div></section>
@@ -258,7 +266,7 @@ export class SettingsCards {
     this.kind = 'hub';
     const op = s.outsideProvider;
     this.d = { route: s.routePermissions !== false, nums: Object.fromEntries(HUB_FIELDS.map(f => [f.k, String(s[f.k] ?? '')])), errors: {},
-      provider: op?.provider || 'google', model: op?.model || 'gemini-3.5-flash-lite', terms: op?.dataTerms || 'unknown', touched: false };
+      provider: op?.provider || 'google', model: op?.model || 'gemini-3.5-flash-lite', terms: op?.dataTerms || 'unknown', touched: false, keys: s.outsideKeys || {} };
     this.show();
   }
   show() {
