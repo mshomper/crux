@@ -382,6 +382,7 @@ export class Agent {
       if (this.role === 'conductor') this.quietTurn = true;
     } else if (m.type === 'system' && m.subtype === 'init') {
       if (m.model && m.model !== this.modelSeen) this.modelSeen = m.model;
+      this.hub.noteKeySource?.(m.apiKeySource);   // with the Account card's saved key, Claude Code must report apiKeyHelper (decision 78 A)
       if (m.session_id !== this.sessionId) {
         this.sessionId = m.session_id;
         this.project.log.append('agent_session', { agent: this.name, sessionId: m.session_id, model: m.model, effort: this.effort, agentType: this.type });

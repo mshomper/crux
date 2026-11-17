@@ -225,24 +225,24 @@ export function sdkCall({ query, model = CHECK_MODEL, claudePath = null, env = p
     const byModel = res?.modelUsage || {};
     const used = Object.entries(byModel);
     const t = used.reduce((a, [, u]) => { const x = tokensOf(u); for (const k of Object.keys(a)) a[k] += x[k]; return a; }, { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
-    return { text, via: 'sdk', modelUsage: byModel, tokens: t, costUSD: Number(res?.total_cost_usd) || used.reduce((s, [, u]) => s + (Number(u?.costUSD) || 0), 0) };
+    return { text, via: 'sdk', stopReason: res?.stop_reason || null, modelUsage: byModel, tokens: t, costUSD: Number(res?.total_cost_usd) || used.reduce((s, [, u]) => s + (Number(u?.costUSD) || 0), 0) };
   };
 }
 
 // A direct call to the API, when a key is set up (CRUX_HUB_USE_API_KEY=1 with ANTHROPIC_API_KEY): the system part is
 // marked for caching, so repeat requests in a project read it at a tenth of the price.
-export function apiCall({ apiKey, model = CHECK_MODEL, fetchFn = globalThis.fetch, baseUrl = 'https://api.anthropic.com' }) {
+export function apiCall({ apiKey, model = CHECK_MODEL, fetchFn = globalThis.fetch, baseUrl = 'https://api.anthropic.com', maxTokens = 300 }) {
   return async ({ system, user, signal }) => {
     const res = await fetchFn(`${baseUrl}/v1/messages`, {
       method: 'POST', signal,
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model, max_tokens: 300, system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: user }] })
+      body: JSON.stringify({ model, max_tokens: maxTokens, system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: user }] })
     });
     if (!res.ok) throw new Error(`The API answered ${res.status}`);
     const j = await res.json();
     const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
     const t = tokensOf(j.usage);
-    return { text, via: 'api', modelUsage: { [model]: { inputTokens: t.input, outputTokens: t.output, cacheReadInputTokens: t.cacheRead, cacheCreationInputTokens: t.cacheCreation, costUSD: listCost(model, t) } }, tokens: t, costUSD: listCost(model, t) };
+    return { text, via: 'api', stopReason: j.stop_reason || null, modelUsage: { [model]: { inputTokens: t.input, outputTokens: t.output, cacheReadInputTokens: t.cacheRead, cacheCreationInputTokens: t.cacheCreation, costUSD: listCost(model, t) } }, tokens: t, costUSD: listCost(model, t) };
   };
 }
 

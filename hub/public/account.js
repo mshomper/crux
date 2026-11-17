@@ -51,6 +51,26 @@ function keyPlate(v, d) {
   </div>`;
 }
 
+export const IMPORT_NOTE = 'An agent drafts your profile from it, and you approve it as one batch in Needs you. Nothing is written before you approve. The export is read as data only.';
+// The Profile part of the card (decision 79 A): whether a profile exists, Create, and Import from another assistant.
+export function profileSection(pf, d) {
+  if (!pf) return '';
+  const packs = pf.packs ? `, ${pf.packs} project pack${pf.packs === 1 ? '' : 's'}` : '';
+  return `<section class="ps-sec ps-last ac-profile"><div class="ps-sec-head">Profile</div>
+    <div class="ac-now"><span class="ps-hex ${pf.exists ? 'on' : ''}">${ic('file-text')}</span>
+      <div><b>${pf.exists ? 'Profile found' : 'No profile yet'}</b><span class="ac-sub">${pf.exists ? `Core${packs}${pf.hasPrivate ? ', private notes' : ''}.${pf.missing?.length ? ' Some files are missing.' : ''}` : 'Agents start without notes on how you like to work.'}</span></div></div>
+    <div class="ac-row ac-pf-row">${pf.exists && !pf.missing?.length ? '' : `<button type="button" class="btn primary" data-pf-create ${d.pfBusy ? 'disabled' : ''}>${ic('plus')}${pf.exists ? 'Create missing files' : 'Create profile'}</button>`}
+      <button type="button" class="btn" data-pf-open aria-expanded="${!!d.pfOpen}">${ic('download')}Import from another assistant</button></div>
+    ${d.pfNote ? `<p class="ps-dflt diff ac-pf-note">${esc(d.pfNote)}</p>` : ''}
+    ${d.pfOpen ? `<div class="ac-import">
+      <div class="ac-drop" data-pf-drop><textarea class="ac-field ac-text" data-pf-text rows="5" spellcheck="false" placeholder="Paste the export here, or drop a file on this box" aria-label="Export from another assistant">${esc(d.pfText || '')}</textarea></div>
+      <p class="ac-lock">${ic('check')}<span>${esc(IMPORT_NOTE)} Up to ${Number(pf.importCap || 60000).toLocaleString('en-US')} characters.</span></p>
+      <div class="ac-row"><button type="button" class="btn primary" data-pf-send ${(d.pfText || '').trim() && !d.pfBusy ? '' : 'disabled'}>${ic('send')}${d.pfBusy ? 'Sorting it...' : 'Sort it'}</button>
+        <button type="button" class="btn ghost" data-pf-file-btn>${ic('file-text')}Choose a file</button><input type="file" accept=".txt,.md,.json,.csv,text/*" data-pf-file hidden></div></div>` : ''}
+    ${d.pfError ? `<p class="ps-dflt warn ac-err" role="alert">${ic('warn')}${esc(d.pfError)}</p>` : ''}
+  </section>`;
+}
+
 export function accountCard(v, d) {
   const sw = switchState(v, d);
   return `<div class="ps-head"><h2 id="ps-title">Account</h2><button type="button" class="ps-x" data-ac-close aria-label="Close without changing anything" title="Close without changing anything">${ic('x')}</button></div>
@@ -61,10 +81,11 @@ export function accountCard(v, d) {
       ${v.problem ? `<p class="ps-lv-warn ac-env">${ic('warn')}<span>${esc(v.problem)}</span></p>` : ''}
       ${v.envLocked ? `<p class="ps-lv-warn ac-env">${ic('warn')}<span>This key comes from the environment variables ANTHROPIC_API_KEY and CRUX_HUB_USE_API_KEY. They win over this card: remove them and restart the hub to choose here.</span></p>` : ''}
     </section>
-    <section class="ps-sec ps-last"><div class="ps-sec-head">Choose</div>
+    <section class="ps-sec"><div class="ps-sec-head">Choose</div>
       <div class="ps-levels ${v.envLocked ? 'ac-locked' : ''}" role="radiogroup" aria-label="Account">${planPlate(v, d)}${keyPlate(v, d)}</div>
       ${d.error ? `<p class="ps-dflt warn ac-err" role="alert">${ic('warn')}${esc(d.error)}</p>` : ''}
     </section>
+    ${profileSection(d.profile, d)}
   </div>
   <div class="ps-foot">
     <p class="ps-note ac-restart">${ic('warn')}<span>Switching restarts the hub. This page reconnects by itself, and agents carry on after it.</span></p>
@@ -82,7 +103,15 @@ export class AccountCard {
     document.body.append(this.el);
     this.el.addEventListener('pointerdown', e => { this.downOutside = e.target === this.el; });
     this.el.addEventListener('click', e => this.click(e));
-    this.el.addEventListener('input', e => { if (e.target.matches?.('[data-ac-key]')) { this.typedKey = this.d.key = e.target.value; this.d.error = ''; this.refreshSwitch(); } });
+    this.el.addEventListener('input', e => {
+      if (e.target.matches?.('[data-ac-key]')) { this.typedKey = this.d.key = e.target.value; this.d.error = ''; this.refreshSwitch(); }
+      else if (e.target.matches?.('[data-pf-text]')) { this.d.pfText = e.target.value; this.d.pfError = ''; const b = this.el.querySelector('[data-pf-send]'); if (b) b.disabled = !(this.d.pfText.trim() && !this.d.pfBusy); }
+    });
+    // drop a file on the paste box: its text goes in (up to the cap; the hub says plainly if it is too long)
+    this.el.addEventListener('dragover', e => { if (e.target.closest?.('[data-pf-drop]')) { e.preventDefault(); e.target.closest('[data-pf-drop]').classList.add('over'); } });
+    this.el.addEventListener('dragleave', e => e.target.closest?.('[data-pf-drop]')?.classList.remove('over'));
+    this.el.addEventListener('drop', e => { const z = e.target.closest?.('[data-pf-drop]'); if (!z) return; e.preventDefault(); z.classList.remove('over'); this.takeFile(e.dataTransfer?.files?.[0]); });
+    this.el.addEventListener('change', e => { if (e.target.matches?.('[data-pf-file]')) { this.takeFile(e.target.files?.[0]); e.target.value = ''; } });
     this.el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches?.('[data-ac-key]')) { e.preventDefault(); this.go(); } });
     this.el.addEventListener('close', () => { this.stopWatching(); this.typedKey = ''; if (this.d) this.d.key = ''; this.d = null; this.opener?.focus?.({ preventScroll: true }); });
     addEventListener('resize', () => this.place());
@@ -93,7 +122,7 @@ export class AccountCard {
   show() {
     this.v = null; this.typedKey = '';
     const v = this.view;
-    this.d = { pick: v.mode, key: '', error: '', busy: false, waiting: false, signinNote: '' };
+    this.d = { pick: v.mode, key: '', error: '', busy: false, waiting: false, signinNote: '', profile: this.host.profile?.() || null, pfOpen: false, pfText: '', pfBusy: false, pfError: '', pfNote: '' };
     this.opener = document.activeElement;
     this.render();
     if (!this.el.open) this.el.showModal();
@@ -135,6 +164,10 @@ export class AccountCard {
     if (e.target.closest('[data-ac-switch]')) return void this.go();
     if (e.target.closest('[data-ac-signin]')) return void this.signIn();
     if (e.target.closest('[data-ac-recheck]')) return void this.refresh();
+    if (e.target.closest('[data-pf-create]')) return void this.createProfile();
+    if (e.target.closest('[data-pf-open]')) { this.d.pfOpen = !this.d.pfOpen; this.d.pfError = ''; this.render(); this.el.querySelector('[data-pf-text]')?.focus({ preventScroll: true }); this.el.querySelector('.ac-import')?.scrollIntoView({ block: 'end' }); return; }
+    if (e.target.closest('[data-pf-file-btn]')) return void this.el.querySelector('[data-pf-file]')?.click();
+    if (e.target.closest('[data-pf-send]')) return void this.sendImport();
     const pick = e.target.closest('[data-ac-pick]');
     if (pick && !this.view.envLocked && this.d.pick !== pick.dataset.acPick) {
       this.d.pick = pick.dataset.acPick; this.d.error = '';
@@ -157,26 +190,61 @@ export class AccountCard {
     } finally { body.apiKey = ''; }
   }
 
+  // ---------- the profile (decision 79 A) ----------
+  async createProfile() {
+    this.d.pfBusy = true; this.d.pfError = ''; this.render();
+    try {
+      const r = await this.host.api('/api/profile/create', {});
+      this.host.setProfile?.(r.profile); this.d.profile = r.profile;
+      const git = { initialised: ', and a local git repository was started in your home Crux folder (nothing is sent anywhere)', unavailable: '. Git is not installed on this PC, so the folder is not under version control', inside: '. Your home Crux folder sits inside another git repository, so it was left as it is: check that repository is private' }[r.git] || '';
+      this.d.pfNote = `${r.created?.length ? (r.skipped?.length ? 'Missing profile files created' : 'Profile created') : 'Nothing was missing'}${git}. Fill it in with Import, or let agents add lessons as you work.`;
+    } catch (e) { this.d.pfError = e.message; }
+    this.d.pfBusy = false; this.render();
+  }
+  async takeFile(file) {
+    if (!file) return;
+    const cap = this.d.profile?.importCap || 60000;
+    // The size is checked before the file is read: a huge file is never loaded into the page (a character is at most 4 bytes).
+    if (file.size > cap * 4) { this.d.pfOpen = true; this.d.pfError = `That file is ${(file.size / 1048576).toFixed(1)} MB; at most ${cap.toLocaleString('en-US')} characters are taken in one go. Cut it down first.`; return this.render(); }
+    try {
+      const text = await file.text();
+      this.d.pfOpen = true; this.d.pfText = text; this.d.pfError = text.length > cap ? `That file is ${text.length.toLocaleString('en-US')} characters; at most ${cap.toLocaleString('en-US')} are taken in one go. Cut it down first.` : '';
+    } catch { this.d.pfError = 'That file could not be read as text.'; }
+    this.render();
+  }
+  async sendImport() {
+    const text = this.d.pfText.trim();
+    if (!text || this.d.pfBusy) return;
+    this.d.pfBusy = true; this.d.pfError = ''; this.render();
+    try {
+      await this.host.api('/api/profile/import', { project: this.host.project?.(), text });
+      this.d.pfText = '';
+      this.close();
+      this.host.afterImport?.();   // Needs you, where the batch waits
+    } catch (e) { this.d.pfBusy = false; this.d.pfError = e.message; this.render(); }
+  }
+
   // "Sign in as someone else": the hub opens a terminal window on this PC; then the card re-reads who is signed in.
   async signIn() {
     this.d.busy = true; this.d.signinNote = ''; this.render();
     try {
       const r = await this.host.api('/api/account/signin', {});
       this.d.busy = false;
-      if (r.opened) { this.d.waiting = true; this.watch(); }
+      if (r.opened) { this.d.waiting = true; this.d.baseId = this.view.planId || null; this.watch(); }
       else this.d.signinNote = r.test ? 'A test hub opens no sign-in window.' : `Open a terminal on this PC and run: ${r.command || 'claude auth login'}`;
     } catch (e) { this.d.busy = false; this.d.error = e.message; }
     this.render();
   }
   async refresh() {
     try {
-      const was = this.view.planName;
       this.v = await this.host.api('/api/account');
-      const changed = this.d?.waiting && this.v.planName && this.v.planName !== was;
-      if (changed) { this.d.waiting = false; this.stopWatching(); this.d.signinNote = `Signed in as ${this.v.planName}. Restarting the hub so its agents use it.`; }
+      // The person is compared by id (two people can share a display name); an unreadable first look is replaced by the first
+      // one that can be read, never counted as a change (the hub itself watches and restarts, this only words the card).
+      if (this.d?.waiting && !this.d.baseId && this.v.planId) this.d.baseId = this.v.planId;
+      const changed = this.d?.waiting && this.d.baseId && this.v.planId && this.v.planId !== this.d.baseId;
+      if (changed) { this.d.waiting = false; this.stopWatching(); this.d.signinNote = `Signed in as ${this.v.planName}. The hub restarts in a moment so its agents use it.`; }
       this.render();
-      if (changed) await this.host.restart?.();   // like Switch: running agents pick up the new sign-in after a restart
-      if (changed) this.close();
+      if (changed) setTimeout(() => this.close(), 2500);   // the hub restarts by itself when it sees the new name (even with this card closed)
     } catch { /* the hub is busy: the next check tries again */ }
   }
   watch() {

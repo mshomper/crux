@@ -16,7 +16,7 @@ import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
 import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp, dataDir, isolateNonLiveData } from './lib/relaunch.mjs';
 import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, saveDollarCap, readHubConfig, pickFolder } from './lib/setup.mjs';
-import { Account, openSignInWindow, NO_PROTECT } from './lib/account.mjs';
+import { Account, openSignInWindow, watchSignIn, NO_PROTECT } from './lib/account.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
 import { searchLog } from './lib/archive.mjs';
@@ -90,6 +90,9 @@ const settings = new HubSettings({ initial: { ...hubCfg, retireAt } });
 // Decision 55: the Conductor keeps its log and handoffs in the hub's own state folder, next to settings.json.
 const hub = new Hub({ projects, defaults: hubCfg.defaults, settings, noAgents, conductorDir: join(dataDir(), 'conductor') });
 // The saved key (Account card) is used by the hub in memory and reaches agents through apiKeyHelper, never the environment.
+// What the Account card is told: the account's own view, plus a problem line when Claude Code said it is not using the helper.
+const accountView = () => { const v = account.view(); return !v.problem && hub.keyProblem ? { ...v, problem: hub.keyProblem } : v; };
+let stopSignInWatch = null;
 const syncKey = () => { hub.apiKey = () => account.currentKey(); hub.apiKeyHelper = account.helperCommand({ hubDir: here }); };
 syncKey();
 if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
@@ -278,7 +281,7 @@ const routes = {
   // The conductor alone (its events change often; the page reads this instead of the whole state), and one entry's words.
   'GET /api/conductor': () => ({ conductor: hub.conductor?.view() || null, seq: streamSeq }),
   'GET /api/entry': ({ project, id }) => hub.entryBody(project, id),
-  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: account.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
+  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: accountView(), profile: hub.profileView(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/older': ({ project, thread, before, ts }) => hub.older(project, thread, before, ts),
   // Search chat and summaries in a project's log, archive included: words must all appear. { hits: [{ id, ts, type, thread, from, snippet }] }
@@ -306,7 +309,7 @@ const routes = {
   },
   // ---------- decision 78 A: the Account card ----------
   // What the card shows: which account is in use, whether a key is saved (its last four characters only), who is signed in.
-  'GET /api/account': () => account.view(),
+  'GET /api/account': () => accountView(),
   // Switch: { mode: 'plan' } or { mode: 'key', apiKey? } (a pasted key, or the one already saved). The key is shape-checked,
   // asked of Anthropic (a free list of models; a test hub never calls out), protected and saved; never logged, never sent
   // back. Then the hub restarts onto the choice; agents carry on after it, as after any restart.
@@ -322,14 +325,28 @@ const routes = {
       account.chooseKey(k);
     } else throw new Error('Choose Plan sign-in or API key.');
     setTimeout(restart, 300);
-    return { restarting: true, boot: BOOT, account: account.view() };
+    return { restarting: true, boot: BOOT, account: accountView() };
   },
+  // ---------- decision 79 A: the profile, from the Account card ----------
+  'GET /api/profile': () => hub.profileView(),
+  // Create <home>/profile from the template (never overwrites; git init in the home folder if it is not a repo yet).
+  'POST /api/profile/create': () => hub.createProfile(),
+  // Import: { project, text } is an export from another assistant, as pasted or dropped. One model call with no tools sorts
+  // it; the result waits as one batch card in the project's Needs you. Nothing is written before it is accepted.
+  'POST /api/profile/import': async ({ project, text }) => hub.importProfile(hub.place(project), text),
+  // The proposed text of one waiting batch, for its card (private lines only to this PC).
+  'GET /api/profile/batch': ({ id }, { local }) => hub.profileBatch(String(id || ''), { local }),
+  // "Not now" on the first-run prompt: remembered, so it never comes back.
+  'POST /api/profile/prompt': () => { hub.dismissPrompt(); return hub.profileView(); },
   // "Sign in as someone else": a terminal window on this PC runs Claude Code's own sign-in (it opens the browser). The card
   // then asks GET /api/account until the name changes. This PC only; a test hub opens nothing.
   'POST /api/account/signin': (_, ctx) => {
     if (!ctx.local) throw new GuardError('Signing in opens a window on the PC the hub runs on. Do it there.', 403);
     if (hub.noAgents) return { opened: false, test: true };
-    return { opened: openSignInWindow({ hubDir: here, claudePath: hub.claudeCode?.() || null }), command: 'claude auth login' };
+    const opened = openSignInWindow({ hubDir: here, claudePath: hub.claudeCode?.() || null });
+    // The hub watches for a new name (the card may be closed by then) and restarts itself, so running agents use the new sign-in.
+    if (opened) { stopSignInWatch?.(); stopSignInWatch = watchSignIn({ onChange: () => { console.log('A different person signed in: restarting so the agents use it.'); setTimeout(restart, 1500); } }); }
+    return { opened, command: 'claude auth login' };
   },
   // Download the exact Claude Code this hub's SDK expects; the page follows its progress through GET /api/setup.
   'POST /api/setup/claude': async (_, ctx) => { pcOnly(ctx); await claudeDownload.start(); return setupState(true); },
@@ -466,7 +483,7 @@ const routes = {
   // Only an answer the page marks as your own words ({ index, text, own: true }) can pre-approve a merge (decision 64);
   // without the mark (the Conductor's pre-fill, Take all, an older page) it is sent as yours but gives no pass.
   'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.place(project), String(question || ''), answers),
-  'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept) }),
+  'POST /api/lessons': ({ project, ids, accept }, { local }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept, { local }) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
   // ---------- the Expedition module (decisions 69 to 72), phase 5 ----------
   // Launch: { project, brief, question?, test: { 'CHECKLIST.md': '...', 'run.json': '...' }, envelope?: { hours, percent, dollars },
