@@ -234,7 +234,7 @@ test('the page: leaving All projects, Back or a hidden page drops a recording; t
 
 test('the page: only the page that spoke plays, never with its mic open; a tap anywhere stops her', () => {
   const app = src('../public/app.js');
-  assert.match(app, /ev\.type === 'voice_say' && ev\.logged && ev\.project === CP\.CONDUCTOR && ev\.client === VOICE_CLIENT && S\.voice\?\.on && voiceRec\.state === 'idle'\) voicePlayer\.play\(ev\)/);
+  assert.match(app, /ev\.type === 'voice_say' && ev\.logged && ev\.project === CP\.CONDUCTOR && ev\.client === VOICE_CLIENT && S\.voice\?\.on && voiceRec\.state === 'idle' && Date\.now\(\) - Date\.parse\(ev\.ts\) < 15000\) voicePlayer\.play\(ev\)/);   // and not an answer from a while ago, replayed by a resume
   assert.match(app, /const voiceStop = \$\('#voice-stop'\)/);
   assert.match(app, /if \(!S\.voice\.on\) voicePlayer\.stop\(\)/);
   assert.match(src('../public/index.html'), /<div id="voice-stop" class="voice-stop" hidden/);

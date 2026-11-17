@@ -111,8 +111,9 @@ export class Hub {
   // (server.mjs: <data>/conductor). Null: no Conductor (tests that do not ask for one).
   // checker: the one-shot permission check (decision 66, lib/permission-check.mjs); tests pass one with a stubbed model.
   // Left out, it is made on first use: the Agent SDK on this machine's sign-in, or the API when a key is set up.
-  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {} }) {
+  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {}, rotateLogs = true }) {
     this.noAgents = !!noAgents;
+    this.rotatesLogs = rotateLogs !== false;   // decision 74 B: move old events to the archive when a log is due (a test can turn it off)
     this.checkerMade = checker;
     this.checkGit = null;   // how the Auto script gate asks git whether a script is committed (lib/permission-scripts.mjs); tests swap in a fake
     this.memory = memory;
@@ -276,6 +277,8 @@ export class Hub {
     if (p.name === CONDUCTOR) throw new Error(`"${CONDUCTOR}" is the Conductor's own name; rename that folder to add it as a project.`);
     if (this.projects.has(p.name)) return this.projects.get(p.name);
     this.projects.set(p.name, p);
+    this.rotateLogs();   // before the log is read for the agents: the hub starts from the snapshot and the live file
+    if (!this.rotateTimer) { this.rotateTimer = setInterval(() => this.rotateLogs(), 6 * 3600e3); this.rotateTimer.unref?.(); }
     this.restore(p);
     this.markQuestionRules(p);
     p.log.on(ev => this.emit({ ...ev, project: p.name, logged: true }));
@@ -2167,9 +2170,25 @@ export class Hub {
 
   // ---------- views ----------
   // "Show older" in a thread: the page of conversation events just before the oldest one the page holds (lib/feed.mjs).
-  older(project, thread, before) {
-    const p = this.project(String(project || ''));
-    return olderPage(p.log.events, [...p.agents.values()].map(a => ({ name: a.name, thread: a.thread })), String(thread || '-'), String(before || ''));
+  // Past what is in memory it reads the project's archive (decision 74 B, lib/archive.mjs).
+  older(project, thread, before, ts) {
+    const p = this.project(String(project || '')), t = String(thread || '-');
+    const archive = { page: o => p.log.archivedPage(o), count: p.log.archivedOlder()[t] || 0 };
+    return olderPage(p.log.events, [...p.agents.values()].map(a => ({ name: a.name, thread: a.thread })), t, String(before || ''), Date.now(), archive, String(ts || ''), p.log.snapshotCount);
+  }
+
+  // Moves each project's log older than about two weeks into its archive, when it is due (lib/archive.mjs). At start and
+  // every few hours. CRUX_HUB_NO_ROTATE=1 turns it off (a plain off switch for the hub folder's owner).
+  rotateLogs() {
+    if (!this.rotatesLogs || process.env.CRUX_HUB_NO_ROTATE === '1') return [];
+    const done = [];
+    for (const p of this.projects.values()) {
+      try {
+        const r = p.log.rotateIfDue();
+        if (r) { done.push({ project: p.name, ...r }); console.log(`Log archive: ${p.name}: ${r.archived} events moved to ${r.months.join(', ')}; ${r.liveEvents} left in the live log.`); }
+      } catch (e) { console.error(`Log archive: ${p.name}: rotation failed, the live log is untouched: ${e.message}`); }
+    }
+    return done;
   }
 
   // The words of one board entry. The page gets entries without them and asks when you open one.
@@ -2185,10 +2204,12 @@ export class Hub {
     const views = [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor, type: a.type, model: a.model, effort: a.effort, modelSeen: a.modelSeen, restartPending: a.restartWhenIdle, ...(a.expedition ? { expedition: a.expedition, expeditionRole: a.expeditionRole } : {}) }));
     const board = p.board.snapshot();
     board.entries = board.entries.map(({ body, ...e }) => ({ ...e, hasBody: !!body }));
-    // The meters read today and since the hub started, so usage events from before the earlier of the two are not sent.
-    const usageSince = Math.min(this.bootAt || now, new Date(now).setHours(0, 0, 0, 0));
+    // The meters read today and since the hub started: usage events from before the earlier of 36 hours ago (any day's
+    // midnight, in any time zone, is later) and the hub's start are not sent.
+    const usageSince = Math.min(this.bootAt || now, now - 36 * 3600e3);
     const pending = [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id);
-    const w = waitingOf(evs, views, board.decisions, pending), pe = events ? pageEvents(evs, views, now, usageSince) : null;
+    const w = waitingOf(evs, views, board.decisions, pending, p.log.carried), pe = events ? pageEvents(evs, views, now, usageSince, p.log.snapshotCount) : null;
+    if (pe) for (const [t, n] of Object.entries(p.log.archivedOlder())) pe.older[t] = (pe.older[t] || 0) + n;   // what "Show older" can still bring from the archive
     return {
       name: p.name, dir: p.dir,
       ...(pe ? { events: pe.events, older: pe.older } : {}),

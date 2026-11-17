@@ -198,7 +198,8 @@ function connect() {
     // A resync is never thrown away for an old id (a restarted hub counts from the start again); a message already in the state is.
     const step = streamStep(S, n, ev);
     if (step === 'drop') return;
-    if (step === 'resync') { load().catch(() => { }); return; }
+    // A restarted hub may not answer the state read at once: try once more a moment later.
+    if (step === 'resync') { load().catch(() => setTimeout(() => load().catch(() => { }), 2500)); return; }
     if (ev.type === 'project_patch') { applyPatch(ev.project, ev.patch); return; }
     // Plan numbers belong to the hub, not a project: the live copy (no project) and the logged one both land here.
     if (ev.type === 'plan_usage') { if (!ev.logged) usageUI.setPlan(ev); return; }
@@ -1812,10 +1813,10 @@ document.addEventListener('click', e => {
     const t = b.dataset.older; if (!p || b.disabled) return;
     b.disabled = true;
     // The page of older items ends at the oldest conversation event this page holds for the thread.
-    const before = threadEvents(p, t).find(x => DISPLAY.has(x.type))?.id || '';
+    const oldest = threadEvents(p, t).find(x => DISPLAY.has(x.type)), before = oldest?.id || '';
     const feed = b.closest('.feed'), top = feed?.scrollTop || 0, height = feed?.scrollHeight || 0;
     act(async () => {
-      const { events, left, stale } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}`);
+      const { events, left, stale } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}&ts=${encodeURIComponent(oldest?.ts || '')}`);
       // Nothing came back: the page was out of step with the hub, so read the state again.
       if (stale || !events.length) return load();
       const have = new Set(p.events.map(x => x.id));

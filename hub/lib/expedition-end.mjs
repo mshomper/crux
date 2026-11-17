@@ -155,7 +155,9 @@ export class ExpeditionEnd {
     const leadText = ex.read('REPORT.md');
     const verdict = ex.read('verify/VERDICT.md');
     const claims = claimsStatus(verdict);
-    const md = assembleReport({ leadText, events: p.log.events, id: ex.id, question, claims, hubStop });
+    // The whole span of the expedition, archive included (decision 74 B): a long one may have begun before the live log.
+    const began = p.log.events.find(e => e.type === 'expedition_started' && e.expedition === ex.id);
+    const md = assembleReport({ leadText, events: began ? p.log.eventsSince(Date.parse(began.ts)) : p.log.events, id: ex.id, question, claims, hubStop });
     ex.write('REPORT.md', md);
     // BRIEF.md is the user's ask, hashed at the launch: if it is not what was launched (an agent's file tool under acceptEdits, a
     // disguised write), the card says so in plain words.

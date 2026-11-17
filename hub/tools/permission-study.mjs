@@ -27,18 +27,15 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { readAllEvents } from '../lib/archive.mjs';
 
 // ---------- reading ----------
 
+// Every event of a project: the archived months (decision 74 B) and the live file. Read-only: it repairs nothing.
 export function readEvents(projectDir) {
-  const file = join(projectDir, '.crux', 'events.jsonl');
-  if (!existsSync(file)) return null;
-  const out = [];
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
-    if (!line.trim()) continue;
-    try { out.push(JSON.parse(line)); } catch { /* a torn last line */ }
-  }
-  return out;
+  const dir = join(projectDir, '.crux');
+  if (!existsSync(join(dir, 'events.jsonl')) && !existsSync(join(dir, 'archive'))) return null;
+  return readAllEvents(dir, { repair: false });
 }
 
 export function projectsFromHubJson(home = process.env.CRUX_HOME || join(homedir(), 'crux')) {
