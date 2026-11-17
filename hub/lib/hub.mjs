@@ -15,7 +15,7 @@ import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite, expeditionFolderWrite } from './permission-rules.mjs';
 import { normalizeOverlay, parseHttpsUrl } from './permission-lists.mjs';
 import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
-import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './settings.mjs';
+import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, OUTSIDE_MODES, projectKey } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, EffortCeilings, modelId, effortLevel, modelLabel } from './agent-types.mjs';
@@ -27,6 +27,7 @@ import { PermissionCheck, CHECK_NAME, CHECK_MODEL, sdkCall, apiCall, scriptTexts
 import { scriptsFor, parseCommand, changedDiff } from './permission-scripts.mjs';
 import { totalsOf, sumCost } from '../public/usage.js';
 import { summariseDue, SUMMARY_MODEL } from './month-summaries.mjs';
+import { Offload } from './offload.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
 import { ExpeditionWatchdog, HUB_STOPS as EXPEDITION_HUB_STOPS } from './expedition-watchdog.mjs';
@@ -119,7 +120,7 @@ export class Hub {
   // (server.mjs: <data>/conductor). Null: no Conductor (tests that do not ask for one).
   // checker: the one-shot permission check (decision 66, lib/permission-check.mjs); tests pass one with a stubbed model.
   // Left out, it is made on first use: the Agent SDK on this machine's sign-in, or the API when a key is set up.
-  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {}, rotateLogs = !noAgents, summariser = null, profileCall = null, batches = null, promptFile = null }) {
+  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {}, rotateLogs = !noAgents, summariser = null, profileCall = null, batches = null, promptFile = null, offload = null }) {
     this.noAgents = !!noAgents;
     // Decision 79 A: the profile import. profileCall is the one model call with no tools that sorts an export (made on first
     // use; tests pass a fake). The proposed text waits in the hub's data folder until it is accepted or cancelled.
@@ -145,6 +146,9 @@ export class Hub {
     this.checkGit = null;   // how the Auto script gate asks git whether a script is committed (lib/permission-scripts.mjs); tests swap in a fake
     this.memory = memory;
     this.settings = settings;
+    // Outside models (expedition 20261117): the per-project switch, the provider keys and the calls. Off unless a project's
+    // switch is set in the hub settings; tests pass their own with a mock server's address.
+    this.offload = offload || new Offload({ settings });
     this.defaults = defaults || {};
     // Routing guide 9.1: effort levels each model accepts, learned from refusals and kept in the hub settings.
     this.effortCeilings = new EffortCeilings(settings?.effortCeilings, map => { try { settings?.save?.({ effortCeilings: map }); } catch { /* kept for this run */ } });
@@ -1146,6 +1150,31 @@ export class Hub {
     if (!VISUAL_TYPES[ext]) throw new Error(`Visuals must be one of ${Object.keys(VISUAL_TYPES).join(', ')}`);
     const { file, kind } = this.memory.storeVisual(p.name, path);
     return p.log.append('visual', { thread: agent.thread, from: agent.name, visual: file, kind, caption });
+  }
+
+  // A picture the hub itself made (make_image): stored and posted exactly like a post_visual PNG, so it shows in the thread
+  // and "<id>" works in a summary's visuals and a decision's images. Returns the id; throws a plain reason when it is not a picture.
+  postImage(p, agent, buf, caption) {
+    const attachment = p.attachments.save(buf, undefined, { imageOnly: true, label: 'That picture' });
+    p.log.append('visual', { thread: agent.thread, from: agent.name, visual: attachment.id, kind: 'image', attachment, caption: String(caption || '').slice(0, 200) });
+    return attachment.id;
+  }
+
+  // ---------- outside models (decision 80): the per-project switch, kept in hub settings only ----------
+  outsideMode(p) { return this.settings.outsideMode?.(p.dir) || 'off'; }
+  setOutsideMode(p, mode, by = 'you') {
+    if (!OUTSIDE_MODES.includes(mode)) return this.outsideMode(p);
+    const was = this.outsideMode(p);
+    this.settings.setProject(p.dir, { outsideModels: mode });
+    if (mode === was) return mode;
+    p.log.append('project_settings', { outsideModels: mode, was, by, thread: 'orchestrator' });
+    const who = by === 'you' ? 'You' : by;
+    this.notice(p, 'orchestrator', {
+      off: `${who} turned outside models off for ${p.name}: no text or picture goes to another provider.`,
+      local: `${who} set outside models to Local only for ${p.name}: drafts may go to a model on this computer; pictures stay off.`,
+      any: `${who} set outside models to Any for ${p.name}: the hub may send an agent's short questions, draft text and picture prompts to the provider chosen for the hub, within its allowance. Agents started from now on can use ask_outside_model, draft_with_outside_model and make_image.`
+    }[mode]);
+    return mode;
   }
 
   readProfile(p, agent, section, reason) {
@@ -2379,12 +2408,20 @@ export class Hub {
     if (this.summarising) return this.summarising;
     const run = (async () => {
       for (const p of this.projects.values()) {
+        // The choice is made here, per project: a project that has opted in to outside month summaries (a separate setting,
+        // off by default) and whose switch allows a set-up provider is summarised by it, and by nothing else (a failure
+        // leaves the month for the next tick; it never drops to Claude). Otherwise Claude, as before: allowing outside jobs
+        // does not send archived chat outside.
+        const outside = this.settings.outsideSummaries?.(p.dir) ? (this.offload?.plan(p.dir) || null) : null;
         const onUsage = res => {
           if (!res?.modelUsage || !Object.keys(res.modelUsage).length) return;
+          if (res.via === 'outside') { this.offload.logUsage(p, res, { agent: 'month summaries', agentType: 'summary', role: 'summary', purpose: 'month summary' }); return; }
           const models = totalsOf(res.modelUsage);
-          p.log.append('usage', { agent: 'month summaries', project: p.name, agentType: 'summary', role: 'summary', model: SUMMARY_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null });
+          p.log.append('usage', { agent: 'month summaries', project: p.name, agentType: 'summary', role: 'summary', model: Object.keys(res.modelUsage)[0] || SUMMARY_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null });
         };
-        const r = await summariseDue(p.log.dir, { summarise: arg => this.summariser(arg), onUsage, label: `: ${p.name}`, failures: this.summaryFailures });
+        const summarise = outside ? (arg => this.offload.chat(p.dir, { ...arg, maxTokens: 400 })) : (arg => this.summariser(arg));
+        const source = outside ? `${outside.provider}:${outside.model}` : 'claude';
+        const r = await summariseDue(p.log.dir, { summarise, onUsage, source, label: `: ${p.name}`, failures: this.summaryFailures });
         const ok = r.filter(x => !x.error);
         if (ok.length) console.log(`Month summaries: ${p.name}: ${ok.map(x => `${x.ym} (${x.threads} threads, ${x.calls} model calls)`).join(', ')}.`);
       }
@@ -2424,6 +2461,7 @@ export class Hub {
       permissionRules: this.rulesFor(p)?.entryId || null,
       permissionMode: this.permissionMode(p),
       permissionCheck: this.checkMode(p),   // decision 66: off, shadow or on
+      outsideModels: this.outsideMode(p),   // decision 80: off, local or any
       paused: this.isPaused(p),
       connectors: this.connectorsOn(p),
       // Decision 44 B: the handoff numbers in force here, and the project's own (null = the hub default).

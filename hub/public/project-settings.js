@@ -127,6 +127,27 @@ const CHECK_TIP = {
   on: 'On: a quick check answers unclear requests. It asks the orchestrator only when it cannot tell, and sends the risky ones to you. Turning it on needs Windows Hello or Face ID.'
 };
 
+// Outside models per project (decision 80): off by default. Pictures and the hub's own provider choice are in the tips.
+export const OUTSIDE_CHOICES = [['off', 'Off'], ['local', 'Local only'], ['any', 'Any']];
+const outsideOf = p => (['local', 'any'].includes(p?.outsideModels) ? p.outsideModels : 'off');
+const OUTSIDE_TIP = {
+  off: 'Off: nothing goes to another provider. Agents have no outside-model tools.',
+  local: 'Local only: agents may have a draft written by a model on this computer. Pictures stay off.',
+  any: 'Any: agents may ask the provider chosen in the hub menu for short answers, drafts from text they pass in, and pictures, within a small hourly and daily allowance. Text and picture prompts leave this computer. Needs your OK on a phone.'
+};
+// The hub-wide provider (Whole hub panel): which service answers, and what you know of its terms for your key.
+export const PROVIDERS = [['google', 'Google'], ['openai', 'OpenAI'], ['openrouter', 'OpenRouter'], ['ollama', 'Ollama']];
+export const TERMS = [['unknown', 'Not sure'], ['free', 'Free plan'], ['paid', 'Paid plan']];
+const TERMS_TIP = 'Paid plan: the provider does not train on or keep what the hub sends. Not sure or Free plan: projects set to Any send nothing. Google\'s picture models are paid only.';
+
+// Under the provider: whether a key is saved on this computer (never more than its last four characters). Ollama needs none.
+export function keyLine(provider, keys = {}) {
+  if (provider === 'ollama') return '<p class="ps-keyline">No key needed: it runs on this computer.</p>';
+  const k = keys?.[provider];
+  return k?.saved ? `<p class="ps-keyline ok">${ic('check')}Key saved${k.end ? `, ends ${esc(k.end)}` : ''}</p>`
+    : `<p class="ps-keyline warn">${ic('warn')}No key yet. Run the live-check tool in the hub folder to save one.</p>`;
+}
+
 const head = (iconId, title) => `<header class="ps-head">${ic(iconId)}<h2 id="ps-title">${esc(title)}</h2>
   <button type="button" class="ps-x" data-ps-close aria-label="Close without changing anything" title="Close without changing anything">${ic('x')}</button></header>`;
 const foot = note => `<footer class="ps-foot"><p class="ps-note">${note}</p><button type="button" class="btn primary ps-done" data-ps-done>${ic('check')}Done</button></footer>`;
@@ -140,6 +161,8 @@ export function projectCard(p, hub, d) {
       ${always(d.alwaysOpen)}</section>
     <section class="ps-sec"><h3 class="ps-sec-head">Permission check ${help('A quick one-shot model check for requests the hub could not settle by its own rules. It has no tools and no memory, and the risky ones still come to you.')}</h3>
       <div class="ps-conn" data-ps-check>${segN(d.check, 'check', CHECK_CHOICES)}<p>${esc(CHECK_TIP[d.check] || CHECK_TIP.off)}</p></div></section>
+    <section class="ps-sec"><h3 class="ps-sec-head">Outside models ${help('Lets this project\'s agents hand simple jobs (short questions, long drafts from text they pass in, pictures) to another provider through the hub, which makes every call with its own saved key. Off until you turn it on. The provider is chosen in the hub menu.')}</h3>
+      <div class="ps-conn" data-ps-outside>${segN(d.outside, 'outside', OUTSIDE_CHOICES)}<p>${esc(OUTSIDE_TIP[d.outside] || OUTSIDE_TIP.off)}</p></div></section>
     <section class="ps-sec"><h3 class="ps-sec-head">Pause work in this project ${help('Every new permission request waits for you as a card, and agents are told to stop at their next turn. Switch back to Running to let them carry on.')}</h3>
       <div class="ps-conn" data-ps-pause>${seg(d.paused, 'paused', ['Running', 'Paused'])}<p>${d.paused ? `${ic('pause')} Paused: new requests wait for you.` : 'Running: nothing is held.'}</p></div></section>
     <section class="ps-sec"><h3 class="ps-sec-head">Trusted sites and packages ${help('The sites agents may read or download from and the packages they may install without asking you, each added by you. They are kept on this computer and apply in every project unless narrowed to one.')}</h3>
@@ -162,8 +185,13 @@ export function hubPanel(d) {
       <div class="ps-nums">${numRow(TIMEOUT, d.nums[TIMEOUT.k], null, d.errors?.[TIMEOUT.k], 'h')}</div></section>
     <section class="ps-sec"><h3 class="ps-sec-head">Handoff defaults for every project ${help('A project can set its own numbers on its settings card; an empty box there uses these.')}</h3>
       <div class="ps-nums">${NUMBERS.map(f => numRow(f, d.nums[f.k], null, d.errors?.[f.k], 'h')).join('')}</div></section>
-    <section class="ps-sec ps-last"><h3 class="ps-sec-head">When the orchestrator may hand a worker on</h3>
+    <section class="ps-sec"><h3 class="ps-sec-head">When the orchestrator may hand a worker on</h3>
       <div class="ps-nums">${[WORKER_FLOOR, WORKER_MARK].map(f => numRow(f, d.nums[f.k], null, d.errors?.[f.k], 'h')).join('')}</div></section>
+    <section class="ps-sec ps-last"><h3 class="ps-sec-head">Outside provider ${help('Which service answers when a project that has Outside models turned on hands off a job. One for the whole hub. The key is saved on this computer by the live-check tool, never typed here. Each project\'s own switch is on its settings card.')}</h3>
+      <div class="ps-conn" data-ps-provider>${segN(d.provider, 'provider', PROVIDERS)}${keyLine(d.provider, d.keys)}</div>
+      <div class="ps-row"><span class="ps-num-l"><label class="ps-num-label" for="ps-h-model"><span>Model for text</span></label>${help('The model that writes answers and drafts, exactly as the provider names it, for example gemini-3.5-flash-lite. Pictures use the provider\'s picture model, chosen by the hub.')}</span>
+        <input id="ps-h-model" class="ps-model" type="text" autocomplete="off" spellcheck="false" maxlength="120" data-ps-model value="${esc(d.model)}">${d.errors?.model ? `<span class="ps-dflt warn" style="grid-column:1/-1">${ic('warn')}${esc(d.errors.model)}</span>` : ''}</div>
+      <div class="ps-row"><span class="ps-num-l"><span class="ps-num-label"><span>Your plan with them</span></span>${help(TERMS_TIP)}</span>${segN(d.terms, 'terms', TERMS)}</div></section>
   </div>
   ${foot('Saved on this computer when you press Done. Numbers a project set for itself stay as they are.')}`;
 }
@@ -181,6 +209,7 @@ export function projectChanges(p, d) {
   if (d.connectors !== !!p.connectors) body.connectors = d.connectors;
   if (d.check != null && d.check !== checkOf(p)) body.permissionCheck = d.check;
   if (typeof d.paused === 'boolean' && d.paused !== !!p.paused) body.paused = d.paused;
+  if (d.outside != null && d.outside !== outsideOf(p)) body.outsideModels = d.outside;
   if (Object.keys(handoff).length) body.handoff = handoff;
   return { body, errors };
 }
@@ -192,6 +221,15 @@ export function hubChanges(settings, d) {
     if (r.value !== settings[f.k]) body[f.k] = r.value;
   }
   if (d.route !== (settings.routePermissions !== false)) body.routePermissions = d.route;
+  // The outside provider travels as one object; sent when it differs from what is saved (or, with nothing saved, once touched).
+  if (d.provider) {
+    const model = String(d.model ?? '').trim();
+    const cur = settings.outsideProvider;
+    if (!model) errors.model = 'Needs a model name';
+    else if (cur ? (cur.provider !== d.provider || cur.model !== model || (cur.dataTerms || 'unknown') !== d.terms) : d.touched) {
+      body.outsideProvider = { provider: d.provider, model, dataTerms: d.terms, ...(cur?.provider === d.provider && cur.baseUrl ? { baseUrl: cur.baseUrl } : {}) };
+    }
+  }
   return { body, errors };
 }
 
@@ -220,13 +258,15 @@ export class SettingsCards {
     const s = this.host.hubSettings();
     this.hub = Object.fromEntries(NUMBERS.map(f => [f.k, s[f.k]]));   // the hub defaults, shown under each box
     const own = p.ownHandoff || {};
-    this.d = { level: levelOf(p), connectors: !!p.connectors, check: checkOf(p), paused: !!p.paused, nums: Object.fromEntries(NUMBERS.map(f => [f.k, own[f.k] == null ? '' : String(own[f.k])])), errors: {}, alwaysOpen };
+    this.d = { level: levelOf(p), connectors: !!p.connectors, check: checkOf(p), outside: outsideOf(p), paused: !!p.paused, nums: Object.fromEntries(NUMBERS.map(f => [f.k, own[f.k] == null ? '' : String(own[f.k])])), errors: {}, alwaysOpen };
     this.show();
   }
   openHub() {
     const s = this.host.hubSettings();
     this.kind = 'hub';
-    this.d = { route: s.routePermissions !== false, nums: Object.fromEntries(HUB_FIELDS.map(f => [f.k, String(s[f.k] ?? '')])), errors: {} };
+    const op = s.outsideProvider;
+    this.d = { route: s.routePermissions !== false, nums: Object.fromEntries(HUB_FIELDS.map(f => [f.k, String(s[f.k] ?? '')])), errors: {},
+      provider: op?.provider || 'google', model: op?.model || 'gemini-3.5-flash-lite', terms: op?.dataTerms || 'unknown', touched: false, keys: s.outsideKeys || {} };
     this.show();
   }
   show() {
@@ -267,12 +307,16 @@ export class SettingsCards {
     if (sg) {
       const name = sg.dataset.psSeg;
       if (name === 'check') this.d.check = CHECK_CHOICES.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'off';
+      else if (name === 'outside') this.d.outside = OUTSIDE_CHOICES.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'off';
+      else if (name === 'provider') { this.d.provider = PROVIDERS.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'google'; this.d.touched = true; }
+      else if (name === 'terms') { this.d.terms = TERMS.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'unknown'; this.d.touched = true; }
       else this.d[name === 'route' ? 'route' : name === 'paused' ? 'paused' : 'connectors'] = sg.dataset.v === '1';
       this.render(); this.el.querySelector(`[data-ps-seg="${sg.dataset.psSeg}"].on`)?.focus(); return; }
     const rs = e.target.closest('[data-ps-reset]');
     if (rs) { this.d.nums[rs.dataset.psReset] = ''; delete this.d.errors[rs.dataset.psReset]; this.render(); this.el.querySelector(`[data-ps-num="${rs.dataset.psReset}"]`)?.focus(); }
   }
   input(e) {
+    if (e.target.matches?.('[data-ps-model]')) { this.d.model = e.target.value; this.d.touched = true; delete this.d.errors.model; return; }
     const k = e.target.dataset?.psNum;
     if (!k) return;
     this.d.nums[k] = e.target.value;

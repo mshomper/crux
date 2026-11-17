@@ -231,7 +231,7 @@ export class Agent {
       systemPrompt: { type: 'preset', preset: 'claude_code', append },
       settingSources: ['user', 'project', 'local'],
       mcpServers: { crux: cruxTools(this.hub, p, this) },
-      allowedTools: cruxToolNames(this),
+      allowedTools: cruxToolNames(this, this.hub, p),
       disallowedTools: [...(this.role === 'orchestrator' ? ['NotebookEdit'] : []), ...(this.expedition ? EXPEDITION_DISALLOWED : []), ...(connectors ? [] : CONNECTOR_SERVERS)],
       ...(subagents ? { agents: subagents } : {}),
       // The Account card's saved key reaches Claude Code through apiKeyHelper (a command that opens it when needed), not

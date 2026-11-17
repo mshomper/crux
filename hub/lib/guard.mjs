@@ -498,11 +498,14 @@ export function settingsNeed(body = {}, hub) {
     if (body.connectors === true && !hub.connectorsOn(p)) { parts.push('connectors'); why.push(`turn connectors on for ${p.name}`); }
     // Decision 66: the permission check answering for the orchestrator. Shadow (log only) and off need only the cookie.
     if (body.permissionCheck === 'on' && hub.checkMode(p) !== 'on') { parts.push('check'); why.push(`let the permission check answer requests for ${p.name}`); }
+    // Decision 80: turning outside models on (text and picture prompts leave this computer). Off needs only the cookie.
+    const rank = { off: 0, local: 1, any: 2 };
+    if (body.outsideModels in rank && rank[body.outsideModels] > rank[hub.outsideMode(p)]) { parts.push('outside'); why.push(`let ${p.name} use outside models`); }
   }
   const cur = hub.settings.all();
   if (body.routePermissions === true && cur.routePermissions === false) { parts.push('routing'); why.push('let the orchestrator answer requests'); }
   if (!p) {
-    const other = Object.entries(body).filter(([k, v]) => !['project', 'stepUp', 'routePermissions'].includes(k) && v != null && v !== '' && String(v) !== String(cur[k]));
+    const other = Object.entries(body).filter(([k, v]) => !['project', 'stepUp', 'routePermissions'].includes(k) && v != null && v !== '' && (typeof v === 'object' ? JSON.stringify(v) !== JSON.stringify(cur[k]) : String(v) !== String(cur[k])));   // outsideProvider is an object
     if (other.length) { parts.push('hub'); why.push('change settings for the whole hub'); }
   }
   if (!parts.length) return null;

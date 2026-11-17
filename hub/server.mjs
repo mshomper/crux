@@ -281,7 +281,7 @@ const routes = {
   // The conductor alone (its events change often; the page reads this instead of the whole state), and one entry's words.
   'GET /api/conductor': () => ({ conductor: hub.conductor?.view() || null, seq: streamSeq }),
   'GET /api/entry': ({ project, id }) => hub.entryBody(project, id),
-  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: accountView(), profile: hub.profileView(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
+  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), outsideKeys: hub.offload?.keys?.view?.() || {}, boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: accountView(), profile: hub.profileView(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/older': ({ project, thread, before, ts }) => hub.older(project, thread, before, ts),
   // Search chat and summaries in a project's log, archive included: words must all appear. { hits: [{ id, ts, type, thread, from, snippet }] }
@@ -377,12 +377,13 @@ const routes = {
   // workerHandoffFloorPct (decision 46 A) is hub-wide only.
   // Decision 66: { project, permissionCheck: 'off' | 'shadow' | 'on', paused: bool }. Turning the check on needs the
   // step-up (lib/guard.mjs settingsNeed); it is kept in hub settings, never read from the repo.
-  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, permissionCheck, paused }) => {
+  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, permissionCheck, paused, outsideModels, outsideProvider }) => {
     const p = project ? hub.project(project) : null;
     if (!p) {
-      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt }).filter(([, v]) => v != null));
+      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, outsideProvider }).filter(([, v]) => v != null));
       if (Object.keys(hubWide).length) hub.settings.set(hubWide);
     }
+    if (p && outsideModels) hub.setOutsideMode(p, outsideModels);   // decision 80: off, local or any; needs the step-up to go from off (lib/guard.mjs)
     if (p && permissionMode) hub.setPermissionMode(p, permissionMode);
     if (p && typeof connectors === 'boolean') hub.setConnectors(p, connectors);   // Matt's claude.ai connectors
     if (p && permissionCheck) hub.setCheckMode(p, permissionCheck);
@@ -391,7 +392,7 @@ const routes = {
     return {
       settings: typeof routePermissions === 'boolean' ? hub.setRouting(routePermissions) : hub.settings.all(),
       permissionMode: p ? hub.permissionMode(p) : undefined, connectors: p ? hub.connectorsOn(p) : undefined,
-      permissionCheck: p ? hub.checkMode(p) : undefined, paused: p ? hub.isPaused(p) : undefined,
+      permissionCheck: p ? hub.checkMode(p) : undefined, outsideModels: p ? hub.outsideMode(p) : undefined, paused: p ? hub.isPaused(p) : undefined,
       handoff: p ? hub.handoffNumbers(p) : undefined, ownHandoff: p ? hub.ownHandoffNumbers(p) : undefined
     };
   },

@@ -119,8 +119,24 @@
 .ps-conn{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .ps-conn p{margin:0;flex:1;min-width:180px;font-size:12.5px;color:var(--muted)}
 
+/* outside provider (Whole hub panel): a text box for the model, and segments that never run past the card */
+.ps-model{width:min(240px,100%);min-width:0;margin:0;font:600 13px/1 var(--mono);color:var(--hud-ice);background:var(--hud-deep);border:1px solid var(--hud-edge);border-radius:2px;padding:8px 9px}
+.ps-model:focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.22),0 0 18px -6px rgba(111,227,255,.5)}
+.ps-keyline{display:flex;align-items:center;gap:6px;margin:0;flex:1 1 100%;font:500 11.5px/1.3 var(--mono);color:var(--faint)}
+.ps-keyline .icon{width:13px;height:13px}
+.ps-keyline.ok{color:var(--hud-cyan)}
+.ps-keyline.warn{color:var(--hud-amber,#f3b955)}
+.ps-conn .ps-seg{max-width:100%}
+.ps-conn .ps-seg button{min-width:0;padding-inline:10px}
+
 /* ---------- phone: the card fills the screen; thumb-sized targets ---------- */
 @media (max-width:720px){
+  .ps-row{grid-template-columns:minmax(0,1fr)}
+  .ps-row .ps-seg,.ps-row .ps-model{justify-self:stretch;width:100%}
+  .ps-row .ps-seg button{flex:1}
+  [data-ps-provider] .ps-seg{grid-auto-flow:row;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  [data-ps-provider] .ps-seg button:nth-child(odd){border-left:0}
+  [data-ps-provider] .ps-seg button:nth-child(n+3){border-top:1px solid var(--hud-edge)}
   .pset,.pset.hubp{inset:0;left:0!important;top:0!important;width:100%;max-width:none;height:100%;max-height:none;border:0;clip-path:none;box-shadow:none;background:linear-gradient(180deg,#0d131b,#0a0e14)}
   .pset::backdrop{background:#0a0e14}
   .ps-head{padding:calc(10px + env(safe-area-inset-top)) 12px 10px;background:linear-gradient(180deg,#121b27,#0d141d)}
