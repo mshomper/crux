@@ -116,7 +116,6 @@ export class LiveMap {
         </div>
         <button type="button" class="ex-warn" data-exp-warn hidden>${svg('alert')}</button>
         <div class="hud-read hud-read-l">
-          <span class="k">Latest</span>
           <span class="hud-ticker" data-r="ticker" aria-live="off"></span>
         </div>
         <div class="hud-read hud-read-r">
@@ -332,6 +331,7 @@ export class LiveMap {
     if (this.upEl.hidden === !show && !show) return;
     this.upEl.hidden = !show;
     this.panel.classList.toggle('up', show);
+    this.slot.classList.toggle('has-up', show);   // the left zone's column (a sibling of the panel) steps right of the button
     if (!show) return;
     const c = this.hub?.conductor, n = this.hub?.total || 0;
     const agent = { model: c?.model || c?.modelSeen || null, effort: c?.effort || null, state: c?.name ? c.state : 'asleep', role: 'conductor' };
@@ -547,8 +547,9 @@ export class LiveMap {
       const board = A.at.get('board');   // the strip's right end: where the Board would sit, clear of the readout
       this.H = { A, B: H, bays: hubBays(slot, this.places, this.phone, { core: A.core, you: A.at.get('you'), rightEnd: board.x + board.r }), o: origin, phone: this.phone };
     } else {
-      // the ALL button takes the strip's left end; You and the workers move over for it
-      const lead = this.panel.classList.contains('up') ? (this.phone ? 36 : 52) : 0;
+      // the ALL button takes the strip's left end: on a phone You and the workers move over for it; on the desktop
+      // it sits inside the left zone, which the layout already reserves
+      const lead = this.phone && this.panel.classList.contains('up') ? 36 : 0;
       const cl = this.cluster ? { lead: { id: this.cluster.lead.id }, stations: this.cluster.stations.map(s => ({ id: s.id })) } : null;
       A = stripLayout(lead ? { ...slot, left: slot.left + lead, width: slot.width - lead } : slot, this.workers, this.phone, cl);
       B = radialLayout(tgt, this.workers, this.phone, cl);
@@ -559,13 +560,27 @@ export class LiveMap {
     L.bendMax = lerp(slot.height * 0.36, 420, E);
     this.panel.dataset.tele = B.reserve.tele;
     this.panel.classList.toggle('no-labels', !L.labels);
-    this.panel.style.setProperty('--lw', Math.round(clamp(lerp(A.spacing - 10, 150, E), 40, 150)) + 'px');
+    this.panel.style.setProperty('--lw', Math.round(clamp(lerp(A.labelW, 150, E), 40, 150)) + 'px');
+    this.zoneVars(A);
     this.panel.style.setProperty('--cx', L.core.x.toFixed(1) + 'px');
     this.panel.style.setProperty('--cy', L.core.y.toFixed(1) + 'px');
     this.L = L;
     this.size = { w, h };
     this.placeCluster(L);
     return L;
+  }
+
+  // The strip's zones, from the layout, written to the slot (other strip parts live there too, beside the panel): a class
+  // and the widths. the style sheets read only these, never their own breakpoints.
+  zoneVars(A) {
+    const z = A.zones, s = this.slot.style;
+    this.slot.classList.toggle('strip-zoned', !!z);
+    this.slot.classList.toggle('strip-wide', !!A.wide);
+    if (!z) return;
+    s.setProperty('--zl', z.left.w + 'px');
+    s.setProperty('--zr', z.right.w + 'px');
+    s.setProperty('--lane-x', Math.round(z.lane.x - (z.left.x)) + 'px');
+    s.setProperty('--lane-w', Math.round(z.lane.w) + 'px');
   }
 
   // The caption, Stop and the warning mark sit under and beside the cluster's arcs; they show once the map is open.

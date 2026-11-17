@@ -7,7 +7,11 @@ export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 export const lerp = (a, b, t) => a + (b - a) * t;
 export const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
-const STRIP_SIDE = 214;   // room for the readout blocks at each end of a wide strip
+// The desktop strip has three fixed zones (the Fable advisor's option A): meters at the left (the ALL button sits
+// inside it), the lane (You, workers, core, workers, Board) in the middle, and the Needs you pill with the expand
+// button at the right. stripLayout returns these numbers; map.js writes them to the page as CSS variables and a
+// class, and the CSS keys off those alone, so the layout and the styles cannot disagree about widths.
+export const STRIP_ZONE = { left: 176, right: 156, ticker: 700 };   // ticker: the narrowest lane that shows the one-line "latest"
 
 // On a phone the plan meters get a row of their own under the map's lane, so they never share a line with the
 // stations. The row's height here must match usage.css (a test checks it).
@@ -25,14 +29,17 @@ export function stripLayout(rect, workers, phone, cluster = null) {
   if (cluster) workers = [{ id: cluster.lead.id }, ...workers];
   const { left, top, width: w, height: h } = rect;
   const at = new Map();
-  const cx = left + w / 2, cy = top + h / 2;
+  // zones (desktop only; a phone keeps its one lane and the meters' own row)
+  const zl = phone ? 0 : STRIP_ZONE.left, zr = phone ? 0 : STRIP_ZONE.right;
+  const laneL = left + zl, laneW = Math.max(0, w - zl - zr);
+  const zones = phone ? null : { left: { x: left, w: zl }, right: { x: left + w - zr, w: zr }, lane: { x: laneL, w: laneW }, top, height: h };
+  const cx = laneL + laneW / 2, cy = top + h / 2;
   // a phone's lane is low: the core is sized so its tick scale stays inside it (the outer scale is not drawn there)
   const coreR = phone ? h * 0.3 : h * 0.25;
-  const wide = !phone && w >= 980;
-  const side = phone ? 10 : wide ? STRIP_SIDE : 18;
   const sr = phone ? 6 : 12;
+  const pad = phone ? 20 : 10;
   const sy = phone ? cy : top + h * 0.42;   // stations sit a little high so labels fit underneath
-  const youX = left + side + sr + 10, boardX = left + w - side - sr - 10;
+  const youX = laneL + pad + sr, boardX = laneL + laneW - pad - sr;
   at.set('you', { x: youX, y: sy, r: sr });
   at.set('board', { x: boardX, y: sy, r: sr });
 
@@ -49,7 +56,12 @@ export function stripLayout(rect, workers, phone, cluster = null) {
   place(right, cx + gap, boardX - sr * 2);
   place(leftSide, cx - gap, youX + sr * 2);
   if (cluster) { const lead = at.get(cluster.lead.id); for (const s of cluster.stations) at.set(s.id, { x: lead.x, y: lead.y, r: 0 }); }
-  return { core: { x: cx, y: cy, r: coreR }, at, labels: !phone && spacing > 50, compact: phone, spacing: Math.min(spacing, 170) };
+  const gapPx = Math.min(spacing, 170);
+  return {
+    core: { x: cx, y: cy, r: coreR }, at, labels: !phone && spacing > 50, compact: phone, spacing: gapPx,
+    zones, wide: !phone && laneW >= STRIP_ZONE.ticker,   // wide: the lane has room for the "latest" line
+    labelW: Math.round(clamp(gapPx - (phone ? 10 : 8), 40, 150))   // a worker's name: one line, as wide as its neighbours allow
+  };
 }
 
 // Room the full map leaves for its own chrome (top bar, telemetry column or tray).

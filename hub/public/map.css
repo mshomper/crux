@@ -63,6 +63,11 @@
 .hs-label i{font-style:normal;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--hud-dim);max-width:170px;overflow:hidden;text-overflow:ellipsis;opacity:clamp(0,calc((var(--e) - .45) * 3),1);height:calc(13px * var(--e))}
 .hud.no-labels .hs-label{opacity:0;transition:opacity .2s}
 .hud.no-labels .hs:hover .hs-label{opacity:1}
+/* the desktop strip: a worker's name on one line (its icon and ring already show its state, so no state word), and You and
+   the Board are icons whose label shows on hover */
+.hud.docked:not(.phone) .hs-label i{display:none}
+.hud.docked:not(.phone) .hs.you .hs-label,.hud.docked:not(.phone) .hs.board .hs-label{opacity:0;transition:none}
+.hud.docked:not(.phone) .hs.you:hover .hs-label,.hud.docked:not(.phone) .hs.board:hover .hs-label,.hud.docked:not(.phone) .hs.you:focus-visible .hs-label,.hud.docked:not(.phone) .hs.board:focus-visible .hs-label{opacity:1}
 .hud.phone.docked .hs-label,.hud.phone.docked .hs-body .hud-i{display:none}
 .hud.phone.docked .hs{pointer-events:none}
 /* a phone's strip is low: the stations keep their colour but only a tight glow, and the backdrop light is
@@ -165,15 +170,20 @@
 .hud.phone.has-exp .hs.you .hs-label i,.hud.phone.has-exp .hs.board .hs-label i{display:none}
 
 /* ---------- strip readouts ---------- */
-.hud-read{position:absolute;top:50%;transform:translateY(-50%);width:172px;display:grid;gap:5px;opacity:clamp(0,calc(1 - var(--e) * 2.4),1);pointer-events:none}
-.hud-read-l{left:22px}
-.hud-read-r{right:22px;justify-items:end;text-align:right}
-.hud-read .k{font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--hud-dim)}
-.hud-read .v{font-size:11.5px;letter-spacing:.08em;color:var(--hud-ice);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
-.hud-read .v.dim{font-size:10.5px;color:var(--hud-dim)}
-.hud-ticker{font-size:10.5px;letter-spacing:.04em;color:var(--hud-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
-.hud-read-r .hud-needs{pointer-events:auto}
-@container hud (max-width:979px){.hud-read{display:none}}
+/* The desktop strip is three zones whose widths come from stripLayout (map-layout.js STRIP_ZONE): the map writes them to
+   the slot as --zl, --zr, --lane-x and --lane-w and the classes strip-zoned (desktop) and strip-wide (the lane has room
+   for the ticker). There are no breakpoints here: the layout and these rules read the same numbers.
+     left zone   the ALL button and the plan meters (usage.css)
+     lane        You, workers, core, workers, Board; the "latest" ticker runs along its bottom edge
+     right zone  the Needs you / All clear pill and the expand button, side by side */
+.hud-read{display:none;position:absolute;opacity:clamp(0,calc(1 - var(--e) * 2.4),1);pointer-events:none}
+.strip-zoned .hud-read-r{display:flex;align-items:center;right:46px;top:50%;transform:translateY(-50%);max-width:calc(var(--zr, 156px) - 52px)}
+.strip-zoned.strip-wide .hud-read-l{display:block;left:var(--lane-x);width:var(--lane-w);bottom:3px;box-sizing:border-box;padding:0 30px;text-align:center}
+.hud-ticker{display:block;font-size:10.5px;line-height:13px;letter-spacing:.04em;color:var(--hud-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hud-read-r .hud-needs{pointer-events:auto;min-width:0;max-width:100%}
+.hud-read-r .hud-needs>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hud-read-r .hud-needs{letter-spacing:.04em;gap:6px;padding:4px 9px}
+.hud-read-r .hud-needs .hud-i{display:none}
 
 
 .hud-needs{font:inherit;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;cursor:pointer;
@@ -187,7 +197,7 @@
 .hud-btn{font:inherit;display:grid;place-items:center;width:30px;height:30px;padding:0;border-radius:8px;cursor:pointer;color:var(--hud-dim);background:rgba(8,14,22,.6);border:1px solid var(--hud-line)}
 .hud-btn .hud-i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .hud-btn:hover{color:var(--hud-ice);border-color:var(--hud-dim)}
-.hud-open{position:absolute;right:9px;top:9px;width:26px;height:26px;opacity:clamp(0,calc(1 - var(--e) * 3),1)}
+.hud-open{position:absolute;right:11px;top:50%;margin-top:-13px;width:26px;height:26px;opacity:clamp(0,calc(1 - var(--e) * 3),1)}
 .hud.open .hud-open,.hud.phone .hud-open{display:none}
 
 /* ---------- full map chrome ---------- */
@@ -351,7 +361,6 @@
   color:#2a0609;background:var(--hud-red);box-shadow:0 0 0 2px #070b11,0 0 10px rgba(242,114,122,.8)}
 .hud-up i{font-style:normal;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase}
 .hud-up:hover .up-ring{box-shadow:0 0 18px color-mix(in srgb,var(--mh) 55%,transparent)}
-.hud.up .hud-read-l{left:72px}
 .hud.phone .hud-up{left:0;top:50%;gap:0;width:40px;height:40px;place-content:center}   /* a 40px target for a thumb */
 .hud.phone .hud-up i{display:none}
 .hud.phone .up-ring{width:24px;height:24px}

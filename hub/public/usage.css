@@ -1,15 +1,18 @@
 /* Plan meters in the strip and the usage panel (decision 36). Calm: no animation. Cyan for the plan windows,
    copper for Fable (decision 20), amber for a warning, red only when work is blocked (decision 31). */
 
-/* ---------- meters: wide strip, a column at the left under "Latest" ---------- */
-.usage-meters{position:absolute;left:22px;bottom:12px;width:186px;z-index:2;display:grid;gap:4px;font-family:var(--mono);cursor:pointer;color:var(--hud-ice);
-  padding:5px 7px;margin-left:-7px;border:1px solid transparent;border-radius:8px;-webkit-tap-highlight-color:transparent}
+/* ---------- meters: the strip's left zone, a column of bar and percent (reset times are in the panel) ----------
+   The zone's width is --zl, written by the map from the layout (map-layout.js STRIP_ZONE), and the ALL button (class
+   has-up on the slot) takes the zone's first 46px. No breakpoints here. */
+.usage-meters{position:absolute;left:6px;top:50%;transform:translateY(-50%);width:calc(var(--zl, 176px) - 12px);box-sizing:border-box;z-index:2;display:grid;gap:4px;font-family:var(--mono);cursor:pointer;color:var(--hud-ice);
+  padding:5px 7px;border:1px solid transparent;border-radius:8px;-webkit-tap-highlight-color:transparent}
+.has-up .usage-meters{left:48px;width:calc(var(--zl, 176px) - 54px)}
 .usage-meters[hidden]{display:none}
 .usage-meters:hover,.usage-meters:focus-visible,.usage-meters[aria-expanded="true"]{outline:none;border-color:var(--hud-line);background:rgba(111,227,255,.06)}
 .usage-meters.stale{opacity:.6}
-.hud-slot.has-usage .hud-read-l{top:18px;transform:none}
 
-.um{--c:var(--mh,var(--hud-cyan));display:grid;grid-template-columns:40px minmax(0,1fr) 30px 36px;align-items:center;gap:6px;font-size:10.5px;line-height:13px;letter-spacing:.02em;white-space:nowrap}
+.um{--c:var(--mh,var(--hud-cyan));display:grid;grid-template-columns:36px minmax(0,1fr) 30px;align-items:center;gap:6px;font-size:10.5px;line-height:13px;letter-spacing:.02em;white-space:nowrap}
+.um-r{display:none}
 .um-l{font-style:normal;letter-spacing:.06em;text-transform:uppercase;color:var(--hud-dim);overflow:hidden;text-overflow:ellipsis}
 .um-p{font-style:normal;text-align:right;color:var(--hud-ice)}
 .um-r{text-decoration:none;text-align:right;color:var(--hud-dim)}
@@ -21,12 +24,6 @@
 .um.t-red .um-p{color:var(--hud-red)}
 .um.idle .um-p,.um.idle .um-r{color:var(--hud-faint)}
 
-/* a strip too narrow for the readout columns: one row along the bottom edge, bars with their times */
-@container hud (max-width:979px){
-  .usage-meters{left:12px;right:auto;bottom:5px;width:auto;display:flex;gap:16px;padding:2px 6px;margin-left:-6px}
-  .um{grid-template-columns:auto 52px auto auto;gap:5px}
-  .hud-slot.has-usage .hud-read-l{top:auto;transform:none}
-}
 /* A phone: the meters get a slim row of their own under the map's lane, so they never share a line with the
    stations or sit under their glow. Three equal meters with percent only (the times are in the panel).
    The row is 15px: the same number as PHONE_METER_ROW in map-layout.js, which keeps the map out of it.
@@ -34,7 +31,7 @@
 @media (max-width:720px){
   .hud-slot[data-under-row] .hud.docked{bottom:15px}
   .usage-meters,.usage-meters:hover,.usage-meters:focus-visible,.usage-meters[aria-expanded="true"]{background:#070b11}
-  .usage-meters{left:0;right:0;bottom:0;margin:0;gap:12px;padding:0 12px;height:15px;box-sizing:border-box;align-items:center;
+  .usage-meters,.has-up .usage-meters{display:flex;left:0;right:0;top:auto;transform:none;width:auto;bottom:0;margin:0;gap:12px;padding:0 12px;height:15px;box-sizing:border-box;align-items:center;
     border:0;border-bottom:1px solid var(--hud-line);border-radius:0}
   .usage-meters[aria-expanded="true"]{border-bottom-color:var(--hud-dim)}
   /* the row is slim, so a finger gets a taller target: it reaches a little way up into the lane */
