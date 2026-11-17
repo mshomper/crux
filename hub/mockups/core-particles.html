@@ -7,17 +7,29 @@
 <style>
   :root{--cyan:#6fe3ff;--dim:rgba(111,227,255,.55);--faint:rgba(111,227,255,.25);--bg:#0a121b}
   *{box-sizing:border-box}
-  html,body{margin:0;background:var(--bg);color:#d8f6ff;font:12px/1.4 ui-monospace,Consolas,monospace;overflow:hidden}
-  header{display:flex;gap:18px;align-items:center;flex-wrap:nowrap;padding:10px 14px;border-bottom:1px solid var(--faint);background:#070b11;height:48px}
+  html,body{margin:0;background:var(--bg);color:#d8f6ff;font:12px/1.4 ui-monospace,Consolas,monospace}
+  body{overflow-x:hidden}
+  header{display:flex;gap:18px;align-items:center;flex-wrap:nowrap;padding:10px 14px;border-bottom:1px solid var(--faint);background:#070b11;height:48px;overflow:hidden}
+  #err{display:none;margin:10px 14px;padding:8px 10px;border:1px solid #f3b955;border-radius:6px;color:#f3b955;background:rgba(243,185,85,.08)}
+  #err.on{display:block}
+  #wrap{position:relative;margin:8px auto 0;overflow:hidden}
+  body.sheet #wrap{margin:0}
   header h1{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);margin:0;white-space:nowrap}
   .grp{display:flex;gap:4px;align-items:center}
   .grp span{color:var(--dim);letter-spacing:.1em;text-transform:uppercase;margin-right:4px}
   button{font:inherit;color:var(--dim);background:rgba(8,14,22,.8);border:1px solid var(--faint);border-radius:5px;padding:4px 8px;cursor:pointer;white-space:nowrap}
   button.on{color:var(--cyan);border-color:var(--cyan);box-shadow:0 0 8px rgba(111,227,255,.35)}
   #fps{margin-left:auto;color:var(--cyan);white-space:nowrap;min-width:230px;text-align:right}
-  #stage{position:relative}
+  #stage{position:absolute;left:0;top:0;transform-origin:0 0}
   #stage canvas{position:absolute;left:0;top:0}
   body.sheet header{display:none}
+  /* narrow windows and the hub's frame: the controls take two fixed rows and get smaller, rather than running off the edge */
+  @media (max-width:1320px){
+    header{display:grid;grid-template-columns:auto auto 1fr;grid-template-rows:auto auto;height:auto;row-gap:6px;column-gap:12px;padding:8px 10px}
+    #states{grid-row:2;grid-column:1/3} #counts{grid-row:2;grid-column:3} #fps{grid-row:1;grid-column:3;min-width:0;font-size:11px}
+    button{padding:3px 6px;font-size:11px}
+  }
+  @media (max-width:960px){ .grp span{display:none} header h1{display:none} #fps{grid-column:2/4} }
 </style>
 </head>
 <body>
@@ -28,7 +40,8 @@
   <div class="grp" id="counts"><span>Points</span></div>
   <div id="fps"></div>
 </header>
-<div id="stage"><canvas id="bg"></canvas><canvas id="gl"></canvas><canvas id="fg"></canvas></div>
+<div id="err"></div>
+<div id="wrap"><div id="stage"><canvas id="bg"></canvas><canvas id="gl"></canvas><canvas id="fg"></canvas></div></div>
 <script type="module">
 // Mockups of the live map's orchestrator core (crux, 2026-11-17), for a Crux decision. Nothing here is used by the hub.
 //   first  the first shot (commit 205b7a4): 760 particles as an atom, simulated on the CPU (ported as it was)
@@ -304,7 +317,8 @@ class Renderer {
     const gl = this.gl = canvas.getContext('webgl2', { premultipliedAlpha: true, alpha: true, antialias: false, powerPreference: 'high-performance', preserveDrawingBuffer: preserve });
     if (!gl) throw new Error('WebGL2 is not available');
     this.canvas = canvas;
-    this.float = !!gl.getExtension('EXT_color_buffer_float');
+    this.float = !params.has('force8') && !!gl.getExtension('EXT_color_buffer_float');   // ?force8 tests the fallback
+    if (!this.float) this.note = params.has('force8') ? '8-bit fallback forced' : 'no half-float targets in this browser; using the 8-bit fallback';
     this.seeds = this.program(VS_SEEDS, FS_POINTS);
     this.points = this.program(VS_POINTS, FS_POINTS);
     this.fade = this.program(VS_QUAD, FS_FADE);
@@ -347,7 +361,19 @@ class Renderer {
     this.w = w; this.h = h; this.canvas.width = w; this.canvas.height = h;
     this.canvas.style.width = cssW + 'px'; this.canvas.style.height = cssH + 'px';
     for (const t of this.targets) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); }
-    this.targets = [0, 1].map(() => {
+    this.targets = this.makeTargets(w, h);
+    // a half-float target the driver cannot draw into: fall back to 8-bit, as the hub does today
+    if (this.float && this.targets.some(t => !t.ok)) {
+      for (const t of this.targets) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); }
+      this.float = false; this.note = 'half-float target refused by this browser; using the 8-bit fallback';
+      this.targets = this.makeTargets(w, h);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (this.targets.some(t => !t.ok)) throw new Error('the browser refused the drawing target (framebuffer incomplete)');
+  }
+  makeTargets(w, h) {
+    const gl = this.gl;
+    return [0, 1].map(() => {
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
       if (this.float) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
@@ -356,8 +382,9 @@ class Renderer {
       const fb = gl.createFramebuffer();
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
       gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
-      return { tex, fb };
+      return { tex, fb, ok };
     });
   }
   begin(trail) {
@@ -585,7 +612,10 @@ class Cell {
 
 class Page {
   constructor() {
-    this.view = 'compare'; this.stateId = 'work60'; this.count = REF_N;
+    // the live page can be opened straight to a test: ?test=A&state=near85&n=120000
+    this.view = params.get('test') ? 'bench' : 'compare'; this.benchLook = params.get('test') || null;
+    this.stateId = STATES.some(s => s.id === params.get('state')) ? params.get('state') : 'work60';
+    this.count = clamp(Number(params.get('n')) || REF_N, 1000, 500000);
     this.bg = document.getElementById('bg'); this.fg = document.getElementById('fg');
     this.renderer = new Renderer(document.getElementById('gl'), !!sheet);
     this.cpu = new Float32Array(200000 * STRIDE);
@@ -600,18 +630,30 @@ class Page {
     } else if (this.view === 'bench') {
       const st = STATES.find(s => s.id === this.stateId);
       cells.push(new Cell(this.benchLook || 'A', st, 'open', 0, top));
-      this.title = 'FRAME-RATE TEST · ' + LOOKS[this.benchLook || 'A'].name; lab.push([st.label, OPEN.w / 2]);
-      this.W = OPEN.w * 2;
+      this.title = 'FRAME-RATE TEST · ' + LOOKS[this.benchLook || 'A'].name; lab.push([LOOKS[this.benchLook || 'A'].name + ' · ' + st.label, OPEN.w / 2]);
+      this.W = OPEN.w;
     } else {
       const st = STATES.find(s => s.id === (sheet === 'compare' ? 'work60' : this.stateId));
       ['first', 'A', 'B', 'C'].forEach((lk, i) => { cells.push(new Cell(lk, st, 'open', i * OPEN.w, top), new Cell(lk, st, 'strip', i * OPEN.w, top + OPEN.h)); lab.push([LOOKS[lk].name, i * OPEN.w + OPEN.w / 2]); });
       this.title = st.label; this.W = 4 * OPEN.w;
     }
-    this.cells = cells; this.labels = lab; this.H = top + OPEN.h + STRIP.h + 6;
+    this.bench = this.view === 'bench' && !sheet;
+    this.cells = cells; this.labels = lab; this.H = top + OPEN.h + (this.bench ? 0 : STRIP.h + 6);
     for (const cv of [this.bg, this.fg]) { cv.width = Math.round(this.W * this.dpr); cv.height = Math.round(this.H * this.dpr); cv.style.width = this.W + 'px'; cv.style.height = this.H + 'px'; }
+    document.getElementById('stage').style.cssText = `width:${this.W}px;height:${this.H}px`;
+    this.fit();
     this.renderer.resize(this.W, this.H, this.dpr);
+    if (this.renderer.note) showError(this.renderer.note, false);
     if (this.renderer.nSeeds !== this.count) this.renderer.setSeeds(this.count);
     this.paintBg();
+  }
+  // centre the cores and shrink them to fit a small window or the hub's frame; never wider than the window (no sideways scroll)
+  fit() {
+    const wrap = document.getElementById('wrap'), stage = document.getElementById('stage');
+    const top = sheet ? 0 : wrap.getBoundingClientRect().top + window.scrollY;
+    const k = sheet ? 1 : Math.min(1, (document.documentElement.clientWidth - 16) / this.W, Math.max(0.25, (window.innerHeight - top - 8) / this.H));
+    wrap.style.width = `${this.W * k}px`; wrap.style.height = `${this.H * k}px`;
+    stage.style.transform = k < 1 ? `scale(${k})` : '';
   }
   paintBg() {
     const c = this.bg.getContext('2d');
@@ -628,6 +670,7 @@ class Page {
     c.beginPath(); c.moveTo(0, y0 + 0.5); c.lineTo(this.W, y0 + 0.5); c.stroke();
     for (const [t, x] of this.labels) label(c, t, x, 18);
     if (sheet && sheet !== 'compare') label(c, this.title, 8, y0 + 12, 'rgba(216,246,255,0.9)', 'left', 11);
+    if (this.bench) return;
     label(c, 'OPEN MAP', this.W - 8, 34 + 12, 'rgba(111,227,255,0.4)', 'right', 10);
     label(c, 'STRIP', this.W - 8, y0 + 12, 'rgba(111,227,255,0.4)', 'right', 10);
   }
@@ -697,9 +740,23 @@ class Page {
   syncControls() { for (const [b, on] of this.btn) b.classList.toggle('on', !!on()); }
 }
 
-const page = window.page = new Page();
-if (sheet) { document.body.classList.add('sheet'); page.layout(); page.still(); }
-else { page.controls(); page.layout(); page.live(); }
+// a visible line when something fails, instead of a blank page
+function showError(msg, fatal = true) {
+  const el = document.getElementById('err');
+  el.textContent = (fatal ? 'The particles cannot be drawn here: ' : 'Note: ') + msg;
+  el.classList.add('on');
+}
+window.addEventListener('error', e => showError(e.message || String(e.error)));
+try {
+  if (sheet) document.body.classList.add('sheet');
+  const page = window.page = new Page();
+  if (sheet) { page.layout(); page.still(); }
+  else { page.controls(); page.layout(); page.live(); addEventListener('resize', () => page.fit()); }
+  page.renderer.canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); showError('the graphics card dropped the drawing (context lost); reload the page'); });
+} catch (err) {
+  showError(/WebGL2/.test(err.message) ? 'this browser has no WebGL2. Open the page in an up-to-date Chrome or Edge, with hardware acceleration on.' : err.message);
+  console.error(err);
+}
 </script>
 </body>
 </html>
