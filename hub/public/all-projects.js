@@ -36,13 +36,20 @@ export function applyPick(p, id, choice) {
 // escalates or runs out of time; you can still answer them, which overrides it.
 export function waitingApprovals(p, pending) {
   const done = new Set(p.events.filter(e => e.type === 'approval_result').map(e => e.approval));
-  return p.events.filter(e => e.type === 'approval' && !done.has(e.approval) && pending.has(e.approval));
+  // The page holds only a thread's newest events; the hub names the older requests still without an answer (p.wait).
+  const seen = new Set(), out = [];
+  for (const e of [...(p.wait?.approvals || []), ...p.events]) {
+    if (e.type !== 'approval' || done.has(e.approval) || !pending.has(e.approval) || seen.has(e.approval)) continue;
+    seen.add(e.approval); out.push(e);
+  }
+  return out.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
 }
 export const escalation = (p, id) => p.events.findLast(e => e.type === 'approval_escalated' && e.approval === id);
 export const withOrchestrator = (p, pending) => waitingApprovals(p, pending).filter(e => e.routedTo && !escalation(p, e.approval));
 export const pendingApprovals = (p, pending) => waitingApprovals(p, pending).filter(e => !e.routedTo || escalation(p, e.approval));
 // Questions agents asked that still wait on you; the rule lives in questions.js, shared with the map and the server.
-export const openQuestions = p => askedOpen(p.events, pageAsk(p));
+// The hub works them out over the whole log (p.wait.questions) and sends the cards; a page state without them (a test, an older hub) works them out here.
+export const openQuestions = p => p.wait?.questions || askedOpen(p.events, pageAsk(p));
 // Lessons about you that an agent wants added to the core profile, until you add or skip them (one card).
 export function pendingLessons(p) {
   const done = new Set(p.events.filter(e => e.type === 'lesson_result').map(e => e.lesson));
@@ -58,7 +65,8 @@ export const needsCount = (p, pending) => waiting(p, pending).count;
 // permission cards and questions, and the open decisions its round summaries asked for.
 export function threadWaiting(p, t, pending) {
   const open = new Set(openDecisions(p).map(d => d.id));
-  const asked = new Set(p.events.filter(e => e.type === 'summary' && e.thread === t).flatMap(e => (e.decisions_needed || []).map(Number)).filter(id => open.has(id)));
+  const named = p.wait?.askedDecisions ? p.wait.askedDecisions[t] || [] : p.events.filter(e => e.type === 'summary' && e.thread === t).flatMap(e => (e.decisions_needed || []).map(Number));
+  const asked = new Set(named.map(Number).filter(id => open.has(id)));
   return pendingApprovals(p, pending).filter(e => e.thread === t).length + openQuestions(p).filter(q => q.thread === t).length + asked.size;
 }
 

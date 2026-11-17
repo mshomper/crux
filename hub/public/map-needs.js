@@ -4,6 +4,7 @@
 // the cards in the chat, so app.js answers them exactly the same way.
 
 import { nameHtml, nameParts } from './agent-name.js';
+import { waitingApprovals } from './all-projects.js';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ICON = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
@@ -41,8 +42,7 @@ export class NeedsPopover {
   // the popover then matches the strip's counter and its link opens All projects.
   set(project, pending, total, hub = null) {
     this.pname = project?.name || '';   // an orchestrator asking shows as its project and "vN"
-    const done = new Set(project.events.filter(e => e.type === 'approval_result').map(e => e.approval));
-    const approvals = hub ? hub.approvals : project.events.filter(e => e.type === 'approval' && pending.has(e.approval) && !done.has(e.approval));
+    const approvals = hub ? hub.approvals : waitingApprovals(project, pending);   // the one rule, in all-projects.js
     const all = hub ? hub.total : total;
     this.multi = !!hub;
     this.items = { approvals, others: Math.max(0, all - approvals.length) };

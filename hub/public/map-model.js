@@ -92,7 +92,7 @@ export class MapModel {
   // Same rule as the Needs you list (questions.js).
   openQuestions() {
     const p = this.project;
-    return p ? openQuestions(p.events, pageAsk(p)) : [];
+    return p ? p.wait?.questions || openQuestions(p.events, pageAsk(p)) : [];   // the hub works them out over the whole log
   }
 
   openDecisions() { return (this.project?.board?.decisions || []).filter(d => d.status === 'open' || d.status === 'found'); }
@@ -123,6 +123,7 @@ export class MapModel {
   // How much has happened in each thread: messages, summaries, approvals, board posts.
   traffic() {
     const m = new Map();
+    if (this.project?.traffic) { for (const [t, n] of Object.entries(this.project.traffic)) m.set(t, n); return m; }   // the hub counts over the whole log
     for (const e of this.project?.events || []) {
       if (!['message', 'summary', 'approval', 'entry'].includes(e.type) || !e.thread) continue;
       m.set(e.thread, (m.get(e.thread) || 0) + 1);
