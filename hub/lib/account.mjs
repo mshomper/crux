@@ -139,6 +139,20 @@ export class Account {
 }
 export const ENV_WINS = 'The API key comes from the environment variables (ANTHROPIC_API_KEY and CRUX_HUB_USE_API_KEY), and they win over this card. Remove them, then restart the hub, to choose here.';
 
+// After "Sign in as someone else" opens its window, the hub itself watches for the signed-in name to change, even if the card
+// was closed meanwhile, and calls onChange(now, before) once (the server restarts the hub then, so running agents pick the new
+// sign-in up). Gives up after forMs. Returns a function that stops the watch. read and timers are injectable.
+export function watchSignIn({ read = () => planName(process.env), onChange, everyMs = 3000, forMs = 5 * 60 * 1000, now = Date.now, timers = { setInterval, clearInterval } } = {}) {
+  const before = read(), end = now() + forMs;
+  const t = timers.setInterval(() => {
+    if (now() > end) return timers.clearInterval(t);
+    const cur = read();
+    if (cur && cur !== before) { timers.clearInterval(t); onChange(cur, before); }
+  }, everyMs);
+  t.unref?.();
+  return () => timers.clearInterval(t);
+}
+
 // ---------- "Sign in as someone else" ----------
 // Claude Code's login is interactive (it opens the browser and waits), so the hub opens a terminal window on this PC that
 // runs it (login.mjs --signin), and the card re-reads who is signed in while it waits. Windows only; elsewhere the card

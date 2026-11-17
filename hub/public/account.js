@@ -165,7 +165,7 @@ export class AccountCard {
     if (e.target.closest('[data-ac-signin]')) return void this.signIn();
     if (e.target.closest('[data-ac-recheck]')) return void this.refresh();
     if (e.target.closest('[data-pf-create]')) return void this.createProfile();
-    if (e.target.closest('[data-pf-open]')) { this.d.pfOpen = !this.d.pfOpen; this.d.pfError = ''; this.render(); this.el.querySelector('[data-pf-text]')?.focus({ preventScroll: true }); return; }
+    if (e.target.closest('[data-pf-open]')) { this.d.pfOpen = !this.d.pfOpen; this.d.pfError = ''; this.render(); this.el.querySelector('[data-pf-text]')?.focus({ preventScroll: true }); this.el.querySelector('.ac-import')?.scrollIntoView({ block: 'end' }); return; }
     if (e.target.closest('[data-pf-file-btn]')) return void this.el.querySelector('[data-pf-file]')?.click();
     if (e.target.closest('[data-pf-send]')) return void this.sendImport();
     const pick = e.target.closest('[data-ac-pick]');
@@ -237,10 +237,9 @@ export class AccountCard {
       const was = this.view.planName;
       this.v = await this.host.api('/api/account');
       const changed = this.d?.waiting && this.v.planName && this.v.planName !== was;
-      if (changed) { this.d.waiting = false; this.stopWatching(); this.d.signinNote = `Signed in as ${this.v.planName}. Restarting the hub so its agents use it.`; }
+      if (changed) { this.d.waiting = false; this.stopWatching(); this.d.signinNote = `Signed in as ${this.v.planName}. The hub restarts in a moment so its agents use it.`; }
       this.render();
-      if (changed) await this.host.restart?.();   // like Switch: running agents pick up the new sign-in after a restart
-      if (changed) this.close();
+      if (changed) setTimeout(() => this.close(), 2500);   // the hub restarts by itself when it sees the new name (even with this card closed)
     } catch { /* the hub is busy: the next check tries again */ }
   }
   watch() {

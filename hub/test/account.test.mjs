@@ -8,7 +8,9 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { makeTmp, removeTmp } from './helpers/tmp.mjs';
-import { Account, defaultProtector, planName, openSignInWindow, ENV_WINS } from '../lib/account.mjs';
+import { Account, defaultProtector, planName, openSignInWindow, watchSignIn, ENV_WINS } from '../lib/account.mjs';
+import { Hub } from '../lib/hub.mjs';
+import { createServer } from 'node:net';
 import { Secrets } from '../lib/setup.mjs';
 import { HUB_DIR, pidsOnPort, stopTree, dataDir } from '../lib/relaunch.mjs';
 import { stepUpNeed, PURPOSES } from '../lib/guard.mjs';
@@ -183,6 +185,28 @@ test('from a phone, switching the account or pasting a key asks for the step-up;
   assert.equal(stepUpNeed('POST /api/profile/create', {}, {}), null, 'unrelated routes are as before');
 });
 
+test('the hub watches for a new signed-in name by itself (card closed or not), once, and gives up after a while', () => {
+  let name = 'Alex Doe', t = 0, ticks = null, cleared = 0;
+  const timers = { setInterval: fn => { ticks = fn; return { unref() { } }; }, clearInterval: () => { cleared++; } };
+  const seen = [];
+  watchSignIn({ read: () => name, onChange: (n, b) => seen.push([n, b]), now: () => t, timers, everyMs: 3000, forMs: 60000 });
+  ticks(); assert.deepEqual(seen, [], 'same person: nothing');
+  name = null; ticks(); assert.deepEqual(seen, [], 'nobody readable for a moment: nothing');
+  name = 'Sam Roe'; ticks(); assert.deepEqual(seen, [['Sam Roe', 'Alex Doe']]); assert.ok(cleared >= 1, 'it stops itself');
+  let late = 0; ticks = null; t = 0;
+  watchSignIn({ read: () => name, onChange: () => late++, now: () => t, timers, forMs: 60000 });
+  t = 61000; name = 'Someone Else'; ticks(); assert.equal(late, 0, 'after the time is up it does not act');
+});
+
+test('with the saved key set up for agents, Claude Code must report apiKeyHelper or the card says so', () => {
+  const hub = { apiKeyHelper: '"node" "x"', keyProblem: '' };
+  Hub.prototype.noteKeySource.call(hub, 'apiKeyHelper'); assert.equal(hub.keyProblem, '');
+  Hub.prototype.noteKeySource.call(hub, 'none'); assert.match(hub.keyProblem, /not using the saved key \(it reports "none"\)/);
+  Hub.prototype.noteKeySource.call(hub, undefined); assert.match(hub.keyProblem, /not using/, 'a missing report changes nothing');
+  Hub.prototype.noteKeySource.call(hub, 'apiKeyHelper'); assert.equal(hub.keyProblem, '', 'and it clears when it is right again');
+  const plain = { apiKeyHelper: null, keyProblem: '' }; Hub.prototype.noteKeySource.call(plain, 'oauth'); assert.equal(plain.keyProblem, '', 'no helper, nothing to check');
+});
+
 // ---------- the hub itself ----------
 async function startHub(port, dir, env = {}) {
   mkdirSync(join(dir, 'proj'), { recursive: true }); mkdirSync(join(dir, 'cfg'), { recursive: true });
@@ -228,7 +252,9 @@ test('a test hub on a plan sign-in: the page learns who, refuses bad keys, and o
 // The reviewer's known-answer test (#140): a fake key saved on this Windows user's protection, a REAL restart through the
 // route, and then the hub reports it uses the saved key, is not locked, and the key's middle appears in no file of the hub.
 test('a saved fake key survives a real restart through POST /api/account and is written nowhere in the clear (Windows only)', { skip: !win && 'needs Windows' }, async () => {
-  const dir = makeTmp('crux-acct-known-'), port = 4793, data = join(dir, 'data');
+  // a free port picked now: the restarted hub is stopped by what listens on it, never on a port someone else may be using
+  const port = await new Promise((ok, bad) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); s.on('error', bad); });
+  const dir = makeTmp('crux-acct-known-'), data = join(dir, 'data');
   mkdirSync(data, { recursive: true });
   const MID = 'm1ddl3'.repeat(7);                       // the key's middle: 42 characters no file may hold
   const FAKE = `sk-ant-api03-${MID}f4k3`;
@@ -249,7 +275,7 @@ test('a saved fake key survives a real restart through POST /api/account and is 
     // nowhere in the data folder (settings, secrets, account, launch file, hub log) or in a project's event log
     const files = d => readdirSync(d).flatMap(n => { const f = join(d, n); return statSync(f).isDirectory() ? files(f) : [f]; });
     for (const f of [...files(data), ...files(join(dir, 'proj'))]) assert.ok(!readFileSync(f).toString('latin1').includes(MID), `the key is in ${f}`);
-    assert.ok(files(data).some(f => /hub-4793\.log$/.test(f)), 'the restarted hub\'s log was checked too');
+    assert.ok(files(data).some(f => f.endsWith(`hub-${port}.log`)), 'the restarted hub\'s log was checked too');
   } finally {
     await Promise.race([stop().catch(() => { }), new Promise(ok => setTimeout(ok, 2000))]);   // the first hub already left by itself
     for (const pid of await pidsOnPort(port)) await stopTree(pid);   // the restarted hub runs detached: stop it, the port is a test one

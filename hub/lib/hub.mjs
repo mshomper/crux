@@ -131,6 +131,7 @@ export class Hub {
     // apiKeyHelper instead, a command Claude Code runs to read it when it needs it.
     this.apiKey = () => (process.env.CRUX_HUB_USE_API_KEY === '1' ? process.env.ANTHROPIC_API_KEY || '' : '');
     this.apiKeyHelper = null;
+    this.keyProblem = '';   // set when Claude Code says it is not using the helper's key (noteKeySource); shown on the Account card
     // Decision 74 B: old events move to the archive when a log is due. Never on a test hub (it may be looking at a real
     // folder another hub is writing), unless a test asks; CRUX_HUB_NO_ROTATE=1 turns it off, recovery included.
     this.rotatesLogs = rotateLogs !== false && process.env.CRUX_HUB_NO_ROTATE !== '1';
@@ -1062,6 +1063,13 @@ export class Hub {
   pendingLessons(p) {
     const done = new Set(p.log.ofType('lesson_result').map(e => e.lesson));
     return p.log.ofType('lesson_proposed').filter(e => !done.has(e.lesson));
+  }
+
+  // Claude Code's start-up message says where its key came from (apiKeySource). With the saved key set up for agents it must
+  // say apiKeyHelper; anything else means they may be on another account, so the card says so.
+  noteKeySource(src) {
+    if (!this.apiKeyHelper || !src) return;
+    this.keyProblem = src === 'apiKeyHelper' ? '' : `Claude Code is not using the saved key (it reports "${String(src).slice(0, 40)}"), so the agents may be running on another account. Switch again, or restart the hub.`;
   }
 
   // ---------- the profile (decision 79 A): Create, and Import as one batch ----------
