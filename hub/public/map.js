@@ -13,7 +13,7 @@
 // button at the strip's left end (the Conductor's halo and the hub's red total) goes back up.
 
 import { MapModel } from './map-model.js';
-import { stripLayout, stripLane, radialLayout, blendLayouts, easeInOut, clamp, lerp } from './map-layout.js';
+import { stripLayout, stripLane, radialLayout, blendLayouts, easeInOut, clamp, lerp, satSub } from './map-layout.js';
 import { Effects, STRIDE, bend, stationRing, RING_REACH, RING_MAX, COLORS, TONE } from './map-particles.js';
 import { SwarmCore, stream } from './map-core.js';
 import { createRenderer, withPower } from './map-gl.js';
@@ -88,7 +88,14 @@ export class LiveMap {
     this.setMotion();
     this.reducedMq.addEventListener('change', () => this.setMotion());
     addEventListener('resize', () => this.reduced && this.drawStatic());
-    addEventListener('keydown', e => { if (e.key === 'Escape' && this.target === 1) this.collapse(); });
+    // Escape closes an open worker card first (tapped open, or shown by keyboard focus); the next one closes the map
+    addEventListener('keydown', e => {
+      if (e.key !== 'Escape' || this.target !== 1) return;
+      if (this.cardOpen) return this.closeCard();
+      const f = document.activeElement;
+      if (f?.matches?.('.hs.sat:focus-visible, .hud-fold:focus-visible')) return f.blur();
+      this.collapse();
+    });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) this.kick(); });
     const ro = new ResizeObserver(() => this.reduced ? this.drawStatic() : this.kick());
     ro.observe(slot);
@@ -135,7 +142,7 @@ export class LiveMap {
         <div class="hud-bg"></div>
         <canvas class="hud-lines" aria-hidden="true"></canvas>
         <canvas class="hud-glow" aria-hidden="true"></canvas>
-        <div class="hud-stations"><button type="button" class="hud-more" hidden></button></div>
+        <div class="hud-stations"><button type="button" class="hud-more" hidden></button><button type="button" class="hud-fold" hidden><b></b><span class="hs-card"><b></b><i></i></span></button></div>
         <div class="hud-exp" hidden>
           <b class="ex-t"></b><span class="ex-s"></span>
           <button type="button" class="ex-stop" data-exp-stop hidden>${svg('stop')}</button>
@@ -167,6 +174,7 @@ export class LiveMap {
     this.lineCanvas = q('.hud-lines');
     this.stationsEl = q('.hud-stations');
     this.moreEl = q('.hud-more');
+    this.foldEl = q('.hud-fold');
     this.expEl = q('.hud-exp');
     this.warnEl = q('.ex-warn');
     this.feedEl = q('.tele-feed ol');
@@ -176,6 +184,11 @@ export class LiveMap {
 
     this.upEl = q('.hud-up');
     this.panel.addEventListener('click', e => {
+      // a worker's card opened by a tap closes on any tap but one on the same worker (which opens its thread)
+      if (this.cardOpen && !this.cardOpen.contains(e.target)) this.closeCard();
+      // the open map's "+N" chip: its card names the workers folded into it (shown on hover; a tap toggles it)
+      const fold = e.target.closest('.hud-fold');
+      if (fold) { fold.dataset.open ? this.closeCard() : this.openCard(fold); return; }
       // decision 57 C: ALL goes up to every project; a project's bay, sector, label or telemetry line opens its
       // orchestrator; "+N more" closes the map onto the All projects column (already the one in focus), where they are
       if (e.target.closest('[data-up]')) { this.needsPop.hide(); this.readout.hide(); return this.go('all'); }
@@ -188,6 +201,9 @@ export class LiveMap {
       const st = e.target.closest('.hs');
       // You: the first tap shows what is waiting, right here; a second tap opens Needs you.
       if (st?.dataset.id === 'you' && this.needsPop.count && this.needsPop.el.hidden) return this.needsPop.show();
+      // A worker on the open map, by touch: the first tap shows its card (there is no pointing on a phone); a second tap
+      // on it opens its thread.
+      if (st?.classList.contains('sat') && this.touch && this.target === 1 && !st.dataset.open) { this.needsPop.hide(); return this.openCard(st); }
       if (st) { this.needsPop.hide(); return this.go(st.dataset.thread); }
       if (e.target.closest('[data-needs]')) return this.go(this.multi ? 'all' : 'needs');
       if (e.target.closest('.hud-close')) return this.collapse();
@@ -213,6 +229,9 @@ export class LiveMap {
     });
     this.panel.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') this.readout.closeSoon(); });
   }
+
+  openCard(el) { this.closeCard(); el.dataset.open = '1'; this.cardOpen = el; }
+  closeCard() { if (this.cardOpen) delete this.cardOpen.dataset.open; this.cardOpen = null; }
 
   overCore(e, k = 1.45) {
     if (!this.L) return false;
@@ -263,6 +282,7 @@ export class LiveMap {
   collapse() {
     if (this.target === 0) return;
     this.target = 0;
+    this.closeCard();
     clearTimeout(this.powerTimer);
     this.powerTimer = setTimeout(() => { if (this.target === 0 && this.e === 0) this.setPower('low-power'); }, 8000);
     this.panel.classList.remove('open');
@@ -423,7 +443,7 @@ export class LiveMap {
       const sat = s.kind === 'worker' && !s.cluster && !s.lead;
       const sub = s.kind === 'ghost' ? 'handing over'
         : s.cluster ? s.sub
-        : sat ? (s.needs ? 'Waiting on you' : s.handoff === 'writing' ? 'writing handoff' : s.handoff === 'overlap' ? 'handing over' : '') : s.sub || '';
+        : sat ? satSub(s) : s.sub || '';   // the layout makes room for the same words (map-layout.js satLabel)
       // Decision 31 and M008 8: only You turns fully red. A worker that is waiting on you keeps its model hue
       // and wears a red badge with how many things wait.
       const asking = s.kind === 'worker' && s.needs;
@@ -463,23 +483,23 @@ export class LiveMap {
       if (el.title !== title) el.title = title;
       if (el.getAttribute('aria-label') !== aria) el.setAttribute('aria-label', aria);
     }
-    for (const [id, el] of this.stationEls) if (!seen.has(id)) { el.remove(); this.stationEls.delete(id); }
+    for (const [id, el] of this.stationEls) if (!seen.has(id)) { if (this.cardOpen === el) this.closeCard(); el.remove(); this.stationEls.delete(id); }
   }
 
   // What a satellite is doing, for its card: its activity, else its goal, else its state.
   cardLine(s) { return s.needs ? `Waiting on you${s.goal ? `: ${s.goal}` : ''}` : s.activity || s.goal || STATE_WORD[s.state] || s.state || ''; }
 
-  // A satellite's hover card (decision 77, Matt 2026-11-17): its name, its model and effort, its context and state, and
-  // what it is doing. Shown on the open map when you point at the robot or reach it with the keyboard.
+  // A satellite's hover card (decision 77, Matt 2026-11-17): its name, its model and effort with its state, its context
+  // against the point it hands off at (its ring is full there, not at 100%), and what it is doing. Shown on the open map
+  // when you point at the robot or reach it with the keyboard; on a touch screen the first tap shows it.
   card(el, s) {
     let c = el.querySelector('.hs-card');
-    if (!c) { c = document.createElement('span'); c.className = 'hs-card'; c.innerHTML = '<b></b><span></span><i></i>'; el.append(c); }
-    const meta = [describe(s), s.ctx == null ? '' : `${s.ctx}% context`, STATE_WORD[s.state] || s.state].filter(Boolean).join(' · ');
-    const parts = [s.name, meta, this.cardLine(s)];
-    const [b, m, i] = c.children;
-    if (b.textContent !== parts[0]) b.textContent = parts[0];
-    if (m.textContent !== parts[1]) m.textContent = parts[1];
-    if (i.textContent !== parts[2]) i.textContent = parts[2];
+    if (!c) { c = document.createElement('span'); c.className = 'hs-card'; c.innerHTML = '<b></b><span></span><span></span><i></i>'; el.append(c); }
+    const meta = [describe(s), STATE_WORD[s.state] || s.state].filter(Boolean).join(' · ');
+    const ctx = s.ctx == null ? '' : `Context ${Math.round(s.ctx)}% (hands off at ${WORKER_HANDOFF}%)`;
+    const parts = [s.name, meta, ctx, this.cardLine(s)];
+    [...c.children].forEach((n, k) => { if (n.textContent !== parts[k]) n.textContent = parts[k]; });
+    c.children[2].hidden = !ctx;
     // each resting robot breathes on its own beat
     const beat = `${(seedOf(s.id) * 4).toFixed(2)}s`;
     if (el.style.getPropertyValue('--beat') !== beat) el.style.setProperty('--beat', beat);
@@ -614,7 +634,7 @@ export class LiveMap {
       const lead = this.phone && this.panel.classList.contains('up') ? 36 : 0;
       const cl = this.cluster ? { lead: { id: this.cluster.lead.id }, stations: this.cluster.stations.map(s => ({ id: s.id })) } : null;
       A = stripLayout(lead ? { ...slot, left: slot.left + lead, width: slot.width - lead } : slot, this.workers, this.phone, cl, { all: this.panel.classList.contains('up') });
-      B = radialLayout(tgt, this.workers, this.phone, cl);
+      B = this.radial(tgt, cl);
       L = blendLayouts(A, B, E, origin);
       this.H = null;
       this.sectors.hide();
@@ -627,11 +647,41 @@ export class LiveMap {
     this.panel.style.setProperty('--cx', L.core.x.toFixed(1) + 'px');
     this.panel.style.setProperty('--cy', L.core.y.toFixed(1) + 'px');
     L.fold = A.fold;   // workers folded into the strip's "+N" chip; they come out as the map opens
+    L.foldOpen = B.fold || null;   // and those the open map has no room for: they go into its own "+N" chip
     L.foldE = E;
+    this.foldVars(L.foldOpen, origin, E, L.core);
     this.L = L;
     this.size = { w, h };
     this.placeCluster(L);
     return L;
+  }
+
+  // The open map's layout. It searches for room (map-layout.js radialIn), so it is worked out again only when the
+  // window, the workers' names or their second lines change, not on every frame.
+  radial(tgt, cl) {
+    const key = JSON.stringify([tgt.left, tgt.top, tgt.width, tgt.height, this.phone, cl && cl.lead.id, this.workers.map(w => [w.id, w.name, satSub(w)])]);
+    if (this.radialKey !== key) { this.radialKey = key; this.radialMemo = radialLayout(tgt, this.workers, this.phone, cl); }
+    return this.radialMemo;
+  }
+
+  // The open map's "+N" chip, for workers it has no room for: placed by the layout, its card names them.
+  foldVars(f, origin, E, core) {
+    const el = this.foldEl;
+    el.hidden = !f;
+    if (!f) { if (this.cardOpen === el) this.closeCard(); return; }
+    const txt = `+${f.n}`;
+    if (el.firstChild.textContent !== txt) el.firstChild.textContent = txt;
+    const names = f.ids.map(id => this.info.get(id)?.name || id);
+    const head = `${f.n} more worker${f.n === 1 ? '' : 's'}`, list = names.join(', ');
+    const [b, i] = el.querySelector('.hs-card').children;
+    if (b.textContent !== head) b.textContent = head;
+    if (i.textContent !== list) i.textContent = list;
+    const aria = `${head}: ${list}`;
+    if (el.getAttribute('aria-label') !== aria) el.setAttribute('aria-label', aria);
+    el.dataset.card = f.chip.x - origin.x > core.x ? 'left' : 'right';
+    el.style.transform = `translate(${(f.chip.x - origin.x - f.chip.r).toFixed(1)}px,${(f.chip.y - origin.y - f.chip.r).toFixed(1)}px)`;
+    el.style.opacity = String(clamp((E - 0.5) * 3, 0, 1));
+    el.style.pointerEvents = E > 0.6 ? '' : 'none';
   }
 
   // The strip's zones, from the layout, written to the slot (other strip parts live there too, beside the panel): a class
@@ -699,6 +749,10 @@ export class LiveMap {
       const s = info.get(id);
       if (s) info.set(id, { ...s, fade: Math.min(s.fade ?? 1, clamp(L.foldE * 2, 0, 1)) });
     }
+    if (L.foldOpen) for (const id of L.foldOpen.ids) {   // folded into the open map's chip: gone by the time it is open
+      const s = info.get(id);
+      if (s) info.set(id, { ...s, fade: Math.min(info.get(id).fade ?? 1, clamp((1 - L.foldE) * 2, 0, 1)) });
+    }
     return info;
   }
 
@@ -711,6 +765,8 @@ export class LiveMap {
       // satellites: back ones a little dimmer (depth), and the hover card opens away from the core's side
       const depth = (s.depth ?? 1).toFixed(2);
       if (el.style.getPropertyValue('--depth') !== depth) el.style.setProperty('--depth', depth);
+      const slw = s.lw ? `${s.lw}px` : '';   // how wide its name may be on the open map (the layout made room for that)
+      if (el.style.getPropertyValue('--slw') !== slw) slw ? el.style.setProperty('--slw', slw) : el.style.removeProperty('--slw');
       const flip = s.x > (L.core?.x ?? 0) + 1 ? 'left' : 'right';   // a data attribute: syncStations rewrites the class
       if (el.dataset.card !== flip) el.dataset.card = flip;
       const f = info.get(id)?.fade;
