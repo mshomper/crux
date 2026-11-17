@@ -1,12 +1,17 @@
 // Glow renderer for the live map's particles. WebGL2 with soft additive points and fading trails (two targets,
-// ping-pong), a plain canvas fallback when WebGL2 is unavailable.
+// ping-pong), a plain canvas fallback when WebGL2 is unavailable or its shaders will not build.
 // Input: Float32Array of x, y, size, r, g, b, a (stride 7) in CSS pixels, plus the core's swarm ({ count, u }), whose
 // particles move in the vertex shader (map-core.js SWARM_VS) from seeds uploaded once.
 // The targets are half-float where the browser can draw into them, so dense additive light rolls off softly in the
-// final pass instead of clipping white; otherwise 8-bit, as before.
+// final pass instead of clipping white; otherwise 8-bit, as before. They are allocated in 256 px steps and only grown,
+// so the map's zoom does not reallocate them every frame; each frame draws into the corner it needs.
+// After the graphics card drops the context (a driver reset, a heavy GPU job, a phone in the background) the renderer
+// rebuilds itself when the context comes back and calls onRestored.
 
 import { STRIDE } from './map-particles.js';
 import { SWARM_VS, swarmSeeds } from './map-core.js';
+
+const MAX_AREA = 6e6;   // device pixels: a soft glow gains nothing from more, and two half-float targets stay modest
 
 const VS_POINTS = `#version 300 es
 layout(location=0) in vec2 aPos;
@@ -42,13 +47,15 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
+// uScale: the share of the target in use (it may be larger than the canvas)
 const FS_FADE = `#version 300 es
 precision mediump float;
 in vec2 vUv;
 uniform sampler2D uTex;
 uniform float uFade;
+uniform vec2 uScale;
 out vec4 o;
-void main() { o = max(texture(uTex, vUv) * uFade - vec4(1.6 / 255.0), 0.0); }`;
+void main() { o = max(texture(uTex, vUv * uScale) * uFade - vec4(1.6 / 255.0), 0.0); }`;
 
 // To the screen. 8-bit: clamp, as before. Half-float: unchanged up to a knee, then a soft roll-off toward full, and the
 // very hottest spots pushed to white, so the faint map stays as it was and the dense swarm never clips flat.
@@ -57,10 +64,11 @@ precision highp float;
 in vec2 vUv;
 uniform sampler2D uTex;
 uniform int uSoft;
+uniform vec2 uScale;
 out vec4 o;
 vec3 knee(vec3 c) { return mix(c, 0.6 + 0.4 * (1.0 - exp(-(c - 0.6) / 0.4)), step(0.6, c)); }
 void main() {
-  vec4 c = texture(uTex, vUv);
+  vec4 c = texture(uTex, vUv * uScale);
   vec3 m;
   if (uSoft == 1) {
     float peak = max(c.r, max(c.g, c.b));
@@ -69,20 +77,64 @@ void main() {
   o = vec4(m, min(max(min(c.a, 1.0), max(m.r, max(m.g, m.b))), 1.0));
 }`;
 
-export function createRenderer(canvas) {
-  try {
-    const gl = canvas.getContext('webgl2', { premultipliedAlpha: true, alpha: true, antialias: false, powerPreference: 'high-performance' });
-    if (gl) return new GLRenderer(canvas, gl);
-  } catch { /* fall through */ }
+const ATTRS = { premultipliedAlpha: true, alpha: true, antialias: false };
+
+// A canvas that has handed out a WebGL2 context can never give a 2D one: the fallback and a power switch need a fresh one.
+function freshCanvas(old) {
+  const c = old.cloneNode ? old.cloneNode(false) : old;
+  if (c !== old) old.replaceWith?.(c);
+  return c;
+}
+
+// power: 'low-power' (the strip) or 'high-performance' (the open map); see withPower.
+export function createRenderer(canvas, { power = 'low-power' } = {}) {
+  let gl = null;
+  try { gl = canvas.getContext('webgl2', { ...ATTRS, powerPreference: power }); } catch { /* fall through */ }
+  if (gl) {
+    try { return new GLRenderer(canvas, gl, power); }
+    catch (err) { console.warn('Live map: WebGL2 shaders did not build, using the plain canvas:', err); canvas = freshCanvas(canvas); }
+  }
   return new CanvasRenderer(canvas);
 }
 
+// The same renderer asking for a different GPU (high-performance while the map is open, low-power in the strip): a new
+// context on a fresh canvas, which replaces the old one in the page. Returns the old renderer if that does not work.
+export function withPower(r, power) {
+  if (!r || r.kind !== 'webgl2' || r.power === power) return r;
+  const c = r.canvas.cloneNode(false);
+  let gl = null, next;
+  try { gl = c.getContext('webgl2', { ...ATTRS, powerPreference: power }); } catch { /* keep the old one */ }
+  if (!gl) return r;
+  try { next = new GLRenderer(c, gl, power); } catch { return r; }
+  r.canvas.replaceWith?.(c);
+  next.onRestored = r.onRestored;
+  if (r.cssW) next.resize(r.cssW, r.cssH, r.reqDpr);
+  r.dispose();
+  return next;
+}
+
 class GLRenderer {
-  constructor(canvas, gl) {
+  constructor(canvas, gl, power = 'low-power') {
     this.kind = 'webgl2';
     this.canvas = canvas;
     this.gl = gl;
-    this.soft = !!gl.getExtension('EXT_color_buffer_float');
+    this.power = power;
+    this.lost = false;
+    this.noSoft = false;      // the half-float targets failed once: stay on 8-bit
+    this.onRestored = null;
+    this.cssW = 0;
+    this.setup();
+    canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); this.lost = true; });
+    canvas.addEventListener('webglcontextrestored', () => {
+      try { this.setup(); this.lost = false; this.onRestored?.(); }
+      catch (err) { console.warn('Live map: could not rebuild after the graphics card came back:', err); }
+    });
+  }
+
+  // Everything that lives on the GPU: made at the start and again after a lost context comes back.
+  setup() {
+    const gl = this.gl;
+    this.soft = !this.noSoft && !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
     this.points = this.program(VS_POINTS, FS_POINTS);
     this.swarmProg = this.program(SWARM_VS, FS_POINTS);
     this.fade = this.program(VS_QUAD, FS_FADE);
@@ -102,12 +154,13 @@ class GLRenderer {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16);
     gl.bindVertexArray(null);
-    this.nSeeds = 0;
     this.quadVao = gl.createVertexArray();
+    this.nSeeds = 0;
     this.targets = [];
+    this.tw = this.th = 0;
     this.w = this.h = 0;
-    this.lost = false;
-    canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); this.lost = true; });
+    this.broken = false;
+    if (this.cssW) this.resize(this.cssW, this.cssH, this.reqDpr);   // after a restore: the same size again
   }
 
   program(vs, fs) {
@@ -115,33 +168,41 @@ class GLRenderer {
     const sh = (type, src) => {
       const s = gl.createShader(type);
       gl.shaderSource(s, src); gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader did not compile');
       return s;
     };
     const p = gl.createProgram();
     gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
     gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'program did not link');
     const u = {};
     for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) { const { name } = gl.getActiveUniform(p, i); u[name] = gl.getUniformLocation(p, name); }
     return { p, u };
   }
 
   resize(cssW, cssH, dpr) {
+    this.reqDpr = dpr;
+    const area = cssW * cssH * dpr * dpr;
+    if (area > MAX_AREA) dpr *= Math.sqrt(MAX_AREA / area);
     const w = Math.max(1, Math.round(cssW * dpr)), h = Math.max(1, Math.round(cssH * dpr));
     this.cssW = cssW; this.cssH = cssH; this.dpr = dpr;
-    if (w === this.w && h === this.h) return;
-    this.w = w; this.h = h;
-    this.canvas.width = w; this.canvas.height = h;
+    if (w !== this.w || h !== this.h) { this.w = w; this.h = h; this.canvas.width = w; this.canvas.height = h; }
+    if (w > this.tw || h > this.th) this.allocate(Math.max(this.tw, Math.ceil(w / 256) * 256), Math.max(this.th, Math.ceil(h / 256) * 256));
+  }
+
+  allocate(tw, th) {
     const gl = this.gl;
     for (const t of this.targets) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); }
-    this.targets = this.makeTargets(w, h);
-    if (this.soft && this.targets.some(t => !t.ok)) {   // the driver will not draw into half-float: 8-bit, as before
+    this.targets = this.makeTargets(tw, th);
+    if (this.soft && this.targets.some(t => !t.ok)) {   // the driver will not draw into half-float: 8-bit, as before, from now on
       for (const t of this.targets) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); }
-      this.soft = false;
-      this.targets = this.makeTargets(w, h);
+      this.soft = false; this.noSoft = true;
+      this.targets = this.makeTargets(tw, th);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.broken = this.targets.some(t => !t.ok);
+    if (this.broken) console.warn('Live map: the browser refused the drawing targets');
+    this.tw = tw; this.th = th;
   }
 
   makeTargets(w, h) {
@@ -175,9 +236,9 @@ class GLRenderer {
 
   // trail: 0 = no trails (a still), up to ~0.9 = long trails. swarms: [{ count, u, max }] from SwarmCore.swarm().
   draw(data, count, trail, swarms = []) {
-    if (this.lost || !this.targets.length) return;
+    if (this.lost || this.broken || !this.targets.length) return;
     const gl = this.gl;
-    const [prev, next] = this.targets;
+    const [prev, next] = this.targets, sx = this.w / this.tw, sy = this.h / this.th;
     gl.viewport(0, 0, this.w, this.h);
     gl.disable(gl.DEPTH_TEST);
     // 1. previous frame, faded, into the next target
@@ -187,6 +248,7 @@ class GLRenderer {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, prev.tex);
     gl.uniform1i(this.fade.u.uTex, 0);
     gl.uniform1f(this.fade.u.uFade, trail);
+    gl.uniform2f(this.fade.u.uScale, sx, sy);
     gl.bindVertexArray(this.quadVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.enable(gl.BLEND);
@@ -227,6 +289,7 @@ class GLRenderer {
     gl.bindTexture(gl.TEXTURE_2D, next.tex);
     gl.uniform1i(this.copy.u.uTex, 0);
     gl.uniform1i(this.copy.u.uSoft, this.soft ? 1 : 0);
+    gl.uniform2f(this.copy.u.uScale, sx, sy);
     gl.bindVertexArray(this.quadVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
@@ -234,11 +297,15 @@ class GLRenderer {
   }
 
   clear() {
+    if (this.lost) return;
     const gl = this.gl;
     for (const t of this.targets) { gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.clear(gl.COLOR_BUFFER_BIT);
   }
+
+  // Let the GPU free this context now (after a power switch) rather than whenever the page drops it.
+  dispose() { try { this.gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch { /* already gone */ } }
 }
 
 // Fallback: additive dots on a 2D canvas; trails by fading what is already there. It cannot run the swarm's shader:
@@ -246,8 +313,10 @@ class GLRenderer {
 class CanvasRenderer {
   constructor(canvas) {
     this.kind = 'canvas';
+    this.power = 'low-power';
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    if (!this.ctx) throw new Error('no 2D canvas either');
   }
   resize(cssW, cssH, dpr) {
     const w = Math.round(cssW * dpr), h = Math.round(cssH * dpr);
@@ -273,4 +342,5 @@ class CanvasRenderer {
     }
   }
   clear() { this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height); }
+  dispose() {}
 }

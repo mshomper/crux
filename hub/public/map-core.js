@@ -213,7 +213,9 @@ export class SwarmCore {
     this.t = 0; this.yaw = 0; this.rot = 0; this.flash = 0; this.pulsePh = 0;
     this.kick = 0; this.kv = 0;                            // the handoff's throw: a spring that settles back
     this.lx = 0; this.ly = 0; this.lvx = 0; this.lvy = 0;  // the lean toward a pulse or away from a spark: a spring too
-    this.q = 1; this.ema = 1 / 60; this.ref = 1 / 60; this.slow = 0; this.calm = 0;   // the frame-time probe
+    // the frame-time probe: the share of the budget drawn, a smoothed frame time, the screen's own pace, a trial cut
+    this.q = 1; this.ema = 1 / 60; this.ref = 1 / 60; this.slow = 0; this.calm = 0; this.trial = null; this.floor = 0;
+    this.ring = new Float32Array(400); this.ri = 0; this.rn = 0; this.since = 0;
     this.P = { fill: 0, heat: 0, due: 0, gold: 0, swirl: 0, speed: 0.2, energy: 0.5, bright: 0.35, flare: 0, ask: 0, hr: 0.44, hg: 0.89, hb: 1 };
     this.G = { ...this.P };
     this.look = null;
@@ -251,6 +253,7 @@ export class SwarmCore {
   settle() {
     Object.assign(this.P, this.G);
     this.kick = this.kv = this.lx = this.ly = this.lvx = this.lvy = 0;
+    this.flash = 0; this.nsp = 0; this.events.length = 0;
   }
 
   // ---------- events ----------
@@ -296,8 +299,9 @@ export class SwarmCore {
   absorb() { this.flash = Math.max(this.flash, 0.3); this.kv += 0.5; }
 
   // ---------- time ----------
-  step(dt) {
-    this.probe(dt);
+  // probe: false while the map holds the frame rate down on purpose (the strip runs at about 30 a second)
+  step(dt, probe = true) {
+    if (probe) this.probe(dt);
     dt = Math.min(dt, 0.05);
     this.t += dt;
     const P = this.P, G = this.G, k = 1 - Math.exp(-dt * 2.4), t = this.t;
@@ -316,18 +320,39 @@ export class SwarmCore {
     this.stepSparks(dt);
   }
 
-  // The frame-time probe: when frames run long for a second and a half, draw a fifth fewer particles; when they have
-  // run well for four seconds, draw a little more again, up to the budget. "Long" is against the screen's own refresh
-  // interval (the fastest frames seen lately), but never chases more than about 58 frames a second.
+  // The frame-time probe. The screen's own pace is the 10th percentile of the last two seconds of frames (so a 30 Hz
+  // screen reads as 30, and one short frame changes nothing). When frames run long for a second and a half, it tries
+  // drawing a fifth fewer particles for two seconds and keeps the cut only if frames got shorter; if they did not, the
+  // particles were not the cost, so it puts them back and leaves them until frames get clearly worse. When frames have
+  // run well for four seconds it draws a little more again, up to the budget. It never chases more than ~58 a second.
   probe(raw) {
     if (!(raw > 0) || raw > 0.25) return;   // a hidden tab or a hiccup tells nothing
     this.ema += (raw - this.ema) * 0.06;
-    this.ref = raw < this.ref ? raw : this.ref + (raw - this.ref) * 0.002;
-    const slowAt = Math.max(this.ref * 1.35, 1 / 50), fastAt = Math.max(this.ref * 1.15, 1 / 58);
-    if (this.ema > slowAt) { this.slow += raw; this.calm = 0; }
+    const R = this.ring;
+    R[this.ri] = raw; this.ri = (this.ri + 1) % R.length; this.rn = Math.min(this.rn + 1, R.length);
+    if ((this.since += raw) > 0.5) { this.since = 0; this.ref = this.pace(); }
+    if (this.trial) {
+      if ((this.trial.left -= raw) > 0) return;
+      if (this.ema > this.trial.ema * 0.93) { this.q = this.trial.q; this.floor = this.trial.ema; }   // the cut did not help
+      this.trial = null; this.slow = 0; this.calm = -4;
+      return;
+    }
+    const slowAt = Math.min(Math.max(this.ref * 1.35, 1 / 50), 1 / 40), fastAt = Math.max(this.ref * 1.15, 1 / 58);
+    const slow = this.ema > slowAt && (!this.floor || this.ema > this.floor * 1.25);
+    if (slow) { this.slow += raw; this.calm = 0; }
     else { this.slow = Math.max(0, this.slow - raw * 2); this.calm = this.ema < fastAt ? this.calm + raw : 0; }
-    if (this.slow > 1.5 && this.q > Q_MIN) { this.q = Math.max(Q_MIN, this.q * 0.8); this.slow = 0; this.calm = -4; }
+    if (this.ema < slowAt) this.floor = 0;   // frames are fine again: a later slowdown may be the particles
+    if (this.slow > 1.5 && this.q > Q_MIN) { this.trial = { q: this.q, ema: this.ema, left: 2 }; this.q = Math.max(Q_MIN, this.q * 0.8); this.slow = 0; }
     else if (this.calm > 4 && this.q < 1) { this.q = Math.min(1, this.q * 1.12); this.calm = 0; }
+  }
+
+  // The 10th percentile of the frames in the last two seconds.
+  pace() {
+    const R = this.ring, out = [];
+    let sum = 0;
+    for (let k = 1; k <= this.rn && sum < 2; k++) { const v = R[(this.ri - k + R.length) % R.length]; out.push(v); sum += v; }
+    out.sort((a, b) => a - b);
+    return out[Math.floor(out.length * 0.1)] || this.ref;
   }
 
   stepSparks(dt) {
@@ -379,7 +404,9 @@ export class SwarmCore {
     const sizeK = clamp(r / 90, 0.45, 1.15);
     U.uC[0] = this.cx; U.uC[1] = this.cy; U.uR = r; U.uSizeK = sizeK;
     U.uDens = Math.pow((REF_N * (r / REF_R) ** 2 * (REF_K / sizeK) ** 2) / n, 0.85);
-    U.uT = this.t; U.uRot = this.rot; U.uFill = P.fill; U.uHeat = P.heat; U.uSwirl = P.swirl; U.uEnergy = P.energy;
+    // time and turn are wrapped at a long period so the GPU's floats keep their precision on a map left open for days
+    // (one small jump every half hour or so)
+    U.uT = this.t % 1800; U.uRot = this.rot % (TAU * 400); U.uFill = P.fill; U.uHeat = P.heat; U.uSwirl = P.swirl; U.uEnergy = P.energy;
     U.uBright = P.bright; U.uGold = P.gold; U.uDue = P.due; U.uPh = this.pulsePh; U.uFlash = this.flash; U.uKick = this.kick;
     U.uLean[0] = this.lx; U.uLean[1] = this.ly;
     U.uHue[0] = P.hr; U.uHue[1] = P.hg; U.uHue[2] = P.hb;
@@ -389,7 +416,7 @@ export class SwarmCore {
 
   // The canvas fallback (no WebGL2): a sample of the swarm drawn on the CPU with the same maths. Returns the next free slot.
   cpuSwarm(out, o) {
-    const { count, u } = this.swarm(), n = Math.min(count, this.budget.fallback);
+    const { count, u } = this.swarm(), n = Math.max(100, Math.min(count, Math.round(this.budget.fallback * this.q)));
     this.seeds ||= swarmSeeds(this.budget.fallback);
     const dens = u.uDens;
     u.uDens = dens * Math.pow(count / n, 0.85);

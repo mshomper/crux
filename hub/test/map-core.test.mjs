@@ -170,13 +170,28 @@ test('the count follows the core size, and the frame-time probe scales it down a
   assert.equal(c.q, 1, 'steady 60 fps keeps the full budget');
   for (let i = 0; i < 165 * 4; i++) c.step(1 / 165);
   assert.equal(c.q, 1, 'a 165 Hz screen too');
-  for (let i = 0; i < 30 * 20; i++) c.step(1 / 30);
-  assert.ok(c.q < 1 && c.q >= 0.2, `slow frames shed particles (${c.q})`);
-  const low = c.q;
-  for (let i = 0; i < 60 * 3; i++) c.step(1 / 60);
-  assert.equal(c.q, low, 'it waits before adding any back');
+});
+
+test('the probe: a 30 Hz screen is not slow; a GPU that the particles hold back sheds them and gets them back', () => {
+  // known answer (review of #134): 120 s of 1/30 frames with 1% at 1/60 must leave the full budget
+  const screen30 = new SwarmCore();
+  screen30.setMood({ state: 'working', ctx: 30 });
+  for (let i = 0; i < 30 * 120; i++) screen30.step(i % 100 === 0 ? 1 / 60 : 1 / 30);
+  assert.equal(screen30.q, 1, `a 30 Hz screen keeps the full budget (${screen30.q})`);
+  // a GPU whose frame time follows the particle count: 0.045 s at the full budget, never faster than the 60 Hz screen
+  const c = new SwarmCore();
+  c.setMood({ state: 'working', ctx: 30 });
+  const gpu = q => Math.max(1 / 60, 0.045 * q);
+  for (let i = 0; i < 60 * 30; i++) c.step(gpu(c.q));
+  assert.ok(c.q < 0.6 && c.q >= 0.2, `the cuts helped, so they stay (${c.q.toFixed(2)})`);
   for (let i = 0; i < 60 * 90; i++) c.step(1 / 60);
   assert.equal(c.q, 1, 'and recovers to the full budget once frames run well');
+  // the cost is elsewhere (frames slow whatever the count): a cut is tried once, then put back
+  const busy = new SwarmCore();
+  busy.setMood({ state: 'working', ctx: 30 });
+  for (let i = 0; i < 60 * 3; i++) busy.step(1 / 60);
+  for (let i = 0; i < 25 * 60; i++) busy.step(1 / 25);
+  assert.equal(busy.q, 1, `particles not the cost: the budget is put back (${busy.q})`);
 });
 
 test('the canvas fallback draws a CPU sample of the swarm, within the buffer', () => {
