@@ -230,7 +230,12 @@ export class ProviderClient {
 
   // One image: { b64 (base64), mime, model, provider, tokens, costUSD, estimated, costUnit, modelUsage, ms }. Ollama has no image
   // route. Google: the Interactions route; the picture's bytes are read from the answer wherever it puts an image block.
-  async image({ prompt, size = '1024x1024', aspectRatio = '1:1', signal, timeoutMs = 90000 }) {
+  async image(args) {
+    try { return await this.imageCall(args); }
+    catch (e) { if (e instanceof ProviderError && this.imageModel) e.model = this.imageModel; throw e; }   // a failure names the picture model, not the text one
+  }
+
+  async imageCall({ prompt, size = '1024x1024', aspectRatio = '1:1', signal, timeoutMs = 90000 }) {
     const started = Date.now();
     const model = this.imageModel;
     if (!model) throw this.fail('no-image');

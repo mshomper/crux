@@ -35,6 +35,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     if (req.url.endsWith('/images/generations')) return res.end(JSON.stringify({ created: 1, data: [{ b64_json: PNG_B64 }] }));
     if (req.url.endsWith('/interactions')) {
+      if (mock.mode === 'incomplete') return res.end(JSON.stringify({ id: 'i1', status: 'in_progress', steps: [] }));
       if (mock.mode === 'noimage') return res.end(JSON.stringify({ id: 'i1', status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: 'I cannot draw that.' }] }] }));
       return res.end(JSON.stringify({ id: 'i1', status: 'completed', steps: [{ type: 'user_input', content: [{ type: 'text', text: 'x' }] }, { type: 'model_output', content: [{ type: 'image', mime_type: 'image/png', data: PNG_B64 }] }],
         usage: { total_input_tokens: 20, total_output_tokens: 1120, total_tokens: 1140 } }));
@@ -323,7 +324,7 @@ test('month summaries stay on Claude unless the separate opt-in is set, even at 
 test('ask_outside_model refuses a question or context that holds a key or a password, in the "password: x" form too', async t => {
   reset();
   const w = world(t);
-  for (const bad of ['the password: hunter2hunter2', 'my API key is abcd1234efgh', 'token="abcdef123456"', 'sk-abcdefghijklmnopqrstuvwxyz1234']) {
+  for (const bad of ['the password: hunter2hunter2', 'my API key: abcd1234efgh', 'token="abcdef123456"', 'sk-abcdefghijklmnopqrstuvwxyz1234']) {
     assert.match(await run(w, 'ask_outside_model', { question: 'what is this?', context: bad }), /^Refused \(secret\)/, bad);
     assert.match(await run(w, 'ask_outside_model', { question: bad }), /^Refused \(secret\)/, bad);
   }
@@ -356,6 +357,34 @@ test('401 and 403 say the key was not accepted, 404 says the model is unknown, a
       assert.ok(!out.includes(DUMMY_KEY) && !/bad key/.test(out));
     }
   }
+});
+
+test('ordinary sentences with "token is" or "password is" go through; "password: x" is still refused', async t => {
+  reset();
+  const w = world(t);
+  const out = await run(w, 'draft_with_outside_model', { instructions: 'Write a note.', source: 'Each output token is counted at the list price. The password is required on first login.' });
+  assert.match(out, /^Untrusted draft/);
+  assert.equal(mock.requests.length, 1, 'it reached the mock');
+  assert.match(await run(w, 'draft_with_outside_model', { instructions: 'x', source: 'password: hunter22' }), /^Refused \(secret\)/);
+  assert.equal(mock.requests.length, 1, 'the second one did not');
+});
+
+test('a picture call that fails before its answer is read still writes a usage line at the fallback rate, so it counts toward the caps', async t => {
+  reset('incomplete');
+  const w = world(t, { limits: { outsideUsdPerDay: 0.05 } });
+  assert.match(await run(w, 'make_image', { prompt: 'x' }), /^Refused \(bad-answer\)/);
+  const u = w.p.log.events.filter(e => e.type === 'usage' && e.purpose === 'make_image');
+  assert.equal(u.length, 1, 'one usage line');
+  assert.equal(u[0].model, 'gemini-nano-banana-2.1', 'it names the picture model');
+  assert.ok(u[0].costUSD >= 0.05, `counted at ${u[0].costUSD}`);
+  reset();
+  assert.match(await run(w, 'make_image', { prompt: 'y' }), /^Refused \(budget\)/, 'the next call is held by the cap');
+  assert.equal(mock.requests.length, 0);
+  // an answer that was stored and logged is not charged a second time
+  const ok = world(t);
+  reset();
+  await run(ok, 'make_image', { prompt: 'z' });
+  assert.equal(ok.p.log.events.filter(e => e.type === 'usage').length, 1);
 });
 
 test('the provider section says whether a key is saved and shows its last four characters only', () => {
