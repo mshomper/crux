@@ -14,7 +14,7 @@
 
 import { MapModel } from './map-model.js';
 import { stripLayout, stripLane, radialLayout, blendLayouts, easeInOut, clamp, lerp } from './map-layout.js';
-import { Effects, STRIDE, bend } from './map-particles.js';
+import { Effects, STRIDE, bend, stationRing, RING_REACH, RING_MAX, COLORS, TONE } from './map-particles.js';
 import { SwarmCore, stream } from './map-core.js';
 import { createRenderer, withPower } from './map-gl.js';
 import { HudPainter } from './map-hud.js';
@@ -45,6 +45,13 @@ const ICON = {
 const svg = (name, cls = 'hud-i') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const DUR = 0.62;           // seconds for the zoom
+// Satellites (decision 77): what each of up to 12 workers may add to a frame on the CPU path: its ring, its stream and a
+// red stream to You when it waits on Matt.
+const STREAM_MAX = 18, ASK_MAX = 14, SAT_WORKERS = 12;
+const SAT_RESERVE = SAT_WORKERS * (RING_MAX + STREAM_MAX + ASK_MAX);
+const WORKER_HANDOFF = 60;   // a worker hands off at 60% context (decision 46): its ring is full there
+const STATE_WORD = { working: 'Working', starting: 'Starting', idle: 'Idle', asleep: 'Asleep', error: 'Stopped on an error', retired: 'Retired' };
+const seedOf = id => { let h = 2166136261; for (const ch of String(id)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return ((h >>> 0) % 1000) / 1000; };
 const GLYPHS = '█▓▒░<>/\\|=+*#01';
 
 export class LiveMap {
@@ -77,7 +84,7 @@ export class LiveMap {
     this.hud = new HudPainter(this.lineCanvas);
     this.core = new SwarmCore({ light: this.phone });   // a phone carries about a sixth of the particles
     this.fx = new Effects();
-    this.buf = new Float32Array((this.core.capacity + 700 + 12 * 9) * STRIDE);
+    this.buf = new Float32Array((this.core.capacity + 700 + SAT_RESERVE) * STRIDE);
     this.setMotion();
     this.reducedMq.addEventListener('change', () => this.setMotion());
     addEventListener('resize', () => this.reduced && this.drawStatic());
@@ -297,7 +304,8 @@ export class LiveMap {
     const you = this.multi ? this.hub.total : needs;
     this.info.set('you', { id: 'you', kind: 'you', name: 'You', thread: this.multi ? 'all' : 'needs', state: you ? 'needs' : 'idle', needs: you > 0, traffic: 0.5, sub: you ? `${you} waiting` : 'all clear' });
     // the Board belongs to one project: the hub map leaves it out
-    if (!hubMode) this.info.set('board', { id: 'board', kind: 'board', name: 'Board', thread: 'board', state: 'idle', needs: false, traffic: 0.35, sub: `${board.decisions} decision${board.decisions === 1 ? '' : 's'} · ${board.entries} entr${board.entries === 1 ? 'y' : 'ies'}` });
+    // the Board shows its name only on the map (Matt, 2026-11-17); its counts stay in its tooltip
+    if (!hubMode) this.info.set('board', { id: 'board', kind: 'board', name: 'Board', thread: 'board', state: 'idle', needs: false, traffic: 0.35, sub: '', counts: `${board.decisions} decision${board.decisions === 1 ? '' : 's'} · ${board.entries} entr${board.entries === 1 ? 'y' : 'ies'}` });
     this.applyCluster(hubMode ? null : this.model.cluster());
     this.syncStations();
     if (hubMode) this.sectors.set(this.places);
@@ -410,20 +418,25 @@ export class LiveMap {
         this.stationsEl.append(el);
         this.stationEls.set(s.id, el);
       }
+      // A satellite (decision 77): the orchestrator's own worker. Its name only; what it is doing lives in a card on hover
+      // (Matt, 2026-11-17), except a worker waiting on him, which keeps one red line, and a handoff in progress.
+      const sat = s.kind === 'worker' && !s.cluster && !s.lead;
       const sub = s.kind === 'ghost' ? 'handing over'
         : s.cluster ? s.sub
-        : s.kind === 'worker' ? (s.needs ? 'needs you' : s.handoff === 'writing' ? 'writing handoff' : s.handoff === 'overlap' ? 'handing over' : s.activity || s.state) : s.sub;
+        : sat ? (s.needs ? 'Waiting on you' : s.handoff === 'writing' ? 'writing handoff' : s.handoff === 'overlap' ? 'handing over' : '') : s.sub || '';
       // Decision 31 and M008 8: only You turns fully red. A worker that is waiting on you keeps its model hue
       // and wears a red badge with how many things wait.
       const asking = s.kind === 'worker' && s.needs;
-      const cls = `hs ${s.kind} ${s.state || ''} ${s.handoff ? 'handoff' : ''} ${s.needs ? (asking ? 'asks' : 'needs') : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}${s.cluster ? ' cl' : ''}${s.lead ? ' lead' : ''}`;
+      const cls = `hs ${s.kind} ${s.state || ''} ${s.handoff ? 'handoff' : ''} ${s.needs ? (asking ? 'asks' : 'needs') : ''} ${this.leaving.has(s.id) ? 'leaving' : ''} ${this.entering.has(s.id) ? 'entering' : ''}${s.cluster ? ' cl' : ''}${s.lead ? ' lead' : ''}${sat ? ' sat' : ''}`;
       // The station body takes its model's hue too (decision 20).
       const hue = s.kind === 'worker' ? hueOf(s.model) : null;
       const full = hue && !s.handoff && s.state !== 'error' ? `${cls} mh` : cls;   // handoff gold and the error amber win
       if (s.kind === 'worker' && !s.lead) {   // its model family's robot (M015), redrawn only when its look changes
         const key = robotKey(s, asking);
-        if (el.dataset.bot !== key) { el.dataset.bot = key; el.querySelector('.hs-body > svg').outerHTML = robot(s, { size: 28, needs: asking, cls: 'hud-i' }); }
+        // a satellite's robot is drawn at 44 px on the open map, big enough for its own effort pips (they hide in the strip)
+        if (el.dataset.bot !== key) { el.dataset.bot = key; el.querySelector('.hs-body > svg').outerHTML = robot(s, { size: sat ? 44 : 28, needs: asking, cls: 'hud-i' }); }
       }
+      if (sat) this.card(el, s);
       const badge = el.querySelector('.hs-badge');
       const n = asking ? Math.max(1, s.asks || 0) : 0;
       if (badge && badge.textContent !== String(n || '')) { badge.textContent = n ? String(n) : ''; badge.hidden = !n; }
@@ -444,10 +457,32 @@ export class LiveMap {
         const ptip = `${s.gatherers} gatherer${s.gatherers === 1 ? '' : 's'} running inside the Lead`;
         if (pill.title !== ptip) pill.title = ptip;
       }
-      const tip = s.lead ? `Lead of the expedition ${s.name} (${describe(s)}): ${s.phase || s.sub}. Opens its thread` : s.kind === 'slot' ? `${s.name}: not started yet` : s.cluster ? `${s.name} (${describe(s)}): ${s.sub}` : s.kind === 'worker' ? `${s.name} (${describe(s)}): ${s.goal || s.state}` : s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? (s.needs ? 'Point here to see and answer what is waiting' : 'Nothing waiting') : 'Open the memory board';
-      if (el.title !== tip) { el.title = tip; el.setAttribute('aria-label', `${label}, ${sub}`); }
+      const tip = s.lead ? `Lead of the expedition ${s.name} (${describe(s)}): ${s.phase || s.sub}. Opens its thread` : s.kind === 'slot' ? `${s.name}: not started yet` : s.cluster ? `${s.name} (${describe(s)}): ${s.sub}` : s.kind === 'worker' ? `${s.name} (${describe(s)}): ${s.goal || s.state}` : s.kind === 'ghost' ? `${s.name}: ${s.goal || s.state}` : s.kind === 'you' ? (s.needs ? 'Point here to see and answer what is waiting' : 'Nothing waiting') : `Open the memory board${s.counts ? ` (${s.counts})` : ''}`;
+      // a satellite's card replaces the browser's tooltip (it would show both)
+      const title = sat ? '' : tip, aria = sat ? `${label}: ${this.cardLine(s)}` : sub ? `${label}, ${sub}` : label;
+      if (el.title !== title) el.title = title;
+      if (el.getAttribute('aria-label') !== aria) el.setAttribute('aria-label', aria);
     }
     for (const [id, el] of this.stationEls) if (!seen.has(id)) { el.remove(); this.stationEls.delete(id); }
+  }
+
+  // What a satellite is doing, for its card: its activity, else its goal, else its state.
+  cardLine(s) { return s.needs ? `Waiting on you${s.goal ? `: ${s.goal}` : ''}` : s.activity || s.goal || STATE_WORD[s.state] || s.state || ''; }
+
+  // A satellite's hover card (decision 77, Matt 2026-11-17): its name, its model and effort, its context and state, and
+  // what it is doing. Shown on the open map when you point at the robot or reach it with the keyboard.
+  card(el, s) {
+    let c = el.querySelector('.hs-card');
+    if (!c) { c = document.createElement('span'); c.className = 'hs-card'; c.innerHTML = '<b></b><span></span><i></i>'; el.append(c); }
+    const meta = [describe(s), s.ctx == null ? '' : `${s.ctx}% context`, STATE_WORD[s.state] || s.state].filter(Boolean).join(' · ');
+    const parts = [s.name, meta, this.cardLine(s)];
+    const [b, m, i] = c.children;
+    if (b.textContent !== parts[0]) b.textContent = parts[0];
+    if (m.textContent !== parts[1]) m.textContent = parts[1];
+    if (i.textContent !== parts[2]) i.textContent = parts[2];
+    // each resting robot breathes on its own beat
+    const beat = `${(seedOf(s.id) * 4).toFixed(2)}s`;
+    if (el.style.getPropertyValue('--beat') !== beat) el.style.setProperty('--beat', beat);
   }
 
   syncText(core, needs) {
@@ -673,6 +708,11 @@ export class LiveMap {
       if (!s) { el.style.opacity = '0'; continue; }
       el.style.transform = `translate3d(${s.x.toFixed(1)}px,${s.y.toFixed(1)}px,0)`;
       el.style.setProperty('--r', s.r.toFixed(1) + 'px');
+      // satellites: back ones a little dimmer (depth), and the hover card opens away from the core's side
+      const depth = (s.depth ?? 1).toFixed(2);
+      if (el.style.getPropertyValue('--depth') !== depth) el.style.setProperty('--depth', depth);
+      const flip = s.x > (L.core?.x ?? 0) + 1 ? 'left' : 'right';   // a data attribute: syncStations rewrites the class
+      if (el.dataset.card !== flip) el.dataset.card = flip;
       const f = info.get(id)?.fade;
       // an expedition's role stations wait on their Lead in the lane (radius 0): nothing of them shows until the map opens
       const folded = !!info.get(id)?.cluster && !info.get(id)?.lead && s.r < 6;
@@ -714,8 +754,8 @@ export class LiveMap {
       p => { if (p.to === 'core') this.core.absorb(); });
     let o = this.core.project(L.core.x, L.core.y, L.core.r, this.buf, 0);
     if (this.renderer.kind === 'canvas') o = this.core.cpuSwarm(this.buf, o);   // no WebGL2: a CPU sample of the swarm
-    o = this.fx.project(this.buf, o, L, info, now, this.size.w, this.size.h, this.buf.length / STRIDE - 12 * 9);
-    o = this.streams(o, L, info);
+    o = this.fx.project(this.buf, o, L, info, now, this.size.w, this.size.h, this.buf.length / STRIDE - SAT_RESERVE);
+    o = this.streams(o, L, info, E);
     try { this.renderer.draw(this.buf, o, zooming ? 0.35 : lerp(0.72, 0.6, E), [this.core.swarm()]); }
     catch (err) {
       console.warn('Live map renderer stopped:', err);
@@ -734,7 +774,7 @@ export class LiveMap {
   }
 
   // Workers in flight: the core's own particles stream out along the spoke to every worker that is working.
-  streams(o, L, info) {
+  streams(o, L, info, E = this.e) {
     const hue = this.core.look?.hue;
     if (!hue) return o;
     let k = 0;
@@ -751,14 +791,28 @@ export class LiveMap {
       }
       return o;
     }
+    // satellites (decision 77): every worker's spoke is a stream in its own hue, dense while it works, sparse while it
+    // rests; a worker waiting on Matt also sends red toward You; and each wears its ring, lit for its share of context
+    const you = L.at.get('you'), t = this.core.t, ringN = Math.round(lerp(this.phone ? 48 : 72, this.phone ? 110 : 160, E));
     for (const [id, s] of L.at) {
       const st = info.get(id);
-      if (!st || st.kind !== 'worker' || st.cluster || !['working', 'starting'].includes(st.state) || k >= 12) continue;
+      if (!st || st.kind !== 'worker' || st.cluster || k >= SAT_WORKERS || s.r < 3) continue;
+      k++;
+      const fade = st.fade ?? 1, busy = st.state === 'working' || st.state === 'starting', asleep = st.state === 'asleep';
+      const shue = st.state === 'error' ? COLORS.amber : st.handoff ? TONE.handoff : rgb01(hueOf(st.model)) || hue;
+      const [n0, n1, pace, alpha] = busy ? [9, STREAM_MAX, 0.5, 1] : asleep ? [2, 4, 0.06, 0.35] : st.state === 'error' ? [0, 0, 0, 0] : [4, 7, 0.16, 0.6];
+      const n = Math.round(lerp(n0, n1, E)), reach = s.r * RING_REACH;
       const len = Math.hypot(s.x - L.core.x, s.y - L.core.y) || 1;
-      o = stream(this.buf, o, L.core, bend(L.core, s, 0.17, L.bendMax), s, this.core.t, hue, {
-        u0: Math.min(0.5, (L.core.r * 1.12) / len), u1: 1 - (s.r + 4) / len, n: L.core.r < 20 ? 5 : 9,
-        pace: 0.25 + 0.4 * this.core.look.energy, seed: k++ * 0.37, alpha: st.fade ?? 1
+      if (n) o = stream(this.buf, o, L.core, bend(L.core, s, 0.17, L.bendMax), s, t, shue, {
+        u0: Math.min(0.5, (L.core.r * 1.12) / len), u1: Math.max(0.55, 1 - (reach + 3) / len), n, pace, seed: k * 0.37, alpha: alpha * fade
       });
+      if (st.needs && you) {
+        const yl = Math.hypot(you.x - s.x, you.y - s.y) || 1;
+        o = stream(this.buf, o, s, bend(s, you, 0.12, L.bendMax), you, t, COLORS.red, {
+          u0: Math.min(0.4, (reach + 3) / yl), u1: Math.max(0.6, 1 - (you.r + 6) / yl), n: Math.round(lerp(8, ASK_MAX, E)), pace: 0.5, seed: 0.2 + k * 0.13, alpha: fade
+        });
+      }
+      o = stationRing(this.buf, o, s, { hue: shue, frac: st.ctx == null ? 0 : clamp(st.ctx / WORKER_HANDOFF, 0, 1), state: st.state, t, seed: seedOf(id), n: ringN, alpha: fade });
     }
     return o;
   }
@@ -772,6 +826,7 @@ export class LiveMap {
     if (this.renderer) {
       let o = this.core.project(L.core.x, L.core.y, L.core.r, this.buf, 0);
       if (this.renderer.kind === 'canvas') o = this.core.cpuSwarm(this.buf, o);
+      o = this.streams(o, L, info, this.e);   // the workers' rings (their context) belong in the still too
       // the same frame laid down a few times with the trail it moves with there (strip or open map), so the still is as
       // bright as the moving map
       const trail = lerp(0.72, 0.6, this.e);

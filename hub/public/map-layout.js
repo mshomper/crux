@@ -152,24 +152,28 @@ function placeCluster(at, region, cluster, phone) {
   };
 }
 
+// The open map (decision 77 A, satellites): a larger core, and the workers pulled in close round it on a tilted orbit
+// (about 30% of the width), front ones a little larger and brighter (depth 0 at the back to 1 at the front). The Board
+// and You keep their places at the top and bottom of the area.
 function radialIn(ax, ay, aw, ah, workers, phone, res) {
   const cx = ax + aw / 2, cy = ay + ah / 2;
   const m = Math.min(aw, ah);
-  const coreR = clamp(m * 0.13, 34, 104);
+  const coreR = clamp(m * 0.16, 34, 116);
   const sr = phone ? 17 : 21;
-  const ringOuter = coreR * 1.75 + sr + 14;
-  const rx = Math.max(ringOuter, Math.min(aw / 2 - 74, aw * 0.42));
-  const ry = Math.max(ringOuter * 0.8, ah / 2 - sr - 38);   // room for the label under You
+  const ringOuter = coreR * 1.7 + sr * 1.62 + 12;   // clear of the core's HUD rings, counting the worker's own ring
+  const ryEnds = Math.max(ringOuter * 0.8, ah / 2 - sr - 38);   // room for the label under You
+  const rx = Math.max(ringOuter, Math.min(aw / 2 - 90, aw * 0.30));
+  const ry = Math.min(ryEnds - sr * 2.2, Math.max(ringOuter * 0.78, ah * 0.29));
   const at = new Map();
-  at.set('board', { x: cx, y: cy - ry, r: sr });
-  at.set('you', { x: cx, y: cy + ry, r: sr });
+  at.set('board', { x: cx, y: cy - ryEnds, r: sr });
+  at.set('you', { x: cx, y: cy + ryEnds, r: sr });
 
   const right = workers.filter((_, i) => i % 2 === 0), left = workers.filter((_, i) => i % 2 === 1);
   const gapDeg = 34;
   const arc = (list, a0, a1) => list.forEach((s, i) => {
     const t = list.length === 1 ? 0.5 : i / (list.length - 1);
-    const a = (lerp(a0, a1, t) * Math.PI) / 180;
-    at.set(s.id, { x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry, r: sr });
+    const a = (lerp(a0, a1, t) * Math.PI) / 180, depth = (Math.sin(a) + 1) / 2;
+    at.set(s.id, { x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry, r: sr * (0.88 + 0.24 * depth), depth });
   });
   const span = n => Math.min(90 - gapDeg, 14 * n);   // a few workers bunch near the middle; many use the whole arc
   arc(right, -span(right.length), span(right.length));
@@ -179,7 +183,7 @@ function radialIn(ax, ay, aw, ah, workers, phone, res) {
 
 // Blend two layouts (viewport coordinates) and return panel-local coordinates.
 export function blendLayouts(a, b, e, origin) {
-  const mix = (p, q) => ({ x: lerp(p.x, q.x, e) - origin.x, y: lerp(p.y, q.y, e) - origin.y, r: lerp(p.r, q.r, e) });
+  const mix = (p, q) => ({ x: lerp(p.x, q.x, e) - origin.x, y: lerp(p.y, q.y, e) - origin.y, r: lerp(p.r, q.r, e), depth: lerp(p.depth ?? 1, q.depth ?? 1, e) });
   const at = new Map();
   for (const [id, q] of b.at) {
     const p = a.at.get(id) || q;

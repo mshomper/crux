@@ -119,6 +119,35 @@
 .hs.ghost .hs-body{opacity:.75}
 .hs.ghost .hs-body::after,.hs.handoff .hs-body::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px dashed rgba(255,209,122,.6);animation:hud-spin 9s linear infinite reverse}
 .hs.ghost .hud-i,.hs.handoff .hud-i{filter:drop-shadow(0 0 3px rgba(255,209,122,.7))}
+
+/* ---------- satellites (decision 77 A): the orchestrator's own workers ----------
+   A worker is its robot on a dark plate inside its own ring of particles (map-particles.js stationRing), with no disc, drawn
+   ring or dashed halo. The robot is drawn twice as large, so its own effort pips show (they hide in the strip, where the HUD
+   draws them over the ring). Back stations are a little dimmer; resting ones breathe. The name only under it, plus one red
+   line when it waits on you; what it is doing is in a card on hover (Matt, 2026-11-17). The repeated class outranks the
+   state rules above. */
+.hs.sat.sat.sat .hs-body{background:radial-gradient(circle,rgba(6,11,18,.92) 52%,rgba(6,11,18,0) 72%);box-shadow:none;animation:none;opacity:calc(.74 + .26 * var(--depth,1))}
+.hs.sat.sat.sat .hs-body::after{content:none}
+.hs.sat.sat.sat:hover .hs-body{box-shadow:none;transform:scale(1.08)}
+.hs.sat.sat.sat:focus-visible .hs-body{box-shadow:0 0 0 2px var(--hud-ice),0 0 18px rgba(111,227,255,.4)}
+.hs.sat .hs-body .bot{width:calc(var(--r) * 2.1);height:calc(var(--r) * 2.1)}
+.hud.docked .hs.sat .bot .p{display:none}
+.hs.sat.sat.sat.idle .hs-body,.hs.sat.sat.sat.asleep .hs-body{animation:sat-breathe 4.2s ease-in-out infinite;animation-delay:calc(var(--beat,0s) * -1)}
+@keyframes sat-breathe{50%{scale:1.045}}
+.hs.sat .hs-label{top:calc(var(--r) * 1.62 + 6px)}
+.hs.sat .hs-label i:empty,.hs.board .hs-label i:empty{display:none}
+.hs.sat.asks .hs-label i{text-transform:none;letter-spacing:.02em;font-family:system-ui,"Segoe UI",sans-serif;font-size:11.5px;line-height:1.3;height:calc(16px * var(--e))}
+.hs.sat .hs-badge{right:calc(var(--r) * -.62);top:calc(var(--r) * -.62)}
+.hs-card{position:absolute;top:0;left:calc(var(--r) * 1.62 + 12px);transform:translateY(-50%);display:none;min-width:200px;max-width:290px;padding:8px 11px 9px;text-align:left;white-space:normal;
+  border:1px solid color-mix(in srgb,var(--mh,#6fe3ff) 45%,transparent);border-radius:4px;background:linear-gradient(180deg,rgba(10,20,32,.97),rgba(6,11,18,.97));
+  box-shadow:0 0 18px rgba(111,227,255,.16);clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%);pointer-events:none;z-index:8}
+.hs[data-card="left"] .hs-card{left:auto;right:calc(var(--r) * 1.62 + 12px)}
+.hud:not(.docked) .hs.sat:hover .hs-card,.hud:not(.docked) .hs.sat:focus-visible .hs-card{display:block}
+.hs-card b{display:block;font:600 11.5px/1.3 var(--mono);color:var(--hud-ice)}
+.hs-card span{display:block;font:400 10px/1.45 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--hud-dim)}
+.hs-card i{display:block;margin-top:4px;font:400 12px/1.35 system-ui,"Segoe UI",sans-serif;font-style:normal;color:#c6d6e2}
+.hs.asks .hs-card i{color:#f2939a}
+@media (prefers-reduced-motion:reduce){.hs.sat.sat.sat .hs-body{animation:none}}
 .hs.ghost .hs-label i,.hs.handoff .hs-label i{color:#ffd17a}
 .hs.entering .hs-body{animation:hud-materialize .7s ease-out both}
 @keyframes hud-materialize{from{transform:scale(.2);filter:brightness(3) blur(2px)}60%{transform:scale(1.15)}to{transform:scale(1);filter:none}}
