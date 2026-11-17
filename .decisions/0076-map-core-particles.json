@@ -7,7 +7,7 @@
  "lenses": [
   "UI"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the live map's core become a dense swarm of particles that fills the whole sphere, with a bright centre that grows as an agent's context fills, in place of today's painted liquid? I recommend it: it fills the empty middle, drops the fake-looking liquid, and is closest to the first core you liked.",
  "for_you": [
   "The sphere is always full of moving particles (about 80,000 on your PC, about 10,000 on the phone, against about 1,200 today); context shows as how much of it is lit, turning gold near handoff",
@@ -72,9 +72,9 @@
  "recommendation": "A: a full volumetric swarm with a lit core that grows with context, built first as a quick swap of the painted liquid and then moved fully onto the GPU.",
  "confidence": "medium",
  "change_mind": "If the frame-rate buttons show your PC or phone struggling at the planned counts, lower the counts; if context is hard to read in daily use, borrow B's dense surface line.",
- "chosen": null,
- "reason": "",
- "decided_on": null,
+ "chosen": "A",
+ "reason": "Matt watched the live mockup page: \"The swarm is great, let's do that.\"",
+ "decided_on": "2026-11-17",
  "superseded_by": null,
  "challenge": null,
  "settles": [
@@ -85,37 +85,32 @@
  ],
  "images": [
   {
-   "from": ".crux/attachments/5ec1a75e384325ac606f9f8e26d26ee7.png",
+   "file": "images/0076-all-four-side-by-side-at-working-60-a.png",
    "caption": "All four side by side at working 60%: A swarm, B level, C galaxy, and the first core",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   },
   {
-   "from": ".crux/attachments/6376784d7bc6e90ee556f956630d6235.png",
+   "file": "images/0076-a-volumetric-swarm-five-states-idle-30.png",
    "caption": "A: volumetric swarm, five states (idle 30%, working 60%, working 85%, needs you, handoff due), open map above and strip below",
    "option": "A",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   },
   {
-   "from": ".crux/attachments/87d701e717c5354f42e5cfa78704cc48.png",
+   "file": "images/0076-b-particle-level-same-five-states.png",
    "caption": "B: particle level, same five states",
    "option": "B",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   },
   {
-   "from": ".crux/attachments/ab80e57fd8b606e132186b150332da63.png",
+   "file": "images/0076-c-galaxy-same-five-states.png",
    "caption": "C: galaxy, same five states",
    "option": "C",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   },
   {
-   "from": ".crux/attachments/b77a4f2315b687b5452a5430782b4a2d.png",
+   "file": "images/0076-reference-the-first-core-you-liked-same.png",
    "caption": "Reference: the first core you liked, same five states",
-   "kind": "mockup",
-   "missing": "not found"
+   "kind": "mockup"
   }
  ]
 }

@@ -1,7 +1,7 @@
 # 0076 What should the live map's core look like: a full particle swarm, a particle level, or a galaxy?
 
-- Status: open
-- Date: 2026-11-17
+- Status: decided
+- Date: 2026-11-17, decided 2026-11-17
 - Lenses: UI
 - Builds on: 0017, 0033
 - Settles: live map core look = dense volumetric particle swarm filling the sphere; context as the lit core's size, gold near handoff; motion in the vertex shader; tens of thousands of points on desktop, about 10,000 on a phone
@@ -17,15 +17,36 @@ For you:
 - You can open the mockup page on your PC and watch all three move, with buttons to test the frame rate
 - Nothing is hard to undo: the old core stays in git history
 
+## Decision
+
+**A: Volumetric swarm.** The whole sphere is always full of particles in slow orbital flow. Context is how much is lit: a bright core with a white nucleus grows outward from the centre inside a dim haze of the model's colour; gold over the last fifth, full and pulsing gold at handoff. Working is a faster three-arm vortex, idle a slow drift. Glass kept only as a thin rim and highlight.
+
+Reason: Matt watched the live mockup page: "The swarm is great, let's do that."
+
 ## Context
 
 Matt (2026-11-17): the first live-map core was great, but now the particles are hardly there in the middle and a fake-looking liquid sloshes; he wants to go all in on particles. A Fable review found that every particle above the liquid level is pushed onto the glass and drawn almost invisible (half the budget), the liquid itself is painted 2D canvas fills rather than particles, the particle budget only ever drops after a slow spell, the strip core is dimmed further, and the renderer asks for the low-power GPU and recomputes every particle in JavaScript each frame, which caps it near 1,200. The first core (commit 205b7a4) was a cyan atom of 760 particles that carried almost no context. A solver built a mockup page (hub/mockups/core-particles.html on feat/core-particles) with motion in the vertex shader, 60,000 points per core, half-float glow, on Matt's RTX 4070 Ti SUPER, in five states (idle 30%, working 60%, working 85%, needs you, handoff due) at open-map and strip size. Particle budgets beyond the mockup are an estimate until Matt runs the page's frame-rate buttons. This supersedes the glass reservoir look from memo M013 and lifts the pack's 'modest particle count' line.
 
+## Pictures
+
+![All four side by side at working 60%: A swarm, B level, C galaxy, and the first core](images/0076-all-four-side-by-side-at-working-60-a.png)
+
+*All four side by side at working 60%: A swarm, B level, C galaxy, and the first core*
+
+![Reference: the first core you liked, same five states](images/0076-reference-the-first-core-you-liked-same.png)
+
+*Reference: the first core you liked, same five states*
+
 ## Options
 
-### A: Volumetric swarm (recommended)
+### A: Volumetric swarm (chosen) (recommended)
 
 The whole sphere is always full of particles in slow orbital flow. Context is how much is lit: a bright core with a white nucleus grows outward from the centre inside a dim haze of the model's colour; gold over the last fifth, full and pulsing gold at handoff. Working is a faster three-arm vortex, idle a slow drift. Glass kept only as a thin rim and highlight.
+
+![A: volumetric swarm, five states \(idle 30%, working 60%, working 85%, needs you, handoff due\), open map above and strip below](images/0076-a-volumetric-swarm-five-states-idle-30.png)
+
+*A: volumetric swarm, five states \(idle 30%, working 60%, working 85%, needs you, handoff due\), open map above and strip below*
+
 - Pro: Fills the middle at every context level
 - Pro: Closest to the first core's sparkle and nucleus
 - Pro: Context reads clearly from 30% to 60%
@@ -35,6 +56,11 @@ The whole sphere is always full of particles in slow orbital flow. Context is ho
 ### B: Particle level
 
 Keeps today's idea of a level, with the painted body removed: particles below the level are dense, those above become a thin mist, and the surface is just where the cloud gets dense.
+
+![B: particle level, same five states](images/0076-b-particle-level-same-five-states.png)
+
+*B: particle level, same five states*
+
 - Pro: Reads at a glance as a level, closest to today
 - Pro: Smallest change
 - Con: The top half is still sparse at low context, which is the thing you dislike
@@ -43,6 +69,11 @@ Keeps today's idea of a level, with the painted body removed: particles below th
 ### C: Galaxy
 
 A tilted disc with spiral arms and a halo; context is the size of the bright centre bulge.
+
+![C: galaxy, same five states](images/0076-c-galaxy-same-five-states.png)
+
+*C: galaxy, same five states*
+
 - Pro: The most striking picture
 - Pro: Working against idle shows clearly
 - Con: Context is the hardest to read
