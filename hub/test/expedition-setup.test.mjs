@@ -109,9 +109,9 @@ test('under an API key with no cap Launch waits for a dollar limit; typing one l
   assert.deepEqual(ids(d, ctx(st)), []);
   const b = launchBody('demo', d, st);
   assert.equal(b.envelope.dollars, 12);
-  assert.equal('rememberDollars' in b, false, 'per run only unless asked to keep it');
-  d.remember = true;
-  assert.equal(launchBody('demo', d, st).rememberDollars, true);
+  assert.equal(b.rememberDollars, true, 'Keep as default starts ticked');
+  d.remember = false;
+  assert.equal('rememberDollars' in launchBody('demo', d, st), false, 'unticked: this run only');
 });
 
 test('with the plan meters the field is optional and never blocks; with a confirmed figure it is not shown and the figure wins', () => {
@@ -122,7 +122,7 @@ test('with the plan meters the field is optional and never blocks; with a confir
   const api = ST();
   assert.match(panelHtml(startDraft(api, { question: 'Q?' }), ctx(api), h), /data-xp-dollars[^>]*placeholder="limit"/);
   const fig = ST({ dollarsPerPercent: 2.7, meterGuard: true }), df = startDraft(fig, { question: 'Q?' });
-  df.dollars = '999'; df.remember = true;
+  df.dollars = '999';
   assert.doesNotMatch(panelHtml(df, ctx(fig), h), /data-xp-dollars/);
   assert.equal(launchBody('demo', df, fig).envelope.dollars, 18.9, '7% at 2.7 per 1%');
   assert.equal('rememberDollars' in launchBody('demo', df, fig), false);

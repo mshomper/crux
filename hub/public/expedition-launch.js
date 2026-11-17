@@ -82,7 +82,7 @@ export function startDraft(state = null, seed = {}) {
     roles, gatherers: Math.min(GATHERER_LIMIT, Math.max(1, Number.isFinite(n) ? Math.round(n) : 3)),
     // The dollar limit for this run, used only while no dollars-per-percent figure is confirmed: a kept default or a draft's figure comes pre-filled.
     dollars: st?.dollarsPerPercent > 0 ? '' : String(seed.envelope?.dollars ?? st?.dollars ?? ''),
-    remember: false,
+    remember: true,   // "Keep as default" starts ticked: type the figure once (Matt, 2026-11-17)
     editing: null,   // the role whose model and effort are open
     add: null        // 'site' | 'package': the small add form
   };
