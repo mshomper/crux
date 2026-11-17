@@ -201,22 +201,27 @@
   <header class="sec-head"><p class="k">Expeditions</p><h2>Hand over a whole job and come back to a report</h2></header>
   <div class="stack">
     <div class="prose">
-      <p>Give the Hub a goal, a time limit and a spending limit, then step away. A Lead splits the job between research agents. A Skeptic argues against what they find. A builder makes a small prototype, and a verifier runs the test you agreed on.</p>
+      <p>Give the Hub a goal, a time limit and a spending limit, then step away. The team has seven roles: a Lead, an Advisor, gatherers, a Synthesizer, a Skeptic, a Builder and a Verifier. The Lead splits the job between gatherers, which read web pages (up to 8 runs in all). The Synthesizer turns their notes into findings, and the Skeptic argues against them. The Builder makes a small prototype. The Verifier runs the test written into the plan: the Lead drafts it, and it is frozen when you approve the plan.</p>
       <p>You come back to a report and a draft pull request. An expedition never merges anything. That last step is yours.</p>
+      <p class="note"><strong>Before your first expedition,</strong> two things to check:</p>
+      <ul class="dots">
+        <li>Set the project to <strong>Auto</strong>. An expedition will not start at Ask, the default, because nobody is there to answer its requests.</li>
+        <li>Set a spending limit. On the API-key route there is no plan meter, so type a dollar limit in the launch panel. On a plan login the Hub works it out from your plan meter.</li>
+      </ul>
     </div>
     <figure class="plate">
       <ol class="flow" style="--n:5">
         <li><span class="node"><svg class="icon"><use href="#i-ask"/></svg></span><b>You set the job</b><span>A goal, a time limit and a spending limit.</span></li>
         <li><span class="node"><svg class="icon"><use href="#i-team"/></svg></span><b>The Lead plans</b><span>It splits the job between research agents.</span></li>
         <li><span class="node"><svg class="icon"><use href="#i-search"/></svg></span><b>Research and challenge</b><span>Findings come back, and a Skeptic argues against them.</span></li>
-        <li><span class="node"><svg class="icon"><use href="#i-code"/></svg></span><b>Build and verify</b><span>A builder makes a prototype. A verifier runs the test.</span></li>
+        <li><span class="node"><svg class="icon"><use href="#i-code"/></svg></span><b>Build and verify</b><span>A Builder makes a prototype. A Verifier runs the test in the plan.</span></li>
         <li class="you"><span class="node"><svg class="icon"><use href="#i-merge"/></svg></span><b>Report and draft pull request</b><span>You read it. It never merges.</span></li>
       </ol>
       <figcaption><span>Fig. 7</span>One expedition, start to finish</figcaption>
     </figure>
     <figure class="plate shot">
       <a class="zoom crop" href="img/hub-expedition.png" style="--x:170;--y:60;--w:1100;--h:790;--px:170;--py:60;--pw:1100;--ph:790"><img src="img/hub-expedition.png" width="1440" height="900" loading="lazy" alt="The New expedition panel in Crux Hub: a box for what you want done, time and spending limits, and the team of seven roles each with a model and effort"></a>
-      <figcaption><span>Fig. 8</span>The launch panel, with the demo project. It ends at one branch and a draft pull request.</figcaption>
+      <figcaption><span>Fig. 8</span>The launch panel, with the demo project. The spending limit is a dollar figure you type on an API key, or a share of your plan meter on a plan login. It ends at one branch and a draft pull request.</figcaption>
     </figure>
   </div>
 </section>
@@ -254,7 +259,7 @@
       <article class="plate tile">
         <svg class="icon big"><use href="#i-gauge"/></svg>
         <h3>Spend, per model and per agent</h3>
-        <p>The usage panel shows estimated spend, split by model and by agent. It is an estimate from list prices. Your Anthropic Console has the real figures.</p>
+        <p>The usage panel shows estimated spend, split by model and by agent. It is an estimate from list prices. Your Anthropic Console has the real figures. On an API key, open the panel by adding <code>?usagepanel</code> to the Hub's address.</p>
       </article>
       <article class="plate tile amber">
         <svg class="icon big"><use href="#i-warn"/></svg>
@@ -276,6 +281,7 @@
     <a class="plate more-tile" href="#f-memory"><svg class="icon"><use href="#i-memory"/></svg><b>Memory and handoffs</b><span>What agents learned outlives them.</span></a>
     <a class="plate more-tile" href="#f-models"><svg class="icon"><use href="#i-bot"/></svg><b>Models and effort</b><span>Pick them per agent.</span></a>
     <a class="plate more-tile" href="#f-pr"><svg class="icon"><use href="#i-merge"/></svg><b>Picks as a pull request</b><span>One change to review.</span></a>
+    <a class="plate more-tile" href="#f-conductor"><svg class="icon"><use href="#i-crown"/></svg><b>The Conductor</b><span>One chat above every project, by voice too.</span></a>
     <a class="plate more-tile" href="#f-org"><svg class="icon"><use href="#i-team"/></svg><b>How it fits together</b><span>Who talks to whom.</span></a>
   </div>
 </section>
@@ -323,7 +329,7 @@
           <li class="plate"><span class="key">4</span><div><b class="t">Share the Hub with your devices</b><p>With the Hub running, in a terminal on the PC. 4748 is the Hub's phone port. It prints the address. If you set Tailscale up on 4747 before, run <code>tailscale serve reset</code> first. Use <code>serve</code>, never <code>funnel</code>: funnel publishes to the whole internet.</p><pre><code>tailscale serve --bg 4748</code></pre></div></li>
           <li class="plate"><span class="key">5</span><div><b class="t">Open that address on the phone</b><p>Then add it to the home screen: Share, then Add to Home Screen on iPhone; menu, then Install app on Android.</p></div></li>
           <li class="plate"><span class="key">6</span><div><b class="t">Pair the phone</b><p>On the PC, open the Hub menu (three dots), then Devices, then Pair another device. A code shows for 10 minutes. On the phone, open Crux from the home-screen icon, type the code, then use Face ID. Never send the code to anyone.</p></div></li>
-          <li class="plate"><span class="key">7</span><div><b class="t">Turn on notifications</b><p>Back on the list of agents, tap the bell. A test notification arrives.</p></div></li>
+          <li class="plate"><span class="key">7</span><div><b class="t">Turn on notifications</b><p>Back on the list of agents, tap the bell. Allow notifications and confirm with Face ID. A test notification arrives.</p></div></li>
         </ol>
       </div>
     </details>
@@ -361,13 +367,14 @@
 <section class="sec" id="limits">
   <header class="sec-head"><p class="k">Limits</p><h2>What it can't do yet</h2></header>
   <ul class="limits">
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Early software.</strong> Hub version 0.25, desktop app 0.3. Built and used by one person so far. Expect rough edges.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Early software.</strong> Built and used by one person so far. Expect rough edges.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>It runs on your own PC, for one person.</strong> If the PC sleeps, the agents stop and your phone can't reach the Hub.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Windows first.</strong> Mac and Linux are untested and use the source route. The restart shortcut, the desktop opener and the one-download desktop app are Windows-only.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>API use is billed per token.</strong> Several agents use more, faster. The spend shown in the Hub is an estimate.</span></li>
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>An expedition's spending limit is an estimate.</strong> The Hub works it out from list prices and your plan meter, so the real bill can differ.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>An expedition's spending limit is an estimate.</strong> On an API key it is the dollar limit you type in the launch panel, counted from list prices. On a plan login the Hub works it out from your plan meter. Either way the real bill can differ.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Chats are kept in <code>.crux/events.jsonl</code>.</strong> It holds everything said in every thread, so keep <code>.crux/</code> out of public repositories: add it to <code>.gitignore</code>.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Starting with an API key is new.</strong> The steps above come from the code and have not yet been tested end to end on a fresh machine.</span></li>
-    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>The Windows installer is unsigned.</strong> Windows may show "Windows protected your PC" when you run it: choose More info, then Run anyway. Version 0.1.0 had no updater, so if you have it, install the newest version by hand once; after that, updates arrive from the tray icon.</span></li>
+    <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>The Windows installer is unsigned.</strong> Windows may show "Windows protected your PC" when you run it: choose More info, then Run anyway. Updates arrive from the tray icon.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Terminal sessions can't join yet.</strong> Only agents started by the Hub appear in it.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Notifications open the card.</strong> There are no answer buttons on the lock screen. On iPhone they need iOS 16.4 or later and the home-screen app.</span></li>
     <li><svg class="icon"><use href="#i-warn"/></svg><span><strong>Your PC's name becomes public</strong> when you turn on secure addresses for phone access. Pick a neutral name.</span></li>
@@ -431,7 +438,7 @@
           </figure>
           <figure class="plate shot">
             <a class="zoom crop" href="img/crux-all.png" style="--x:110;--y:120;--w:620;--h:264;--px:116;--py:124;--pw:340;--ph:150"><img src="img/crux-all.png" width="1440" height="1000" loading="lazy" alt="The all-projects page for two demo projects: a conflict on distance unit, miles in one and kilometres in the other, then next up and the lanes across both"></a>
-            <figcaption><span>Fig. 11</span>All projects: two of them settled the same question differently</figcaption>
+            <figcaption><span>Fig. 11</span>The decisions page across projects: two of them settled the same question differently</figcaption>
           </figure>
         </div>
         <div class="tiles">
@@ -456,6 +463,17 @@
           <div><dt><code>/crux park 7 until 2027-01-15</code></dt><dd>Set a decision aside; it comes back on the date</dd></div>
           <div><dt><code>/crux-dig</code></dt><dd>Draft the decisions already in the code</dd></div>
         </dl>
+      </div>
+    </details>
+
+    <details class="fold" id="f-conductor">
+      <summary><svg class="icon"><use href="#i-chev"/></svg>The Conductor and All projects<span>one chat, voice, notices</span></summary>
+      <div class="in">
+        <ul class="dots prose" style="max-width:none">
+          <li><strong>All projects.</strong> A column in the Hub that shows what needs you and which agents are busy, across every project. The Conductor chats there. It passes your requests to each project's orchestrator and gives you one digest after time away.</li>
+          <li><strong>Talk to it.</strong> Tap the mic, say it, tap again. Your words go in as your message. A small helper on your own PC does the listening and the speaking: about 1 GB, set up once, and it needs <a href="https://docs.astral.sh/uv/">uv</a>. Nothing leaves the PC and no sound is stored.</li>
+          <li><strong>Notices.</strong> When something needs you, your PC gets the notice first. Your phone gets it as backup if the PC has been idle for 5 minutes.</li>
+        </ul>
       </div>
     </details>
 
