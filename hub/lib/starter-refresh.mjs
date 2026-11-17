@@ -1,9 +1,10 @@
-// Keeps the expedition agent files a person copied into ~/.claude/agents (or a project's .claude/agents) up to date.
-// Only expedition-*.md, and only a copy that is still exactly an earlier shipped version (listed by hash in
-// agent-types/starter/previous-hashes.json): that copy was not edited, so it is replaced by the current file. An edited copy
-// is left alone and one line says so. refreshExpeditionFiles never adds a file; addMissingExpeditionFiles (below) puts a file
-// that is missing from ~/.claude/agents there, so a fresh install needs no copying by hand. Line endings do not count as an edit.
-// WHEN YOU EDIT an expedition-*.md in agent-types/starter, add the hashOf() of its text on main BEFORE the edit to
+// Keeps the agent files a person copied into ~/.claude/agents (or a project's .claude/agents) up to date.
+// Every agent file in agent-types/starter (the expedition-*.md ones and the others), and only a copy that is still exactly an
+// earlier shipped version (listed by hash in agent-types/starter/previous-hashes.json): that copy was not edited, so it is replaced
+// by the current file. An edited copy is left alone and one line says so. refreshExpeditionFiles never adds a file;
+// addMissingExpeditionFiles (below) puts an expedition file that is missing from ~/.claude/agents there, so a fresh install needs no
+// copying by hand. Line endings do not count as an edit.
+// WHEN YOU EDIT any .md in agent-types/starter, add the hashOf() of its text on main BEFORE the edit to
 // previous-hashes.json (git show origin/main:agent-types/starter/<file>), or installed copies are never refreshed (PR 127 missed it).
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -36,7 +37,9 @@ export function refreshExpeditionFiles(dirs, { starter = STARTER, log = console.
   const out = { refreshed: [], kept: [] };
   let previous = {};
   try { previous = JSON.parse(readFileSync(join(starter, 'previous-hashes.json'), 'utf8')); } catch { /* none shipped */ }
-  const current = readdirSync(starter).filter(f => /^expedition-.*\.md$/.test(f));
+  // Every shipped agent file, not only the expedition ones (the standing line about the Edit and Write tools went into all of
+  // them): an installed copy is replaced only when it is exactly an earlier shipped version listed in previous-hashes.json.
+  const current = readdirSync(starter).filter(f => /\.md$/.test(f) && f !== 'README.md');
   for (const dir of dirs) {
     for (const f of current) {
       const file = join(dir, f);
@@ -48,6 +51,6 @@ export function refreshExpeditionFiles(dirs, { starter = STARTER, log = console.
       else { out.kept.push(file); log(`Agent file ${file} differs from this hub's ${f} and was edited, so it was left as it is.`); }
     }
   }
-  if (out.refreshed.length) log(`Updated ${out.refreshed.length} expedition agent file(s) to this hub's version: ${out.refreshed.map(p => p.split(/[\\/]/).pop()).join(', ')}.`);
+  if (out.refreshed.length) log(`Updated ${out.refreshed.length} agent file(s) to this hub's version: ${out.refreshed.map(p => p.split(/[\\/]/).pop()).join(', ')}.`);
   return out;
 }

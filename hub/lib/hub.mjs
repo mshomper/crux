@@ -1566,6 +1566,9 @@ export class Hub {
     // Matt's lists (never saved into them). Both come from the hub's own record of the agent's expedition.
     const c = classify({ tool: toolName, input, projectDir: p.dir, cwd, agent: agent.name, madeTemp: agent.tempDirs, downloaded: [...agent.downloads, ...known], hubs: agent.testHubs, level, lists: this.lists?.forProject(p.dir, this.expeditionOverlay(p, agent)), frozen: this.frozenDirs(p, agent), expeditionRoot: agent.expedition ? this.expeditionOf(p, agent).root : null });
     if (c.frozen) return { denied: c.reasons[0] };
+    // A plain mistake: an existing project file changed with a command-line script (sed -i, an inline node or python script, ...).
+    // Refused at once as a deny, with no card, no orchestrator and no check call (M042: mistakes, not disguise).
+    if (c.rewrite && c.route !== 'human') return { denied: c.rewrite };
     for (const d of c.downloaded || []) if (!known.has(d)) p.log.append('download', { path: d, agent: agent.name, thread: agent.thread, ...(c.downloads?.find(x => x.path.toLowerCase().replace(/\\/g, '/') === d) || {}) });
     const { route, tempMade } = c;
     this.startsOf = { agent, ports: route === 'human' ? [] : c.hubsStarted || [] };   // noted in requestApproval, once the request is allowed
