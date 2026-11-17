@@ -346,6 +346,26 @@ test('an in-process rotation does not blind the expedition watchdog: a new exped
   assert.notEqual(se.ex.state(), before, 'a reload clears the cached state');
 });
 
+test('an expedition with activity holds the rotation back (with a console line); one quiet for a day does not', async t => {
+  const env = stubHub({ watch: { now: () => Date.now(), timers: quietTimers } });
+  const { hub, p } = env;
+  hub.rotatesLogs = true;
+  const old = Array.from({ length: 60 }, (_, i) => JSON.stringify({ id: `old${i}`, ts: new Date(Date.now() - 60 * DAY + i * 1000).toISOString(), type: 'message', thread: 'orchestrator', from: 'you', text: `old ${i}` }));
+  const file = join(p.dir, '.crux', 'events.jsonl');
+  writeFileSync(file, old.join('\n') + '\n' + readFileSync(file, 'utf8'));
+  p.log.load();
+  const se = new StubExpedition(env);
+  se.ex.write('BRIEF.md', '# Which is faster?\n');
+  se.ex.write('test/CHECKLIST.md', '1. A table exists.\n');
+  se.ex.start({ envelope: { hours: 6, dollars: 10, percent: 7 }, planStart: null });
+  const lines = [], log = console.log;
+  console.log = (...a) => lines.push(a.join(' '));
+  try { assert.deepEqual(hub.rotateLogs(), [], 'a fresh expedition blocks the rotation'); } finally { console.log = log; }
+  assert.ok(lines.some(l => l.includes('skipped') && l.includes(se.id)), 'and says so');
+  hub.expeditionActiveAt = () => Date.now() - 2 * DAY;   // stuck: nothing for two days
+  assert.equal(hub.rotateLogs().length, 1, 'a stuck expedition no longer blocks it');
+});
+
 test('a rotation does not lose what another process appended to the live log while it ran', async t => {
   const { now, events, split } = await fixture(t);
   const dir = join(split, '.crux');

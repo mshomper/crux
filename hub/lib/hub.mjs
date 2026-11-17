@@ -97,6 +97,7 @@ const when = ts => new Date(ts).toISOString().slice(0, 16).replace('T', ' ') + '
 // After a restart (M014): how old an unfinished turn or unread message may be and still be resumed, and the gap
 // between agents waking.
 export const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000, RESUME_GAP_MS = 4000;
+const EXPEDITION_IDLE_MS = 24 * 3600e3;   // an expedition with no event for this long no longer blocks a log rotation
 export const ROTATE_FIRST_MS = 60 * 1000;   // the first log rotation, this long after start
 
 // A10: what a request could add to Matt's lists (the "Always allow" offers on its card and audit line), as an event field.
@@ -2187,6 +2188,12 @@ export class Hub {
     return olderPage(p.log.events, [...p.agents.values()].map(a => ({ name: a.name, thread: a.thread })), t, String(before || ''), Date.now(), archive, String(ts || ''), p.log.snapshotCount);
   }
 
+  // When the expedition last wrote anything to the log (ms), 0 when nothing of it is in memory.
+  expeditionActiveAt(p, id) {
+    const e = p.log.events.findLast(x => x.expedition === id);
+    return e ? Date.parse(e.ts) || 0 : 0;
+  }
+
   // Moves each project's log older than about two weeks into its archive, when it is due (lib/archive.mjs). At start and
   // every few hours. CRUX_HUB_NO_ROTATE=1 turns it off (a plain off switch for the hub folder's owner).
   rotateLogs() {
@@ -2194,8 +2201,10 @@ export class Hub {
     const done = [];
     for (const p of this.projects.values()) {
       try {
-        // Not while an expedition is running: its watchdog and Lead work from the log in memory.
-        if (Expedition.all(p).some(x => !['new', 'ended'].includes(x.phase))) continue;
+        // Not while an expedition is at work: its watchdog and Lead work from the log in memory. One with no event in the
+        // last day is stuck or abandoned and does not hold the rotation back for ever.
+        const busy = Expedition.all(p).filter(x => !['new', 'ended'].includes(x.phase) && this.expeditionActiveAt(p, x.id) > Date.now() - EXPEDITION_IDLE_MS);
+        if (busy.length) { console.log(`Log archive: ${p.name}: skipped, expedition ${busy.map(x => x.id).join(', ')} is still active.`); continue; }
         const r = p.log.rotateIfDue();
         if (r) { done.push({ project: p.name, ...r }); console.log(`Log archive: ${p.name}: ${r.archived} events moved to ${r.months.join(', ')}; ${r.liveEvents} left in the live log.`); }
       } catch (e) { console.error(`Log archive: ${p.name}: rotation failed, the live log is untouched: ${e.message}`); }
