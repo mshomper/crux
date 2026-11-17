@@ -1564,6 +1564,9 @@ class Check {
       words = words.slice(1);
     }
     while (words.length && /^(if|then|else|elif|fi|do|done|while|until|!|time|foreach)$/.test(words[0].text)) words = words.slice(1);
+    // nohup <command>: it only keeps the command running after the shell closes, so the command is what is judged (a test hub
+    // started with nohup node server.mjs --port N then counts as started, which the check's "test hubs this worker started" needs).
+    if (words[0]?.text === 'nohup' && words.length > 1) words = words.slice(1);
     // timeout N <command> (coreutils): it only limits how long the command runs, so the command is what is judged.
     if (words[0]?.text === 'timeout') {
       let i = 1;

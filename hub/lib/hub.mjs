@@ -23,7 +23,7 @@ import { answerMessage, answerNote, QUESTION_RULES } from '../public/questions.j
 import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage, FABLE_NOTE } from './usage.mjs';
-import { PermissionCheck, CHECK_NAME, CHECK_MODEL, sdkCall, apiCall } from './permission-check.mjs';
+import { PermissionCheck, CHECK_NAME, CHECK_MODEL, sdkCall, apiCall, scriptTexts } from './permission-check.mjs';
 import { scriptsFor, parseCommand } from './permission-scripts.mjs';
 import { totalsOf, sumCost } from '../public/usage.js';
 import { summariseDue, SUMMARY_MODEL } from './month-summaries.mjs';
@@ -1335,7 +1335,7 @@ export class Hub {
       project: p.name, dir: p.dir, temp: tmpdir(), level: { standard: 'Ask', auto: 'Auto', trusted: 'Trusted' }[this.permissionMode(p)],
       rulesId: rules?.entryId, rulesBody: rules?.body, worker: agent.name,
       goal: agent.goal || String(agent.task || '').split('\n')[0].slice(0, 200),
-      tool: toolName, input, cwd, doubts: route.unsure || [],
+      tool: toolName, input, cwd, doubts: route.unsure || [], scripts: route.scripts || [],
       testPorts: [...(agent.testHubs || [])]   // plan A7: the test hubs this agent started, the hub's own record
     };
   }
@@ -1555,7 +1555,7 @@ export class Hub {
   // Decision 67. Committed and unchanged scripts (and nothing else unread) stay allowed at once. A worker-written, changed
   // or unread chain: with the check on, the check judges it plainly from the request, like any request the hub could not
   // settle (the 5 minutes run from the request); in shadow mode it is allowed as today and the check reads the request and
-  // writes a check_shadow line. The script text is not sent to the model (decision 73).
+  // writes a check_shadow line. The text of an uncommitted or changed script is sent with the request, capped (M054).
   async gateScript(p, agent, toolName, input, route, { signal, title, description, suggestions, noteStarts = () => {}, subagent = null } = {}) {
     const g = route.scriptGate;
     let scripts = null;
@@ -1567,17 +1567,20 @@ export class Hub {
     if (signal?.aborted) return { behavior: 'deny', message: 'Cancelled' };
     const unsure = [scripts ? 'Auto mode would allow it because it runs a script inside the project, but that script (or something it loads) is not committed and unchanged from main'
       : 'Auto mode would allow it because it runs a script inside the project, and the hub could not look at the script'];
+    // The text of the uncommitted or changed scripts goes with the request, as the orchestrator could read it (capped; a script too
+    // big or unreadable is listed as not shown, and the model escalates). Nothing is scanned or held back in code (decision 73).
+    const shown = scriptTexts(scripts ? scripts.scripts : [{ path: '(the command)', kind: 'unknown', note: 'the hub could not look up which scripts it runs' }]);
     if (g.mode === 'shadow') {
       // Allowed as today. The check reads it beside, and the allow is logged under the same request id so the study can compare.
       const id = randomUUID();
       const i = input || {};
       // An expedition agent's line is filed in its own thread and tagged, never in the orchestrator's (decision 71).
       p.log.append('permission_answer', { thread: agent.expedition ? agent.thread : 'orchestrator', approval: id, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || '').slice(0, 400), answer: 'allow', reason: 'Auto mode: it runs a script inside the project (the check reads it in shadow mode only)', by: 'hub', ...(agent.expedition ? { expedition: agent.expedition, ...(subagent ? { subagent } : {}) } : {}) });
-      this.runShadow(id, { p, agent, toolName, input, route: { unsure, cwd: g.cwd, rules: g.rules } });
+      this.runShadow(id, { p, agent, toolName, input, route: { unsure, cwd: g.cwd, rules: g.rules, scripts: shown } });
       noteStarts();
       return { behavior: 'allow', updatedInput: input };
     }
-    const checkRoute = { to: CHECK_NAME, check: true, stops: [], rules: g.rules, unsure, cwd: g.cwd };
+    const checkRoute = { to: CHECK_NAME, check: true, stops: [], rules: g.rules, unsure, cwd: g.cwd, scripts: shown };
     if (agent.expedition) return this.quietCheck(p, agent, toolName, input, checkRoute, { signal, noteStarts, subagent });   // no card, no waiting entry
     return this.openApproval(p, agent, toolName, input, checkRoute, { signal, title, description, suggestions, waitedMs: Date.now() - g.since, noteStarts });
   }
