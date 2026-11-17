@@ -40,7 +40,7 @@ const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';   // no 0/O, 1/I/L
 
 // The only POSTs a device without the cookie may make: the steps of pairing it.
 export const OPEN_POSTS = new Set(['/api/pair/code', '/api/pair/options', '/api/pair/finish']);
-export const PURPOSES = new Set(['project', 'hub', 'push', 'pair', 'unpair', 'lists']);
+export const PURPOSES = new Set(['project', 'hub', 'push', 'pair', 'unpair', 'lists', 'account']);
 export const NOT_PAIRED = 'This device is not paired with the hub, so it cannot make changes. Pair it first: "Pair this device" on the hub page.';
 
 export class GuardError extends Error {
@@ -471,6 +471,8 @@ function needFor(route, body, hub) {
     // like Matt's own list adds it needs a fresh step-up for exactly this launch. A launch without them needs the cookie only.
     case 'POST /api/expedition': return expeditionNeed(body, hub);
     case 'POST /api/push/subscribe': return { purpose: 'push', scope: 'push', why: 'Add this device to the hub\'s notifications' };
+    // Decision 78 A: switching the account, or pasting a key, from a remote device asks for Face ID, like raising to Trusted.
+    case 'POST /api/account': return { purpose: 'account', scope: `account;${body.mode === 'key' ? (body.apiKey ? 'key;new' : 'key') : 'plan'}`, why: body.mode === 'key' ? (body.apiKey ? 'Use a new API key for the agents' : 'Switch the agents to the saved API key') : 'Switch the agents to the plan sign-in' };
     case 'POST /api/pair/issue': return { purpose: 'pair', scope: 'pair', why: 'Pair another device' };
     case 'POST /api/devices/remove': return { purpose: 'unpair', scope: `device=${String(body.id || '').slice(0, 40)}`, why: 'Unpair a device and its passkey' };
     default: return null;

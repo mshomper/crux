@@ -590,6 +590,7 @@ const modeWord = p => (LEVEL_INFO[p.permissionMode] || LEVEL_INFO.standard).word
 const accountCard = new AccountCard({
   api, account: () => S.account, sideRect: () => $('#side')?.getBoundingClientRect(),
   switchTo: body => restartWith(() => api('/api/account', body)),
+  restart: () => restartWith(() => api('/api/restart', {})),
   profile: () => S.profile, setProfile: p => { S.profile = p; }, project: () => proj()?.name,
   afterImport: () => { toast('Sorted. The batch is waiting in Needs you.', 'info'); selectThread('needs'); }
 });

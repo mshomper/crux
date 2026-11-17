@@ -21,15 +21,19 @@ const ENTROPY = 'crux-hub-api-key-v1';   // ties a protected key to this use of 
 const PS_HEAD = 'Add-Type -AssemblyName System.Security; $t=[Console]::In.ReadToEnd(); $e=[Text.Encoding]::UTF8; $n=$e.GetBytes("' + ENTROPY + '"); $s=[Security.Cryptography.DataProtectionScope]::CurrentUser; ';
 const PS_PROTECT = PS_HEAD + '[Console]::Out.Write([Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($e.GetBytes($t),$n,$s)))';
 const PS_UNPROTECT = PS_HEAD + '[Console]::Out.Write($e.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($t.Trim()),$n,$s)))';
-const runPs = (script, input, run) => String(run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { input, encoding: 'utf8', windowsHide: true, timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'] }));
+// A failure says so in plain words; PowerShell's own message (it can quote the script) is not passed on.
+const runPs = (script, input, run, failure) => {
+  try { return String(run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { input, encoding: 'utf8', windowsHide: true, timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'] })); }
+  catch { throw new Error(failure); }
+};
 
 // null where the key cannot be protected. run is injectable so a test never needs Windows.
 export function defaultProtector({ platform = process.platform, run = execFileSync } = {}) {
   if (platform !== 'win32') return null;
   return {
     scheme: 'dpapi-user',
-    protect: text => runPs(PS_PROTECT, text, run).trim(),
-    unprotect: data => runPs(PS_UNPROTECT, data, run)
+    protect: text => runPs(PS_PROTECT, text, run, 'Windows could not protect the key (PowerShell did not run). Nothing was saved.').trim(),
+    unprotect: data => runPs(PS_UNPROTECT, data, run, 'Windows could not open the saved key for this user.')
   };
 }
 export const NO_PROTECT = 'This computer cannot protect a saved key (Windows only). Set ANTHROPIC_API_KEY and CRUX_HUB_USE_API_KEY=1 in the environment instead; the README shows how.';
@@ -51,13 +55,13 @@ export function planName(env = process.env, { home = homedir() } = {}) {
 }
 
 // ---------- the choice ----------
-const KEY_VARS = ['ANTHROPIC_API_KEY', 'CRUX_HUB_USE_API_KEY'];
 export class Account {
   // secrets: a Secrets (lib/setup.mjs). env: the process environment, which the agents' environment is made from.
   constructor({ env = process.env, secrets, file = join(dataDir(env), 'account.json'), platform = process.platform } = {}) {
     Object.assign(this, { env, secrets, file, platform });
     this.source = null;      // 'environment', 'saved' or null: where the agents' key came from at start
-    this.injected = null;    // what the environment held before the saved key went into it, so a restart can undo it
+    this.key = null;         // the saved key while it is in use: in this process's memory only, never in the environment
+    this.problem = '';       // plain words when a saved key could not be opened
   }
   get mode() { try { const m = JSON.parse(readFileSync(this.file, 'utf8').replace(/^﻿/, ''))?.mode; return m === 'plan' || m === 'key' ? m : null; } catch { return null; } }
   setMode(mode) {
@@ -70,38 +74,50 @@ export class Account {
   get canProtect() { return !!this.secrets.protector; }
   get envKey() { return !!(this.env.ANTHROPIC_API_KEY && this.env.CRUX_HUB_USE_API_KEY === '1'); }
 
-  // At start: an API key set in the environment wins. Else the saved key goes in when API key is chosen (the desktop app's
-  // first-run key, saved before there was a card, counts as chosen while nothing else was). Same path as
-  // CRUX_HUB_USE_API_KEY=1 always was: the agents read these two variables.
+  // At start: an API key set in the environment wins. Else the saved key is used when API key is chosen (the desktop app's
+  // first-run key, saved before there was a card, counts as chosen while nothing else was).
   applyAtStart({ bundled = false } = {}) {
     if (this.envKey) return this.source = 'environment';
     const m = this.mode;
     if (m === 'key' || (m == null && bundled)) return this.useSaved();
     return this.source = null;
   }
+  // The saved key is opened into this process's memory. It is not put in the environment: the hub's own calls take it from
+  // currentKey(), and agents get Claude Code's apiKeyHelper (helperCommand), so no command an agent runs sees it.
   useSaved() {
-    const k = this.secrets.apiKey;
-    if (!k) return this.source = null;
-    if (!this.injected) this.injected = Object.fromEntries(KEY_VARS.map(v => [v, this.env[v]]));
-    this.env.ANTHROPIC_API_KEY = k;
-    this.env.CRUX_HUB_USE_API_KEY = '1';
+    if (this.envKey) return this.source = 'environment';   // the environment wins
+    this.problem = '';
+    if (!this.secrets.savedEnd) return this.source = null;
+    let k = null;
+    try { k = this.secrets.apiKey; } catch { }
+    if (!k) {
+      this.problem = 'The saved key could not be opened (it may have been saved by another Windows user or on another PC). Paste it again.';
+      console.warn('The saved API key could not be opened; the agents use the plan sign-in until it is pasted again on the Account card.');
+      return this.source = null;
+    }
+    if (this.secrets.isClear) { try { this.secrets.save(k); } catch { } }   // a key an earlier version left in the clear is saved protected now
+    this.key = k;
     return this.source = 'saved';
   }
-  // The environment the next hub is started with: what this one was started with, without the saved key it added.
-  restartEnv() {
-    const env = { ...this.env };
-    if (this.injected) for (const v of KEY_VARS) { if (this.injected[v] === undefined) delete env[v]; else env[v] = this.injected[v]; }
-    return env;
+  // The key the hub itself calls with, or ''.
+  currentKey() { return this.envKey ? this.env.ANTHROPIC_API_KEY : this.key || ''; }
+  // The apiKeyHelper command for Claude Code: it runs key-helper.mjs, which opens the key when asked. null unless the saved key
+  // is in use. Forward slashes and quotes, because Claude Code runs it through a shell.
+  helperCommand({ node = process.execPath, hubDir } = {}) {
+    if (this.source !== 'saved' || !this.key) return null;
+    const q = s => `"${String(s).replace(/\\/g, '/')}"`;
+    return `${q(node)} ${q(join(hubDir, 'lib', 'key-helper.mjs'))} ${q(this.secrets.file)}`;
   }
 
   // What the page is told. Never the key: its last four characters at most.
   view() {
-    const key = this.envKey ? this.env.ANTHROPIC_API_KEY : '';
+    const key = this.currentKey();
     return {
-      mode: this.envKey ? 'key' : 'plan',
+      mode: key ? 'key' : 'plan',
       source: this.source,
       envLocked: this.source === 'environment',
       keyEnd: key ? key.slice(-4) : '',
+      problem: this.problem,
       savedEnd: this.secrets.savedEnd,
       planName: planName(this.env),
       canProtect: this.canProtect,
@@ -127,9 +143,11 @@ export const ENV_WINS = 'The API key comes from the environment variables (ANTHR
 // Claude Code's login is interactive (it opens the browser and waits), so the hub opens a terminal window on this PC that
 // runs it (login.mjs --signin), and the card re-reads who is signed in while it waits. Windows only; elsewhere the card
 // shows the command to run. Never run by a test hub.
-export function openSignInWindow({ hubDir, platform = process.platform, spawnFn = spawn, node = process.execPath } = {}) {
+// claudePath: the Claude Code the hub's agents run (the desktop app downloads its own at first run, decision 54), so the
+// window signs in with the same one.
+export function openSignInWindow({ hubDir, claudePath = null, platform = process.platform, spawnFn = spawn, node = process.execPath } = {}) {
   if (platform !== 'win32') return false;
-  const cmd = `start "Claude sign-in" cmd.exe /d /c ""${node}" "${join(hubDir, 'login.mjs')}" --signin"`;
+  const cmd = `start "Claude sign-in" cmd.exe /d /c ""${node}" "${join(hubDir, 'login.mjs')}" --signin${claudePath ? ` --claude "${claudePath}"` : ''}"`;
   const child = spawnFn('cmd.exe', ['/d', '/s', '/c', cmd], { windowsVerbatimArguments: true, windowsHide: true, detached: true, stdio: 'ignore' });
   child.unref?.();
   return true;
