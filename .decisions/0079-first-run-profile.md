@@ -1,7 +1,7 @@
 # 0079 How does a new user get a memory profile?
 
-- Status: open
-- Date: 2026-11-17
+- Status: decided
+- Date: 2026-11-17, decided 2026-11-17
 - Lenses: UI, research and product
 - Builds on: 0013, 0014, 0015, 0078
 - Settles: new user profile setup = Profile section in the hub's Account card: create a blank private profile from the template on first run (home crux folder as a local private git repo), optional import of another assistant's memory export drafted by an agent and approved as one batch
@@ -17,13 +17,17 @@ For you:
 - Your own profile is untouched: it already exists, so you only see its status
 - Setup: An import is drafted by an agent and lands as one batch you approve, like core lessons today
 
+## Decision
+
+**A: Create plus import, in the Account card.** A Profile section in the Account card. Create makes ~/crux/profile from the template (core, pack index, empty private file) and makes ~/crux a local private git repo with no remote. Import takes a pasted or dropped memory export from another assistant; an agent sorts it into core, packs and private, treating it as data, and the result waits as one batch for approval. First run shows one small prompt pointing there.
+
 ## Context
 
 Matt (2026-11-17): a new user who downloads Crux gets no memory setup. Today the public repo ships profile-template/ (blank core.md and packs/_index.md) and a README saying to copy it into ~/crux/profile/ and keep that folder private (decisions 14, 15). Nothing in the hub's setup mentions it. Matt's own profile was seeded from his Claude.ai memory export and older notes; a newcomer's grows only from lessons, and it is untested whether propose_lesson works with no profile folder at all. Matt wants this to live in the Account card from decision 78.
 
 ## Options
 
-### A: Create plus import, in the Account card (recommended)
+### A: Create plus import, in the Account card (chosen) (recommended)
 
 A Profile section in the Account card. Create makes ~/crux/profile from the template (core, pack index, empty private file) and makes ~/crux a local private git repo with no remote. Import takes a pasted or dropped memory export from another assistant; an agent sorts it into core, packs and private, treating it as data, and the result waits as one batch for approval. First run shows one small prompt pointing there.
 - Pro: A newcomer gets a useful profile on day one, as Matt did

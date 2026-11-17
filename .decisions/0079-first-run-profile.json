@@ -8,13 +8,16 @@
   "UI",
   "research and product"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the new Account card get a Profile section that creates a private profile on first run and can turn an export from another assistant into a first draft for the user to approve? I recommend it: today a new user starts with no profile unless they find a template folder and copy it by hand.",
  "for_you": [
   "Account card gains a Profile section: it shows whether a profile exists, with Create and Import buttons",
   "On first run the hub shows one small prompt pointing there, with a Not now exit",
   "Your own profile is untouched: it already exists, so you only see its status",
-  { "text": "An import is drafted by an agent and lands as one batch you approve, like core lessons today", "kind": "setup" }
+  {
+   "text": "An import is drafted by an agent and lands as one batch you approve, like core lessons today",
+   "kind": "setup"
+  }
  ],
  "context": "Matt (2026-11-17): a new user who downloads Crux gets no memory setup. Today the public repo ships profile-template/ (blank core.md and packs/_index.md) and a README saying to copy it into ~/crux/profile/ and keep that folder private (decisions 14, 15). Nothing in the hub's setup mentions it. Matt's own profile was seeded from his Claude.ai memory export and older notes; a newcomer's grows only from lessons, and it is untested whether propose_lesson works with no profile folder at all. Matt wants this to live in the Account card from decision 78.",
  "depends_on": [
@@ -71,9 +74,9 @@
  "recommendation": "A: Create and Import in the Account card's Profile section, everything approved as one batch. An interview (C) can follow if users without an export start too empty.",
  "confidence": "medium",
  "change_mind": "If most new users have no export to import, add the interview (C).",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-17",
  "superseded_by": null,
  "challenge": null,
  "settles": [
