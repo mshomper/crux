@@ -30,6 +30,23 @@ Matt (2026-11-17) is testing how the hub works on another plan for a colleague. 
 ### A: Account card, one account for the hub (chosen) (recommended)
 
 An Account card opened from the usage meters: shows the account in use, chooses Plan sign-in (with Sign in as someone else) or API key (paste field), kept in Windows' protected storage; Switch restarts the hub. Plan meters for a plan; tokens and dollars for a key.
+
+![A: Account card on a plan sign-in \(built, fake data\)](images/0078-a-account-card-on-a-plan-sign-in-built.png)
+
+*A: Account card on a plan sign-in \(built, fake data\)*
+
+![A: Account card on an API key \(built, fake key\)](images/0078-a-account-card-on-an-api-key-built-fake.png)
+
+*A: Account card on an API key \(built, fake key\)*
+
+![A: the card on a phone, plan sign-in](images/0078-a-the-card-on-a-phone-plan-sign-in.png)
+
+*A: the card on a phone, plan sign-in*
+
+![A: usage panel on an API key: tokens and dollars instead of plan meters](images/0078-a-usage-panel-on-an-api-key-tokens-and.png)
+
+*A: usage panel on an API key: tokens and dollars instead of plan meters*
+
 - Pro: No terminal or environment variables; you always see which account is billing
 - Pro: Key never sits in a file in a project or the repo
 - Con: One account for all projects at a time

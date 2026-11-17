@@ -30,6 +30,19 @@ Matt (2026-11-17): a new user who downloads Crux gets no memory setup. Today the
 ### A: Create plus import, in the Account card (chosen) (recommended)
 
 A Profile section in the Account card. Create makes ~/crux/profile from the template (core, pack index, empty private file) and makes ~/crux a local private git repo with no remote. Import takes a pasted or dropped memory export from another assistant; an agent sorts it into core, packs and private, treating it as data, and the result waits as one batch for approval. First run shows one small prompt pointing there.
+
+![A: Profile section in the Account card, new user, with the first-run prompt](images/0079-a-profile-section-in-the-account-card.png)
+
+*A: Profile section in the Account card, new user, with the first-run prompt*
+
+![A as built: import from another assistant \(fake export\)](images/0079-a-as-built-import-from-another-assistant.png)
+
+*A as built: import from another assistant \(fake export\)*
+
+![A as built: the one batch card you approve in Needs you](images/0079-a-as-built-the-one-batch-card-you.png)
+
+*A as built: the one batch card you approve in Needs you*
+
 - Pro: A newcomer gets a useful profile on day one, as Matt did
 - Pro: Nothing joins the profile without the user's yes
 - Con: The import step costs one agent run and needs care with what the export contains

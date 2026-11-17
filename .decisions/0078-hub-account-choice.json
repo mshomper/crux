@@ -91,32 +91,28 @@
  ],
  "images": [
   {
-   "from": ".crux/attachments/2111a1c740fc3ff5af60b565ffbdbdd6.png",
+   "file": "images/0078-a-account-card-on-a-plan-sign-in-built.png",
    "caption": "A: Account card on a plan sign-in (built, fake data)",
    "option": "A",
-   "kind": "screenshot",
-   "missing": "not found"
+   "kind": "screenshot"
   },
   {
-   "from": ".crux/attachments/6892365fd28a03f5fd4a2345317eadbb.png",
+   "file": "images/0078-a-account-card-on-an-api-key-built-fake.png",
    "caption": "A: Account card on an API key (built, fake key)",
    "option": "A",
-   "kind": "screenshot",
-   "missing": "not found"
+   "kind": "screenshot"
   },
   {
-   "from": ".crux/attachments/6098aa68b461b7169b4f648f05080a7b.png",
+   "file": "images/0078-a-the-card-on-a-phone-plan-sign-in.png",
    "caption": "A: the card on a phone, plan sign-in",
    "option": "A",
-   "kind": "screenshot",
-   "missing": "not found"
+   "kind": "screenshot"
   },
   {
-   "from": ".crux/attachments/1eb865e1ba0d186d1a48de0d7b2151ac.png",
+   "file": "images/0078-a-usage-panel-on-an-api-key-tokens-and.png",
    "caption": "A: usage panel on an API key: tokens and dollars instead of plan meters",
    "option": "A",
-   "kind": "screenshot",
-   "missing": "not found"
+   "kind": "screenshot"
   }
  ]
 }
