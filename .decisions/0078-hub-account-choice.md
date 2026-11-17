@@ -1,7 +1,7 @@
 # 0078 Where do you choose which account the hub's agents run on?
 
-- Status: open
-- Date: 2026-11-17
+- Status: decided
+- Date: 2026-11-17, decided 2026-11-17
 - Lenses: UI, architecture
 - Builds on: 0036, 0038, 0044, 0048
 - Settles: agent account selection = chosen in the hub's UI (plan sign-in or API key), one account for the hub; API key kept in the OS's per-user protected storage, never in a project or repo; switching restarts the hub
@@ -17,13 +17,17 @@ For you:
 - Setup: A pasted API key is kept in Windows' protected storage for your user, never in a project folder or the repo
 - Hard to undo: Switching the plan sign-in also switches Claude Code for your other sessions on this PC until you switch back
 
+## Decision
+
+**A: Account card, one account for the hub.** An Account card opened from the usage meters: shows the account in use, chooses Plan sign-in (with Sign in as someone else) or API key (paste field), kept in Windows' protected storage; Switch restarts the hub. Plan meters for a plan; tokens and dollars for a key.
+
 ## Context
 
 Matt (2026-11-17) is testing how the hub works on another plan for a colleague. Today agents use the PC's Claude Code sign-in; with ANTHROPIC_API_KEY plus CRUX_HUB_USE_API_KEY=1 set before start they use an API key instead (hub/README.md, lib/agent.mjs; the API-key start has not been tested end to end). Usage shows as plan meters in the strip (decision 36), which only exist for a plan sign-in. Per-project settings live on a card opened from each project's level chip (decision 44). A plan sign-in is meant for its owner; a colleague is best tested on their own machine or Windows user, or with an API key.
 
 ## Options
 
-### A: Account card, one account for the hub (recommended)
+### A: Account card, one account for the hub (chosen) (recommended)
 
 An Account card opened from the usage meters: shows the account in use, chooses Plan sign-in (with Sign in as someone else) or API key (paste field), kept in Windows' protected storage; Switch restarts the hub. Plan meters for a plan; tokens and dollars for a key.
 - Pro: No terminal or environment variables; you always see which account is billing

@@ -8,13 +8,19 @@
   "UI",
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the hub get an Account card where you see which account the agents use and switch between a plan sign-in and an API key, with the key kept in Windows' protected storage? I recommend it: switching today means environment variables and a terminal sign-in.",
  "for_you": [
   "Click the usage meters to open the Account card: it shows the account in use and lets you switch, with a Cancel exit",
   "Switching restarts the hub, and running agents stop their turn and carry on afterwards",
-  { "text": "A pasted API key is kept in Windows' protected storage for your user, never in a project folder or the repo", "kind": "setup" },
-  { "text": "Switching the plan sign-in also switches Claude Code for your other sessions on this PC until you switch back", "kind": "undo" }
+  {
+   "text": "A pasted API key is kept in Windows' protected storage for your user, never in a project folder or the repo",
+   "kind": "setup"
+  },
+  {
+   "text": "Switching the plan sign-in also switches Claude Code for your other sessions on this PC until you switch back",
+   "kind": "undo"
+  }
  ],
  "context": "Matt (2026-11-17) is testing how the hub works on another plan for a colleague. Today agents use the PC's Claude Code sign-in; with ANTHROPIC_API_KEY plus CRUX_HUB_USE_API_KEY=1 set before start they use an API key instead (hub/README.md, lib/agent.mjs; the API-key start has not been tested end to end). Usage shows as plan meters in the strip (decision 36), which only exist for a plan sign-in. Per-project settings live on a card opened from each project's level chip (decision 44). A plan sign-in is meant for its owner; a colleague is best tested on their own machine or Windows user, or with an API key.",
  "depends_on": [
@@ -72,9 +78,9 @@
  "recommendation": "A: one Account card for the hub, key in Windows' protected storage. Per-project keys (B) can come later if a project really needs its own bill.",
  "confidence": "medium",
  "change_mind": "If a project must bill to someone else's key while others run on yours, take B.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-17",
  "superseded_by": null,
  "challenge": null,
  "settles": [
