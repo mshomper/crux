@@ -1,0 +1,108 @@
+{
+ "id": 79,
+ "slug": "first-run-profile",
+ "title": "How does a new user get a memory profile?",
+ "date": "2026-11-17",
+ "mode": "quick",
+ "lenses": [
+  "UI",
+  "research and product"
+ ],
+ "status": "decided",
+ "lead": "Should the new Account card get a Profile section that creates a private profile on first run and can turn an export from another assistant into a first draft for the user to approve? I recommend it: today a new user starts with no profile unless they find a template folder and copy it by hand.",
+ "for_you": [
+  "Account card gains a Profile section: it shows whether a profile exists, with Create and Import buttons",
+  "On first run the hub shows one small prompt pointing there, with a Not now exit",
+  "Your own profile is untouched: it already exists, so you only see its status",
+  {
+   "text": "An import is drafted by an agent and lands as one batch you approve, like core lessons today",
+   "kind": "setup"
+  }
+ ],
+ "context": "Matt (2026-11-17): a new user who downloads Crux gets no memory setup. Today the public repo ships profile-template/ (blank core.md and packs/_index.md) and a README saying to copy it into ~/crux/profile/ and keep that folder private (decisions 14, 15). Nothing in the hub's setup mentions it. Matt's own profile was seeded from his Claude.ai memory export and older notes; a newcomer's grows only from lessons, and it is untested whether propose_lesson works with no profile folder at all. Matt wants this to live in the Account card from decision 78.",
+ "depends_on": [
+  13,
+  14,
+  15,
+  78
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Create plus import, in the Account card",
+   "summary": "A Profile section in the Account card. Create makes ~/crux/profile from the template (core, pack index, empty private file) and makes ~/crux a local private git repo with no remote. Import takes a pasted or dropped memory export from another assistant; an agent sorts it into core, packs and private, treating it as data, and the result waits as one batch for approval. First run shows one small prompt pointing there.",
+   "pros": [
+    "A newcomer gets a useful profile on day one, as Matt did",
+    "Nothing joins the profile without the user's yes"
+   ],
+   "cons": [
+    "The import step costs one agent run and needs care with what the export contains"
+   ],
+   "effort": "Medium",
+   "source": "Claude's judgment"
+  },
+  {
+   "key": "B",
+   "name": "Create only",
+   "summary": "As A without import: Create makes the blank profile, and lessons fill it over time.",
+   "pros": [
+    "Smallest; no agent run, nothing pasted in"
+   ],
+   "cons": [
+    "Starts empty; agents know nothing about the user for weeks"
+   ],
+   "effort": "Small",
+   "source": "Claude's judgment"
+  },
+  {
+   "key": "C",
+   "name": "A, plus a short first-run interview",
+   "summary": "As A, and for users with no export: a five-minute chat with an agent (role, how they like work approved, tone, UI likes) that drafts the core for approval.",
+   "pros": [
+    "Everyone starts with a real core, export or not"
+   ],
+   "cons": [
+    "Most to build; an interview can feel like homework"
+   ],
+   "effort": "Large",
+   "source": "Claude's judgment"
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "A: Create and Import in the Account card's Profile section, everything approved as one batch. An interview (C) can follow if users without an export start too empty.",
+ "confidence": "medium",
+ "change_mind": "If most new users have no export to import, add the interview (C).",
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-17",
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "new user profile setup",
+   "value": "Profile section in the hub's Account card: create a blank private profile from the template on first run (home crux folder as a local private git repo), optional import of another assistant's memory export drafted by an agent and approved as one batch"
+  }
+ ],
+ "images": [
+  {
+   "file": "images/0079-a-profile-section-in-the-account-card.png",
+   "caption": "A: Profile section in the Account card, new user, with the first-run prompt",
+   "option": "A",
+   "kind": "mockup"
+  },
+  {
+   "file": "images/0079-a-as-built-import-from-another-assistant.png",
+   "caption": "A as built: import from another assistant (fake export)",
+   "option": "A",
+   "kind": "screenshot"
+  },
+  {
+   "file": "images/0079-a-as-built-the-one-batch-card-you.png",
+   "caption": "A as built: the one batch card you approve in Needs you",
+   "option": "A",
+   "kind": "screenshot"
+  }
+ ]
+}

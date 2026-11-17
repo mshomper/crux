@@ -1,0 +1,58 @@
+# 0073 Should the permission check go back to a plain one-shot model, without the extra layers?
+
+- Status: decided
+- Date: 2026-11-16, decided 2026-11-16
+- Lenses: architecture
+- Builds on: 0066, 0067
+- Settles: agent permission answering = hard stops in code; everything else unclear goes to one plain one-shot model with the request as the orchestrator sees it and the rules (allow, deny, or escalate to the human); no script hold-back or code scan layers; shadow before go-live
+
+## In short
+
+Should the permission check be stripped back to what was first vetted: one fresh model gets the request and the rules, and answers allow, deny or ask you? I recommend it. In a replay of 625 real requests it agreed with the orchestrator 87% of the time and sent only 11% up, while the layered check passed back 93%. It runs in shadow for a few days before it answers anything for real.
+
+For you:
+
+- Today: almost every unclear request still lands on the orchestrator. After this, about 9 in 10 would be answered by the check, and about 1 in 10 would come up
+- Hard stops stay in code and never reach the model, as now
+- Hard to undo: It missed four real safety catches in the replay: a delete that hits the main folder if a 'change folder' step fails, and deletes through a linked packages folder. Those two get added to its rules as plain facts, not new code layers
+- Nothing goes live until a shadow period shows it holds up on new requests; you get the numbers first
+
+## Decision
+
+**A: Plain one-shot, two safety facts added, shadow first.** Remove the unread-script hold-back, the script scan and the consult answer. The model gets the request as the orchestrator sees it plus R005 and two plain facts (failed folder change before a delete; linked packages folders). Hard stops stay in code. Shadow for a few days, then go live if it holds.
+
+## Context
+
+Decision 66 set up a one-shot model check, vetted by two Fable reviews. Decision 67 and later fixes added code layers on top: a rule that holds back any script not fully read, a code scan of scripts and imports, and a 'consult the orchestrator' answer. In shadow on crux (memo M051) the layered check passed back 93% of 432 requests (bar: 10%). Matt asked for a replay with no layers (2026-11-16): 625 requests the orchestrator really answered, each sent as the orchestrator saw it to a fresh model with R005 and the orchestrator's answering instructions. Sonnet 5.5: 86.9% agreement, 88.6% of real allows allowed, 10.7% escalated, $3.84. Opus 5.5 on 100: 72% agreement, more cautious (18% escalated on allows). Of 13 real refusals Sonnet allowed 9: about half need context it cannot have (house rules like using Edit, a pause Matt gave in chat); four were real catches (failed-cd then delete, junction deletes, a fake key typed into a rehearsal app). Fix candidate work in PR #116 (draft) is parked.
+
+## Options
+
+### A: Plain one-shot, two safety facts added, shadow first (chosen) (recommended)
+
+Remove the unread-script hold-back, the script scan and the consult answer. The model gets the request as the orchestrator sees it plus R005 and two plain facts (failed folder change before a delete; linked packages folders). Hard stops stay in code. Shadow for a few days, then go live if it holds.
+- Pro: Back to the vetted design; about 1 in 10 comes up instead of 9 in 10
+- Pro: Simpler: less code to maintain and review
+- Con: Worker-written scripts are judged from what the request shows, not read in full (decision 67's layers go; its routing stays: at Auto a worker-written script run still goes to the check)
+- Con: It can't know chat-only context like a pause; those cases rely on the hub's own pause handling
+- Effort: Small to medium
+
+### B: Keep the layers and keep fixing them
+
+Finish PR #116 and keep tuning the hold-back and scan rules.
+- Pro: Keeps the extra caution on unread scripts
+- Con: The fixes moved 93% only to 89%; the layers, not the model, cause the pass-backs
+- Con: More rules on rules, which Matt asked to stop
+- Effort: Ongoing
+
+### C: Drop the check; the orchestrator keeps answering
+
+Turn the check off and leave permission answering with the orchestrator as today.
+- Pro: Nothing to build; the orchestrator catches context-dependent cases
+- Con: Every unclear request keeps costing an orchestrator turn
+- Effort: None
+
+## Recommendation
+
+A (firm). A: it matches the vetted design, and the replay shows it would take most of the load while hard stops stay in code.
+
+What would change this: If the shadow period shows it allowing something the orchestrator refuses for a safety reason, go to C.
