@@ -218,7 +218,11 @@ hub.on(ev => {
   if (!ev.logged || ev.project === CONDUCTOR || NO_PATCH.has(ev.type) || patchTimers.has(ev.project)) return;
   patchTimers.set(ev.project, setTimeout(() => {
     patchTimers.delete(ev.project);
-    try { const patch = hub.patchFor(ev.project); if (patch) broadcast({ type: 'project_patch', project: ev.project, patch }); } catch (e) { console.error('patch failed:', e.message); }
+    try {
+      const patch = hub.patchFor(ev.project);
+      if (patch?.unknown) broadcast({ type: 'resync' });   // a project the pages have not read yet (added since): they read the state
+      else if (patch) broadcast({ type: 'project_patch', project: ev.project, patch });
+    } catch (e) { console.error('patch failed:', e.message); }
   }, 150));
 });
 
@@ -533,7 +537,8 @@ async function handle(req, res) {
       // is no longer kept, one message telling it to read the state again.
       const last = Number(url.searchParams.get('last'));
       if (url.searchParams.has('last')) {
-        if (url.searchParams.get('boot') === BOOT && Number.isFinite(last) && last >= streamFloor) { for (const k of streamKept) if (k.n > last) res.write(k.line); }
+        // An id ahead of this hub's own counter comes from another run of the hub (it cannot be one this hub gave): read again.
+        if (url.searchParams.get('boot') === BOOT && Number.isFinite(last) && last >= streamFloor && last <= streamSeq) { for (const k of streamKept) if (k.n > last) res.write(k.line); }
         else res.write(streamLine(streamSeq, { type: 'resync' }));
       }
       clients.add(res);

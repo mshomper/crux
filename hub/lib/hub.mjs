@@ -2185,7 +2185,10 @@ export class Hub {
     const views = [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor, type: a.type, model: a.model, effort: a.effort, modelSeen: a.modelSeen, restartPending: a.restartWhenIdle, ...(a.expedition ? { expedition: a.expedition, expeditionRole: a.expeditionRole } : {}) }));
     const board = p.board.snapshot();
     board.entries = board.entries.map(({ body, ...e }) => ({ ...e, hasBody: !!body }));
-    const w = waitingOf(evs, views, board.decisions), pe = events ? pageEvents(evs, views, now, Math.min(this.bootAt || now, now - 36 * 3600e3)) : null;
+    // The meters read today and since the hub started, so usage events from before the earlier of the two are not sent.
+    const usageSince = Math.min(this.bootAt || now, new Date(now).setHours(0, 0, 0, 0));
+    const pending = [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id);
+    const w = waitingOf(evs, views, board.decisions, pending), pe = events ? pageEvents(evs, views, now, usageSince) : null;
     return {
       name: p.name, dir: p.dir,
       ...(pe ? { events: pe.events, older: pe.older } : {}),
@@ -2223,7 +2226,8 @@ export class Hub {
     const p = this.projects.get(project);
     if (!p) return null;
     const view = this.pageProject(p, { events: false });
-    this.baseline(p, view);
+    // No page has read this project yet (it was added after the first state read): it cannot be patched, it must be read.
+    if (!this.sent?.has(p.name)) { this.baseline(p, view); return { unknown: true }; }
     const d = diffParts(this.sent.get(p.name), view);
     if (!d) return null;
     this.sent.set(p.name, d.next);

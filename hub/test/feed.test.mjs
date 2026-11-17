@@ -133,8 +133,10 @@ test('an old unresolved permission request is named by the hub even when the pag
   for (let i = 0; i < 200; i++) log.push(ev('message', { thread: 'w2', from: 'w2', text: `m${i}` }));
   const sent = pageEvents(log, wagents, at(log)).events;
   assert.ok(!sent.some(e => e.approval === 'old1'), 'it is outside w2\'s window');
-  const w = waitingOf(log, wagents, decisions);
+  const w = waitingOf(log, wagents, decisions, ['old1', 'a2']);
   assert.ok(w.approvals.some(e => e.approval === 'old1'));
+  // a request the hub no longer holds (answered some other way, or lost in a restart) is not named
+  assert.ok(!waitingOf(log, wagents, decisions, ['a2']).approvals.some(e => e.approval === 'old1'));
   const page = { name: 'p', events: sent, agents: wagents, board: { decisions }, wait: { questions: w.questions, repeats: w.repeats, approvals: w.approvals, askedDecisions: w.askedDecisions } };
   assert.ok(waiting(page, new Set(['old1', 'a2'])).approvals.some(e => e.approval === 'old1'));
 });

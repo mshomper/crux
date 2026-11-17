@@ -13,9 +13,8 @@ import { openQuestions, repeatsIn } from '../public/questions.js';
 export const KEEP = 6;              // a thread always sends its newest events of this many, whatever their age
 export const WINDOW = 30;           // and up to this many of the last day
 export const RECENT_MS = 86400e3;
-export const SUMMARIES = 4;         // round summaries a thread sends beyond its newest KEEP events
+export const SUMMARIES = 4;         // past its newest KEEP events, a thread sends no more once it has sent this many summaries (the newest KEEP count among them)
 export const PAGE = 150;            // events one "Show older" brings
-export const USAGE_MS = 8 * 86400e3;    // the meters read the last week
 export const RETIRED_MS = 14 * 86400e3; // retired agents older than this go as bare names
 const TEXT_CUT = 400;
 
@@ -48,7 +47,7 @@ const slimCreated = e => (e.task && e.task.length > 200 ? { ...e, task: e.task.s
 // The events the page is sent for one project: { events, older } with older = how many conversation events of each
 // thread were left out.
 // usageSince: the meters read today and since the hub started, so older usage events are not sent.
-export function pageEvents(events, agents, now = Date.now(), usageSince = now - USAGE_MS) {
+export function pageEvents(events, agents, now = Date.now(), usageSince = 0) {
   const threads = agentThreads(agents), out = cutOff(events, threads, now), send = [], older = {};
   for (const e of events) {
     if (NOT_SENT.has(e.type)) continue;
@@ -85,7 +84,9 @@ export function agentsFor(views, events, now = Date.now()) {
 }
 
 // What waits on you and the counts the page used to work out from the whole log, from the whole log, here.
-export function waitingOf(events, agents, decisions) {
+// pending: the ids of the permission requests the hub still holds; only those are named (when given).
+export function waitingOf(events, agents, decisions, pending = null) {
+  const holds = pending ? new Set(pending) : null;
   const opts = { decisionStatus: id => (decisions || []).find(d => d.id === Number(id))?.status, decisions: decisions || [] };
   const threads = agentThreads(agents);
   const resolved = new Set(), askedDecisions = {}, counts = {}, traffic = {};
@@ -101,8 +102,8 @@ export function waitingOf(events, agents, decisions) {
   return {
     questions: openQuestions(events, opts),
     repeats: Object.fromEntries(repeatsIn(events, opts)),
-    // every permission request without an answer yet; the page keeps only those still pending on the hub
-    approvals: events.filter(e => e.type === 'approval' && !resolved.has(e.approval)),
+    // the permission requests the hub still holds without an answer, whatever their age
+    approvals: events.filter(e => e.type === 'approval' && !resolved.has(e.approval) && (!holds || holds.has(e.approval))),
     askedDecisions: Object.fromEntries(Object.entries(askedDecisions).map(([t, s]) => [t, [...s]])),
     counts, traffic
   };

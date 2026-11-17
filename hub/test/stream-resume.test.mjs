@@ -119,6 +119,15 @@ test('a page from before a restart, or with an unknown boot, is told to read the
   assert.ok(other.got[0].id >= st.stream.seq, 'the message carries the stream\'s current id');
 });
 
+test('an id ahead of this hub\'s own counter, even with this boot, is told to read again (a page from before a restart)', async () => {
+  const st = (await call('GET', '/api/state')).json;
+  const ahead = listen(`?boot=${st.stream.boot}&last=999999999`);
+  await sleep(400);
+  await ahead.close();
+  assert.equal(ahead.got[0].ev.type, 'resync');
+  assert.ok(ahead.got[0].id >= 1 && ahead.got[0].id < 999999999, 'the resync carries this hub\'s own, small id');
+});
+
 test('a plain connection with no resume asks for nothing and gets no resync', async () => {
   const plain = listen();
   await sleep(400);
