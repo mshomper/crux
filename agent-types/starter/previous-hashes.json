@@ -1,5 +1,25 @@
 {
-  "expedition-lead.md": ["8a2409af746d3c1e", "86e88e6c9d35b66d"],
-  "expedition-gatherer.md": ["8d9024bd6a95be17"],
-  "expedition-verifier.md": ["f720d9ca4db1c923"]
+  "advisor.md": ["57f6494ac21eb6b1"],
+  "calendar-planner.md": ["31803372df9532f8"],
+  "calendar-reader.md": ["3b239bca884349a3"],
+  "clerk.md": ["97d162a915aae401"],
+  "deep-reviewer.md": ["045ee7acf9c4d748"],
+  "doc-editor.md": ["753e65b2007bc106"],
+  "doc-reviewer.md": ["0d55065c49cf0adf"],
+  "expedition-advisor.md": ["1006d4b6be33deca"],
+  "expedition-builder.md": ["508e945d58251168"],
+  "expedition-gatherer.md": ["8d9024bd6a95be17", "24b4b5f5c5689fa7"],
+  "expedition-lead.md": ["8a2409af746d3c1e", "86e88e6c9d35b66d", "707dbaddd090a454"],
+  "expedition-skeptic.md": ["30b9fd716d83162f"],
+  "expedition-synthesizer.md": ["78689edd15ae296a"],
+  "expedition-verifier.md": ["f720d9ca4db1c923", "f7dd7226ecfd5ee4"],
+  "gatherer.md": ["77d4862bc9e05d2f"],
+  "implementer.md": ["5912d7b9b41058e7"],
+  "quick-fix.md": ["306567d7ce47e33c"],
+  "researcher.md": ["989907d472a18303"],
+  "reviewer.md": ["a3bfe0281d42828f"],
+  "solver.md": ["9b2d928222ee7668"],
+  "synthesizer.md": ["c5113a18ffca83ae"],
+  "task-organizer.md": ["abba31778fb28113"],
+  "test-writer.md": ["76b2e1dac506fe03"]
 }
