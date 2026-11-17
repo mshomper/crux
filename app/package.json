@@ -1,7 +1,7 @@
 {
   "name": "crux-hub-app",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Crux Hub desktop app: the hub, its Node, a window, a tray icon and PC notices (decisions 49, 52, 54, 58)",
   "license": "MIT",
   "scripts": {
