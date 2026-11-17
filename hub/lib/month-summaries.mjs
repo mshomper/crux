@@ -11,7 +11,7 @@
 // `summarise` is injected: ({ system, user }) => { text, modelUsage?, costUSD?, via? } (the hub passes Haiku through the
 // Agent SDK; tests pass a fake).
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, unlinkSync } from 'node:fs';
 import { DISPLAY } from '../public/feed-rules.js';
 import { readIndex, readMonth, readMonthSummary, summariesFile, writeAtomic } from './archive.mjs';
 
@@ -58,7 +58,8 @@ const tidy = (s, n) => { s = String(s ?? '').split(/\r?\n/).map(l => l.replace(/
 // The thread-month as one block of text, cut to the cap from the middle so its start and end both stay.
 export function transcriptOf(events) {
   const lines = events.map(lineOf).filter(Boolean);
-  let text = lines.join('\n');
+  // the chat sits inside <thread-text> tags: a closing tag typed in the chat must not end the block early
+  let text = lines.join('\n').replace(/<\/?\s*thread-text\s*>/gi, m => m.replace('<', '[').replace('>', ']'));
   if (text.length > INPUT_CAP) { const half = Math.floor(INPUT_CAP / 2); text = text.slice(0, half) + '\n[... middle of the month left out ...]\n' + text.slice(-half); }
   return text;
 }
@@ -89,34 +90,52 @@ export function monthsDue(dir, now = Date.now()) {
 
 // Summarises one month and writes its file; returns { ym, threads, calls } or throws (nothing is written then).
 // onUsage(res, thread) is called after each model call that answered.
+// Threads that already got their answer are kept in archive/YYYY-MM.summaries.partial.json (keyed on the event count), so a
+// retry after a failure redoes only the thread that failed and never pays twice for one that succeeded.
 export async function summariseMonth(dir, ym, count, { summarise, onUsage = null, now = Date.now() }) {
-  const events = readMonth(dir, ym), threads = {};
+  const events = readMonth(dir, ym), partialFile = summariesFile(dir, ym).replace(/\.summaries\.json$/, '.summaries.partial.json');
+  let threads = {};
+  try { const j = JSON.parse(readFileSync(partialFile, 'utf8')); if (j?.events === count && j.threads) threads = j.threads; } catch { /* none */ }
+  const usage = (res, thread) => { try { if (res?.modelUsage) onUsage?.(res, thread); } catch { /* a usage line that cannot be written is not a failed summary */ } };
   let calls = 0;
   for (const [thread, evs] of threadsOf(events)) {
+    if (threads[thread]) continue;
     if (evs.length < MIN_EVENTS) { threads[thread] = { text: plainDigest(evs), events: evs.length, plain: true }; continue; }
-    const res = await summarise({ system: SYSTEM, user: `Thread: ${thread}\nMonth: ${ym}\n\n<thread-text>\n${transcriptOf(evs)}\n</thread-text>` });
+    let res;
+    try { res = await summarise({ system: SYSTEM, user: `Thread: ${thread}\nMonth: ${ym}\n\n<thread-text>\n${transcriptOf(evs)}\n</thread-text>` }); }
+    catch (e) { usage(e, thread); throw e; }   // a call that threw may still have been billed, when the error carries usage
     calls++;
+    usage(res, thread);   // before the empty check: a billed empty answer counts too
     const text = tidy(res?.text, SUMMARY_CAP);
     if (!text) throw new Error(`The model gave no summary for ${thread} in ${ym}.`);
-    try { onUsage?.(res, thread); } catch { /* a usage line that cannot be written is not a failed summary */ }
     threads[thread] = { text, events: evs.length };
+    try { writeAtomic(partialFile, JSON.stringify({ events: count, threads })); } catch { /* only a saving; the retry would pay again */ }
   }
   // the month may have been rewritten by a rotation while the model worked: then this would describe the wrong month
   const now0 = readIndex(dir).months[ym];
   if (!now0 || now0.events !== count) throw new Error(`${ym} changed while it was being summarised.`);
   writeAtomic(summariesFile(dir, ym), JSON.stringify({ version: 1, month: ym, events: count, at: new Date(now).toISOString(), model: SUMMARY_MODEL, threads }));
+  try { unlinkSync(partialFile); } catch { /* none */ }
   return { ym, threads: Object.keys(threads).length, calls };
 }
 
 // What a tick does for one project: the due months, up to MAX_MONTHS_PER_RUN. A month that fails is logged and left for
-// the next tick; the others go on. Never throws. Returns [{ ym, ... } | { ym, error }].
-export async function summariseDue(dir, { summarise, onUsage = null, now = Date.now(), log = console.error, label = '' } = {}) {
+// the next tick; the others go on. After MAX_FAILURES failures a month is skipped for the rest of this hub run (`failures`
+// is the hub's own map, kept between ticks; a month a rotation rewrote has a new key). Never throws.
+// Returns [{ ym, ... } | { ym, error }].
+export const MAX_FAILURES = 2;
+export async function summariseDue(dir, { summarise, onUsage = null, now = Date.now(), log = console.error, label = '', failures = new Map() } = {}) {
   const done = [];
   let due;
-  try { due = monthsDue(dir, now).slice(0, MAX_MONTHS_PER_RUN); } catch (e) { log(`Month summaries${label}: could not read the archive: ${e.message}`); return done; }
+  try { due = monthsDue(dir, now).filter(m => (failures.get(`${dir}|${m.ym}|${m.events}`) || 0) < MAX_FAILURES).slice(0, MAX_MONTHS_PER_RUN); } catch (e) { log(`Month summaries${label}: could not read the archive: ${e.message}`); return done; }
   for (const { ym, events } of due) {
-    try { done.push(await summariseMonth(dir, ym, events, { summarise, onUsage, now })); }
-    catch (e) { log(`Month summaries${label}: ${ym} not summarised (will try again): ${e.message}`); done.push({ ym, error: e.message }); }
+    const key = `${dir}|${ym}|${events}`;
+    try { done.push(await summariseMonth(dir, ym, events, { summarise, onUsage, now })); failures.delete(key); }
+    catch (e) {
+      const n = (failures.get(key) || 0) + 1; failures.set(key, n);
+      log(`Month summaries${label}: ${ym} not summarised: ${e.message} ${n >= MAX_FAILURES ? `Giving up on it until the hub restarts (${n} failures).` : '(will try again)'}`);
+      done.push({ ym, error: e.message });
+    }
   }
   return done;
 }

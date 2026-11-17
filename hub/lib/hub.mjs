@@ -125,6 +125,7 @@ export class Hub {
     this.summariserMade = summariser;
     this.summarisesMonths = this.rotatesLogs && process.env.CRUX_HUB_NO_SUMMARIES !== '1' && (!!summariser || !noAgents);
     this.summarising = null;
+    this.summaryFailures = new Map();   // month -> failures this run; after two it is left alone until a restart
     this.checkerMade = checker;
     this.checkGit = null;   // how the Auto script gate asks git whether a script is committed (lib/permission-scripts.mjs); tests swap in a fake
     this.memory = memory;
@@ -2241,7 +2242,7 @@ export class Hub {
           const models = totalsOf(res.modelUsage);
           p.log.append('usage', { agent: 'month summaries', project: p.name, agentType: 'summary', role: 'summary', model: SUMMARY_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null });
         };
-        const r = await summariseDue(p.log.dir, { summarise: arg => this.summariser(arg), onUsage, label: `: ${p.name}` });
+        const r = await summariseDue(p.log.dir, { summarise: arg => this.summariser(arg), onUsage, label: `: ${p.name}`, failures: this.summaryFailures });
         const ok = r.filter(x => !x.error);
         if (ok.length) console.log(`Month summaries: ${p.name}: ${ok.map(x => `${x.ym} (${x.threads} threads, ${x.calls} model calls)`).join(', ')}.`);
       }

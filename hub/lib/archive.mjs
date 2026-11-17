@@ -424,7 +424,7 @@ export function searchLog(dir, query, { limit = 50, thread = null } = {}) {
   for (let k = months.length - 1; k >= 0 && hits.length < limit; k--) {
     // a month's summaries match too (one hit per thread, listed before that month's own lines)
     const sums = readMonthSummary(dir, months[k]);
-    for (const [t, s] of Object.entries(sums?.threads || {})) if (s?.text && (!thread || t === thread) && words.every(w => s.text.toLowerCase().includes(w))) { const low = s.text.toLowerCase(); hits.push({ id: `month-summary:${months[k]}:${t}`, ts: sums.at || `${months[k]}-01T00:00:00.000Z`, type: 'month_summary', thread: t, from: null, snippet: s.text.slice(Math.max(0, low.indexOf(words[0]) - 60), low.indexOf(words[0]) + 140) }); }
+    for (const [t, s] of Object.entries(sums?.threads || {})) if (hits.length < limit && s?.text && (!thread || t === thread) && words.every(w => s.text.toLowerCase().includes(w))) { const low = s.text.toLowerCase(); hits.push({ id: `month-summary:${months[k]}:${t}`, ts: sums.at || `${months[k]}-01T00:00:00.000Z`, type: 'month_summary', month: months[k], thread: t, from: null, snippet: s.text.slice(Math.max(0, low.indexOf(words[0]) - 60), low.indexOf(words[0]) + 140) }); }
     const evs = readMonth(dir, months[k]); for (let i = evs.length - 1; i >= 0 && hits.length < limit; i--) test(evs[i]); }
   return hits.slice(0, limit);
 }
