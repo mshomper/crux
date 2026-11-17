@@ -23,10 +23,11 @@ const SHOTS = {
   'hub-map': { ...DESK, wait: 4500, eval: steps(thread('orchestrator'), click('.hud-open'), 'await z(1500)') },
   'hub-models': { ...DESK, wait: 4500, eval: steps(thread('elevation'), click('[data-mchip="elevation"]')) },
   'hub-handoff': { ...DESK, wait: 4500, eval: steps(thread('orchestrator'), click('#open-board'), section('handoffs'), click('[data-expand="entry:H001"]'), `document.querySelector('[data-sec="handoffs"]').scrollIntoView({ block: 'start' })`) },
+  'hub-expedition': { ...DESK, wait: 4500, eval: steps(click('#new-expedition'), `(q => { q.focus(); q.value = 'Find out whether offline map tiles for the trail planner can be stored in one file per region, and build a small test of it.'; q.dispatchEvent(new Event('input', { bubbles: true })); })(document.querySelector('[data-xp-q]'))`) },
   'hub-permissions': { ...DESK, wait: 4500, eval: steps(thread('orchestrator'), `document.querySelector('.perm-line').scrollIntoView({ block: 'center' })`) },
   'phone-needs-you': { ...PHONE, wait: 4500 },
   'phone-thread': { ...PHONE, wait: 4500, eval: steps(thread('orchestrator')) },
-  'phone-list': { ...PHONE, wait: 4500, eval: steps(click('#back')) },
+  'phone-list': { ...PHONE, wait: 4500, eval: steps(`[...document.querySelectorAll('[data-c="back"]')].find(b => b.offsetParent)?.click()`) },
   'hub-needs-you-tall': { w: 1440, h: 1560, wait: 4500 },   // an extra: every waiting card in one tall shot
   'hub-robots': { w: 1440, h: 534, wait: 1500, path: '/lab/robots-lab.html', eval: noNames }
 };

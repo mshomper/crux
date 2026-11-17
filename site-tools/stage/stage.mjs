@@ -6,10 +6,10 @@
 //   crux-home/profile/    a tiny profile: the hub calls the user Alex
 //   hub-data/             empty; a hub whose data folder is in temp is a test hub and starts no agents
 //   trailhead/            the demo project: .crux/events.jsonl, .decisions/*.json, .crux-hub.json (from fixture.mjs)
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, readdirSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { root, dirs, env, server, HUB_PORT, PROXY_PORT } from './paths.mjs';
+import { root, dirs, env, server, worktree,HUB_PORT, PROXY_PORT } from './paths.mjs';
 import { profileCore, agentTypes, projectHubJson, decisions, events } from './fixture.mjs';
 
 rmSync(root, { recursive: true, force: true });   // only ever this script's own folder in temp
@@ -18,6 +18,9 @@ for (const d of [agentsDir, join(dirs.crux, 'profile'), dirs.data, join(dirs.pro
 
 writeFileSync(join(dirs.crux, 'profile', 'core.md'), profileCore);
 for (const [name, text] of Object.entries(agentTypes)) writeFileSync(join(agentsDir, `${name}.md`), text);
+// The New expedition panel needs the seven expedition roles to be set up, or it warns with the folder's path.
+const starter = join(worktree, 'agent-types', 'starter');
+for (const f of readdirSync(starter)) if (f.startsWith('expedition-')) copyFileSync(join(starter, f), join(agentsDir, f));
 writeFileSync(join(dirs.project, '.crux-hub.json'), JSON.stringify(projectHubJson, null, 1) + '\n');
 
 const now = Date.now();
