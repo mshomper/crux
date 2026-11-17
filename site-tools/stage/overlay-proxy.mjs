@@ -8,7 +8,7 @@ import { createServer, request } from 'node:http';
 import { HUB_PORT, PROXY_PORT, PROJECT } from './paths.mjs';
 import { overlay } from './fixture.mjs';
 
-const upstream = (req, onRes) => request({ host: '127.0.0.1', port: HUB_PORT, path: req.url, method: 'GET', headers: { ...req.headers, host: `127.0.0.1:${HUB_PORT}` } }, onRes);
+const upstream = (req, onRes) => request({ host: '127.0.0.1', port: HUB_PORT, path: req.url, method: 'GET', headers: { ...req.headers, 'accept-encoding': 'identity', host: `127.0.0.1:${HUB_PORT}` } }, onRes);
 
 createServer((req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
@@ -36,7 +36,7 @@ createServer((req, res) => {
     r.pipe(res);
     if (path === '/api/stream') {   // the live activity lines, repeated so they stay fresh while the page is open
       const tell = () => { for (const a of overlay.activity) res.write(`data: ${JSON.stringify({ type: 'activity', project: PROJECT, ...a })}\n\n`); };
-      const first = setTimeout(tell, 1200), again = setInterval(tell, 8000);
+      const first = setTimeout(tell, 1200), again = setInterval(tell, 60000);
       res.on('close', () => { clearTimeout(first); clearInterval(again); });
     }
   });

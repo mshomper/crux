@@ -187,7 +187,7 @@ export const events = [
 // What a restored hub cannot show, laid over the hub's answers by overlay-proxy.mjs (no real agent runs):
 // who is working or resting right now, which permission card is still waiting, and one line of live activity.
 export const overlay = {
-  states: { [O2]: 'idle', elevation: 'working', 'offline-maps': 'idle', 'gpx-import': 'asleep' },
+  states: { [O2]: 'idle', elevation: 'working', 'offline-maps': 'idle', 'gpx-import': 'working' },
   pendingApprovals: ['demo-approval-download'],
-  activity: [{ agent: 'elevation', thread: 'elevation', text: 'Editing route/sections.js' }]
+  activity: [{ agent: 'elevation', thread: 'elevation', text: 'Editing route/sections.js' }, { agent: 'gpx-import', thread: 'gpx-import', text: 'Reading waypoints from shared files' }]
 };

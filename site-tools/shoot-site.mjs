@@ -12,7 +12,14 @@ const run = (...a) => spawnSync(process.execPath, [join(here, 'shoot.mjs'), '--r
 const ready = "document.querySelectorAll('img').forEach(i=>{i.loading='eager'});document.querySelectorAll('details').forEach(d=>{d.open=true});Promise.all([...document.images].map(i=>i.decode().catch(()=>{})))";
 
 if (process.argv[2] === 'share') {
-  run('--url', 'index.html', '--w', '1200', '--h', '630', '--view', '--wait', '3500', '--out', join(root, 'img', 'share.png'));
+  // The card is the page's top as it loads at 1200 x 630, with two changes made in the page before the shot: the hero's
+  // drawing is replaced by a crop of img/hub-map.png (the Hub's own map: the swarm core with its satellites, so the card
+  // matches the Hub as it looks now), and the lead is cut to its first sentence so no text runs off the bottom.
+  const card = "document.querySelectorAll('.hero-core canvas,.hero-core .callout').forEach(e=>e.remove());" +
+    "const c=document.querySelector('.hero-core');c.style.cssText+=';background:url(img/hub-map.png) -368px -166px/1325px 828px no-repeat;-webkit-mask-image:radial-gradient(circle at 50% 50%,#000 55%,transparent 78%);mask-image:radial-gradient(circle at 50% 50%,#000 55%,transparent 78%)';" +
+    "const l=document.querySelector('.hero .lead');l.textContent=l.textContent.split('. ')[0]+'.';" +
+    "document.querySelectorAll('.hero .fine,.hero .cta').forEach(e=>e.remove());new Promise(r=>setTimeout(r,1500))";
+  run('--url', 'index.html', '--w', '1200', '--h', '630', '--view', '--wait', '3500', '--eval', card, '--out', join(root, 'img', 'share.png'));
 } else {
   run('--url', 'index.html', '--w', '1440', '--wait', '3500', '--eval', ready, '--slice', '2600', '--out', join(here, 'shots', 'desktop.png'));
   run('--url', 'index.html', '--w', '390', '--h', '844', '--dpr', '2', '--wait', '3500', '--eval', ready, '--slice', '3000', '--out', join(here, 'shots', 'phone.png'));
