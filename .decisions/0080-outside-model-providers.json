@@ -8,7 +8,7 @@
   "architecture",
   "research and product"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the hub keep the expedition's prototype, so a project can send basic jobs (month summaries now, a short-answer tool for agents) to an outside or local model, off by default? I recommend it after a review: Claude stays the brain, and it takes load off your plan, with the live call already working.",
  "for_you": [
   "Each project gets an outside-model setting: off (default), local only, or any provider",
@@ -73,9 +73,9 @@
  "recommendation": "A: review and merge the prototype with every project off by default, then turn it on per project where basic jobs add up.",
  "confidence": "medium",
  "change_mind": "If cheap-model summaries read badly in a first trial, keep the layer for images and privacy (B) and leave text on Claude.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "A",
+ "reason": "Matt in chat: \"Yes, the Hub should provide a way to hand outside tasks to other model providers.\" The month summary is not a useful first job yet; test image generation and report writing on his Google AI Studio key instead.",
+ "decided_on": "2026-11-17",
  "superseded_by": null,
  "challenge": null,
  "settles": [
