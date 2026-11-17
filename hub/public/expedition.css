@@ -48,6 +48,15 @@
 .xp-opt:hover{color:var(--text)}
 .xp-opt.on{color:var(--hud-ice);border-color:var(--hud-cyan);background:rgba(111,227,255,.1);box-shadow:inset 0 0 12px -6px var(--hud-cyan)}
 .xp-usd{flex:none;font:500 12px var(--mono);color:var(--faint);white-space:nowrap}
+/* The dollar limit row, shown only while no dollars-per-percent figure is confirmed (API-key route) */
+.xp-capr{margin-top:8px;gap:8px;flex-wrap:wrap}
+.xp-cap{position:relative;display:inline-flex;align-items:center;flex:0 1 150px;min-width:110px}
+.xp-cur{position:absolute;left:10px;font:600 14px var(--mono);color:var(--hud-label);pointer-events:none}
+.xp-cap .xp-in{padding-left:24px;font-family:var(--mono)}
+.xp-rem{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer}
+.xp-rem input{accent-color:var(--hud-cyan);width:16px;height:16px;margin:0}
+.xp-rem:hover{color:var(--text)}
+.xp-why{margin:0;min-width:0;max-width:360px;text-align:right;font-size:13px;line-height:1.35;color:#f3b955}
 .xp-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;min-width:0}
 .xp-chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:4px 4px 4px 8px;font:500 12px var(--mono);color:var(--text);border:1px solid var(--hud-edge);border-radius:2px;background:rgba(18,26,37,.7)}
 .xp-chip b{font-weight:600;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -89,7 +98,7 @@
 .xp-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;border-top:1px solid var(--hud-edge);background:rgba(8,12,18,.85);min-width:0}
 .xp-fixed{display:flex;align-items:center;gap:10px;margin:0;font-size:13px;color:var(--muted);min-width:0}
 .xp-fixed .icon{color:var(--hud-label);flex:none}
-.xp-acts{display:flex;align-items:center;gap:10px;flex:none}
+.xp-acts{display:flex;align-items:center;gap:10px;flex:0 1 auto;min-width:0}
 .xp-go:disabled{opacity:.45}
 
 /* ---------- the thread cards ---------- */
@@ -168,7 +177,8 @@ html[data-hud] .card.xfinished .card-head > .icon{color:var(--good)}
   .xp-blurb{display:none}
   .xp-foot{flex-wrap:wrap;padding:10px 14px 12px;gap:8px}
   .xp-fixed{flex:1 1 100%;font-size:12px}
-  .xp-acts{flex:1 1 100%;justify-content:flex-end;gap:8px}
+  .xp-acts{flex:1 1 100%;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+  .xp-why{flex:1 1 100%;max-width:none}
   .xc-tiles,.xc-tiles.four{grid-template-columns:repeat(2,minmax(0,1fr))}
   .xcard{max-width:100%}
 }

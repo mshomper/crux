@@ -7,7 +7,7 @@ import { join, extname, resolve, normalize, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Hub } from './lib/hub.mjs';
-import { refreshExpeditionFiles } from './lib/starter-refresh.mjs';
+import { refreshExpeditionFiles, addMissingExpeditionFiles } from './lib/starter-refresh.mjs';
 import { parseQuickPicks } from './lib/quick.mjs';
 import { checkRequest, checkAttachmentRead, extraHosts } from './lib/access.mjs';
 import { decodeDataUrl, servedHeaders, MAX_UPLOAD } from './lib/attachments.mjs';
@@ -15,7 +15,7 @@ import { Push } from './lib/push.mjs';
 import { MODELS, EFFORTS } from './lib/agent-types.mjs';
 import { HubSettings, projectKey } from './lib/settings.mjs';
 import { launchSpec, saveLaunch, startDetached, logFile, testHubWithoutAgents, testHubFolderError, testPairError, pageBuild, inTemp, dataDir, isolateNonLiveData } from './lib/relaunch.mjs';
-import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, readHubConfig, pickFolder } from './lib/setup.mjs';
+import { isBundled, Secrets, KEY_SHAPE, keyEnd, checkKey, checkFolders, saveProjects, saveDollarCap, readHubConfig, pickFolder } from './lib/setup.mjs';
 import { expected as claudeExpected, resolveClaude, claudeReady, ClaudeDownload } from './lib/claude-code.mjs';
 import { CONDUCTOR } from './lib/conductor.mjs';
 import { searchLog } from './lib/archive.mjs';
@@ -89,7 +89,10 @@ const hub = new Hub({ projects, defaults: hubCfg.defaults, settings, noAgents, c
 if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
 // The expedition agent files copied into ~/.claude/agents (or a project's) follow this hub's version when they were not edited.
 else {
-  try { refreshExpeditionFiles([join(homedir(), '.claude', 'agents'), ...projects.map(d => join(d, '.claude', 'agents'))]); }
+  try {
+    addMissingExpeditionFiles(join(homedir(), '.claude', 'agents'));
+    refreshExpeditionFiles([join(homedir(), '.claude', 'agents'), ...projects.map(d => join(d, '.claude', 'agents'))]);
+  }
   catch (e) { console.warn('Could not refresh the expedition agent files:', e?.message || e); }
 }
 // Decision 54 B: the Claude Code the agents run. A clone's SDK finds its own; the desktop app's hub uses the copy the
@@ -439,7 +442,15 @@ const routes = {
   // pre-approves sites or packages also needs the step-up (lib/guard.mjs). The launch is the OK for one branch push and a draft PR (D0071).
   'POST /api/expedition': ({ project, ...input }) => {
     const r = hub.launchExpedition(hub.project(String(project || '')), input, 'you');
-    return { ...r, started: r.expedition };
+    // "Remember this limit": only a typed figure with no dollars-per-percent figure confirmed, and only after the launch was accepted.
+    let remembered = null;
+    if (input.rememberDollars && Number(input.envelope?.dollars) > 0 && hub.dollarsPerPercent() == null) {
+      try {
+        remembered = saveDollarCap(input.envelope.dollars, cfg);
+        hub.rememberDollarCap(remembered);
+      } catch (e) { console.warn(`Could not save the dollar limit into ${cfg}: ${e.message}`); }
+    }
+    return { ...r, started: r.expedition, remembered };
   },
   // Stop: straight to the report, reason "Matt" (spec 5). expedition: its id; left out, the one that is running.
   'POST /api/expedition/stop': ({ project, expedition }) => ({ ok: true, ...hub.stopExpedition(hub.project(String(project || '')), expedition ? String(expedition) : null, 'Matt') }),

@@ -79,6 +79,39 @@ export function saveProjects(folders, file = hubConfigFile()) {
   return cfg.projects;
 }
 
+// Saves a dollar limit as the default for every expedition launch (defaults.expedition.envelope.dollars), keeping the rest of
+// hub.json. For an API-key user with no dollars-per-percent figure. Returns the saved figure.
+export const MAX_RUN_DOLLARS = 500;   // the most one run's dollar limit may be (the launch panel checks the same figure)
+// A dollar figure as the user typed it or a page sent it: a plain number above 0 and at most MAX_RUN_DOLLARS, rounded to cents.
+// -> { value } or { problem } in plain words. "1,5" is refused, never read as 15.
+export function checkDollars(v) {
+  const s = String(v ?? '').trim().replace(/^\$/, '');
+  if (!/^\d+(\.\d+)?$/.test(s) || !(Number(s) > 0)) return { problem: 'The dollar limit must be a plain number above 0, for example 10.' };
+  const n = Math.round(Number(s) * 100) / 100;
+  if (n > MAX_RUN_DOLLARS) return { problem: `The dollar limit for one run is at most $${MAX_RUN_DOLLARS}.` };
+  return n > 0 ? { value: n } : { problem: 'The dollar limit must be a plain number above 0, for example 10.' };
+}
+export function saveDollarCap(dollars, file = hubConfigFile()) {
+  const c = checkDollars(dollars);
+  if (c.problem) throw new Error(c.problem);
+  const n = c.value;
+  // A hub.json that exists but cannot be read is never rewritten: that would drop the user's projects and settings.
+  let cfg = {};
+  if (existsSync(file)) {
+    const text = readFileSync(file, 'utf8').replace(/^﻿/, '');
+    if (text.trim()) {
+      try { cfg = JSON.parse(text); } catch (e) { throw new Error(`${file} could not be read (${e.message}), so the dollar limit was not saved. Fix or remove that file first.`); }
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error(`${file} is not a JSON object, so the dollar limit was not saved.`);
+    }
+  }
+  const defaults = cfg.defaults && typeof cfg.defaults === 'object' ? cfg.defaults : (cfg.defaults = {});
+  const ex = defaults.expedition && typeof defaults.expedition === 'object' ? defaults.expedition : (defaults.expedition = {});
+  ex.envelope = { ...(ex.envelope && typeof ex.envelope === 'object' ? ex.envelope : {}), dollars: n };
+  mkdirSync(resolve(file, '..'), { recursive: true });
+  writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  return n;
+}
+
 // The Windows folder picker, shown on this PC's screen, on top. Resolves to the chosen path, or '' when closed.
 export function pickFolder({ run = execFile } = {}) {
   if (process.platform !== 'win32') return Promise.resolve('');
