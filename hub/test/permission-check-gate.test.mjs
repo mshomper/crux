@@ -98,7 +98,8 @@ test('on: a worker-written (untracked) or changed script goes to the check; its 
       assert.match(r.message, /permission check declined: it deletes things outside the project/);
       assert.equal(calls.length, 1, cmd);
       assert.match(calls[0].user, /Auto mode would allow it because it runs a script inside the project, but that script .* is not committed and unchanged from main/);
-      assert.ok(!/attached|CUT OFF|NOT ATTACHED/.test(calls[0].user), `${cmd}: the script text is not sent: the check judges the request plainly (decision 73)`);
+      // M054: the text of an uncommitted or changed script goes with the request, as the orchestrator could read it.
+      assert.ok(/<<<\w+ script [^>]*x\.(mjs|sh|ps1)>>>/.test(calls[0].user) && /project script|echo project|Write-Host project/.test(calls[0].user), `${cmd}: the script text is in the request`);
       assert.ok(calls[0].user.includes(cmd.split(' ').slice(-1)[0]) || calls[0].user.includes(cmd), `${cmd}: the request itself is what it sees`);
       assert.equal(last(p, 'permission_answer').by, CHECK_NAME);
     }

@@ -1564,12 +1564,17 @@ class Check {
       words = words.slice(1);
     }
     while (words.length && /^(if|then|else|elif|fi|do|done|while|until|!|time|foreach)$/.test(words[0].text)) words = words.slice(1);
-    // timeout N <command> (coreutils): it only limits how long the command runs, so the command is what is judged.
-    if (words[0]?.text === 'timeout') {
+    // nohup <command>: it only keeps the command running after the shell closes, so the command is what is judged (a test hub
+    // started with nohup node server.mjs --port N then counts as started, which the check's "test hubs this worker started" needs).
+    // timeout N <command> (coreutils): it only limits how long the command runs, so the command is what is judged. Either order
+    // (nohup timeout 60 X, timeout 60 nohup X), a few levels deep.
+    for (let guard = 0; guard < 4 && words.length > 1; guard++) {
+      if (words[0].text === 'nohup') { words = words.slice(1); continue; }
+      if (words[0].text !== 'timeout') break;
       let i = 1;
       while (/^(--preserve-status|--foreground|-v|--verbose)$/.test(words[i]?.text || '') || /^--(kill-after|signal)=\w+$/.test(words[i]?.text || '')) i++;
       if (/^-[ks]$/.test(words[i]?.text || '') && /^\w+$/.test(words[i + 1]?.text || '')) i += 2;
-      if (/^\d+(\.\d+)?[smhd]?$/.test(words[i]?.text || '') && words.length > i + 1) words = words.slice(i + 1);
+      if (/^\d+(\.\d+)?[smhd]?$/.test(words[i]?.text || '') && words.length > i + 1) words = words.slice(i + 1); else break;
     }
     if (!words.length) return cwd;
     // A string on its own in PowerShell ("checked") is only printed.
@@ -1894,6 +1899,9 @@ class Check {
       // A8: a recursive delete that reaches through a junction or link would empty what it points to (a worktree's
       // node_modules points at the project's own): for judgment, whatever else is true of the path.
       if (recursive || head === 'rimraf') {
+        // The home folder itself (~, $HOME, %USERPROFILE%, C:/Users/<name>): never for judgment, always a stop (M054 review).
+        const homeNorm = norm(this.home);
+        if (targets.some(t => { const a = this.abs(t, cwd); return typeof a === 'string' && norm(a) === homeNorm; })) return this.stop(`Deletes the home folder itself (${head} ${targets.join(' ')})`);
         const via = targets.find(t => this.throughLink(t, cwd));
         if (via) return this.unsure(`Deletes recursively through a link or junction (${head} ${via}): that could empty the folder it points to`, true);
       }
