@@ -197,7 +197,34 @@ function hubUrl(fileUrl) {
 // ---------- http ----------
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.webmanifest': 'application/manifest+json', '.md': 'text/plain; charset=utf-8' };
 const clients = new Set();
-hub.on(ev => { const line = `data: ${JSON.stringify(ev)}\n\n`; for (const res of clients) res.write(line); });
+// The live stream (decision 74, step A). Every message carries an id (a counter), and the latest ones are kept, so a page
+// that lost the link asks to resume after the last id it saw and gets only what it missed; a page that was gone longer
+// than the kept ones (or across a restart) is told to read the state again.
+let streamSeq = 0, streamFloor = 0;
+const streamKept = [];   // { n, line }
+const STREAM_KEPT = 3000;
+const streamLine = (n, obj) => `id: ${n}\ndata: ${JSON.stringify(obj)}\n\n`;
+function broadcast(obj, { keep = true } = {}) {
+  const n = ++streamSeq, line = streamLine(n, obj);
+  if (keep) { streamKept.push({ n, line }); if (streamKept.length > STREAM_KEPT) streamFloor = streamKept.shift().n; }
+  for (const res of clients) res.write(line);
+}
+hub.on(ev => broadcast(ev, { keep: ev.type !== 'activity' }));
+// After a change, the page gets a small patch of the project's parts that changed (lib/feed.mjs), a moment later, once
+// for a burst of events. Conversation-only and telemetry events change nothing the patch carries.
+const NO_PATCH = new Set(['usage', 'plan_usage', 'agent_busy', 'check_shadow', 'permission_answer', 'notice', 'notice_routed', 'approval_delivered', 'visual', 'activity', 'agent_state']);
+const patchTimers = new Map();
+hub.on(ev => {
+  if (!ev.logged || ev.project === CONDUCTOR || NO_PATCH.has(ev.type) || patchTimers.has(ev.project)) return;
+  patchTimers.set(ev.project, setTimeout(() => {
+    patchTimers.delete(ev.project);
+    try {
+      const patch = hub.patchFor(ev.project);
+      if (patch?.unknown) broadcast({ type: 'resync' });   // a project the pages have not read yet (added since): they read the state
+      else if (patch) broadcast({ type: 'project_patch', project: ev.project, patch });
+    } catch (e) { console.error('patch failed:', e.message); }
+  }, 150));
+});
 
 // Text answers over 1 KB go out gzipped when the page accepts it: the state feed is JSON and shrinks about tenfold, which is
 // most of the wait on a phone over Tailscale (phone speed, 2026-11-16).
@@ -238,7 +265,10 @@ async function body(req, limit = 1e6, tooBig = 'Too large') {
 
 const routes = {
   // conductor (decision 55): the hub-wide agent's state and its thread's events (lib/conductor.mjs view()), or null.
-  'GET /api/state': (_, { local }) => ({ voice: { ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
+  // The conductor alone (its events change often; the page reads this instead of the whole state), and one entry's words.
+  'GET /api/conductor': () => ({ conductor: hub.conductor?.view() || null, seq: streamSeq }),
+  'GET /api/entry': ({ project, id }) => hub.entryBody(project, id),
+  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/older': ({ project, thread, before }) => hub.older(project, thread, before),
   'GET /api/brief': ({ project, id }) => {
@@ -503,6 +533,14 @@ async function handle(req, res) {
     if (url.pathname === '/api/stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
       res.write(': hello\n\n');
+      // Resume: the page says the last id it saw (and which boot of the hub it was); it gets what came after, or, when that
+      // is no longer kept, one message telling it to read the state again.
+      const last = Number(url.searchParams.get('last'));
+      if (url.searchParams.has('last')) {
+        // An id ahead of this hub's own counter comes from another run of the hub (it cannot be one this hub gave): read again.
+        if (url.searchParams.get('boot') === BOOT && Number.isFinite(last) && last >= streamFloor && last <= streamSeq) { for (const k of streamKept) if (k.n > last) res.write(k.line); }
+        else res.write(streamLine(streamSeq, { type: 'resync' }));
+      }
       clients.add(res);
       const ping = setInterval(() => res.write(': ping\n\n'), 25000);
       req.on('close', () => { clients.delete(res); clearInterval(ping); });

@@ -8,6 +8,10 @@ import { EFFORTS, hueOf, family, modelOf, modelLabel, pips, describe } from './m
 import { robot } from './robots.js';
 import { hudBoot, openPanel, closePanel } from './hud.js';
 import { isYesNo, repeatsIn, pageAsk } from './questions.js';
+import { DISPLAY, threadOf, countsAsUnread, countsAsTraffic } from './feed-rules.js';
+import { applyViewPatch } from './patch.js';
+import { streamStep, afterStateRead, streamUrl } from './stream-state.js';
+import { keepHeld } from './held.js';
 import * as AP from './all-projects.js';
 import * as CP from './conductor-view.js';
 import * as NM from './agent-name.js';
@@ -50,7 +54,6 @@ const store = {
   set(k, v) { try { localStorage.setItem('crux-hub:' + k, JSON.stringify(v)); } catch { } }
 };
 
-const SLIMMED = new Set(['message', 'summary', 'approval', 'permission_answer', 'notice']);   // the kinds the hub may send as stubs (lib/window.mjs)
 const S = {
   projects: [],
   current: store.get('project', null),
@@ -58,7 +61,9 @@ const S = {
   // thread that used to be "the" current one.
   seen: store.get('seen', {}),
   open: new Set(), // expanded messages, answered approvals and task lines
-  restored: new Map(), // id -> full event, for older messages fetched with "Show older" (the feed sends them as stubs)
+  words: new Map(), wordsAsked: new Set(),   // board entries' words by "project:entry id", fetched when one is opened
+  held: new Map(), // project -> (id -> conversation event the page has had; kept across fresh states, see keepHeld)
+  seq: 0, seqSeen: 0, boot2: null,   // the live stream: the last message id applied, the highest seen, which boot of the hub
   activity: {},
   pending: new Set(),
   drafts: store.get('drafts', {}),   // answers typed in Needs you, by "<summary id>:<question place>"
@@ -115,7 +120,7 @@ async function api(path, body) {
 $('#pair-btn').addEventListener('click', () => guardUI.openPair());
 
 async function load() {
-  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, bootAt, setup, voice } = await api('/api/state');
+  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, bootAt, setup, voice, stream } = await api('/api/state');
   S.voice = voice || null;   // decision 61 A: the voice switch and helper; canSetup is true on the hub's own PC
   // Decisions 52 and 54: the desktop app's first run (no key, no folders or no Claude Code yet) opens the setup
   // screen. Closing it there comes back here for this visit; with no project folder at all there is nothing to show.
@@ -132,10 +137,11 @@ async function load() {
   S.retireAt = retireAt;
   S.settings = settings || {};
   S.models = models || [];
-  // Whatever this page already has in full stays in full: a refresh never turns messages you were reading into stubs.
-  for (const p of S.projects) for (const e of p.events) if (!e.old && SLIMMED.has(e.type)) S.restored.set(e.id, e);
-  for (const p of projects) p.events = p.events.map(e => (e.old && S.restored.get(e.id)) || e);
+  keepHeld(S.projects, projects, S.held);
   S.projects = projects;
+  // The stream picks up from where this state was read (events before it are in it). If it ran ahead while the state was
+  // coming, it goes back and resumes from here.
+  if (afterStateRead(S, stream) && es) connect();
   setConductor(conductor);
   // An open brief whose decision was picked elsewhere loses its pick buttons (decision 50).
   briefPop.sync((pj, id) => projects.find(p => p.name === pj)?.board?.decisions?.find(d => String(d.id) === String(id))?.status);
@@ -151,33 +157,68 @@ async function load() {
   phone.clearSettled(cardWaiting);   // fresh state: notifications for cards settled meanwhile leave the lock screen
 }
 
-let refreshTimer;
-function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(load, 250); }
+// A small update from the hub: the parts of a project that changed (lib/feed.mjs partsOf): agents, decisions and board
+// entries one by one, the waiting parts, and the other fields whole.
+function applyPatch(name, patch) {
+  const p = S.projects.find(x => x.name === name);
+  if (!p) return;
+  applyViewPatch(p, patch);
+  S.pending = new Set(S.projects.flatMap(x => x.pendingApprovals));
+  briefPop.sync((pj, id) => S.projects.find(x => x.name === pj)?.board?.decisions?.find(d => String(d.id) === String(id))?.status);
+  S.hub = null;
+  render();
+  phone.clearSettled(cardWaiting);
+}
+
+// The Conductor's events change often; it is read alone, not with the whole state.
+let conductorTimer;
+function refreshConductor() {
+  clearTimeout(conductorTimer);
+  conductorTimer = setTimeout(async () => {
+    try { const { conductor } = await api('/api/conductor'); setConductor(conductor); S.hub = null; render(); } catch { }
+  }, 250);
+}
+
+// What a thread's unread dot and the map's traffic count: kept by the hub over the whole log, and counted up here as events arrive.
+function bump(p, ev) {
+  const t = threadOf(ev, new Map(p.agents.map(a => [a.name, a.thread])));
+  p.counts ||= {}; p.traffic ||= {};
+  if (countsAsTraffic(ev) && ev.thread) p.traffic[ev.thread] = (p.traffic[ev.thread] || 0) + 1;
+  if (t !== '-' && countsAsUnread(ev)) p.counts[t] = (p.counts[t] || 0) + 1;
+}
 
 let es = null;
 function connect() {
   es?.close();
-  es = new EventSource('/api/stream');
+  // Resume after the last message this page saw: the hub sends what came after, or says to read the state again.
+  es = new EventSource(streamUrl(S));
   es.onmessage = e => {
+    const n = Number(e.lastEventId) || 0;
     const ev = JSON.parse(e.data);
+    // A resync is never thrown away for an old id (a restarted hub counts from the start again); a message already in the state is.
+    const step = streamStep(S, n, ev);
+    if (step === 'drop') return;
+    if (step === 'resync') { load().catch(() => { }); return; }
+    if (ev.type === 'project_patch') { applyPatch(ev.project, ev.patch); return; }
     // Plan numbers belong to the hub, not a project: the live copy (no project) and the logged one both land here.
     if (ev.type === 'plan_usage') { if (!ev.logged) usageUI.setPlan(ev); return; }
     // Voice (decision 61 A): the helper's state and setup progress, hub-wide. Whether this device may set up stays.
     if (ev.type === 'voice') { S.voice = { ...ev.voice, canSetup: !!S.voice?.canSetup }; if (!S.voice.on) voicePlayer.stop(); renderVoice(); return; }
     // The answer to what this page said, read aloud; never while this page's mic is open (WebKit bug 326286).
-    if (ev.type === 'voice_say' && ev.logged && ev.project === CP.CONDUCTOR && ev.client === VOICE_CLIENT && S.voice?.on && voiceRec.state === 'idle') voicePlayer.play(ev);
+    // Not an answer that was given a while ago and only arrives now, from a resume after the link was lost.
+    if (ev.type === 'voice_say' && ev.logged && ev.project === CP.CONDUCTOR && ev.client === VOICE_CLIENT && S.voice?.on && voiceRec.state === 'idle' && Date.now() - Date.parse(ev.ts) < 15000) voicePlayer.play(ev);
     // The Conductor (decision 55): its state as one event, and its own thread's events under its place name.
     if (ev.type === 'conductor_state') { if (S.conductor) { Object.assign(S.conductor, ev.conductor); S.hub = null; render(); } return; }
-    if (ev.project === CP.CONDUCTOR) { if (CP.applyEvent(S.conductor, ev)) { S.hub = null; if (ev.logged && ['agent_created', 'agent_retired', 'agent_session', 'agent_settings', 'summary', 'message', 'lesson_proposed', 'lesson_result', 'question_dismissed'].includes(ev.type)) refreshSoon(); render(); } return; }
+    if (ev.project === CP.CONDUCTOR) { if (CP.applyEvent(S.conductor, ev)) { S.hub = null; if (ev.logged && ['agent_created', 'agent_retired', 'agent_session', 'agent_settings', 'summary', 'message', 'lesson_proposed', 'lesson_result', 'question_dismissed'].includes(ev.type)) refreshConductor(); render(); } return; }
     const p = S.projects.find(x => x.name === ev.project);
     if (!p) return;
     S.hub = null;
     if (ev.logged) {
       p.events.push(ev);
+      bump(p, ev);
       if (ev.type === 'approval') S.pending.add(ev.approval);
       if (ev.type === 'approval_result') S.pending.delete(ev.approval);
-      // Agents write decision records straight to .decisions/; a summary is the signal to re-read the board.
-      if (['agent_created', 'agent_session', 'agent_settings', 'agent_retired', 'pick', 'entry', 'entry_status', 'summary', 'project_settings', 'lesson_result'].includes(ev.type)) refreshSoon();
+      // What changed around it (agents, the board, what waits on you) follows as one small patch from the hub.
       if (ev.type === 'message' && ev.from !== 'you') delete S.activity[key(p.name, ev.thread)];
       if (['approval_result', 'pick', 'question_dismissed', 'message'].includes(ev.type)) queueMicrotask(() => phone.clearSettled(cardWaiting));
     } else if (ev.type === 'agent_state') {
@@ -192,7 +233,8 @@ function connect() {
   };
   // Lost the hub: try again every two seconds. During a restart the restart view does the reconnecting.
   es.onopen = () => setLink(true);
-  es.onerror = () => { es.close(); setLink(false); if (!S.restarting) setTimeout(() => { if (!S.restarting) { connect(); load().catch(() => { }); } }, 2000); };
+  // The new link resumes after the last message seen; if the hub restarted or the page was away too long, it says so and the state is read again.
+  es.onerror = () => { es.close(); setLink(false); if (!S.restarting) setTimeout(() => { if (!S.restarting) connect(); }, 2000); };
 }
 
 // M008 3: when the live link drops, an amber light says so and the cards dim, since they may be out of date.
@@ -312,6 +354,17 @@ function pendingForYou(p) { return new Set(p ? pendingApprovals(p).map(e => e.ap
 // The Conductor's open questions come whole from the hub (decision 55), not from its latest events only.
 const openQuestions = p => p && p === S.cplace ? (S.conductor?.questions || []) : AP.openQuestions(p);
 const pendingLessons = p => AP.pendingLessons(p);
+// A board entry's words, asked for once while it is open; kept by project and entry id, not on the entry (a fresh state or a patch replaces those).
+function entryWords(p, e) {
+  const k = `${p.name}:${e.entryId}`;
+  if (!e.hasBody || S.words.has(k) || S.wordsAsked.has(k)) return;
+  S.wordsAsked.add(k);
+  api(`/api/entry?project=${encodeURIComponent(p.name)}&id=${encodeURIComponent(e.entryId)}`)
+    .then(r => { S.words.set(k, r.body || ''); render(); })
+    .catch(() => { S.wordsAsked.delete(k); });
+}
+// A permission request by id: the hub names the old ones still waiting (p.wait), which the thread's recent events may not hold.
+const approvalById = (p, id) => p.wait?.approvals?.find(e => e.approval === id) || p.events.find(e => e.type === 'approval' && e.approval === id);
 // The project a card or row belongs to (All projects marks each group with data-pj); else the current one.
 const projectOf = el => AP.projectOf(el, S.cplace ? [...S.projects, S.cplace] : S.projects, proj());
 // The Conductor's state from /api/state (lib/conductor.mjs view()), and its place shaped like a project for the shared
@@ -502,7 +555,8 @@ function lastLine(p, t) {
   return `${ev.from === 'you' ? 'You: ' : ''}${ev.from === 'you' ? String(ev.text || '').replace(/^> /gm, '') : ev.text}`;
 }
 // Permission answers (the orchestrator's routine replies) don't light the dot; seen counts the same events.
-const unreadCount = (p, t) => threadEvents(p, t).filter(e => e.type !== 'permission_answer').length;
+// The hub counts a thread's events over the whole log (p.counts), and bump() adds the new ones as they arrive.
+const unreadCount = (p, t) => p.counts ? p.counts[t] || 0 : threadEvents(p, t).filter(countsAsUnread).length;
 function unread(p, t) { return unreadCount(p, t) > (S.seen[key(p.name, t)] || 0); }
 
 // An agent's icon carries a ring in its model's hue (decision 20); no ring until its model is known.
@@ -869,7 +923,7 @@ function chatCard(it) {
   if (!p) return null;
   const kind = CP.cardKind(it.card), id = CP.cardId(it.card);
   if (kind === 'approval') {
-    const ev = p.events.find(e => e.type === 'approval' && e.approval === id);
+    const ev = approvalById(p, id);
     return ev && S.pending.has(id) ? { kind, p, ev, stops: ev.stops || [], escalated: !!escalation(p, id) } : null;
   }
   if (kind === 'decision') {
@@ -1013,14 +1067,14 @@ function feedFor(t) {
     return html || `<div class="empty"><h2>Nothing waiting on you</h2><p>Decisions, questions and permission requests from your agents show up here.</p></div>`;
   } else {
     const evs = threadEvents(p, t), once = AP.decisionCardsOnce(evs);   // one card per decision in a thread
-    const reps = repeatsIn(p.events, pageAsk(p));   // repeats of a card still open elsewhere
-    // Older events arrive as stubs (lib/window.mjs); "Show older" fetches them back a page at a time.
-    const stubs = evs.filter(e => e.old).length;
-    const olderBtn = stubs ? `<div class="older-row"><button type="button" class="btn ghost" data-older="${esc(t)}">Show ${stubs > 150 ? '150 of ' : ''}${stubs} older ${stubs === 1 ? 'item' : 'items'}</button></div>` : '';
-    // Everything before the newest stub waits behind the button too (the picks and notices there would hang alone above the gap).
-    const gap = evs.findLastIndex(e => e.old);
+    const reps = p.wait?.repeats ? { get: id => p.wait.repeats[id] } : repeatsIn(p.events, pageAsk(p));   // repeats of a card still open elsewhere (worked out by the hub)
+    // The hub sends a thread's newest conversation; "Show older" fetches the rest a page at a time (feed.mjs, "p.older").
+    const more = p.older?.[t] || 0;
+    const olderBtn = more ? `<div class="older-row"><button type="button" class="btn ghost" data-older="${esc(t)}">Show ${more > 150 ? '150 of ' : ''}${more} older ${more === 1 ? 'item' : 'items'}</button></div>` : '';
+    // Lines of other kinds from before the oldest conversation event held here (a pick, a lesson) wait behind the button too.
+    const first = more ? evs.findIndex(e => DISPLAY.has(e.type)) : -1;
     const html = olderBtn + evs.map((ev, i) => {
-      if (i <= gap) return '';
+      if (more && (first < 0 || i < first)) return '';
       switch (ev.type) {
         case 'message': return messageEl(p, ev, t);
         case 'summary': return summaryCard(p, ev, once(ev), reps.get(ev.id));
@@ -1146,6 +1200,7 @@ function renderBoard() {
         <span class="bid">${it.id}</span><span class="bt">${esc(it.title)}</span><span class="bs">${line}</span></button>`;
     }
     const e = it.e, k = `entry:${e.entryId}`, open = S.open.has(k);
+    if (open) entryWords(p, e);   // the page is sent entries without their words; an open one fetches them (and keeps them across fresh states and patches)
     // A check on each active memo marks it done; a done one gets an undo icon (each asks first, see the click handler).
     const mark = canMarkDone(e) ? `<button class="bmark" data-entry-status="done" data-entry="${esc(e.entryId)}" title="Mark done" aria-label="Mark ${esc(e.entryId)} done">${icon('check')}</button>`
       : canUndoDone(e) ? `<button class="bmark" data-entry-status="active" data-entry="${esc(e.entryId)}" title="Undo: back to the active list" aria-label="Put ${esc(e.entryId)} back on the active list">${icon('undo')}</button>` : '';
@@ -1153,7 +1208,7 @@ function renderBoard() {
     return `<div class="bitem entry ${open ? 'open' : ''} ${mark ? 'markable' : ''}"><button class="bhead" data-expand="${esc(k)}" aria-expanded="${open}">
         <span class="bid">${esc(e.entryId)}</span><span class="bt">${esc(e.title)}</span>
         <span class="bs">${esc(e.summary || '')}<span class="faint"> · ${NM.nameHtml(e.from, p.name)}${done}</span></span></button>${mark}
-      ${open ? `<div class="bbody">${esc(e.body || '')}</div>` : ''}</div>`;
+      ${open ? `<div class="bbody">${esc(S.words.get(`${p.name}:${e.entryId}`) ?? e.body ?? '')}</div>` : ''}</div>`;
   };
   const html = view.map(s => `<section class="bsec ${s.isOpen ? 'open' : ''} ${s.hot ? 'hot' : ''}" data-sec="${s.key}">
       <button class="bsec-head" data-board-sec="${s.key}" aria-expanded="${s.isOpen}" ${filter.trim() ? 'disabled' : ''}>${icon('chevron')}<span class="bsec-k">${esc(s.label)}</span>
@@ -1299,7 +1354,7 @@ function openCard(project, card, { undo = false } = {}) {
   const waiting = kind === 'approval' ? pendingApprovals(p).some(e => e.approval === id)
     : kind === 'decision' ? openDecisions(p).some(d => d.id === Number(id))
       : openQuestions(p).some(e => e.id === id);
-  const ev = kind === 'approval' ? p.events.find(e => e.type === 'approval' && e.approval === id) : kind === 'question' ? p.events.find(e => e.id === id) : null;
+  const ev = kind === 'approval' ? approvalById(p, id) : kind === 'question' ? openQuestions(p).find(e => e.id === id) || p.events.find(e => e.id === id) : null;
   if (kind === 'approval' && ev) S.open.add(id);
   const target = waiting || !ev ? 'needs' : ev.thread;
   $('#app').classList.remove('show-side');
@@ -1756,16 +1811,16 @@ document.addEventListener('click', e => {
   if ((b = q('[data-older]'))) {
     const t = b.dataset.older; if (!p || b.disabled) return;
     b.disabled = true;
-    // The newest stub of this thread is where the page of older items ends.
-    const before = threadEvents(p, t).findLast(x => x.old)?.id || '';
+    // The page of older items ends at the oldest conversation event this page holds for the thread.
+    const before = threadEvents(p, t).find(x => DISPLAY.has(x.type))?.id || '';
     const feed = b.closest('.feed'), top = feed?.scrollTop || 0, height = feed?.scrollHeight || 0;
     act(async () => {
-      const { events } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}`);
-      // Nothing came back: the page was out of step with the hub (that stub is no longer one), so read the state again.
-      if (!events.length) return load();
-      for (const ev of events) S.restored.set(ev.id, ev);
-      const byId = new Map(events.map(x => [x.id, x]));
-      p.events = p.events.map(x => byId.get(x.id) || x);
+      const { events, left, stale } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}`);
+      // Nothing came back: the page was out of step with the hub, so read the state again.
+      if (stale || !events.length) return load();
+      const have = new Set(p.events.map(x => x.id));
+      p.events = [...p.events, ...events.filter(x => !have.has(x.id))].sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));
+      (p.older ||= {})[t] = left;
       render();
       // What you were reading stays where it is: the older items come in above it.
       const now = [...document.querySelectorAll('[data-older]')].find(x => x.dataset.older === t)?.closest('.feed') || feed;

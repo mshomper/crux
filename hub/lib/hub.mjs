@@ -30,7 +30,7 @@ import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs
 import { ExpeditionWatchdog, HUB_STOPS as EXPEDITION_HUB_STOPS } from './expedition-watchdog.mjs';
 import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, DEFAULT_ENVELOPE, runJsonProblem, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
 import { ExpeditionEnd } from './expedition-end.mjs';
-import { windowed, olderPage } from './window.mjs';
+import { pageEvents, olderPage, waitingOf, agentsFor, partsOf, diffParts } from './feed.mjs';
 import { isProposal, proposalsOf } from './expedition-report.mjs';
 
 export class Project {
@@ -2166,19 +2166,37 @@ export class Hub {
   }
 
   // ---------- views ----------
-  // What the page gets of a project's log: the newest events per thread in full, older ones as small stubs (lib/window.mjs).
-  windowOf(p) { const w = windowed(p.log.events); return { events: w.events, older: w.older }; }
+  // "Show older" in a thread: the page of conversation events just before the oldest one the page holds (lib/feed.mjs).
+  older(project, thread, before) {
+    const p = this.project(String(project || ''));
+    return olderPage(p.log.events, [...p.agents.values()].map(a => ({ name: a.name, thread: a.thread })), String(thread || '-'), String(before || ''));
+  }
 
-  // "Show older" in a thread: the full events behind its stubs, a page at a time.
-  older(project, thread, before) { return olderPage(this.project(String(project || '')).log.events, String(thread || '-'), String(before || '')); }
+  // The words of one board entry. The page gets entries without them and asks when you open one.
+  entryBody(project, entryId) {
+    const e = this.project(String(project || '')).log.events.findLast(x => x.type === 'entry' && x.entryId === String(entryId));
+    return { body: e?.body || '' };
+  }
 
-  state() {
-    return [...this.projects.values()].map(p => ({
-      ...this.windowOf(p),
+  // One project as the page holds it (decision 74 B, step A: load less; lib/feed.mjs). events: false leaves the event
+  // list out, for the patches that follow a change.
+  pageProject(p, { events = true } = {}) {
+    const now = Date.now(), evs = p.log.events;
+    const views = [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor, type: a.type, model: a.model, effort: a.effort, modelSeen: a.modelSeen, restartPending: a.restartWhenIdle, ...(a.expedition ? { expedition: a.expedition, expeditionRole: a.expeditionRole } : {}) }));
+    const board = p.board.snapshot();
+    board.entries = board.entries.map(({ body, ...e }) => ({ ...e, hasBody: !!body }));
+    // The meters read today and since the hub started, so usage events from before the earlier of the two are not sent.
+    const usageSince = Math.min(this.bootAt || now, new Date(now).setHours(0, 0, 0, 0));
+    const pending = [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id);
+    const w = waitingOf(evs, views, board.decisions, pending), pe = events ? pageEvents(evs, views, now, usageSince) : null;
+    return {
       name: p.name, dir: p.dir,
-      agents: [...p.agents.values()].map(a => ({ name: a.name, role: a.role, thread: a.thread, state: a.state, task: a.task, goal: a.goal, contextPct: a.contextPct, live: a.live, retiring: a.retiring || false, predecessor: a.predecessor, type: a.type, model: a.model, effort: a.effort, modelSeen: a.modelSeen, restartPending: a.restartWhenIdle, ...(a.expedition ? { expedition: a.expedition, expeditionRole: a.expeditionRole } : {}) })),
+      ...(pe ? { events: pe.events, older: pe.older } : {}),
+      agents: agentsFor(views, evs, now),
+      wait: { questions: w.questions, repeats: w.repeats, approvals: w.approvals, askedDecisions: w.askedDecisions },
+      counts: w.counts, traffic: w.traffic,
       types: this.agentTypes(p).list().map(({ name, description, model, effort, tools, source }) => ({ name, description, model, effort, tools, source })),
-      board: p.board.snapshot(),
+      board,
       pack: this.memory.packName(p.name),
       pendingApprovals: [...this.approvals.entries()].filter(([, a]) => a.p === p).map(([id]) => id),
       permissionRules: this.rulesFor(p)?.entryId || null,
@@ -2191,6 +2209,28 @@ export class Hub {
       ownHandoff: this.ownHandoffNumbers(p),
       retireAt: this.retireAtFor(p),
       expedition: this.expeditionView(p)   // phase 5: defaults, what is running, past ones, drafts and proposed next expeditions
-    }));
+    };
+  }
+
+  state() { return [...this.projects.values()].map(p => { const v = this.pageProject(p); this.baseline(p, v); return v; }); }
+
+  // The parts of each project as last sent (text), the base the next patch is measured from. The first state read of a
+  // project sets it; only patches move it, so every page that follows the stream gets every change once.
+  baseline(p, view) {
+    this.sent ||= new Map();
+    if (!this.sent.has(p.name)) this.sent.set(p.name, new Map([...partsOf(view)].map(([k, v]) => [k, JSON.stringify(v ?? null)])));
+  }
+
+  // What changed in a project since the last patch, or null.
+  patchFor(project) {
+    const p = this.projects.get(project);
+    if (!p) return null;
+    const view = this.pageProject(p, { events: false });
+    // No page has read this project yet (it was added after the first state read): it cannot be patched, it must be read.
+    if (!this.sent?.has(p.name)) { this.baseline(p, view); return { unknown: true }; }
+    const d = diffParts(this.sent.get(p.name), view);
+    if (!d) return null;
+    this.sent.set(p.name, d.next);
+    return d.patch;
   }
 }
