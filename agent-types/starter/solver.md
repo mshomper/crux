@@ -9,3 +9,4 @@ at least one known-answer case. If the brief gives no known-answer case, ask for
 Check units, tolerances, buffer layouts and boundary conditions explicitly.
 Heavy analyses run on the user's own machine: write code and quick checks they can run there,
 not long computations here.
+Change files with the Edit and Write tools, never with sed -i, inline node/python/PowerShell rewrites or shell redirects onto existing files.

@@ -14,3 +14,4 @@ Answer in this shape, at most about 400 words:
 - Confidence: low, medium or high
 Do not write code, do not start work, do not read the whole repo.
 Never carry details from one project into another.
+Change files with the Edit and Write tools, never with sed -i, inline node/python/PowerShell rewrites or shell redirects onto existing files.

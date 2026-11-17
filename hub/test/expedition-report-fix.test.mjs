@@ -121,7 +121,7 @@ test('start-up refresh: an unedited older copy is replaced, an edited one is kep
   assert.ok(!prev['expedition-lead.md'].includes(hashOf(current('expedition-lead.md'))), 'the current file is not its own history');
   // The versions before decision 75 (PR 127) are listed, so those installed copies are refreshed.
   assert.ok(prev['expedition-lead.md'].includes('86e88e6c9d35b66d'));
-  assert.deepEqual(prev['expedition-gatherer.md'], ['8d9024bd6a95be17']);
+  assert.ok(prev['expedition-gatherer.md'].includes('8d9024bd6a95be17'));   // later edits add the text before them to each list (the standing line, 0.34.0)
   // Every entry is a list of 16-character hashes of a file that exists, and none is the file's own current text.
   for (const [f, list] of Object.entries(prev)) {
     assert.ok(existsSync(join(STARTER, f)), `${f} is a starter file`);

@@ -21,6 +21,7 @@ import { readFileSync, existsSync, statSync, readdirSync, lstatSync, realpathSyn
 import { execFileSync } from 'node:child_process';
 import { gitReadRuns, gitNoIndex, GIT_SAFE_CONFIG } from './permissions.mjs';
 import { settleLists } from './permission-lists.mjs';
+import { inlineRewrite } from './permission-rewrites.mjs';
 
 const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
@@ -430,7 +431,14 @@ export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdi
   c.homeChanged = /^(Bash|PowerShell)$/.test(tool) && assignsEnv(c.cmdText, HOME_NAMES);
   c.assigned = new Set();     // every shell variable the command assigns, exported or not (see envNames)
   const out = settleLists(classifyWith(c, tool, input), { lists, tool, input, projectDir: c.projectDir, cwd: c.cwd0, tmp: c.tmp, home: c.home, downloaded: c.downloaded });   // A10: Matt's lists
-  return { ...out, tempMade: [...c.tempMade], downloaded: [...c.downloaded], hubsStarted: [...c.hubsNow] };
+  // A plain mistake, refused at once (M042, no disguise): changing an existing file of the project with a command-line script when the
+  // Edit and Write tools exist. Never over a hard stop, and never on a guess (permission-rewrites.mjs): the hub turns `rewrite` into a
+  // deny with no card and no check call. A deny, not a stop.
+  let rewrite = null;
+  if (out.route !== 'human' && /^(Bash|PowerShell)$/.test(tool)) {
+    try { rewrite = inlineRewrite({ tool, command: c.cmdText, cwd: cwd || projectDir, projectDir, tmp, home }); } catch { rewrite = null; }
+  }
+  return { ...out, ...(rewrite ? { rewrite } : {}), tempMade: [...c.tempMade], downloaded: [...c.downloaded], hubsStarted: [...c.hubsNow] };
 }
 
 function classifyWith(c, tool, input) {
