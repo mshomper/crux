@@ -85,5 +85,13 @@
    "value": "Profile section in the hub's Account card: create a blank private profile from the template on first run (home crux folder as a local private git repo), optional import of another assistant's memory export drafted by an agent and approved as one batch"
   }
  ],
- "images": []
+ "images": [
+  {
+   "from": "b8d51fbc6ca1a822143697d7c2900154",
+   "caption": "A: Profile section in the Account card, new user, with the first-run prompt",
+   "option": "A",
+   "kind": "mockup",
+   "missing": "not found"
+  }
+ ]
 }
