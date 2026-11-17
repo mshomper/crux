@@ -410,6 +410,8 @@ export class Agent {
       this.inTurn = false;
       this.logUsage(m);
       if (this.expedition) this.hub.expeditionWatch?.onResult(this);   // the result's figure replaces the estimate
+      // The Lead's turn is over: a gatherer call it was let make that never started a task will not start one now.
+      if (this.expeditionRole === 'lead') new Expedition(this.project, this.expedition).gathererExpire({ all: true });
       // A refused effort level may come back as an error result instead: lower it and run the message again.
       const errText = m.is_error ? [m.result, ...(m.errors || [])].filter(Boolean).join(' ') : '';
       if (errText && this.q === q && this.lowerForRefusal(errText)) return this.restartAfterRefusal();
@@ -466,16 +468,29 @@ export class Agent {
       if (!t) return;   // not one the hub saw start (a restart in between): nothing to close
       live.delete(id);
       const tokens = Number.isFinite(m.usage?.total_tokens) ? m.usage.total_tokens : t.tokens;
-      ex.subagent({ phase: 'ended', subagentType: t.type, taskId: id, tokens, status: m.status || null });
+      ex.subagent({ phase: 'ended', subagentType: t.type, taskId: id, tokens, status: m.status || null, ...this.takeGathererUse(id) });
     }
   }
 
-  // A new query cannot have the old one's subagents: any the log still shows as running ended with it.
+  // The gatherer's web search and page open counts (hub.gathererToolBlock keeps them by its id), taken out of memory as it ends
+  // and put on its ended event: { searches, opens }, or nothing when none were counted. A gatherer never outlives its query, and
+  // a restarted query closes every open one (below), so there is nothing to restore from the log.
+  takeGathererUse(id) {
+    const u = this.gathererUse?.get(id);
+    if (!u) return {};
+    this.gathererUse.delete(id);
+    return { searches: u.searches, opens: u.opens };
+  }
+
+  // A new query cannot have the old one's subagents: any the log still shows as running ended with it. Gatherer calls the hub
+  // let through that never became tasks are given up too (decision 75), so they hold neither a slot nor a run.
   closeOpenSubagents() {
     const ex = new Expedition(this.project, this.expedition);
     const open = new Map();
     for (const e of ex.state().subagents) { if (e.phase === 'started') open.set(e.taskId, e); else open.delete(e.taskId); }
-    for (const e of open.values()) ex.subagent({ phase: 'ended', subagentType: e.subagentType, taskId: e.taskId, status: 'stopped' });
+    for (const e of open.values()) ex.subagent({ phase: 'ended', subagentType: e.subagentType, taskId: e.taskId, status: 'stopped', ...this.takeGathererUse(e.taskId) });
+    ex.gathererExpire({ all: true });
+    this.gathererUse = new Map();
     this.subagents = new Map();
   }
 

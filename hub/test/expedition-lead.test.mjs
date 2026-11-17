@@ -317,6 +317,61 @@ test('the hub refuses a ninth gatherer run and a fifth at once, with a reason th
   assert.match(list.gatherers.note, /8 gatherer runs in all/);
 });
 
+test('an allowed call that never starts frees its slot and run after 2 minutes, at the end of the Lead\'s turn, and at a query restart; the expiry is logged and rebuilds the same', async () => {
+  const { A, p } = world();
+  const lead = A.agents.lead, ex = A.ex;
+  const hook = lead.options().hooks.PreToolUse[0].hooks[0];
+  const call = id => hook({ tool_name: 'Agent', tool_use_id: id, tool_input: { subagent_type: 'expedition-gatherer' } });
+  for (const id of ['c1', 'c2', 'c3', 'c4']) await call(id);
+  assert.deepEqual([ex.gathererRuns().total, ex.gathererRuns().pending], [4, 4]);
+  assert.equal((await call('c5')).hookSpecificOutput.permissionDecision, 'deny');
+  // After 2 minutes the four never-started calls stop counting; the block logs it.
+  const later = Date.now() + 3 * 60 * 1000;
+  assert.equal(ex.gathererBlock('c6', 4, later), null, 'a slot is free again');
+  assert.equal(ex.gathererRuns(later).total, 0, 'and none of the four counts toward the 8');
+  assert.equal(p.log.ofType('expedition_note').filter(e => e.kind === 'gatherer-expired').length, 4, 'the expiry is in the log');
+  // A fresh Expedition built from the same log gets the same counts, with no clock help.
+  const again = new Expedition(p, A.id);
+  assert.deepEqual([again.gathererRuns().total, again.gathererRuns().pending], [0, 0]);
+  // The end of the Lead's turn clears what is still waiting.
+  await call('d1'); await call('d2');
+  assert.equal(ex.gathererRuns().total, 2);
+  lead.onMessage({ type: 'result', subtype: 'success', is_error: false, usage: {}, modelUsage: {}, total_cost_usd: 0 }, null);
+  assert.equal(ex.gathererRuns().total, 0, 'turn end');
+  // A query restart clears them too; a started task is never cleared.
+  await call('e1'); await call('e2');
+  lead.onTask({ type: 'system', subtype: 'task_started', task_id: 't1', subagent_type: 'expedition-gatherer', task_type: 'local_agent' });
+  lead.closeOpenSubagents();
+  assert.deepEqual([ex.gathererRuns().total, ex.gathererRuns().started, ex.runningSubagents()], [1, 1, 0], 'one started task stays counted; the call that never started is gone');
+  assert.deepEqual([new Expedition(p, A.id).gathererRuns().total], [1]);
+});
+
+test('an empty tool call id does not collapse calls, and only gatherers count toward the 4 at once', async () => {
+  const { A } = world();
+  const ex = A.ex, hook = A.agents.lead.options().hooks.PreToolUse[0].hooks[0];
+  for (let i = 0; i < 3; i++) assert.deepEqual(await hook({ tool_name: 'Agent', tool_use_id: '', tool_input: { subagent_type: 'expedition-gatherer' } }), {});
+  assert.equal(ex.gathererRuns().total, 3, 'three calls with no id are three runs');
+  // Other subagents running do not use up a gatherer slot.
+  const lead = A.agents.lead;
+  lead.onTask({ type: 'system', subtype: 'task_started', task_id: 'o1', subagent_type: 'general-purpose', task_type: 'local_agent' });
+  lead.onTask({ type: 'system', subtype: 'task_started', task_id: 'o2', subagent_type: 'general-purpose', task_type: 'local_agent' });
+  assert.equal(ex.runningSubagents(), 2);
+  assert.equal(ex.runningSubagents('expedition-gatherer'), 0);
+  assert.deepEqual(await hook({ tool_name: 'Agent', tool_use_id: 'z', tool_input: { subagent_type: 'expedition-gatherer' } }), {}, 'the 4th gatherer fits beside two other subagents');
+});
+
+test('a gatherer\'s search and open counts go on its ended event and out of memory', async () => {
+  const { A, p } = world();
+  const lead = A.agents.lead, hook = lead.options().hooks.PreToolUse[0].hooks[0];
+  lead.onTask({ type: 'system', subtype: 'task_started', task_id: 'g1', subagent_type: 'expedition-gatherer', task_type: 'local_agent' });
+  const g = tool => hook({ tool_name: tool, tool_use_id: `${tool}${Math.random()}`, agent_id: 'g1', agent_type: 'expedition-gatherer', tool_input: {} });
+  for (const t of ['WebSearch', 'WebSearch', 'WebFetch']) await g(t);
+  lead.onTask({ type: 'system', subtype: 'task_notification', task_id: 'g1', status: 'completed', usage: { total_tokens: 5 } });
+  const ended = p.log.ofType('expedition_subagent').find(e => e.phase === 'ended');
+  assert.deepEqual([ended.searches, ended.opens], [2, 1]);
+  assert.equal(lead.gathererUse.has('g1'), false, 'dropped when it ends');
+});
+
 test('a gatherer\'s own searches and page opens are counted and refused past 8 and 6; other tools and other agents are left alone', async () => {
   const { A } = world();
   const hook = A.agents.lead.options().hooks.PreToolUse[0].hooks[0];

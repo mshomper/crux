@@ -848,7 +848,8 @@ export class Hub {
   }
 
   // A gatherer's own WebSearch and WebFetch (hook calls with agent_id): up to 8 searches and 6 page opens each (decision 75 A).
-  // Counted by the gatherer's id on the Lead's agent object; the count goes into the log when the gatherer ends. A plain reason or null.
+  // Counted by the gatherer's id on the Lead's agent object (gathererUse); the count goes onto the gatherer's ended event and the
+  // entry is dropped (Agent.takeGathererUse). A plain reason or null.
   gathererToolBlock(agent, hookInput) {
     if (!agent?.expedition || hookInput?.agent_type !== GATHERER_TYPE || !hookInput.agent_id) return null;
     const kind = hookInput.tool_name === 'WebSearch' ? 'searches' : hookInput.tool_name === 'WebFetch' ? 'opens' : null;
