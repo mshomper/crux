@@ -22,7 +22,8 @@ export const isStale = (plan, now = Date.now()) => !plan?.asOf || now - Date.par
 export function meterHtml(m, now = Date.now()) {
   const hue = m.model ? hueOf(`claude-${m.model}`) || MODEL_HUES.fable : null;
   const left = m.idle ? 'idle' : fmtLeft(m.resetsAt, now);
-  return `<span class="um t-${m.tone}${m.idle ? ' idle' : ''}" data-meter="${esc(m.key)}"${hue ? ` style="--mh:${hue}"` : ''}>
+  const tip = `${m.full}: ${m.idle ? 'no window running' : pctText(m.pct)}`;   // the tight strip shows bars only; this is their hover text
+  return `<span class="um t-${m.tone}${m.idle ? ' idle' : ''}" data-meter="${esc(m.key)}" title="${esc(tip)}"${hue ? ` style="--mh:${hue}"` : ''}>
       <i class="um-l">${esc(m.label)}</i><span class="um-bar"><b style="--p:${m.idle ? 0 : m.pct}%"></b></span><em class="um-p">${pctText(m.pct)}</em><s class="um-r">${esc(left)}</s></span>`;
 }
 export function metersHtml(list, now = Date.now()) { return list.map(m => meterHtml(m, now)).join(''); }
