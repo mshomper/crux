@@ -10,7 +10,8 @@
 .ac-who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 .ac-who .icon{width:15px;height:15px;color:var(--hud-dim);flex:none}
 .ac-who b{color:var(--text);font-weight:600}
-.ac-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ac-row{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;min-width:0}
+.ac-row .btn{min-width:0;white-space:normal;text-align:left}
 .ac-field{width:100%;margin:2px 0 0;font:500 14px/1.2 var(--mono);color:var(--hud-ice);background:var(--hud-deep);border:1px solid var(--hud-edge);border-radius:2px;padding:10px 11px;letter-spacing:.04em}
 .ac-field::placeholder{color:rgba(150,232,255,.38);letter-spacing:.02em}
 .ac-field:focus{outline:none;border-color:var(--hud-cyan);box-shadow:0 0 0 1px rgba(111,227,255,.22),0 0 18px -6px rgba(111,227,255,.5)}

@@ -89,6 +89,9 @@ account.applyAtStart({ bundled: BUNDLED });
 const settings = new HubSettings({ initial: { ...hubCfg, retireAt } });
 // Decision 55: the Conductor keeps its log and handoffs in the hub's own state folder, next to settings.json.
 const hub = new Hub({ projects, defaults: hubCfg.defaults, settings, noAgents, conductorDir: join(dataDir(), 'conductor') });
+// The saved key (Account card) is used by the hub in memory and reaches agents through apiKeyHelper, never the environment.
+const syncKey = () => { hub.apiKey = () => account.currentKey(); hub.apiKeyHelper = account.helperCommand({ hubDir: here }); };
+syncKey();
 if (noAgents) console.log('Test hub: agents do not start here (set CRUX_HUB_AGENTS=1 to let them).');
 // The expedition agent files copied into ~/.claude/agents (or a project's) follow this hub's version when they were not edited.
 else {
@@ -109,11 +112,11 @@ function setupState(local) {
   const cc = resolveClaude({ exp: claudeExp });
   const download = claudeDownload.state();
   const ccReady = claudeReady(cc, download);
-  const hasKey = !!(process.env.ANTHROPIC_API_KEY && process.env.CRUX_HUB_USE_API_KEY === '1');
+  const hasKey = !!account.currentKey();
   const folders = [...hub.projects.values()].map(p => p.dir);
   return {
     bundled: BUNDLED, local, testHub: hub.noAgents, needed: BUNDLED && (!hasKey || !folders.length || !ccReady),
-    key: { saved: hasKey, from: hasKey ? (account.source === 'environment' ? 'environment' : 'saved') : null, end: local && hasKey ? keyEnd(process.env.ANTHROPIC_API_KEY) : '' },
+    key: { saved: hasKey, from: hasKey ? (account.source === 'environment' ? 'environment' : 'saved') : null, end: local && hasKey ? keyEnd(account.currentKey()) : '' },
     folders, configFolders: (readHubConfig(cfg).projects || []),
     claude: { source: cc.source, ready: ccReady, fallback: cc.source === 'previous' || cc.source === 'installed', version: claudeExp?.version || null, path: local ? cc.path : null, sizeMB: claudeExp ? Math.round(claudeExp.size / 1048576) : null, download }
   };
@@ -297,7 +300,8 @@ const routes = {
     if (check === 'refused') throw new Error('Anthropic did not accept this key. Check that it was copied whole and is still active in console.anthropic.com.');
     secrets.save(k);
     account.setMode('key');
-    account.useSaved();
+    account.useSaved();   // a key set in the environment still wins
+    syncKey();
     return { check, setup: setupState(true) };
   },
   // ---------- decision 78 A: the Account card ----------
@@ -325,7 +329,7 @@ const routes = {
   'POST /api/account/signin': (_, ctx) => {
     if (!ctx.local) throw new GuardError('Signing in opens a window on the PC the hub runs on. Do it there.', 403);
     if (hub.noAgents) return { opened: false, test: true };
-    return { opened: openSignInWindow({ hubDir: here }), command: 'claude auth login' };
+    return { opened: openSignInWindow({ hubDir: here, claudePath: hub.claudeCode?.() || null }), command: 'claude auth login' };
   },
   // Download the exact Claude Code this hub's SDK expects; the page follows its progress through GET /api/setup.
   'POST /api/setup/claude': async (_, ctx) => { pcOnly(ctx); await claudeDownload.start(); return setupState(true); },
@@ -619,6 +623,7 @@ async function handle(req, res) {
       // with that same prompt (no code); where Windows Hello is not available it goes ahead, with a push.
       let need = ctx.device && !ctx.device.off ? stepUpNeed(key, input, hub) : null;
       if (need && ctx.device.local && key === 'POST /api/pair/issue') need = null;
+      if (need && ctx.device.local && need.purpose === 'account') need = null;   // the PC needs no Windows Hello to switch the account; a phone does (decision 78 A)
       if (need && ctx.device.local && !guard.pcHasPasskey()) need = { ...need, enroll: true };
       if (need) {
         ctx.stepUp = guard.verifyStepUp({ headers: req.headers, device: ctx.device, stepUp: input.stepUp, need });
@@ -764,7 +769,7 @@ function restart() {
   for (const res of clients) { try { res.end(); } catch { } }
   clients.clear();
   stopAgents();
-  try { startDetached(launchSpec({ port }), { env: account.restartEnv() }); }   // without a saved key this hub put in its environment: the next hub reads the choice afresh
+  try { startDetached(launchSpec({ port })); }
   catch (e) { console.error(`Could not start the new hub: ${e.message}`); restarting = false; hub.stopping = false; server.listen(port, '127.0.0.1'); remoteServer?.listen(remotePort, '127.0.0.1'); return; }
   setTimeout(() => process.exit(0), 300);
 }

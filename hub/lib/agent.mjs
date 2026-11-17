@@ -234,7 +234,9 @@ export class Agent {
       allowedTools: cruxToolNames(this),
       disallowedTools: [...(this.role === 'orchestrator' ? ['NotebookEdit'] : []), ...(this.expedition ? EXPEDITION_DISALLOWED : []), ...(connectors ? [] : CONNECTOR_SERVERS)],
       ...(subagents ? { agents: subagents } : {}),
-      ...(connectors ? {} : { settings: { disableClaudeAiConnectors: true } }),
+      // The Account card's saved key reaches Claude Code through apiKeyHelper (a command that opens it when needed), not
+      // through the environment, where every command an agent runs would see it (decision 78 A).
+      ...(connectors && !this.hub.apiKeyHelper ? {} : { settings: { ...(connectors ? {} : { disableClaudeAiConnectors: true }), ...(this.hub.apiKeyHelper ? { apiKeyHelper: this.hub.apiKeyHelper } : {}) } }),
       permissionMode: this.role === 'worker' ? 'acceptEdits' : 'default',
       canUseTool: (toolName, input, opts) => this.hub.requestApproval(p, this, toolName, input, opts),
       // Only notes where the call runs (noteCwd); it never allows, denies or changes anything.

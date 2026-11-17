@@ -31,6 +31,8 @@ export class Secrets {
     }
     return typeof k === 'string' && KEY_SHAPE.test(k) ? k : null;
   }
+  // A key an earlier version saved in the clear (and a protector that could seal it now).
+  get isClear() { const d = this.read(); return !!this.protector && typeof d.anthropicApiKeyProtected !== 'string' && typeof d.anthropicApiKey === 'string' && KEY_SHAPE.test(d.anthropicApiKey); }
   // The last four characters, kept beside the protected key so the page can say which one is saved without opening it.
   get savedEnd() {
     const d = this.read();

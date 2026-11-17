@@ -10,7 +10,9 @@ import { request } from 'node:http';
 import { makeTmp, removeTmp } from './helpers/tmp.mjs';
 import { Account, defaultProtector, planName, openSignInWindow, ENV_WINS } from '../lib/account.mjs';
 import { Secrets } from '../lib/setup.mjs';
-import { HUB_DIR } from '../lib/relaunch.mjs';
+import { HUB_DIR, pidsOnPort, stopTree, dataDir } from '../lib/relaunch.mjs';
+import { stepUpNeed, PURPOSES } from '../lib/guard.mjs';
+import { readdirSync, statSync } from 'node:fs';
 import { accountLine, accountCard, switchState } from '../public/account.js';
 import { panelHtml, accountBlock } from '../public/usage-ui.js';
 
@@ -58,29 +60,46 @@ test('at start: the environment wins; a saved key is used only when API key is c
     let t = mk({ PATH: 'x' }); t.secrets.save(KEY);
     assert.equal(t.a.applyAtStart(), null); assert.equal(t.env.ANTHROPIC_API_KEY, undefined);
     assert.equal(t.a.view().mode, 'plan'); assert.equal(t.a.view().savedEnd, 'a1b2');
-    // chosen: the same two variables the environment route sets
+    // chosen: the saved key is used, from memory; it is NOT put in the environment agents inherit (review of #140)
     t.a.chooseKey(); assert.equal(t.a.mode, 'key');
     t = mk({ PATH: 'x' });
     assert.equal(t.a.applyAtStart(), 'saved');
-    assert.equal(t.env.ANTHROPIC_API_KEY, KEY); assert.equal(t.env.CRUX_HUB_USE_API_KEY, '1');
+    assert.deepEqual(t.env, { PATH: 'x' }, 'the environment is untouched: no key, no switch');
+    assert.equal(t.a.currentKey(), KEY);
     const v = t.a.view();
-    assert.deepEqual([v.mode, v.source, v.keyEnd, v.envLocked], ['key', 'saved', 'a1b2', false]);
+    assert.deepEqual([v.mode, v.source, v.keyEnd, v.envLocked, v.problem], ['key', 'saved', 'a1b2', false, '']);
     assert.ok(!JSON.stringify(v).includes(KEY) && !JSON.stringify(v).includes('ffff'), 'the page only ever gets the last four');
-    // the next hub starts from what this one started with: without the key it added
-    const next = t.a.restartEnv(); assert.equal(next.ANTHROPIC_API_KEY, undefined); assert.equal(next.CRUX_HUB_USE_API_KEY, undefined); assert.equal(next.PATH, 'x');
-    // plan chosen: the next start does not use the key
-    t.a.choosePlan(); t = mk({ PATH: 'x' }); assert.equal(t.a.applyAtStart(), null); assert.equal(t.env.ANTHROPIC_API_KEY, undefined);
+    // Claude Code reads it through apiKeyHelper: a quoted command with forward slashes, only while the saved key is in use
+    const cmd = t.a.helperCommand({ node: 'C:\\Program Files\\nodejs\\node.exe', hubDir: 'C:\\Crux Hub\\hub' });
+    assert.equal(cmd, `"C:/Program Files/nodejs/node.exe" "C:/Crux Hub/hub/lib/key-helper.mjs" "${t.secrets.file.replace(/\\/g, '/')}"`);
+    assert.ok(!cmd.includes('ffff'), 'the command carries no key');
+    // plan chosen: the next start does not use the key, and there is no helper
+    t.a.choosePlan(); t = mk({ PATH: 'x' }); assert.equal(t.a.applyAtStart(), null); assert.equal(t.a.currentKey(), ''); assert.equal(t.a.helperCommand({ hubDir: 'x' }), null);
     // an environment key wins, and the card cannot switch under it
     t = mk({ ANTHROPIC_API_KEY: 'sk-ant-env-' + 'e'.repeat(30) + 'ZZZZ', CRUX_HUB_USE_API_KEY: '1' });
     assert.equal(t.a.applyAtStart(), 'environment');
     assert.match(t.env.ANTHROPIC_API_KEY, /^sk-ant-env-/, 'the saved key did not replace it');
     assert.deepEqual([t.a.view().envLocked, t.a.view().keyEnd], [true, 'ZZZZ']);
+    assert.equal(t.a.useSaved(), 'environment', 'not even from the desktop setup path'); assert.equal(t.a.helperCommand({ hubDir: 'x' }), null);
     assert.throws(() => t.a.choosePlan(), e => e.message === ENV_WINS);
     assert.throws(() => t.a.chooseKey(KEY), e => e.message === ENV_WINS);
-    // a key set without the switch is not used, and is put back as it was after a restart
+    // a key set without the switch is not used for agents; the saved one is, from memory, and the environment is left alone
     t = mk({ ANTHROPIC_API_KEY: 'sk-ant-env-' + 'e'.repeat(30) + 'ZZZZ' }); t.a.setMode('key');
-    assert.equal(t.a.applyAtStart(), 'saved'); assert.equal(t.env.ANTHROPIC_API_KEY, KEY);
-    assert.match(t.a.restartEnv().ANTHROPIC_API_KEY, /^sk-ant-env-/); assert.equal(t.a.restartEnv().CRUX_HUB_USE_API_KEY, undefined);
+    assert.equal(t.a.applyAtStart(), 'saved'); assert.match(t.env.ANTHROPIC_API_KEY, /^sk-ant-env-/); assert.equal(t.env.CRUX_HUB_USE_API_KEY, undefined);
+    assert.equal(t.a.currentKey(), KEY);
+    // a saved key that cannot be opened: plain words on the card, one line logged, the plan sign-in carries on
+    const bad = new Secrets({ env: {}, file: join(dir, 'bad.json'), protector: { protect: s => 'sealed:' + s, unprotect: () => { throw new Error('PowerShell said something long'); } } });
+    bad.save(KEY);
+    const warns = []; const warn = console.warn; console.warn = m => warns.push(m);
+    const ab = new Account({ env: {}, secrets: bad, file: join(dir, 'bad-a.json') }); ab.setMode('key');
+    try { assert.equal(ab.applyAtStart(), null); } finally { console.warn = warn; }
+    assert.match(ab.view().problem, /could not be opened.*Paste it again/); assert.equal(ab.view().mode, 'plan'); assert.equal(warns.length, 1);
+    assert.ok(!JSON.stringify(ab.view()).includes('PowerShell said'));
+    // an old key in the clear is saved protected at start
+    const old = new Secrets({ env: {}, file: join(dir, 'old.json'), protector: fake }); writeFileSync(join(dir, 'old.json'), JSON.stringify({ anthropicApiKey: KEY }));
+    assert.equal(old.isClear, true);
+    const ao = new Account({ env: {}, secrets: old, file: join(dir, 'old-a.json') }); ao.setMode('key'); assert.equal(ao.applyAtStart(), 'saved');
+    assert.equal(old.isClear, false); assert.ok(!readFileSync(join(dir, 'old.json'), 'utf8').includes(KEY)); assert.equal(old.apiKey, KEY);
     // the desktop app: a key saved on its setup screen counts as chosen while nothing was chosen
     mkdirSync(join(dir, 'b')); const s2 = new Secrets({ env: {}, file: join(dir, 'b', 's.json'), protector: fake }); s2.save(KEY);
     const e2 = {}; assert.equal(new Account({ env: e2, secrets: s2, file: join(dir, 'b', 'a.json') }).applyAtStart({ bundled: true }), 'saved');
@@ -148,6 +167,22 @@ test('the card and the panel: the line that says what is in use, the buttons tha
   assert.match(kp, /How to switch outside the app/); assert.match(accountBlock(key), /data-up-account/);
 });
 
+test('a PowerShell failure is reported in plain words, not as PowerShell\'s own message', () => {
+  const p = defaultProtector({ platform: 'win32', run: () => { throw new Error('Cannot find type [Security.Cryptography.ProtectedData] ... at line 1 char 99'); } });
+  assert.throws(() => p.protect(KEY), e => /Windows could not protect the key/.test(e.message) && !/line 1/.test(e.message));
+  assert.throws(() => p.unprotect('AAAA'), e => /Windows could not open the saved key/.test(e.message) && !/line 1/.test(e.message));
+});
+
+test('from a phone, switching the account or pasting a key asks for the step-up; the PC does not', () => {
+  const need = body => stepUpNeed('POST /api/account', body, {});
+  assert.deepEqual([need({ mode: 'plan' }).purpose, need({ mode: 'plan' }).scope], ['account', 'account;plan']);
+  assert.equal(need({ mode: 'key', apiKey: KEY }).scope, 'account;key;new');
+  assert.equal(need({ mode: 'key' }).scope, 'account;key');
+  assert.ok(PURPOSES.has('account'));
+  assert.ok(!JSON.stringify(need({ mode: 'key', apiKey: KEY })).includes('ffff'), 'the key is not part of what the confirmation names');
+  assert.equal(stepUpNeed('POST /api/profile/create', {}, {}), null, 'unrelated routes are as before');
+});
+
 // ---------- the hub itself ----------
 async function startHub(port, dir, env = {}) {
   mkdirSync(join(dir, 'proj'), { recursive: true }); mkdirSync(join(dir, 'cfg'), { recursive: true });
@@ -188,6 +223,39 @@ test('a test hub on a plan sign-in: the page learns who, refuses bad keys, and o
     assert.deepEqual([si.status, si.json.opened, si.json.test], [200, false, true]);
     assert.ok(!(await call('GET', '/api/state')).text.includes('sk-ant'), 'no key anywhere in the state');
   } finally { await stop(); removeTmp(dir); }
+});
+
+// The reviewer's known-answer test (#140): a fake key saved on this Windows user's protection, a REAL restart through the
+// route, and then the hub reports it uses the saved key, is not locked, and the key's middle appears in no file of the hub.
+test('a saved fake key survives a real restart through POST /api/account and is written nowhere in the clear (Windows only)', { skip: !win && 'needs Windows' }, async () => {
+  const dir = makeTmp('crux-acct-known-'), port = 4793, data = join(dir, 'data');
+  mkdirSync(data, { recursive: true });
+  const MID = 'm1ddl3'.repeat(7);                       // the key's middle: 42 characters no file may hold
+  const FAKE = `sk-ant-api03-${MID}f4k3`;
+  new Secrets({ env: { CRUX_HUB_DATA: data } }).save(FAKE);   // real Windows protection, into the temp data folder
+  const { call, stop } = await startHub(port, dir);
+  try {
+    const before = (await call('GET', '/api/account')).json;
+    assert.deepEqual([before.mode, before.savedEnd], ['plan', 'f4k3']);
+    const bootOf = async () => (await call('GET', '/api/ping').catch(() => ({}))).json?.boot;
+    const old = await bootOf();
+    const r = await call('POST', '/api/account', { mode: 'key' });
+    assert.equal(r.status, 200, r.text); assert.equal(r.json.restarting, true);
+    let now = old; for (let i = 0; i < 80 && (!now || now === old); i++) { await new Promise(ok => setTimeout(ok, 250)); now = await bootOf(); }
+    assert.ok(now && now !== old, 'the hub came back');
+    const a = (await call('GET', '/api/account')).json;
+    assert.deepEqual([a.mode, a.source, a.envLocked, a.keyEnd, a.problem], ['key', 'saved', false, 'f4k3', '']);
+    assert.ok(!(await call('GET', '/api/state')).text.includes(MID), 'not on the page');
+    // nowhere in the data folder (settings, secrets, account, launch file, hub log) or in a project's event log
+    const files = d => readdirSync(d).flatMap(n => { const f = join(d, n); return statSync(f).isDirectory() ? files(f) : [f]; });
+    for (const f of [...files(data), ...files(join(dir, 'proj'))]) assert.ok(!readFileSync(f).toString('latin1').includes(MID), `the key is in ${f}`);
+    assert.ok(files(data).some(f => /hub-4793\.log$/.test(f)), 'the restarted hub\'s log was checked too');
+  } finally {
+    await Promise.race([stop().catch(() => { }), new Promise(ok => setTimeout(ok, 2000))]);   // the first hub already left by itself
+    for (const pid of await pidsOnPort(port)) await stopTree(pid);   // the restarted hub runs detached: stop it, the port is a test one
+    await new Promise(ok => setTimeout(ok, 500));
+    removeTmp(dir);
+  }
 });
 
 test('a test hub whose key is in the environment: the environment wins and the card cannot switch under it', async () => {

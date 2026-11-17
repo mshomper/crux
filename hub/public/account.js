@@ -30,8 +30,8 @@ function planPlate(v, d) {
     <div class="ps-lv-sub">Agents use the Claude plan this PC is signed in to, and draw on its limits.</div>
     ${on ? `<div class="ps-lv-body">
       <div class="ac-who">${ic('user')}<span>${who}</span></div>
-      <div class="ac-row"><button type="button" class="btn" data-ac-signin ${d.busy ? 'disabled' : ''}>${ic('external')}Sign in as someone else</button>
-        ${d.waiting ? `<span class="ps-dflt">Waiting for the sign-in window... <button type="button" class="ps-reset" data-ac-recheck>${ic('reset')}Check again</button></span>` : ''}</div>
+      <div class="ac-row"><button type="button" class="btn" data-ac-signin ${d.busy ? 'disabled' : ''}>${ic('external')}Sign in as someone else</button></div>
+      ${d.waiting ? `<p class="ps-dflt">Waiting for the sign-in window... <button type="button" class="ps-reset" data-ac-recheck>${ic('reset')}Check again</button></p>` : ''}
       <p class="ps-lv-warn">${ic('warn')}<span>This also switches your other Claude Code sessions on this PC.</span></p>
       ${d.signinNote ? `<p class="ps-dflt">${esc(d.signinNote)}</p>` : ''}
     </div>` : ''}
@@ -58,6 +58,7 @@ export function accountCard(v, d) {
     <section class="ps-sec"><div class="ps-sec-head">In use now</div>
       <div class="ac-now"><span class="ps-hex on">${ic(v.mode === 'key' ? 'key' : 'user')}</span>
         <div><b>${esc(accountLine(v))}</b><span class="ac-sub">${v.mode === 'key' ? 'Pay per use, billed to this key.' : 'Drawing on this plan\'s limits.'}</span></div></div>
+      ${v.problem ? `<p class="ps-lv-warn ac-env">${ic('warn')}<span>${esc(v.problem)}</span></p>` : ''}
       ${v.envLocked ? `<p class="ps-lv-warn ac-env">${ic('warn')}<span>This key comes from the environment variables ANTHROPIC_API_KEY and CRUX_HUB_USE_API_KEY. They win over this card: remove them and restart the hub to choose here.</span></p>` : ''}
     </section>
     <section class="ps-sec ps-last"><div class="ps-sec-head">Choose</div>
@@ -81,16 +82,16 @@ export class AccountCard {
     document.body.append(this.el);
     this.el.addEventListener('pointerdown', e => { this.downOutside = e.target === this.el; });
     this.el.addEventListener('click', e => this.click(e));
-    this.el.addEventListener('input', e => { if (e.target.matches?.('[data-ac-key]')) { this.d.key = e.target.value; this.d.error = ''; this.refreshSwitch(); } });
+    this.el.addEventListener('input', e => { if (e.target.matches?.('[data-ac-key]')) { this.typedKey = this.d.key = e.target.value; this.d.error = ''; this.refreshSwitch(); } });
     this.el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches?.('[data-ac-key]')) { e.preventDefault(); this.go(); } });
-    this.el.addEventListener('close', () => { this.stopWatching(); if (this.d) this.d.key = ''; this.d = null; this.opener?.focus?.({ preventScroll: true }); });
+    this.el.addEventListener('close', () => { this.stopWatching(); this.typedKey = ''; if (this.d) this.d.key = ''; this.d = null; this.opener?.focus?.({ preventScroll: true }); });
     addEventListener('resize', () => this.place());
   }
   get open() { return this.el.open; }
   get view() { return this.v || this.host.account() || { mode: 'plan', canProtect: false }; }
 
   show() {
-    this.v = null;
+    this.v = null; this.typedKey = '';
     const v = this.view;
     this.d = { pick: v.mode, key: '', error: '', busy: false, waiting: false, signinNote: '' };
     this.opener = document.activeElement;
@@ -102,7 +103,12 @@ export class AccountCard {
   render() {
     if (!this.d) return;
     const keep = this.el.querySelector('.ps-body')?.scrollTop || 0;
+    // A typed key is kept across a redraw, set on the field itself and never written into the markup. d.key always equals
+    // what the field holds (or will hold when it is shown again), so Switch never counts a key the field no longer has.
+    const live = this.el.querySelector('[data-ac-key]'); if (live) this.typedKey = live.value;
     this.el.innerHTML = accountCard(this.view, this.d);
+    const field = this.el.querySelector('[data-ac-key]'); if (field) field.value = this.typedKey || '';
+    this.d.key = this.typedKey || '';
     const body = this.el.querySelector('.ps-body'); if (body) body.scrollTop = keep;
   }
   refreshSwitch() {
@@ -166,8 +172,11 @@ export class AccountCard {
     try {
       const was = this.view.planName;
       this.v = await this.host.api('/api/account');
-      if (this.d?.waiting && this.v.planName && this.v.planName !== was) { this.d.waiting = false; this.stopWatching(); }
+      const changed = this.d?.waiting && this.v.planName && this.v.planName !== was;
+      if (changed) { this.d.waiting = false; this.stopWatching(); this.d.signinNote = `Signed in as ${this.v.planName}. Restarting the hub so its agents use it.`; }
       this.render();
+      if (changed) await this.host.restart?.();   // like Switch: running agents pick up the new sign-in after a restart
+      if (changed) this.close();
     } catch { /* the hub is busy: the next check tries again */ }
   }
   watch() {

@@ -574,7 +574,8 @@ const modeWord = p => (LEVEL_INFO[p.permissionMode] || LEVEL_INFO.standard).word
 // Decision 78 A: choose the account the agents run on. Switching restarts the hub, as the hub menu's Restart does.
 const accountCard = new AccountCard({
   api, account: () => S.account, sideRect: () => $('#side')?.getBoundingClientRect(),
-  switchTo: body => restartWith(() => api('/api/account', body))
+  switchTo: body => restartWith(() => api('/api/account', body)),
+  restart: () => restartWith(() => api('/api/restart', {}))
 });
 const listsCard = new ListsCard({ api, toast: (m, tone) => toast(m, tone) });
 const settingsCards = new SettingsCards({
