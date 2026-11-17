@@ -61,6 +61,7 @@ const S = {
   // thread that used to be "the" current one.
   seen: store.get('seen', {}),
   open: new Set(), // expanded messages, answered approvals and task lines
+  autoOlder: new Set(),   // threads whose first page of older conversation was loaded on opening (see the thread view)
   words: new Map(), wordsAsked: new Set(),   // board entries' words by "project:entry id", fetched when one is opened
   held: new Map(), // project -> (id -> conversation event the page has had; kept across fresh states, see keepHeld)
   seq: 0, seqSeen: 0, boot2: null,   // the live stream: the last message id applied, the highest seen, which boot of the hub
@@ -168,6 +169,25 @@ function applyPatch(name, patch) {
   S.hub = null;
   render();
   phone.clearSettled(cardWaiting);
+}
+
+// "Show older": the next page of a thread's conversation, from the hub (and, past its live log, from the archive).
+function showOlder(p, t, feed = null) {
+  // The page of older items ends at the oldest conversation event this page holds for the thread.
+  const oldest = threadEvents(p, t).find(x => DISPLAY.has(x.type)), before = oldest?.id || '';
+  const top = feed?.scrollTop || 0, height = feed?.scrollHeight || 0;
+  act(async () => {
+    const { events, left, stale } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}&ts=${encodeURIComponent(oldest?.ts || '')}`);
+    // Nothing came back: the page was out of step with the hub, so read the state again.
+    if (stale || !events.length) return load();
+    const have = new Set(p.events.map(x => x.id));
+    p.events = [...p.events, ...events.filter(x => !have.has(x.id))].sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));
+    (p.older ||= {})[t] = left;
+    render();
+    // What you were reading stays where it is: the older items come in above it.
+    const now = [...document.querySelectorAll('[data-older]')].find(x => x.dataset.older === t)?.closest('.feed') || feed;
+    if (now && top > 0) now.scrollTop = top + (now.scrollHeight - height);
+  });
 }
 
 // The Conductor's events change often; it is read alone, not with the whole state.
@@ -1074,6 +1094,9 @@ function feedFor(t) {
     const olderBtn = more ? `<div class="older-row"><button type="button" class="btn ghost" data-older="${esc(t)}">Show ${more > 150 ? '150 of ' : ''}${more} older ${more === 1 ? 'item' : 'items'}</button></div>` : '';
     // Lines of other kinds from before the oldest conversation event held here (a pick, a lesson) wait behind the button too.
     const first = more ? evs.findIndex(e => DISPLAY.has(e.type)) : -1;
+    // A thread whose newest conversation is older than the hub's live log (it has little or none of it here) loads its
+    // newest page from the archive when it is opened, once, so it does not open empty.
+    if (more && evs.filter(e => DISPLAY.has(e.type)).length < 6 && !S.autoOlder.has(key(p.name, t))) { S.autoOlder.add(key(p.name, t)); queueMicrotask(() => showOlder(p, t)); }
     const html = olderBtn + evs.map((ev, i) => {
       if (more && (first < 0 || i < first)) return '';
       switch (ev.type) {
@@ -1812,21 +1835,7 @@ document.addEventListener('click', e => {
   if ((b = q('[data-older]'))) {
     const t = b.dataset.older; if (!p || b.disabled) return;
     b.disabled = true;
-    // The page of older items ends at the oldest conversation event this page holds for the thread.
-    const oldest = threadEvents(p, t).find(x => DISPLAY.has(x.type)), before = oldest?.id || '';
-    const feed = b.closest('.feed'), top = feed?.scrollTop || 0, height = feed?.scrollHeight || 0;
-    act(async () => {
-      const { events, left, stale } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}&ts=${encodeURIComponent(oldest?.ts || '')}`);
-      // Nothing came back: the page was out of step with the hub, so read the state again.
-      if (stale || !events.length) return load();
-      const have = new Set(p.events.map(x => x.id));
-      p.events = [...p.events, ...events.filter(x => !have.has(x.id))].sort((x, y) => (x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0));
-      (p.older ||= {})[t] = left;
-      render();
-      // What you were reading stays where it is: the older items come in above it.
-      const now = [...document.querySelectorAll('[data-older]')].find(x => x.dataset.older === t)?.closest('.feed') || feed;
-      if (now && top > 0) now.scrollTop = top + (now.scrollHeight - height);
-    });
+    showOlder(p, t, b.closest('.feed'));
   } else if ((b = q('[data-xdraft-edit]'))) { const ev = p?.events.find(x => x.id === b.dataset.xdraftEdit); if (ev) expPanel.open(draftSeed(ev)); }
   else if ((b = q('[data-xdraft-launch]'))) {
     const ev = p?.events.find(x => x.id === b.dataset.xdraftLaunch);

@@ -335,7 +335,7 @@ export class Expedition {
   // sequence under way) or ended (the Lead's one summary sent).
   state() {
     const events = this.project.log.events;
-    if (this.cache?.n === events.length) return this.cache.s;
+    if (this.cache?.n === events.length && this.cache.loads === this.project.log.loads) return this.cache.s;
     const mine = events.filter(e => e.expedition === this.id);
     const of = type => mine.filter(e => e.type === type);
     const s = {
@@ -352,7 +352,7 @@ export class Expedition {
     s.summaryGoNote = s.notes.find(e => e.kind === 'summary-go') || null;
     s.finished = of('expedition_finished')[0] || null;
     s.phase = !s.started ? 'new' : s.steps.has('summary') ? 'ended' : s.stopped ? 'stopped' : s.gate ? 'running' : 'planning';
-    this.cache = { n: events.length, s };
+    this.cache = { n: events.length, loads: this.project.log.loads, s };
     return s;
   }
   hasStep(step) { return this.state().steps.has(step); }

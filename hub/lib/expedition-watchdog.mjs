@@ -177,8 +177,11 @@ class Track {
 
 // One project's log, read once and forward: every Track is built from it.
 class ProjectWatch {
-  constructor(p) { this.p = p; this.cursor = 0; this.paused = false; this.tracks = new Map(); }
+  constructor(p) { this.p = p; this.cursor = 0; this.paused = false; this.tracks = new Map(); this.loads = p.log.loads; }
   ingest() {
+    // The log was read again (an archive rotation swapped in a shorter list): start over from its first event, as at a
+    // restart, so a position in the old list does not hide everything that comes after it.
+    if (this.loads !== this.p.log.loads) { this.loads = this.p.log.loads; this.cursor = 0; this.paused = false; this.tracks = new Map(); }
     const evs = this.p.log.events;
     for (; this.cursor < evs.length; this.cursor++) this.apply(evs[this.cursor]);
   }

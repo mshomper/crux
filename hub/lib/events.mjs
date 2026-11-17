@@ -8,19 +8,24 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { loadEvents, rotate, isDue, readIndex, archivedPage, readSince } from './archive.mjs';
+import { loadEvents, rotate, isDue, readIndex, archivedPage, readSince, hasJournal } from './archive.mjs';
 
 export class EventLog {
-  constructor(projectDir) {
+  // repair: false reads only (a test hub on a real folder, or CRUX_HUB_NO_ROTATE=1): nothing is finished, rewritten or deleted.
+  constructor(projectDir, { repair = true } = {}) {
     this.dir = join(projectDir, '.crux');
     this.file = join(this.dir, 'events.jsonl');
     this.listeners = new Set();
+    this.repair = repair;
+    this.loads = 0;
     this.load();
   }
 
-  // Reads the log from disk: finishes a rotation a crash cut short first, then the snapshot and the live file.
+  // Reads the log from disk: finishes a rotation a crash cut short first, then the snapshot and the live file. `loads`
+  // counts the reads: whoever keeps a position in `events` (the expedition watchdog) starts over when it changes.
   load() {
-    const l = loadEvents(this.dir);
+    const l = loadEvents(this.dir, { repair: this.repair });
+    this.loads++;
     this.events = l.events;
     this.snapshotCount = l.snapshotCount;   // how many of `events` come from the snapshot (older than the live file)
     this.carried = l.carried;               // the unread and traffic counts of what the snapshot left out
@@ -42,7 +47,12 @@ export class EventLog {
   // Moves what is older than about two weeks into the archive, when the live file has grown past about four. Returns
   // what it did, or null. Synchronous: no event is written meanwhile.
   rotateIfDue(now = Date.now()) { return isDue(this.dir, now) ? this.rotateNow({ now }) : null; }
-  rotateNow(opts = {}) { const r = rotate(this.dir, opts); if (r) this.load(); return r; }
+  rotateNow(opts = {}) {
+    const unfinished = hasJournal(this.dir);   // an earlier rotation that failed part-way is finished first (rotate does), so read again either way
+    const r = rotate(this.dir, opts);
+    if (r || unfinished) this.load();
+    return r;
+  }
 
   // Conversation events per thread that are in the archive: what "Show older" brings after the live log's. (The snapshot's
   // own conversation events are copies of archived ones and are never shown from memory.)

@@ -47,12 +47,44 @@ export function readJsonl(file) {
 }
 const jsonl = list => list.map(e => JSON.stringify(e)).join('\n') + (list.length ? '\n' : '');
 
+// A rename that is tried again a few times when Windows says the file is busy (a virus scanner, an indexer, a reader).
+function renameRetry(from, to) {
+  for (let i = 0; ; i++) {
+    try { return renameSync(from, to); } catch (e) {
+      if (i >= 6 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 40 * (i + 1));
+    }
+  }
+}
+
 // Written whole, then renamed over the old file: a reader or a crash sees the old file or the new one, never half.
 function writeAtomic(file, data) {
   const tmp = `${file}.${process.pid}.tmp`;
   const fd = openSync(tmp, 'w');
   try { writeSync(fd, data); fsyncSync(fd); } finally { closeSync(fd); }
-  renameSync(tmp, file);
+  renameRetry(tmp, file);
+}
+
+// The live file as bytes, with each line's events and where its line ends, so a rotation can cut the old lines off the
+// front and keep every byte after them exactly as it is (nothing is re-written that could have been appended meanwhile).
+function scanLive(file) {
+  const raw = existsSync(file) ? readFileSync(file) : Buffer.alloc(0);
+  const events = [], ends = [];
+  let start = 0;
+  while (start < raw.length) {
+    let nl = raw.indexOf(10, start);
+    const end = nl < 0 ? raw.length : nl + 1;
+    const line = raw.toString('utf8', start, nl < 0 ? raw.length : nl);
+    if (line.trim()) { try { events.push(JSON.parse(line)); ends.push(end); } catch { /* a torn line */ } }
+    start = end;
+  }
+  return { raw, events, ends };
+}
+// The live file without its first `n` events: bytes from just after the nth line, read again now so anything appended
+// since is carried over.
+function trimLive(file, ends, n) {
+  const now = readFileSync(file);
+  writeAtomic(file, now.subarray(n ? ends[n - 1] : 0));
 }
 
 const monthFile = (dir, ym) => join(pathsOf(dir).arch, `${ym}.jsonl.gz`);
@@ -100,12 +132,14 @@ const slimOf = e => { const s = {}; for (const k of SLIM[e.type]) if (e[k] !== u
 const hasNotes = n => !!n && JSON.stringify(n).length > 4;
 const asks = e => !!(e.questions?.length || e.decisions_needed?.length);
 
+// The strings in an event that could be another event's id (its own id is not a reference).
 function refsOf(e) {
   const out = [];
+  const add = s => { if (typeof s === 'string' && s.length >= 8 && s !== e.id) out.push(s); };
   for (const v of Object.values(e)) {
-    if (typeof v === 'string') { if (v.length >= 8) out.push(v); }
-    else if (Array.isArray(v)) { for (const x of v) { if (typeof x === 'string') { if (x.length >= 8) out.push(x); } else if (x && typeof x === 'object') for (const y of Object.values(x)) if (typeof y === 'string' && y.length >= 8) out.push(y); } }
-    else if (v && typeof v === 'object') for (const y of Object.values(v)) if (typeof y === 'string' && y.length >= 8) out.push(y);
+    if (typeof v === 'string') add(v);
+    else if (Array.isArray(v)) { for (const x of v) { if (typeof x === 'string') add(x); else if (x && typeof x === 'object') for (const y of Object.values(x)) add(y); } }
+    else if (v && typeof v === 'object') for (const y of Object.values(v)) add(y);
   }
   return out;
 }
@@ -146,14 +180,15 @@ export function buildSnapshot(all, prevCarried = {}) {
   for (const e of all) if (e.type === 'approval' && !answered.has(e.approval)) full.add(e);
 
   // telemetry the hub reads the latest of
-  const lastBusy = new Map(), lastUsage = new Map();
+  const lastBusy = new Map(), lastBusyCtx = new Map(), lastUsage = new Map();   // lastBusyCtx: the last busy mark that has a context number (the idle handoff reads it after a restart)
   let lastPlan = null;
   for (const e of all) {
-    if (e.type === 'agent_busy') lastBusy.set(e.agent, e);
+    if (e.type === 'agent_busy') { lastBusy.set(e.agent, e); if (e.contextPct != null) lastBusyCtx.set(e.agent, e); }
     else if (e.type === 'usage' && agentAlive(e.agent)) lastUsage.set(`${e.agent}\u0000${e.sessionId}`, e);
     else if (e.type === 'plan_usage' && e.plan) lastPlan = e;
   }
   for (const e of lastBusy.values()) full.add(e);
+  for (const e of lastBusyCtx.values()) full.add(e);
   for (const e of lastUsage.values()) full.add(e);
   if (lastPlan) full.add(lastPlan);
 
@@ -167,7 +202,9 @@ export function buildSnapshot(all, prevCarried = {}) {
   // whatever a kept event names: an approval a notice points to, a picture a summary lists
   const byKey = new Map();
   for (const e of all) if (PRUNABLE.has(e.type)) for (const k of [e.id, e.approval, e.visual]) if (typeof k === 'string') { if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push(e); }
-  for (const e of [...full, ...slim]) for (const r of refsOf(e)) for (const t of byKey.get(r) || []) if (!full.has(t)) { full.add(t); slim.delete(t); }
+  // (named by a full event only; one already cut down stays cut down: a dismissal names the summary it dismissed, and the
+  // cut-down copy is all the question logic needs of it)
+  for (const e of [...full]) for (const r of refsOf(e)) for (const t of byKey.get(r) || []) if (!full.has(t) && !slim.has(t)) full.add(t);
 
   const out = [], dropped = { counts: {}, traffic: {} };
   for (const e of all) {
@@ -197,16 +234,18 @@ function monthStats(events) {
 //   6. rotation.json is removed.
 // Nothing leaves the live log until the archive and the snapshot are on disk. recover() finishes or redoes a rotation
 // that a crash cut short; the hub calls it before it reads a log. Returns null when nothing is old, else a summary.
-export function rotate(dir, { now = Date.now(), cutoff = now - CUTOFF_MS, crashAfter = null } = {}) {
+// (crashAfter and onStep are for tests: stop after a step, or do something between steps.)
+export function rotate(dir, { now = Date.now(), cutoff = now - CUTOFF_MS, crashAfter = null, onStep = null } = {}) {
   const P = pathsOf(dir);
-  const live = readJsonl(P.live);
+  if (existsSync(P.journal)) recover(dir);   // an earlier rotation that stopped part-way is finished first, never done twice
+  const { events: live, ends } = scanLive(P.live);
   let n = 0;
   while (n < live.length && ts(live[n]) < cutoff) n++;
   if (!n) return null;
   const old = live.slice(0, n);
   mkdirSync(P.arch, { recursive: true });
   const id = randomUUID();
-  const stop = step => { if (crashAfter === step) throw new Error(`crash after step ${step} (test)`); };
+  const stop = step => { onStep?.(step); if (crashAfter === step) throw new Error(`crash after step ${step} (test)`); };
   writeAtomic(P.journal, JSON.stringify({ id, cutoff, count: n, at: new Date(now).toISOString() }));
   stop(1);
   // 2: the archive
@@ -222,20 +261,23 @@ export function rotate(dir, { now = Date.now(), cutoff = now - CUTOFF_MS, crashA
   writeAtomic(P.index, JSON.stringify(index));
   stop(2);
   // 3: the snapshot
-  const prev = readSnapshot(dir), seen = new Set();
-  const all = [];
-  for (const e of [...prev.events, ...old]) { if (seen.has(e.id)) continue; seen.add(e.id); all.push(e); }
+  // the old snapshot's events first, then the old live ones; an event in both is the original (the snapshot's copy may be slim)
+  const prev = readSnapshot(dir), byId = new Map();
+  for (const e of prev.events) byId.set(e.id, e);
+  for (const e of old) byId.set(e.id, e);
+  const all = [...byId.values()];
   const built = buildSnapshot(all, prev.header.carried);
   const header = { type: 'snapshot_header', version: 1, rotationId: id, upTo: new Date(cutoff).toISOString(), carried: built.carried, rotatedAt: new Date(now).toISOString() };
   writeAtomic(P.snapNext, jsonl([header, ...built.events]));
   stop(3);
-  renameSync(P.snapNext, P.snap);
+  renameRetry(P.snapNext, P.snap);
   stop(4);
-  // 5: the live log without the old events
-  writeAtomic(P.live, jsonl(live.slice(n)));
+  // 5: the live log without the old events: its bytes after them, read again now, so anything another process appended
+  // since this rotation read the file (an old hub still shutting down) comes along
+  trimLive(P.live, ends, n);
   stop(5);
   unlinkSync(P.journal);
-  return { archived: n, months: [...byMonth.keys()], snapshotEvents: built.events.length, liveEvents: live.length - n };
+  return { archived: n, months: [...byMonth.keys()], snapshotEvents: built.events.length, slim: built.events.filter(e => e.slim).length, liveEvents: live.length - n };
 }
 
 // Finishes or redoes a rotation a crash cut short. Called before a log is read. Returns what it did, or null.
@@ -249,15 +291,15 @@ export function recover(dir) {
   if (existsSync(P.snapNext)) {
     // the snapshot was complete (the archive was written before it): take it, and cut the live log
     const head = readJsonl(P.snapNext)[0];
-    if (head?.rotationId === j.id) renameSync(P.snapNext, P.snap);
+    if (head?.rotationId === j.id) renameRetry(P.snapNext, P.snap);
     else try { unlinkSync(P.snapNext); } catch { }
   }
   const done = readSnapshot(dir).header.rotationId === j.id;
   if (done) {
-    const live = readJsonl(P.live);
+    const { events: live, ends } = scanLive(P.live);
     let n = 0;
     while (n < live.length && ts(live[n]) < j.cutoff) n++;
-    if (n) writeAtomic(P.live, jsonl(live.slice(n)));
+    if (n) trimLive(P.live, ends, n);
     unlinkSync(P.journal);
     return { finished: true };
   }
@@ -269,8 +311,10 @@ export function recover(dir) {
 // ---------- reading ----------
 // The events the hub starts from: the snapshot's, then the live log's (an event in both, from a rotation caught in the
 // middle, is the live one). Also what was left out of the snapshot, as counts.
-export function loadEvents(dir) {
-  recover(dir);
+// repair: false reads what is there and changes nothing (a test hub on a real folder, or the off switch). A recovery that
+// fails does not stop the hub: it starts from the snapshot and the live file as they are, and says so.
+export function loadEvents(dir, { repair = true } = {}) {
+  if (repair) { try { recover(dir); } catch (e) { console.error(`Log archive: could not finish an unfinished rotation in ${dir}: ${e.message}. Starting from the snapshot and the live log as they are.`); } }
   const P = pathsOf(dir);
   const snap = readSnapshot(dir), live = readJsonl(P.live), liveIds = new Set(live.map(e => e.id));
   const before = snap.events.filter(e => !liveIds.has(e.id));
@@ -281,14 +325,21 @@ export function loadEvents(dir) {
 export function isDue(dir, now = Date.now()) {
   const f = pathsOf(dir).live;
   if (!existsSync(f)) return false;
-  const fd = openSync(f, 'r');   // the first line only: this runs at every start and every few hours
+  const fd = openSync(f, 'r');   // the first line only (however long it is): this runs at every start and every few hours
   try {
-    const buf = Buffer.alloc(16384), n = readSync(fd, buf, 0, buf.length, 0);
-    const line = buf.toString('utf8', 0, n).split('\n')[0];
-    const first = JSON.parse(line);
+    const parts = [], buf = Buffer.alloc(65536);
+    for (let pos = 0, total = 0; total < 64 * 1048576;) {
+      const n = readSync(fd, buf, 0, buf.length, pos);
+      if (!n) break;
+      const nl = buf.subarray(0, n).indexOf(10);
+      if (nl >= 0) { parts.push(Buffer.from(buf.subarray(0, nl))); break; }
+      parts.push(Buffer.from(buf.subarray(0, n))); pos += n; total += n;
+    }
+    const first = JSON.parse(Buffer.concat(parts).toString('utf8'));
     return now - ts(first) > DUE_MS;
   } catch { return false; } finally { closeSync(fd); }
 }
+export const hasJournal = dir => existsSync(pathsOf(dir).journal);
 
 // Archived conversation events of a thread, `n` of them just before an event (ts, id), oldest first, skipping ids the
 // page already has (`exclude`). left: how many more of the thread are further back (from the index, exact inside the

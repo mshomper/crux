@@ -12,7 +12,8 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, copyFi
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { makeTmp } from './helpers/tmp.mjs';
-import { Hub } from '../lib/hub.mjs';
+import { Hub, ROTATE_FIRST_MS } from '../lib/hub.mjs';
+import { stubHub, StubExpedition } from './helpers/expedition-stub.mjs';
 import { Memory } from '../lib/memory.mjs';
 import { HubSettings } from '../lib/settings.mjs';
 import { EventLog } from '../lib/events.mjs';
@@ -164,6 +165,7 @@ test('rotate, then resolve: the board, agents, waiting cards, counts, requests, 
   const A = resolved(before, pb, now);
   const r = rotate(join(split, '.crux'), { now });
   assert.ok(r && r.archived > 1000, JSON.stringify(r));
+  assert.ok(r.slim > 0, `some events are cut down (${r.slim} of ${r.snapshotEvents})`);
   const after = hubOf(root, split), pa = after.project('split');
   const B = resolved(after, pa, now);
   assert.deepEqual(B, A);
@@ -209,7 +211,7 @@ for (const step of [1, 2, 3, 4, 5]) {
     const dir = join(split, '.crux');
     assert.throws(() => rotate(dir, { now, crashAfter: step }), /crash after step/);
     // whatever state it stopped in, the hub starts, finishes or redoes it, and every event is still somewhere
-    const h = hubOf(root, split);
+    const h = hubOf(root, split, { rotate: true });   // a real hub repairs at start (a test hub does not)
     assert.ok(!existsSync(pathsOf(dir).journal), 'the journal is gone');
     assert.deepEqual(resolved(h, h.project('split'), now), A);
     assert.deepEqual(readAllEvents(dir).map(e => e.id), events.map(e => e.id));
@@ -281,7 +283,12 @@ test('a log younger than the due age is left alone; the hub rotates at start whe
   assert.deepEqual(h.rotateLogs(), []);
   assert.ok(!existsSync(join(dir, '.crux', 'archive')));
   const old = makeProject(root, 'old', buildLog(now, 120).events);
-  const h2 = hubOf(root, old, { rotate: true });   // rotates while it adds the project
+  const h2 = hubOf(root, old, { rotate: true });
+  // not in the constructor (an old hub may still be shutting down and appending): at the first timer tick, a minute on
+  assert.ok(!existsSync(join(old, '.crux', 'archive')), 'nothing at start');
+  assert.equal(ROTATE_FIRST_MS, 60000);
+  const did = h2.rotateLogs();
+  assert.equal(did.length, 1);
   assert.ok(existsSync(join(old, '.crux', 'archive', 'index.json')));
   assert.ok(h2.project('old').log.events.length < buildLog(now, 120).events.length / 2);
   assert.ok(DUE_MS > CUTOFF_MS);
@@ -303,6 +310,125 @@ test('rotation can be switched off from the environment, and a failed rotation l
   try { hubOf(root, dir, { rotate: true }); } finally { delete process.env.CRUX_HUB_NO_ROTATE; }
   assert.ok(!existsSync(join(dir, '.crux', 'archive')), 'off means off');
   assert.equal(live(dir).length, buildLog(Date.now(), 120).events.length);
+});
+
+// ---------- the review's cases ----------
+const quietTimers = { setTimeout() { return { unref() { } }; }, clearTimeout() { }, setInterval() { return { unref() { } }; }, clearInterval() { } };
+
+test('an in-process rotation does not blind the expedition watchdog: a new expedition is tracked and its spend counts', async t => {
+  const env = stubHub({ watch: { now: () => Date.now(), timers: quietTimers } });
+  const { hub, p } = env, wd = hub.expeditionWatch;
+  // two months of old chat in the live file, read by the watchdog (its position is now past all of it)
+  const old = Array.from({ length: 60 }, (_, i) => JSON.stringify({ id: `old${i}`, ts: new Date(Date.now() - 60 * DAY + i * 1000).toISOString(), type: 'message', thread: 'orchestrator', from: 'you', text: `old ${i}` }));
+  const file = join(p.dir, '.crux', 'events.jsonl');
+  writeFileSync(file, old.join('\n') + '\n' + readFileSync(file, 'utf8'));
+  p.log.load();
+  assert.equal(wd.trackOf(p, 'none'), null);
+  const was = p.log.events.length;
+  const r = p.log.rotateNow();
+  assert.ok(r && r.archived === 60 && p.log.events.length < was, 'the old events left memory');
+  // a new expedition: it has a time limit and budget only if the watchdog can see it
+  const se = new StubExpedition(env);
+  se.ex.write('BRIEF.md', '# Which is faster?\n');
+  se.ex.write('test/CHECKLIST.md', '1. A table exists.\n');
+  se.ex.start({ envelope: { hours: 6, dollars: 10, percent: 7 }, planStart: null });
+  const lead = se.startRole('lead', env.orch.name);
+  se.ex.gate({ verdict: 'approve' });
+  const track = wd.trackOf(p, se.id);
+  assert.ok(track, 'the watchdog sees the expedition started after a rotation');
+  assert.equal(track.dollars, 10);
+  assert.equal(wd.spendOf(p, se.id).spendUSD, 0);
+  p.log.append('usage', { agent: lead.name, expedition: se.id, costUSD: 0.5, models: {} });
+  assert.equal(wd.spendOf(p, se.id).settledUSD, 0.5, 'a usage event raises its spend');
+  // and the expedition's own state cache follows the log: a rotation that leaves the count the same does not serve a stale one
+  const before = se.ex.state();
+  p.log.load();
+  assert.notEqual(se.ex.state(), before, 'a reload clears the cached state');
+});
+
+test('a rotation does not lose what another process appended to the live log while it ran', async t => {
+  const { now, events, split } = await fixture(t);
+  const dir = join(split, '.crux');
+  const late = { id: 'late-append', ts: new Date(now).toISOString(), type: 'message', thread: 'orchestrator', from: 'you', text: 'written by the old hub as it shut down' };
+  rotate(dir, { now, onStep: step => { if (step === 4) writeFileSync(join(dir, 'events.jsonl'), readFileSync(join(dir, 'events.jsonl'), 'utf8') + JSON.stringify(late) + '\n'); } });
+  assert.ok(live(split).some(e => e.id === 'late-append'), 'carried over to the new live file');
+  assert.equal(readAllEvents(dir).length, events.length + 1);
+});
+
+test('a test hub (no agents) neither rotates nor repairs: a real folder is left exactly as it is', async t => {
+  const { root, now, split } = await fixture(t);
+  const dir = join(split, '.crux');
+  writeFileSync(join(dir, 'stray.tmp'), 'another hub is writing this');
+  writeFileSync(join(dir, 'rotation.json'), JSON.stringify({ id: 'x', cutoff: 0 }));
+  const h = new Hub({ projects: [split], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }), noAgents: true });
+  assert.deepEqual(h.rotateLogs(), []);
+  assert.ok(existsSync(join(dir, 'stray.tmp')) && existsSync(join(dir, 'rotation.json')) && !existsSync(join(dir, 'archive')));
+  assert.equal(live(split).length, buildLog(now, 120).events.length, 'the live log is untouched');
+});
+
+test('a recovery that fails does not stop the hub from starting; the off switch skips recovery too', async t => {
+  const { root, split } = await fixture(t);
+  const dir = join(split, '.crux');
+  writeFileSync(join(dir, 'rotation.json'), JSON.stringify({ id: 'stuck', cutoff: Date.now() }));
+  writeFileSync(join(dir, 'archive'), 'a file where the archive folder should be');   // makes the rotation fail whatever it tries
+  const log = new EventLog(split);
+  assert.equal(log.events.length, live(split).length, 'starts from the live log as it is');
+  assert.ok(existsSync(join(dir, 'rotation.json')), 'and leaves the unfinished rotation for another try');
+  writeFileSync(join(dir, 'x.tmp'), 'kept');
+  const off = new EventLog(split, { repair: false });
+  assert.ok(off.events.length > 0 && existsSync(join(dir, 'x.tmp')), 'read only: nothing removed');
+  void root;
+});
+
+test('a first line of any length does not stop a log from ever being due', async t => {
+  const root = makeTmp('crux-archive-long-', t);
+  const now = Date.now(), events = buildLog(now, 120).events;
+  events[0] = { ...events[0], blob: 'x'.repeat(300000) };
+  const dir = makeProject(root, 'long', events);
+  const log = new EventLog(dir);
+  assert.ok(log.rotateIfDue(now), 'due and rotated');
+});
+
+test('a rotation that failed at the last step is finished by the next one, not done twice: the counts do not double', async t => {
+  const { root, now, full, split } = await fixture(t);
+  const A = resolved(hubOf(root, full), hubOf(root, full).project('full'), now);
+  const h = hubOf(root, split), p = h.project('split');
+  assert.throws(() => p.log.rotateNow({ now, crashAfter: 5 }), /crash after step 5/);
+  p.log.rotateNow({ now });   // finishes the first (reads the log again), finds nothing more to move
+  assert.deepEqual(resolved(h, p, now), A);
+  assert.deepEqual(p.log.carried.counts, readSnapshot(join(split, '.crux')).header.carried.counts);
+});
+
+test('an event in both the old snapshot (cut down) and the live log is taken from the live one', async t => {
+  const root = makeTmp('crux-archive-orig-', t);
+  const now = Date.now(), t0 = now - 100 * DAY;
+  const q = { id: 'sum1', ts: new Date(t0).toISOString(), type: 'summary', thread: 'w', from: 'w', done: ['the whole round'], questions: ['Which colour, red or blue, for the header?'] };
+  const dir = makeProject(root, 'p', [q, { id: 'm1', ts: new Date(t0 + 1000).toISOString(), type: 'message', thread: 'w', from: 'w', text: 'x' }]);
+  // a snapshot that holds a cut-down copy of the summary, and the live log that still holds the original
+  const slim = { id: 'sum1', ts: q.ts, type: 'summary', thread: 'w', from: 'w', questions: q.questions, slim: true };
+  writeFileSync(join(dir, '.crux', 'snapshot.jsonl'), JSON.stringify({ type: 'snapshot_header', version: 1, carried: { counts: {}, traffic: {} } }) + '\n' + JSON.stringify(slim) + '\n');
+  rotate(join(dir, '.crux'), { now });
+  const kept = readSnapshot(join(dir, '.crux')).events.find(e => e.id === 'sum1');
+  assert.ok(kept && !kept.slim && kept.done, 'the original, not the cut-down copy');
+});
+
+test('the snapshot keeps each agent\'s last busy mark that has a context number', () => {
+  const ev = (type, data, i) => ({ id: `b${i}`, ts: new Date(1e12 + i * 1000).toISOString(), type, ...data });
+  const all = [ev('agent_created', { agent: 'a', thread: 'a' }, 0), ev('agent_busy', { agent: 'a', busy: false, contextPct: 41 }, 1), ev('agent_busy', { agent: 'a', busy: true }, 2), ev('agent_busy', { agent: 'a', busy: false }, 3)];
+  const ids = buildSnapshot(all, {}).events.map(e => e.id);
+  assert.ok(ids.includes('b1') && ids.includes('b3'), ids.join());
+  assert.ok(!ids.includes('b2'));
+});
+
+test('handoff facts read the archive back to the last handoff: the same facts after a rotation', async t => {
+  const { root, now, full, split } = await fixture(t);
+  const a = hubOf(root, full), b = hubOf(root, split);
+  rotate(join(split, '.crux'), { now });
+  const b2 = hubOf(root, split);
+  const fa = a.handoffFacts(a.project('full'), a.project('full').agents.get('orchestrator-1'));
+  const fb = b2.handoffFacts(b2.project('split'), b2.project('split').agents.get('orchestrator-1'));
+  assert.equal(fb, fa);
+  void b;
 });
 
 // The same on a real log, when a copy is named (never the live one): CRUX_REAL_LOG=<path to a copy of events.jsonl>.
