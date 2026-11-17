@@ -25,6 +25,7 @@ import { Usage, FABLE_NOTE } from './usage.mjs';
 import { PermissionCheck, CHECK_NAME, CHECK_MODEL, sdkCall, apiCall } from './permission-check.mjs';
 import { scriptsFor, parseCommand } from './permission-scripts.mjs';
 import { totalsOf, sumCost } from '../public/usage.js';
+import { summariseDue, SUMMARY_MODEL } from './month-summaries.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
 import { ExpeditionWatchdog, HUB_STOPS as EXPEDITION_HUB_STOPS } from './expedition-watchdog.mjs';
@@ -114,11 +115,17 @@ export class Hub {
   // (server.mjs: <data>/conductor). Null: no Conductor (tests that do not ask for one).
   // checker: the one-shot permission check (decision 66, lib/permission-check.mjs); tests pass one with a stubbed model.
   // Left out, it is made on first use: the Agent SDK on this machine's sign-in, or the API when a key is set up.
-  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {}, rotateLogs = !noAgents }) {
+  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {}, rotateLogs = !noAgents, summariser = null }) {
     this.noAgents = !!noAgents;
     // Decision 74 B: old events move to the archive when a log is due. Never on a test hub (it may be looking at a real
     // folder another hub is writing), unless a test asks; CRUX_HUB_NO_ROTATE=1 turns it off, recovery included.
     this.rotatesLogs = rotateLogs !== false && process.env.CRUX_HUB_NO_ROTATE !== '1';
+    // Months older than six months get a short summary per thread from a small model, on the rotation timer. Off with the
+    // rotation, or on its own with CRUX_HUB_NO_SUMMARIES=1. A test hub makes no model call unless a test passes a summariser.
+    this.summariserMade = summariser;
+    this.summarisesMonths = this.rotatesLogs && process.env.CRUX_HUB_NO_SUMMARIES !== '1' && (!!summariser || !noAgents);
+    this.summarising = null;
+    this.summaryFailures = new Map();   // month -> failures this run; after two it is left alone until a restart
     this.checkerMade = checker;
     this.checkGit = null;   // how the Auto script gate asks git whether a script is committed (lib/permission-scripts.mjs); tests swap in a fake
     this.memory = memory;
@@ -2209,7 +2216,38 @@ export class Hub {
         if (r) { done.push({ project: p.name, ...r }); console.log(`Log archive: ${p.name}: ${r.archived} events moved to ${r.months.join(', ')}; ${r.liveEvents} left in the live log.`); }
       } catch (e) { console.error(`Log archive: ${p.name}: rotation failed, the live log is untouched: ${e.message}`); }
     }
+    if (this.summarisesMonths) this.summariseSoon();
     return done;
+  }
+
+  // The month summariser: Haiku through the Agent SDK on this machine's sign-in (or the API when a key is set up, like the
+  // permission check), one call per thread-month, no tools. Made on first use; tests pass their own.
+  get summariser() {
+    if (this.summariserMade) return this.summariserMade;
+    const key = process.env.CRUX_HUB_USE_API_KEY === '1' ? process.env.ANTHROPIC_API_KEY : '';
+    return (this.summariserMade = key ? apiCall({ apiKey: key, model: SUMMARY_MODEL }) : async arg => {
+      const { query } = await import('@anthropic-ai/claude-agent-sdk');
+      return sdkCall({ query, model: SUMMARY_MODEL, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir() })(arg);
+    });
+  }
+
+  // Summarises the due months of every project, in the background and one run at a time. Never throws, never blocks the
+  // rotation or start-up; a failure leaves no file and is tried again on the next tick. Returns the run (tests wait on it).
+  summariseSoon() {
+    if (this.summarising) return this.summarising;
+    const run = (async () => {
+      for (const p of this.projects.values()) {
+        const onUsage = res => {
+          if (!res?.modelUsage || !Object.keys(res.modelUsage).length) return;
+          const models = totalsOf(res.modelUsage);
+          p.log.append('usage', { agent: 'month summaries', project: p.name, agentType: 'summary', role: 'summary', model: SUMMARY_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null });
+        };
+        const r = await summariseDue(p.log.dir, { summarise: arg => this.summariser(arg), onUsage, label: `: ${p.name}`, failures: this.summaryFailures });
+        const ok = r.filter(x => !x.error);
+        if (ok.length) console.log(`Month summaries: ${p.name}: ${ok.map(x => `${x.ym} (${x.threads} threads, ${x.calls} model calls)`).join(', ')}.`);
+      }
+    })().catch(e => console.error(`Month summaries: ${e.message}`)).finally(() => { this.summarising = null; });
+    return (this.summarising = run);
   }
 
   // The words of one board entry. The page gets entries without them and asks when you open one.

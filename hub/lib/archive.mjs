@@ -9,8 +9,9 @@
 // The hub starts from snapshot plus live log. The snapshot holds ORIGINAL events (some with the bulky fields cut, marked
 // `slim`), so everything that reads the in-memory log keeps working as it did; a rotation changes what is in memory only
 // by what the archive holds. The archive is the full record: "Show older", search, the permission study and an
-// expedition's report read it. A summary file per month and thread can sit beside each archive month later
-// (archive/YYYY-MM.summaries.json is reserved for that; nothing writes it yet).
+// expedition's report read it. Beside a month older than six months sits archive/YYYY-MM.summaries.json: one short
+// summary per thread (lib/month-summaries.mjs writes it; "Show older" shows it as a card where the month begins, and
+// search matches its text). The raw month is never touched.
 
 import { readFileSync, existsSync, mkdirSync, renameSync, readdirSync, unlinkSync, openSync, fsyncSync, closeSync, writeSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -58,7 +59,7 @@ function renameRetry(from, to) {
 }
 
 // Written whole, then renamed over the old file: a reader or a crash sees the old file or the new one, never half.
-function writeAtomic(file, data) {
+export function writeAtomic(file, data) {
   const tmp = `${file}.${process.pid}.tmp`;
   const fd = openSync(tmp, 'w');
   try { writeSync(fd, data); fsyncSync(fd); } finally { closeSync(fd); }
@@ -103,6 +104,14 @@ export function readIndex(dir) {
   return { version: 1, months: {} };
 }
 export const archiveMonths = dir => Object.keys(readIndex(dir).months).sort();
+
+// A month's summaries: { version, month, events, at, model, threads: { thread: { text, events, plain? } } } or null.
+// `events` is the month's event count in index.json when it was written: a month a later rotation rewrote differs.
+export const summariesFile = (dir, ym) => join(pathsOf(dir).arch, `${ym}.summaries.json`);
+export function readMonthSummary(dir, ym) {
+  try { const j = JSON.parse(readFileSync(summariesFile(dir, ym), 'utf8')); if (j && j.threads && typeof j.threads === 'object') return j; } catch { /* none, or torn */ }
+  return null;
+}
 
 export function readSnapshot(dir) {
   const f = pathsOf(dir).snap;
@@ -363,14 +372,23 @@ export function archivedPage(dir, { thread, before, exclude = new Set(), n = 150
   let k = months.length - 1;
   while (k >= 0 && months[k] > beforeMonth) k--;
   let left = 0;
+  const cards = [];
   for (; k >= 0 && take.length < n; k--) {
-    const list = monthCached(dir, months[k]).filter(e => DISPLAY.has(e.type) && e.type !== 'entry' && threadOf(e) === thread && !exclude.has(e.id) && (!before || ts(e) < ts(before) || (ts(e) === ts(before) && e.id !== before.id)));
+    const month = monthCached(dir, months[k]);
+    const mine = month.filter(e => DISPLAY.has(e.type) && e.type !== 'entry' && threadOf(e) === thread);
+    const list = mine.filter(e => !exclude.has(e.id) && (!before || ts(e) < ts(before) || (ts(e) === ts(before) && e.id !== before.id)));
     const room = n - take.length;
     take.unshift(...list.slice(-room));
     if (list.length > room) left += list.length - room;
+    // The month's summary of this thread: one folded card where the month begins (just before its first item), once that
+    // item is on the page.
+    else if (list.length && list[0] === mine[0]) {
+      const s = readMonthSummary(dir, months[k])?.threads?.[thread];
+      if (s?.text) cards.push({ id: `month-summary:${months[k]}:${thread}`, ts: new Date(ts(mine[0]) - 1).toISOString(), type: 'month_summary', thread, month: months[k], text: s.text, items: s.events ?? mine.length });
+    }
   }
   for (; k >= 0; k--) left += index.months[months[k]].display[thread] || 0;
-  return { events: take, left };
+  return { events: cards.length ? [...cards, ...take].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0)) : take, left };
 }
 
 // Every event of the log, archive and live (the snapshot's are copies of archived ones): for the permission study.
@@ -403,6 +421,10 @@ export function searchLog(dir, query, { limit = 50, thread = null } = {}) {
   const live = readJsonl(pathsOf(dir).live);
   for (let i = live.length - 1; i >= 0 && hits.length < limit; i--) test(live[i]);
   const months = archiveMonths(dir);
-  for (let k = months.length - 1; k >= 0 && hits.length < limit; k--) { const evs = readMonth(dir, months[k]); for (let i = evs.length - 1; i >= 0 && hits.length < limit; i--) test(evs[i]); }
+  for (let k = months.length - 1; k >= 0 && hits.length < limit; k--) {
+    // a month's summaries match too (one hit per thread, listed before that month's own lines)
+    const sums = readMonthSummary(dir, months[k]);
+    for (const [t, s] of Object.entries(sums?.threads || {})) if (hits.length < limit && s?.text && (!thread || t === thread) && words.every(w => s.text.toLowerCase().includes(w))) { const low = s.text.toLowerCase(); hits.push({ id: `month-summary:${months[k]}:${t}`, ts: sums.at || `${months[k]}-01T00:00:00.000Z`, type: 'month_summary', month: months[k], thread: t, from: null, snippet: s.text.slice(Math.max(0, low.indexOf(words[0]) - 60), low.indexOf(words[0]) + 140) }); }
+    const evs = readMonth(dir, months[k]); for (let i = evs.length - 1; i >= 0 && hits.length < limit; i--) test(evs[i]); }
   return hits.slice(0, limit);
 }
