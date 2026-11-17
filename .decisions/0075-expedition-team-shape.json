@@ -8,7 +8,7 @@
   "architecture",
   "research and product"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should expeditions keep their seven roles and let gatherers read more pages within a clear cap of 8 runs, rather than adding agents or many more gatherers? I recommend that: gatherers are only 2% of a run's cost, but every extra note they write is then read by the expensive roles, so tripling them would roughly double a run's cost.",
  "for_you": [
   "Expeditions look the same; gatherers open and read more pages instead of just skimming search results, so reports cite more sources they actually read",
@@ -85,9 +85,9 @@
  "recommendation": "A: let gatherers read more pages inside a clear cap of 8 runs, keep the team, and try B and two writers comparing notes as one-run trials later.",
  "confidence": "medium",
  "change_mind": "If a trial shows reports missing sources that more gatherers would have found, raise the cap step by step.",
- "chosen": null,
+ "chosen": "A",
  "reason": "",
- "decided_on": null,
+ "decided_on": "2026-11-17",
  "superseded_by": null,
  "challenge": null,
  "settles": [
