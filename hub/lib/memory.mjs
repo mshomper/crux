@@ -74,6 +74,7 @@ export class Memory {
 
   // A core lesson the user approved.
   addCoreLesson(text, from) {
+    mkdirSync(this.profileDir, { recursive: true });   // a new user has no profile folder yet (decision 79)
     const file = join(this.profileDir, 'core.md');
     const body = read(file);
     const section = body.includes('\n## Lessons added by agents') ? '' : '\n\n## Lessons added by agents\n';

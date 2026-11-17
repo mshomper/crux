@@ -34,6 +34,9 @@ import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLE
 import { ExpeditionEnd } from './expedition-end.mjs';
 import { pageEvents, olderPage, waitingOf, agentsFor, partsOf, diffParts } from './feed.mjs';
 import { isProposal, proposalsOf } from './expedition-report.mjs';
+import { profileView, createProfile, SYSTEM as IMPORT_SYSTEM, buildUser as importUser, parseBatch, countsOf, countsLine, applyBatch, BatchStore, IMPORT_CAP, IMPORT_MODEL } from './profile.mjs';
+import { dataDir } from './relaunch.mjs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 
 export class Project {
   // repair: false reads the log and changes nothing in .crux (a test hub on a real folder; the rotation off switch).
@@ -116,8 +119,13 @@ export class Hub {
   // (server.mjs: <data>/conductor). Null: no Conductor (tests that do not ask for one).
   // checker: the one-shot permission check (decision 66, lib/permission-check.mjs); tests pass one with a stubbed model.
   // Left out, it is made on first use: the Agent SDK on this machine's sign-in, or the API when a key is set up.
-  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {}, rotateLogs = !noAgents, summariser = null }) {
+  constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {}, rotateLogs = !noAgents, summariser = null, profileCall = null, batches = null, promptFile = null }) {
     this.noAgents = !!noAgents;
+    // Decision 79 A: the profile import. profileCall is the one model call with no tools that sorts an export (made on first
+    // use; tests pass a fake). The proposed text waits in the hub's data folder until it is accepted or cancelled.
+    this.profileCall = profileCall;
+    this.batches = batches || new BatchStore();
+    this.promptFile = promptFile || join(dataDir(), 'profile-prompt.json');
     // Decision 74 B: old events move to the archive when a log is due. Never on a test hub (it may be looking at a real
     // folder another hub is writing), unless a test asks; CRUX_HUB_NO_ROTATE=1 turns it off, recovery included.
     this.rotatesLogs = rotateLogs !== false && process.env.CRUX_HUB_NO_ROTATE !== '1';
@@ -1051,9 +1059,55 @@ export class Hub {
     return p.log.ofType('lesson_proposed').filter(e => !done.has(e.lesson));
   }
 
+  // ---------- the profile (decision 79 A): Create, and Import as one batch ----------
+  promptDismissed() { try { return JSON.parse(readFileSync(this.promptFile, 'utf8')).dismissed === true; } catch { return false; } }
+  dismissPrompt() { mkdirSync(join(this.promptFile, '..'), { recursive: true }); writeFileSync(this.promptFile, JSON.stringify({ dismissed: true, at: new Date().toISOString() })); }
+  profileView() { return profileView(this.memory, { promptDismissed: this.promptDismissed() }); }
+  createProfile() { const made = createProfile(this.memory); return { ...made, profile: this.profileView() }; }
+  get importer() {
+    if (this.profileCall) return this.profileCall;
+    if (this.noAgents) return async () => { throw new Error('A test hub makes no model call.'); };
+    const key = process.env.CRUX_HUB_USE_API_KEY === '1' ? process.env.ANTHROPIC_API_KEY : '';
+    return (this.profileCall = key ? apiCall({ apiKey: key, model: IMPORT_MODEL, maxTokens: 4000 }) : async arg => {
+      const { query } = await import('@anthropic-ai/claude-agent-sdk');
+      return sdkCall({ query, model: IMPORT_MODEL, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir() })(arg);
+    });
+  }
+  // The pasted export is untrusted data: one call with no tools sorts it; nothing is written until the batch is accepted.
+  // The export itself is never logged; the log gets the batch's id and counts. Returns { counts }.
+  async importProfile(p, text) {
+    const t = String(text ?? '').trim();
+    if (!t) throw new Error('Paste or drop an export first.');
+    if (t.length > IMPORT_CAP) throw new Error(`That export is ${t.length.toLocaleString('en-US')} characters; at most ${IMPORT_CAP.toLocaleString('en-US')} are taken in one go. Paste the part you care about, or split it.`);
+    if (this.pendingLessons(p).some(e => e.batch)) throw new Error('An import is already waiting in Needs you. Accept or cancel it first.');
+    const res = await this.importer({ system: IMPORT_SYSTEM, user: importUser(t), signal: AbortSignal.timeout(120000) });
+    if (res?.modelUsage && Object.keys(res.modelUsage).length) {
+      const models = totalsOf(res.modelUsage);
+      p.log.append('usage', { agent: 'profile import', project: p.name, agentType: 'summary', role: 'summary', model: IMPORT_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null });
+    }
+    const batch = parseBatch(res?.text);
+    if (!batch) throw new Error('Nothing usable was found in that export. Nothing was changed.');
+    const id = this.batches.save(batch), counts = countsOf(batch);
+    p.log.append('lesson_proposed', { thread: 'orchestrator', from: 'profile import', lesson: id, text: `Profile import: ${countsLine(counts)}`, batch: true, counts });
+    return { counts };
+  }
+  // What the batch card shows. The private lines are shown on this PC only.
+  profileBatch(id, { local = true } = {}) {
+    const b = this.batches.read(id);
+    if (!b) throw new Error('That import is no longer waiting.');
+    return { core: b.core, packs: b.packs, private: local ? b.private : b.private.map(() => '(shown on the PC only)'), left: b.left || 0 };
+  }
+
   answerLessons(p, ids, accept) {
     const pending = this.pendingLessons(p).filter(e => ids.includes(e.lesson));
     for (const e of pending) {
+      if (e.batch) {   // a profile import: written only now, on Accept; Cancel drops the proposed text
+        let ok = false;
+        if (accept) { const b = this.batches.read(e.lesson); if (b) { applyBatch(this.memory, b); ok = true; } }
+        this.batches.remove(e.lesson);
+        p.log.append('lesson_result', { lesson: e.lesson, accepted: ok, thread: e.thread, ...(accept && !ok ? { note: 'The proposed text was gone, so nothing was added.' } : {}) });
+        continue;
+      }
       if (accept) this.memory.addCoreLesson(e.text, e.from);
       p.log.append('lesson_result', { lesson: e.lesson, accepted: !!accept, thread: e.thread });
     }

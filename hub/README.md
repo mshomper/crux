@@ -48,6 +48,15 @@ The agents run on either an **API key** (Anthropic bills the tokens to it) or th
 - **Usage:** a plan sign-in shows plan meters in the strip and panel; an API key shows estimated dollars and tokens used instead (there are no plan limits on a key).
 - **Without the app, switching by hand:** set or remove the two environment variables above and restart the hub; to change the plan sign-in, run `npm run login` in the hub folder (or `claude auth login` in a terminal) and restart.
 
+### Your profile
+
+The same Account card has a **Profile** part (usage panel, Account). It says whether a profile was found in your home Crux folder (`~/crux`, or `CRUX_HOME`) or "No profile yet", and offers two things:
+
+- **Create profile** makes `<home>/profile` from `profile-template`: `core.md`, `packs/_index.md` and an empty `private.md`. It never overwrites a file that is there, and is not offered once a profile exists. If the home folder is not a git repo yet, the hub runs `git init` there (local only: no remote, no commit) and adds a `.gitignore` for `media/`.
+- **Import from another assistant**: paste an export of what another assistant knows about you, or drop a file on the box. The export is treated as untrusted data (it may carry planted instructions): one model call with no tools sorts it into core, project packs and private, as proposed text. It lands as **one batch card in Needs you** with Accept and Cancel; nothing is written before Accept, and private lines go only to `private.md`. Lines that read like instructions or secrets are left out and counted. At most 60,000 characters of an export are read; longer ones are refused with the number. The proposed text is kept in the hub's data folder (`profile-batches/`), never in a project's event log, and is deleted once you answer. Accepting appends under a dated heading to existing files.
+
+A first-run prompt on a hub with no profile points there once; **Not now** (or opening the card) is remembered and it never comes back. Agents work without a profile (a new user has none): lessons that agents propose with `propose_lesson` create the profile folder when a core lesson is approved.
+
 Then open http://crux.localhost:4747 (http://localhost:4747 takes you there; see "Paired devices" for the first pairing). With no folders given, it uses `~/crux/hub.json` (`{ "projects": ["C:/path/a"] }`) or the current folder. Each project should be a git repo (see "Where your picks land").
 
 Options: `--port 4747`, `--retire-at 60` (the starting hub default for when the orchestrator hands off, in % of context; once changed in the hub menu's Whole hub panel the saved value wins, and each project can set its own), `--no-agents` (a test hub: messages are kept but no agent starts; also automatic when `CRUX_HUB_DATA` points inside the temp folder, and `CRUX_HUB_AGENTS=1` overrides both), `--test-pair` (a test hub only: one fake device counts as paired and the page gets its cookie, for screenshots and tests; the hub refuses to start with it on port 4747, with real agents, or with its data folder outside the temp folder).

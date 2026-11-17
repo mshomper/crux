@@ -22,6 +22,20 @@
 .acard .ps-foot .btn{flex:none}
 .acard .btn:disabled{opacity:.45;cursor:default}
 
+/* the Profile part of the card (decision 79 A) */
+.ac-pf-row{margin-top:10px}
+.ac-pf-note{margin:8px 0 0}
+.ac-import{margin-top:12px;display:grid;gap:8px}
+.ac-drop{border:1px dashed var(--hud-edge2);border-radius:2px;background:rgba(111,227,255,.03);padding:6px}
+.ac-drop.over{border-color:var(--hud-cyan);background:rgba(111,227,255,.1)}
+.ac-text{display:block;margin:0;min-height:96px;resize:vertical;font:500 12.5px/1.4 var(--mono);letter-spacing:0}
+/* the batch card in Needs you */
+.pf-batch .pf-body{display:grid;gap:4px;max-height:300px;overflow-y:auto;margin:0 0 10px;padding-right:4px}
+.pf-batch h4{display:flex;align-items:center;gap:6px;margin:8px 0 2px;font:600 10.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--hud-label)}
+.pf-batch h4 .icon{width:13px;height:13px;color:var(--hud-cyan)}
+.pf-list{list-style:none;margin:0;padding:0;display:grid;gap:3px;font-size:13px;line-height:1.35}
+.pf-list li{padding:5px 8px;border-left:2px solid var(--hud-line);background:rgba(111,227,255,.035);overflow-wrap:anywhere}
+
 /* the account line in the strip (under the plan meters, or in place of them for a key) */
 .um-who{display:flex;align-items:center;gap:5px;min-width:0;font-size:10px;letter-spacing:.04em;color:var(--hud-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .um-who .hud-i{width:11px;height:11px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}

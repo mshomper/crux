@@ -231,12 +231,12 @@ export function sdkCall({ query, model = CHECK_MODEL, claudePath = null, env = p
 
 // A direct call to the API, when a key is set up (CRUX_HUB_USE_API_KEY=1 with ANTHROPIC_API_KEY): the system part is
 // marked for caching, so repeat requests in a project read it at a tenth of the price.
-export function apiCall({ apiKey, model = CHECK_MODEL, fetchFn = globalThis.fetch, baseUrl = 'https://api.anthropic.com' }) {
+export function apiCall({ apiKey, model = CHECK_MODEL, fetchFn = globalThis.fetch, baseUrl = 'https://api.anthropic.com', maxTokens = 300 }) {
   return async ({ system, user, signal }) => {
     const res = await fetchFn(`${baseUrl}/v1/messages`, {
       method: 'POST', signal,
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model, max_tokens: 300, system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: user }] })
+      body: JSON.stringify({ model, max_tokens: maxTokens, system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: user }] })
     });
     if (!res.ok) throw new Error(`The API answered ${res.status}`);
     const j = await res.json();

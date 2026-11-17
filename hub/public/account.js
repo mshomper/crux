@@ -51,6 +51,26 @@ function keyPlate(v, d) {
   </div>`;
 }
 
+export const IMPORT_NOTE = 'An agent drafts your profile from it, and you approve it as one batch in Needs you. Nothing is written before you approve. The export is read as data only.';
+// The Profile part of the card (decision 79 A): whether a profile exists, Create, and Import from another assistant.
+export function profileSection(pf, d) {
+  if (!pf) return '';
+  const packs = pf.packs ? `, ${pf.packs} project pack${pf.packs === 1 ? '' : 's'}` : '';
+  return `<section class="ps-sec ps-last ac-profile"><div class="ps-sec-head">Profile</div>
+    <div class="ac-now"><span class="ps-hex ${pf.exists ? 'on' : ''}">${ic('file-text')}</span>
+      <div><b>${pf.exists ? 'Profile found' : 'No profile yet'}</b><span class="ac-sub">${pf.exists ? `Core${packs}${pf.hasPrivate ? ', private notes' : ''}.` : 'Agents start without notes on how you like to work.'}</span></div></div>
+    <div class="ac-row ac-pf-row">${pf.exists ? '' : `<button type="button" class="btn primary" data-pf-create ${d.pfBusy ? 'disabled' : ''}>${ic('plus')}Create profile</button>`}
+      <button type="button" class="btn" data-pf-open aria-expanded="${!!d.pfOpen}">${ic('download')}Import from another assistant</button></div>
+    ${d.pfNote ? `<p class="ps-dflt diff ac-pf-note">${esc(d.pfNote)}</p>` : ''}
+    ${d.pfOpen ? `<div class="ac-import">
+      <div class="ac-drop" data-pf-drop><textarea class="ac-field ac-text" data-pf-text rows="5" spellcheck="false" placeholder="Paste the export here, or drop a file on this box" aria-label="Export from another assistant">${esc(d.pfText || '')}</textarea></div>
+      <p class="ac-lock">${ic('check')}<span>${esc(IMPORT_NOTE)} Up to ${Number(pf.importCap || 60000).toLocaleString('en-US')} characters.</span></p>
+      <div class="ac-row"><button type="button" class="btn primary" data-pf-send ${(d.pfText || '').trim() && !d.pfBusy ? '' : 'disabled'}>${ic('send')}${d.pfBusy ? 'Sorting it...' : 'Sort it'}</button>
+        <button type="button" class="btn ghost" data-pf-file-btn>${ic('file-text')}Choose a file</button><input type="file" accept=".txt,.md,.json,.csv,text/*" data-pf-file hidden></div></div>` : ''}
+    ${d.pfError ? `<p class="ps-dflt warn ac-err" role="alert">${ic('warn')}${esc(d.pfError)}</p>` : ''}
+  </section>`;
+}
+
 export function accountCard(v, d) {
   const sw = switchState(v, d);
   return `<div class="ps-head"><h2 id="ps-title">Account</h2><button type="button" class="ps-x" data-ac-close aria-label="Close without changing anything" title="Close without changing anything">${ic('x')}</button></div>
@@ -60,10 +80,11 @@ export function accountCard(v, d) {
         <div><b>${esc(accountLine(v))}</b><span class="ac-sub">${v.mode === 'key' ? 'Pay per use, billed to this key.' : 'Drawing on this plan\'s limits.'}</span></div></div>
       ${v.envLocked ? `<p class="ps-lv-warn ac-env">${ic('warn')}<span>This key comes from the environment variables ANTHROPIC_API_KEY and CRUX_HUB_USE_API_KEY. They win over this card: remove them and restart the hub to choose here.</span></p>` : ''}
     </section>
-    <section class="ps-sec ps-last"><div class="ps-sec-head">Choose</div>
+    <section class="ps-sec"><div class="ps-sec-head">Choose</div>
       <div class="ps-levels ${v.envLocked ? 'ac-locked' : ''}" role="radiogroup" aria-label="Account">${planPlate(v, d)}${keyPlate(v, d)}</div>
       ${d.error ? `<p class="ps-dflt warn ac-err" role="alert">${ic('warn')}${esc(d.error)}</p>` : ''}
     </section>
+    ${profileSection(d.profile, d)}
   </div>
   <div class="ps-foot">
     <p class="ps-note ac-restart">${ic('warn')}<span>Switching restarts the hub. This page reconnects by itself, and agents carry on after it.</span></p>
@@ -81,7 +102,15 @@ export class AccountCard {
     document.body.append(this.el);
     this.el.addEventListener('pointerdown', e => { this.downOutside = e.target === this.el; });
     this.el.addEventListener('click', e => this.click(e));
-    this.el.addEventListener('input', e => { if (e.target.matches?.('[data-ac-key]')) { this.d.key = e.target.value; this.d.error = ''; this.refreshSwitch(); } });
+    this.el.addEventListener('input', e => {
+      if (e.target.matches?.('[data-ac-key]')) { this.d.key = e.target.value; this.d.error = ''; this.refreshSwitch(); }
+      else if (e.target.matches?.('[data-pf-text]')) { this.d.pfText = e.target.value; this.d.pfError = ''; const b = this.el.querySelector('[data-pf-send]'); if (b) b.disabled = !(this.d.pfText.trim() && !this.d.pfBusy); }
+    });
+    // drop a file on the paste box: its text goes in (up to the cap; the hub says plainly if it is too long)
+    this.el.addEventListener('dragover', e => { if (e.target.closest?.('[data-pf-drop]')) { e.preventDefault(); e.target.closest('[data-pf-drop]').classList.add('over'); } });
+    this.el.addEventListener('dragleave', e => e.target.closest?.('[data-pf-drop]')?.classList.remove('over'));
+    this.el.addEventListener('drop', e => { const z = e.target.closest?.('[data-pf-drop]'); if (!z) return; e.preventDefault(); z.classList.remove('over'); this.takeFile(e.dataTransfer?.files?.[0]); });
+    this.el.addEventListener('change', e => { if (e.target.matches?.('[data-pf-file]')) { this.takeFile(e.target.files?.[0]); e.target.value = ''; } });
     this.el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches?.('[data-ac-key]')) { e.preventDefault(); this.go(); } });
     this.el.addEventListener('close', () => { this.stopWatching(); if (this.d) this.d.key = ''; this.d = null; this.opener?.focus?.({ preventScroll: true }); });
     addEventListener('resize', () => this.place());
@@ -92,7 +121,7 @@ export class AccountCard {
   show() {
     this.v = null;
     const v = this.view;
-    this.d = { pick: v.mode, key: '', error: '', busy: false, waiting: false, signinNote: '' };
+    this.d = { pick: v.mode, key: '', error: '', busy: false, waiting: false, signinNote: '', profile: this.host.profile?.() || null, pfOpen: false, pfText: '', pfBusy: false, pfError: '', pfNote: '' };
     this.opener = document.activeElement;
     this.render();
     if (!this.el.open) this.el.showModal();
@@ -102,7 +131,9 @@ export class AccountCard {
   render() {
     if (!this.d) return;
     const keep = this.el.querySelector('.ps-body')?.scrollTop || 0;
+    const typed = this.el.querySelector('[data-ac-key]')?.value;   // kept across a redraw, set on the field itself, never written into the markup
     this.el.innerHTML = accountCard(this.view, this.d);
+    const field = this.el.querySelector('[data-ac-key]'); if (field && typed) field.value = typed;
     const body = this.el.querySelector('.ps-body'); if (body) body.scrollTop = keep;
   }
   refreshSwitch() {
@@ -129,6 +160,10 @@ export class AccountCard {
     if (e.target.closest('[data-ac-switch]')) return void this.go();
     if (e.target.closest('[data-ac-signin]')) return void this.signIn();
     if (e.target.closest('[data-ac-recheck]')) return void this.refresh();
+    if (e.target.closest('[data-pf-create]')) return void this.createProfile();
+    if (e.target.closest('[data-pf-open]')) { this.d.pfOpen = !this.d.pfOpen; this.d.pfError = ''; this.render(); this.el.querySelector('[data-pf-text]')?.focus({ preventScroll: true }); return; }
+    if (e.target.closest('[data-pf-file-btn]')) return void this.el.querySelector('[data-pf-file]')?.click();
+    if (e.target.closest('[data-pf-send]')) return void this.sendImport();
     const pick = e.target.closest('[data-ac-pick]');
     if (pick && !this.view.envLocked && this.d.pick !== pick.dataset.acPick) {
       this.d.pick = pick.dataset.acPick; this.d.error = '';
@@ -149,6 +184,37 @@ export class AccountCard {
       if (!this.d) return;
       this.d.busy = false; this.d.error = e.message || 'The account was not changed.'; this.render();
     } finally { body.apiKey = ''; }
+  }
+
+  // ---------- the profile (decision 79 A) ----------
+  async createProfile() {
+    this.d.pfBusy = true; this.d.pfError = ''; this.render();
+    try {
+      const r = await this.host.api('/api/profile/create', {});
+      this.host.setProfile?.(r.profile); this.d.profile = r.profile;
+      this.d.pfNote = `Profile created${r.git === 'initialised' ? ', and a local git repository was started in your home Crux folder (nothing is sent anywhere)' : ''}. Fill it in with Import, or let agents add lessons as you work.`;
+    } catch (e) { this.d.pfError = e.message; }
+    this.d.pfBusy = false; this.render();
+  }
+  async takeFile(file) {
+    if (!file) return;
+    const cap = this.d.profile?.importCap || 60000;
+    try {
+      const text = await file.text();
+      this.d.pfOpen = true; this.d.pfText = text; this.d.pfError = text.length > cap ? `That file is ${text.length.toLocaleString('en-US')} characters; at most ${cap.toLocaleString('en-US')} are taken in one go. Cut it down first.` : '';
+    } catch { this.d.pfError = 'That file could not be read as text.'; }
+    this.render();
+  }
+  async sendImport() {
+    const text = this.d.pfText.trim();
+    if (!text || this.d.pfBusy) return;
+    this.d.pfBusy = true; this.d.pfError = ''; this.render();
+    try {
+      await this.host.api('/api/profile/import', { project: this.host.project?.(), text });
+      this.d.pfText = '';
+      this.close();
+      this.host.afterImport?.();   // Needs you, where the batch waits
+    } catch (e) { this.d.pfBusy = false; this.d.pfError = e.message; this.render(); }
   }
 
   // "Sign in as someone else": the hub opens a terminal window on this PC; then the card re-reads who is signed in.

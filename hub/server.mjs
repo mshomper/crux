@@ -275,7 +275,7 @@ const routes = {
   // The conductor alone (its events change often; the page reads this instead of the whole state), and one entry's words.
   'GET /api/conductor': () => ({ conductor: hub.conductor?.view() || null, seq: streamSeq }),
   'GET /api/entry': ({ project, id }) => hub.entryBody(project, id),
-  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: account.view(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
+  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: account.view(), profile: hub.profileView(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/older': ({ project, thread, before, ts }) => hub.older(project, thread, before, ts),
   // Search chat and summaries in a project's log, archive included: words must all appear. { hits: [{ id, ts, type, thread, from, snippet }] }
@@ -320,6 +320,17 @@ const routes = {
     setTimeout(restart, 300);
     return { restarting: true, boot: BOOT, account: account.view() };
   },
+  // ---------- decision 79 A: the profile, from the Account card ----------
+  'GET /api/profile': () => hub.profileView(),
+  // Create <home>/profile from the template (never overwrites; git init in the home folder if it is not a repo yet).
+  'POST /api/profile/create': () => hub.createProfile(),
+  // Import: { project, text } is an export from another assistant, as pasted or dropped. One model call with no tools sorts
+  // it; the result waits as one batch card in the project's Needs you. Nothing is written before it is accepted.
+  'POST /api/profile/import': async ({ project, text }) => hub.importProfile(hub.place(project), text),
+  // The proposed text of one waiting batch, for its card (private lines only to this PC).
+  'GET /api/profile/batch': ({ id }, { local }) => hub.profileBatch(String(id || ''), { local }),
+  // "Not now" on the first-run prompt: remembered, so it never comes back.
+  'POST /api/profile/prompt': () => { hub.dismissPrompt(); return hub.profileView(); },
   // "Sign in as someone else": a terminal window on this PC runs Claude Code's own sign-in (it opens the browser). The card
   // then asks GET /api/account until the name changes. This PC only; a test hub opens nothing.
   'POST /api/account/signin': (_, ctx) => {

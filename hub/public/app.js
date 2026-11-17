@@ -25,6 +25,7 @@ import { ViewportFit, isIOS, noFocusZoom } from './viewport.js';
 import { PhoneCheck } from './debug-phone.js';
 import { UsageUI } from './usage-ui.js';
 import { AccountCard } from './account.js';
+import { splitLessons, batchCard } from './profile-batch.js';
 import { md } from './markdown.js';
 import { retiredView, RETIRED_RECENT_DAYS } from './retired-list.js';
 import { SideResizer } from './side-width.js';
@@ -123,7 +124,8 @@ async function api(path, body) {
 $('#pair-btn').addEventListener('click', () => guardUI.openPair());
 
 async function load() {
-  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, account, bootAt, setup, voice, stream } = await api('/api/state');
+  const { projects, conductor, retireAt, models, settings, boot, version, build, usage, account, profile, bootAt, setup, voice, stream } = await api('/api/state');
+  S.profile = profile || null;   // decision 79 A: whether a profile exists, and whether to show the first-run prompt
   S.account = account || null;   // which account the agents run on (decision 78 A); never more of a key than its last four characters
   S.voice = voice || null;   // decision 61 A: the voice switch and helper; canSetup is true on the hub's own PC
   // Decisions 52 and 54: the desktop app's first run (no key, no folders or no Claude Code yet) opens the setup
@@ -402,7 +404,20 @@ function setConductor(c) {
   S.conductor = c || null;
   S.cplace = c ? CP.placeOf(c) : null;
 }
-function lessonsCard(ls, p = proj()) {
+// A profile import's proposed text is fetched once per batch, then the cards are drawn again (decision 79 A).
+const batchAsked = new Set();
+function wantBatch(id) {
+  if (S.batches?.[id] || batchAsked.has(id)) return;
+  batchAsked.add(id);
+  api(`/api/profile/batch?id=${encodeURIComponent(id)}`).then(b => { (S.batches ||= {})[id] = b; render(); }).catch(() => batchAsked.delete(id));
+}
+function lessonsCard(all, p = proj()) {
+  const { batches, plain: ls } = splitLessons(all);
+  for (const b of batches) wantBatch(b.lesson);
+  const imports = batches.map(b => batchCard(b, S.batches?.[b.lesson] || null)).join('');
+  return imports + (ls.length ? plainLessonsCard(ls, p) : '');
+}
+function plainLessonsCard(ls, p) {
   return `<article class="card lessons">
     <div class="card-head">${icon('star')}<h3>${ls.length === 1 ? 'A lesson' : `${ls.length} lessons`} for your core profile</h3></div>
     <p class="muted">Agents noticed these about how you work. Added lessons go to every agent on every project.</p>
@@ -574,8 +589,19 @@ const modeWord = p => (LEVEL_INFO[p.permissionMode] || LEVEL_INFO.standard).word
 // Decision 78 A: choose the account the agents run on. Switching restarts the hub, as the hub menu's Restart does.
 const accountCard = new AccountCard({
   api, account: () => S.account, sideRect: () => $('#side')?.getBoundingClientRect(),
-  switchTo: body => restartWith(() => api('/api/account', body))
+  switchTo: body => restartWith(() => api('/api/account', body)),
+  profile: () => S.profile, setProfile: p => { S.profile = p; }, project: () => proj()?.name,
+  afterImport: () => { toast('Sorted. The batch is waiting in Needs you.', 'info'); selectThread('needs'); }
 });
+// The one-time first-run prompt (decision 79 A): points at the Profile part of the Account card. Either answer is
+// remembered by the hub, so it never comes back.
+let profilePrompted = false;
+function maybeProfilePrompt() {
+  if (profilePrompted || !S.profile?.prompt || document.querySelector('dialog[open]')) return;
+  profilePrompted = true;
+  hubConfirm({ k: 'Profile', title: 'Set up your profile?', body: 'Agents can start out knowing how you like to work. Create a profile, or import one from another assistant, under Profile in the Account card (usage panel, Account).', ok: 'Open Account', no: 'Not now' })
+    .then(go => { api('/api/profile/prompt', {}).then(p => { S.profile = p; }).catch(() => { }); if (go) accountCard.show(); });
+}
 const listsCard = new ListsCard({ api, toast: (m, tone) => toast(m, tone) });
 const settingsCards = new SettingsCards({
   api, reload: () => load(), toast: m => toast(m),
@@ -930,7 +956,7 @@ function conductorItem(ev) {
       case 'summary': return summaryCard(place, ev);
       case 'notice': return `<div class="notice"><span>${NM.namesInHtml(ev.text, place.name)}</span></div>`;
       case 'visual': return `<div class="msg"><span class="who">${NM.nameHtml(ev.from, place.name)} · ${timeOf(ev.ts)}</span>${visualEl(place, ev)}</div>`;
-      case 'lesson_proposed': return `<div class="notice"><span>${NM.nameHtml(ev.from, place.name)} proposed a lesson for your core profile (under Waiting)</span></div>`;
+      case 'lesson_proposed': return ev.batch ? `<div class="notice"><span>A profile import is waiting for your OK (under Waiting)</span></div>` : `<div class="notice"><span>${NM.nameHtml(ev.from, place.name)} proposed a lesson for your core profile (under Waiting)</span></div>`;
       case 'reminder': return `<div class="notice">${icon('clock')}Reminder set for ${esc(new Date(ev.at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}: ${esc(ev.text)}</div>`;
       case 'wake': return `<div class="notice cd-wake" title="${esc(ev.text)}">${esc(CP.wakeLine(ev))} · ${timeOf(ev.ts)}</div>`;
       case 'cards': return cardsBlock(ev);
@@ -1127,7 +1153,7 @@ function feedFor(t) {
         case 'entry': return `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} posted ${esc(ev.entryId)} to the board: ${esc(ev.title)}</span></div>`;
         case 'visual': return `<div class="msg"><span class="who">${NM.nameHtml(ev.from, p.name)} · ${timeOf(ev.ts)}</span>${visualEl(p, ev)}</div>`;
         case 'lesson': return `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} added a lesson to the ${esc(ev.pack)} pack: ${esc(ev.text)}</span></div>`;
-        case 'lesson_proposed': return `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} proposed a lesson for your core profile (in Needs you)</span></div>`;
+        case 'lesson_proposed': return ev.batch ? `<div class="notice"><span>A profile import is waiting for your OK (in Needs you)</span></div>` : `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} proposed a lesson for your core profile (in Needs you)</span></div>`;
         case 'permission_answer': return permLine(ev);
         // Decision 62: the orchestrator's answer to a Conductor request; it went to the Conductor and you only.
         case 'conductor_reply': return `<div class="notice cd-replied"><span>${icon('orch')}${NM.nameHtml(ev.from, p.name)} replied to the Conductor (${esc(ev.request)}${ev.forMatt ? ', for you' : ''}): ${esc(String(ev.text || '').split('\n')[0].slice(0, 200))}</span></div>`;
@@ -1907,7 +1933,7 @@ const openUsage = new URLSearchParams(location.search).get('usagepanel');   // r
 // ?settings=hub the Whole hub panel (decision 44 B; for screenshots and click-tests).
 const openSettings = new URLSearchParams(location.search).get('settings');
 load().then(() => {
-  startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); bootReadout();
+  startView(); afterUpdate(); phone.openFromLocation(); phone.viewChanged(); connect(); bootReadout(); setTimeout(maybeProfilePrompt, 2600);   // after the boot readout
   // Decision 47: an unpaired device sees "Pair this device" once the page has drawn (it has an exit; reading works).
   guardUI.check().then(st => { if (st && !st.paired) guardUI.openPair(); });
   if (openUsage !== null) { if (openUsage === 'session') usageUI.range = 'session'; usageUI.open(); }
