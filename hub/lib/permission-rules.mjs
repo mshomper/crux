@@ -1899,6 +1899,9 @@ class Check {
       // A8: a recursive delete that reaches through a junction or link would empty what it points to (a worktree's
       // node_modules points at the project's own): for judgment, whatever else is true of the path.
       if (recursive || head === 'rimraf') {
+        // The home folder itself (~, $HOME, %USERPROFILE%, C:/Users/<name>): never for judgment, always a stop (M054 review).
+        const homeNorm = norm(this.home);
+        if (targets.some(t => { const a = this.abs(t, cwd); return typeof a === 'string' && norm(a) === homeNorm; })) return this.stop(`Deletes the home folder itself (${head} ${targets.join(' ')})`);
         const via = targets.find(t => this.throughLink(t, cwd));
         if (via) return this.unsure(`Deletes recursively through a link or junction (${head} ${via}): that could empty the folder it points to`, true);
       }

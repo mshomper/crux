@@ -11,7 +11,7 @@
 // scriptsFor() then looks at the files.
 import { execFile } from 'node:child_process';
 import { existsSync, statSync, readFileSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
-import { dirname, basename, resolve, join, isAbsolute } from 'node:path';
+import { dirname, basename, resolve, join, isAbsolute, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
 export const MAX_SCRIPTS = 8;                        // more scripts than this in one command: not listed, so never allowed at once
@@ -513,6 +513,67 @@ const within = (p, root) => norm(p) === norm(root) || norm(p).startsWith(norm(ro
 // One file: inside the project (or one of its worktrees), tracked by git, not ignored, not changed in the working tree
 // or index, not a link, and the same as at the merge-base with main (a worker's own committed edit is not main's).
 // Anything git cannot confirm is false. cache: a Map shared by one request, so each file and ref is asked about once.
+// With the real git (not a test's stand-in), the whole repository is asked once per request instead of four times per file (M054
+// review, speed): the merge-base, the tracked list, what differs from the merge-base, and `git status`. Same answer, fewer
+// processes; any failure of those calls falls back to the per-file questions below. Kept per request only (the `cache`), never
+// longer: a file a worker has just changed must not look committed.
+function gitRootOf(file) {
+  let d = dirname(resolve(file));
+  for (let i = 0; i < 60; i++) {
+    if (existsSync(join(d, '.git'))) return d;
+    const up = dirname(d);
+    if (up === d) return null;
+    d = up;
+  }
+  return null;
+}
+async function mergeBaseOf(root, git, mainRefs) {
+  for (const ref of mainRefs) { const b = await git(['merge-base', 'HEAD', ref], root); if (b.code === 0 && b.out.trim()) return b.out.trim(); }
+  return '';
+}
+const lower = s => String(s).replace(/\\/g, '/').toLowerCase();
+async function repoState(root, { git, mainRefs, cache }) {
+  const key = `s:${norm(root)}`;
+  if (!cache.has(key)) {
+    cache.set(key, (async () => {
+      const sha = await mergeBaseOf(root, git, mainRefs);
+      if (!sha) return { sha: '', tracked: new Set(), dirty: new Set(), dirtyDirs: [] };
+      const [ls, df, st] = await Promise.all([
+        git(['ls-files', '-z'], root),
+        git(['diff', '--name-only', '-z', '--no-ext-diff', '--no-textconv', sha], root),
+        git(['status', '--porcelain', '-z', '--ignored'], root)
+      ]);
+      if (ls.code !== 0 || df.code !== 0 || st.code !== 0) return null;
+      const dirty = new Set(), dirtyDirs = [];
+      const mark = p => { const x = lower(p); if (x.endsWith('/')) dirtyDirs.push(x); else dirty.add(x); };
+      for (const p of df.out.split('\0').filter(Boolean)) mark(p);
+      const parts = st.out.split('\0');
+      for (let i = 0; i < parts.length; i++) {
+        const e = parts[i]; if (e.length < 4) continue;
+        mark(e.slice(3));
+        if (/^[RC]/.test(e)) { i++; if (parts[i]) mark(parts[i]); }   // a rename or copy is followed by its old name
+      }
+      return { sha, tracked: new Set(ls.out.split('\0').filter(Boolean).map(lower)), dirty, dirtyDirs };
+    })());
+  }
+  return cache.get(key);
+}
+
+// The change of one file from the merge-base with main, as text: for a changed file too big to show whole. null when there is none
+// to show (an untracked file, a binary one, no merge-base, git failing). Real git or a stand-in (`git`).
+export async function changedDiff(file, { git = defaultGit, mainRefs = ['origin/main', 'main'], cache = new Map() } = {}) {
+  try {
+    const root = gitRootOf(file);
+    if (!root) return null;
+    const sha = (await repoState(root, { git, mainRefs, cache }))?.sha || await mergeBaseOf(root, git, mainRefs);
+    if (!sha) return null;
+    const rel = relative(root, resolve(file)).replace(/\\/g, '/');
+    const d = await git(['diff', '--no-ext-diff', '--no-textconv', sha, '--', rel], root);
+    if (d.code !== 0 || !d.out.trim() || d.out.includes('\u0000') || /^Binary files /m.test(d.out)) return null;
+    return d.out;
+  } catch { return null; }
+}
+
 export async function isCommittedFile(file, { projectDir, git = defaultGit, mainRefs = ['origin/main', 'main'], cache = new Map() } = {}) {
   try {
     const key = `f:${norm(file)}`;
@@ -520,6 +581,15 @@ export async function isCommittedFile(file, { projectDir, git = defaultGit, main
     const ok = await (async () => {
       if (!projectDir || !within(realpathSync(file), realpathSync(projectDir))) return false;
       if (lstatSync(file).isSymbolicLink()) return false;
+      if (git === defaultGit) {
+        const root = gitRootOf(file);
+        const state = root ? await repoState(root, { git, mainRefs, cache }) : null;
+        if (state) {
+          if (!state.sha) return false;
+          const rel = lower(relative(root, resolve(file)));
+          return state.tracked.has(rel) && !state.dirty.has(rel) && !state.dirtyDirs.some(d => rel.startsWith(d));
+        }
+      }
       const dir = dirname(file), name = basename(file);
       if ((await git(['ls-files', '--error-unmatch', '--', name], dir)).code !== 0) return false;
       const st = await git(['status', '--porcelain', '--ignored', '--', name], dir);
@@ -596,30 +666,45 @@ export async function isProjectScript(file, opts = {}) {
   return (await projectScriptChain(file, opts)).ok;
 }
 
-// The same walk, with the answer in parts (M054): ok, and `bad`, the files of the chain that failed the test, each
-// { path, note? }: no note = the file is there but not committed or changed (its text can be shown); a note = a file the chain
-// loads that cannot be named or followed (the text cannot be shown, and the note says why). The whole chain is walked
-// (up to MAX_FILES), so everything the permission check should be told about is listed, not only the first failure.
+// The same walk, with the answer in parts (M054): ok, and
+//   bad:    the files of the chain the permission check should be shown, { path, changed, notShown: [..] }. changed: the file is not
+//           committed or has changed (its text can be shown). notShown: what the check cannot see of THIS changed file or the files
+//           it loads (named at run time, too big to follow, unreadable): the check escalates on these.
+//   doubts: one plain line per file about what the hub could not follow in an unchanged (committed) file, and every import
+//           that could not be found anywhere. These are ordinary doubts for the model to weigh, not unseen files.
+// The whole chain is walked (up to MAX_FILES), so everything is listed, not only the first failure. `ok` is true only when
+// both lists are empty (the old "committed and unchanged" answer).
 export async function projectScriptChain(file, opts = {}) {
-  const cache = opts.cache || new Map(), seen = new Set(), todo = [file], bad = [];
+  const cache = opts.cache || new Map(), seen = new Set(), todo = [file], bad = [], doubtOf = new Map();
+  const doubt = (f, why) => { const k = norm(f); if (!doubtOf.has(k)) doubtOf.set(k, { path: f, why: [] }); const d = doubtOf.get(k); if (!d.why.includes(why)) d.why.push(why); };
   while (todo.length) {
     const f = todo.pop(), k = norm(f);
     if (seen.has(k)) continue;
     seen.add(k);
-    if (seen.size > MAX_FILES) { bad.push({ path: f, note: `the chain loads more than ${MAX_FILES} files, the rest are not listed` }); break; }
-    if (!(await isCommittedFile(f, { ...opts, cache }))) bad.push({ path: f });
-    if (!/\.(mjs|cjs|js|jsx|ts|tsx|py)$/i.test(f)) continue;   // other kinds are not followed
-    let text;
-    try { if (statSync(f).size > MAX_FILE_BYTES) { bad.push({ path: f, note: 'too big to follow what it loads' }); continue; } text = readFileSync(f, 'utf8'); } catch { bad.push({ path: f, note: 'could not be read to follow what it loads' }); continue; }
-    const { specs, unresolvable } = importsOf(text, f);
-    if (unresolvable) bad.push({ path: f, note: 'it loads a file named at run time, not shown' });
-    for (const s of specs) {
-      const r = resolveImport(s, /\.py$/i.test(f));
-      if (!r) { bad.push({ path: f, note: `it loads ${basename(s)}, which could not be found, so it is not shown` }); continue; }
-      if (!/\.json$/i.test(r)) todo.push(r);
+    const changed = !(await isCommittedFile(f, { ...opts, cache }));
+    const entry = { path: f, changed, notShown: [] };
+    // What cannot be followed in this file: not shown when the file itself is changed (the check has not seen what it loads), a
+    // doubt when it is committed and unchanged (the hub only could not follow it).
+    const unseen = why => (changed ? entry.notShown.push(why) : doubt(f, why));
+    if (seen.size > MAX_FILES) { unseen(`the chain loads more than ${MAX_FILES} files, the rest are not listed`); if (changed || entry.notShown.length) bad.push(entry); break; }
+    const follow = /\.(mjs|cjs|js|jsx|ts|tsx|py)$/i.test(f);   // other kinds are not followed
+    if (follow) {
+      let text = null;
+      try { if (statSync(f).size > MAX_FILE_BYTES) unseen('too big to follow what it loads'); else text = readFileSync(f, 'utf8'); } catch { unseen('could not be read to follow what it loads'); }
+      if (text !== null) {
+        const { specs, unresolvable } = importsOf(text, f);
+        if (unresolvable) unseen('it loads a file named at run time, not shown');
+        for (const s of specs) {
+          const r = resolveImport(s, /\.py$/i.test(f));
+          if (!r) { doubt(f, `it loads ${basename(s)}, which could not be found`); continue; }   // a doubt everywhere: nothing there to show
+          if (!/\.json$/i.test(r)) todo.push(r);
+        }
+      }
     }
+    if (changed || entry.notShown.length) bad.push(entry);
   }
-  return { ok: bad.length === 0, bad };
+  const doubts = [...doubtOf.values()].map(d => `${d.path}: ${d.why.join('; ')}`);
+  return { ok: bad.length === 0 && doubts.length === 0, bad, doubts };
 }
 
 function expandGlob(path) {
@@ -702,8 +787,9 @@ function findPackageJson(from, projectDir) {
 
 // What the Auto gate (hub.mjs gateScript) learns about each script the command runs. Each entry:
 //   { path, kind: 'committed' }                              project script, committed and unchanged (and everything it loads)
-//   { path, kind: 'uncommitted', files }                     a file that exists but is not, or loads one that is not: the check judges it.
-//                                                            files: the failed files of its chain, { path, note? } (a note: not shown)
+//   { path, kind: 'uncommitted', files, doubts }             a file that exists but is not, or loads one that is not: the check judges it.
+//                                                            files: the files of its chain to show { path, changed, notShown[] };
+//                                                            doubts: one plain line per file the hub could not follow (projectScriptChain)
 //   { path, kind: 'missing' | 'unreadable' | 'unknown', note } a script the hub could not resolve to a file
 // `unread` is true when a script could not be resolved to a file, or inline code loads one the hub has not seen. The gate lets a
 // command through at once only when `unread` is false and every entry is 'committed'.
@@ -752,7 +838,7 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
   for (const it of items) unique.set(it.kind ? `${it.kind}\u0000${it.path}` : norm(it.path), it);
   items.length = 0; items.push(...unique.values());
   if (items.length > MAX_SCRIPTS) {   // more than can be told about: the rest are not seen, so it cannot be allowed
-    out.push({ path: `${items.length - MAX_SCRIPTS} more scripts`, kind: 'unreadable', note: `more than ${MAX_SCRIPTS} scripts run, the rest are not listed` });
+    out.push({ path: `${items.length - MAX_SCRIPTS} more scripts`, kind: 'unreadable', note: `more than ${MAX_SCRIPTS} scripts run, the rest are not listed`, notShown: true });
     items.length = MAX_SCRIPTS;
   }
   for (const it of items) {
@@ -767,7 +853,7 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     // `files` (only when not committed): the files of its chain that failed, so the check is shown those and not the unchanged top
     // script (a committed script that imports a changed file: the changed file is what matters).
     const chain = await projectScriptChain(it.path, opts);
-    out.push(chain.ok ? { path: it.path, kind: 'committed' } : { path: it.path, kind: 'uncommitted', files: chain.bad });
+    out.push(chain.ok ? { path: it.path, kind: 'committed' } : { path: it.path, kind: 'uncommitted', files: chain.bad, doubts: chain.doubts });
   }
   // Text run as a command (iex, eval) is never a file the hub could read, wherever it sits in the command.
   if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|(?:^|[;&|(\s])eval\s/i.test(String(cmd || '')) && !inlineLoads.includes('evals text')) inlineLoads.push('evals text');

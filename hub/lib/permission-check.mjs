@@ -63,7 +63,7 @@ export const OTHER_PROJECTS_FACT = '- Another hub project\'s own data (its .crux
 // Shadow comparison of 2026-11-17 (M054): the model was escalating test-hub stops and unseen scripts, and allowing edits the
 // orchestrator refuses by house rule. These are the orchestrator's own working knowledge, said plainly (decision 73: facts,
 // not code layers).
-export const SCRIPT_FACT = '- When the command runs a script that is not committed or has changed, the request shows the text of the file that is new or changed (marked "script"; a committed script that loads a changed file shows that file), as the orchestrator could read it. Judge it by what it does. Escalate only when a script FILE the command runs exists but is listed as not shown (too big, binary, unreadable, kept back, over the count, or loading a file named at run time): you have not seen it. Anything else the hub could not read (a path or argument built at run time, a program it does not know, a missing file) is an ordinary doubt: judge it like any request.';
+export const SCRIPT_FACT = '- When the command runs a script that is not committed or has changed, the request shows the text of the file that is new or changed (marked "script"; a committed script that loads a changed file shows that file), as the orchestrator could read it (a changed file too big to show whole is shown as its change from main). Judge it by what it does. Escalate only when a script FILE the command runs exists but is listed as not shown (too big, binary, unreadable, kept back, over the count, or loading a file named at run time): you have not seen it. Anything else the hub could not read (a path or argument built at run time, a program it does not know, a missing file) is an ordinary doubt: judge it like any request.';
 export const HOUSE_RULES_FACT = '- House rules the orchestrator enforces: change files with the Edit or Write tool, not with sed -i, a PowerShell or Node read-and-write-back, or an inline script that rewrites a file (deny, and say to use Edit; this holds for the worker\'s own temp scripts too). A test hub a worker starts takes --no-agents, so it can never start agents on Matt\'s plan (deny a start without it, and say so). rm, rmdir and Remove-Item are fine only on folders the worker made in its own worktree or in the temp folder: the request lists "Temp folders this worker made" (the hub\'s own record), and a temp folder not on that list, or any other folder it did not make, escalates. Stopping a test hub with hub/tools/stop-test-hub.mjs is fine for a port in "Test hubs this worker started", and only those.';
 export const JSON_ONLY ='Reply with one JSON object and nothing else: {"answer": "allow" | "deny" | "escalate", "reason": "<one plain line, at most 25 words>"}. No text before it or after it, no reasoning, no code fence.';
 
@@ -111,7 +111,7 @@ export function buildSuffix({ worker, goal, tool, input, cwd, doubts = [], testP
   } else lines.push(f.open('input'), JSON.stringify(input ?? {}, null, 1), f.close);
   // The text of a script the command runs that is not committed or has changed (see scriptTexts), or why it is not shown.
   for (const s of scripts || []) {
-    if (typeof s?.text === 'string') lines.push(f.open(`script ${one(s.path)}`), s.text, f.close);
+    if (typeof s?.text === 'string') lines.push(f.open(`script ${one(s.path)}${s.diff ? ' (its change from main, as a diff; the file is too big to show whole)' : ''}`), s.text, f.close);
     else lines.push(`Script ${one(s?.path)} is not shown: ${one(s?.note || 'not read')}`);
   }
   // The hub's reasons quote the worker's own command (a program name, a URL, a path), so they sit inside a fence too.
@@ -129,28 +129,49 @@ export function buildSuffix({ worker, goal, tool, input, cwd, doubts = [], testP
 export const SCRIPT_MAX_BYTES = 16 * 1024;
 export const SCRIPT_MAX_TOTAL = 40 * 1024;
 export const SCRIPT_MAX_FILES = 5;
-export function scriptTexts(list, { readFile = readFileSync, stat = statSync } = {}) {
+// A changed file over the cap is shown as its change from the merge-base with main (`diff`, an async path -> text or null), capped
+// the same; only a change over the cap (or no change to show: an untracked file) is "not shown". Async for that reason.
+// One line per file: the several reasons a file's load could not be followed are joined.
+export async function scriptTexts(list, { readFile = readFileSync, stat = statSync, diff = null } = {}) {
   const out = [];
   let total = 0, shown = 0;
   const seen = new Set();
   const files = [];
   for (const s of list || []) {
-    if (!s || s.kind !== 'uncommitted') continue;
-    for (const f of (s.files?.length ? s.files : [{ path: s.path }])) { const k = `${String(f.path).toLowerCase()}\u0000${f.note || ''}`; if (!seen.has(k)) { seen.add(k); files.push(f); } }
+    if (!s) continue;
+    if (s.notShown === true) { out.push({ path: s.path, note: s.note || 'not listed' }); continue; }   // e.g. more than 8 scripts run
+    if (s.kind !== 'uncommitted') continue;
+    for (const f of (Array.isArray(s.files) ? s.files : [{ path: s.path, changed: true, notShown: [] }])) {
+      const k = String(f.path).toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k); files.push(f);
+    }
   }
   for (const s of files) {
-    if (s.note) { out.push({ path: s.path, note: s.note }); continue; }
-    if (secretFileName(s.path)) { out.push({ path: s.path, note: 'kept back: named like a secret or key file' }); continue; }
-    if (shown >= SCRIPT_MAX_FILES) { out.push({ path: s.path, note: `more than ${SCRIPT_MAX_FILES} scripts; the rest are not shown` }); continue; }
-    try {
-      const size = stat(s.path).size;
-      if (size > SCRIPT_MAX_BYTES) { out.push({ path: s.path, note: `too big to show (${size} bytes; the limit is ${SCRIPT_MAX_BYTES})` }); continue; }
-      const text = String(readFile(s.path, 'utf8'));
-      if (text.includes('\u0000')) { out.push({ path: s.path, note: 'not a text file' }); continue; }
-      if (total + text.length > SCRIPT_MAX_TOTAL) { out.push({ path: s.path, note: 'too much script text for one request; not shown' }); continue; }
-      total += text.length; shown++;
-      out.push({ path: s.path, text });
-    } catch (e) { out.push({ path: s.path, note: `could not be read (${e?.code || 'error'})` }); }
+    if (s.changed !== false) {
+      const note = why => out.push({ path: s.path, note: why });
+      if (secretFileName(s.path)) note('kept back: named like a secret or key file');
+      else if (shown >= SCRIPT_MAX_FILES) note(`more than ${SCRIPT_MAX_FILES} scripts; the rest are not shown`);
+      else {
+        try {
+          const size = stat(s.path).size;
+          let text = null, isDiff = false;
+          if (size > SCRIPT_MAX_BYTES) {
+            const d = diff ? await diff(s.path) : null;
+            if (typeof d === 'string' && d.length <= SCRIPT_MAX_BYTES && !d.includes('\u0000')) { text = d; isDiff = true; }
+            else note(`too big to show (${size} bytes; the limit is ${SCRIPT_MAX_BYTES})${typeof d === 'string' ? ' and its change from main is too big too' : ' and there is no change from main to show instead'}`);
+          } else {
+            text = String(readFile(s.path, 'utf8'));
+            if (text.includes('\u0000')) { note('not a text file'); text = null; }
+          }
+          if (text !== null) {
+            if (total + text.length > SCRIPT_MAX_TOTAL) note('too much script text for one request; not shown');
+            else { total += text.length; shown++; out.push({ path: s.path, text, ...(isDiff ? { diff: true } : {}) }); }
+          }
+        } catch (e) { note(`could not be read (${e?.code || 'error'})`); }
+      }
+    }
+    if (s.notShown?.length) out.push({ path: s.path, note: s.notShown.join('; ') });   // what this file loads that the check cannot see
   }
   return out;
 }

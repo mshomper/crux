@@ -24,7 +24,7 @@ import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage, FABLE_NOTE } from './usage.mjs';
 import { PermissionCheck, CHECK_NAME, CHECK_MODEL, sdkCall, apiCall, scriptTexts } from './permission-check.mjs';
-import { scriptsFor, parseCommand } from './permission-scripts.mjs';
+import { scriptsFor, parseCommand, changedDiff } from './permission-scripts.mjs';
 import { totalsOf, sumCost } from '../public/usage.js';
 import { summariseDue, SUMMARY_MODEL } from './month-summaries.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
@@ -1559,35 +1559,57 @@ export class Hub {
   // writes a check_shadow line. The text of an uncommitted or changed script is sent with the request, capped (M054).
   async gateScript(p, agent, toolName, input, route, { signal, title, description, suggestions, noteStarts = () => {}, subagent = null } = {}) {
     const g = route.scriptGate;
-    let scripts = null;
-    try {
-      scripts = await scriptsFor(String(input?.command || ''), { cwd: g.cwd, projectDir: p.dir, shell: toolName === 'PowerShell' ? 'powershell' : 'bash', ...(this.checkGit ? { git: this.checkGit } : {}) });
-    } catch (e) { console.warn('Script look-up failed:', e?.message || e); }
-    const clean = !!scripts && !scripts.unread && scripts.scripts.every(s => s.kind === 'committed');
-    if (clean) { noteStarts(); return { behavior: 'allow', updatedInput: input }; }
+    // In shadow mode the answer is allow whatever the look-up finds, so the worker is not made to wait for it (the walk of a
+    // script's chain took seconds): it is allowed at once, and the look-up, the permission_answer line and the check run beside it.
+    if (g.mode === 'shadow') {
+      noteStarts();
+      this.shadowGate(p, agent, toolName, input, g, subagent);
+      return { behavior: 'allow', updatedInput: input };
+    }
+    const look = await this.lookUpScripts(p, toolName, input, g);
+    if (look.clean) { noteStarts(); return { behavior: 'allow', updatedInput: input }; }
     if (signal?.aborted) return { behavior: 'deny', message: 'Cancelled' };
+    const checkRoute = { to: CHECK_NAME, check: true, stops: [], rules: g.rules, unsure: look.unsure, cwd: g.cwd, scripts: look.shown };
+    if (agent.expedition) return this.quietCheck(p, agent, toolName, input, checkRoute, { signal, noteStarts, subagent });   // no card, no waiting entry
+    return this.openApproval(p, agent, toolName, input, checkRoute, { signal, title, description, suggestions, waitedMs: Date.now() - g.since, noteStarts });
+  }
+
+  // What the script gate learns about the scripts a command runs: { clean: true } when every one is committed and unchanged, else
+  // { clean: false, unsure, shown }: the hub's reasons (ordinary doubts for the model, decision 73) and the text of the changed
+  // files, or why they are not shown (permission-check.mjs scriptTexts).
+  async lookUpScripts(p, toolName, input, g) {
+    let scripts = null;
+    const git = this.checkGit || undefined;
+    try {
+      scripts = await scriptsFor(String(input?.command || ''), { cwd: g.cwd, projectDir: p.dir, shell: toolName === 'PowerShell' ? 'powershell' : 'bash', ...(git ? { git } : {}) });
+    } catch (e) { console.warn('Script look-up failed:', e?.message || e); }
+    if (!!scripts && !scripts.unread && scripts.scripts.every(s => s.kind === 'committed')) return { clean: true };
     const unsure = [scripts ? 'Auto mode would allow it because it runs a script inside the project, but that script (or something it loads) is not committed and unchanged from main'
       : 'Auto mode would allow it because it runs a script inside the project, and the hub could not look at the script'];
-    // The text of the uncommitted or changed scripts goes with the request, as the orchestrator could read it (capped; a script too
-    // big or unreadable is listed as not shown, and the model escalates). Nothing is scanned or held back in code (decision 73).
-    const shown = scriptTexts(scripts ? scripts.scripts : []);
-    // Everything else the hub could not read is an ordinary doubt for the model to weigh, as for any request (decision 73): it is
-    // not a reason to escalate by itself.
-    for (const s of scripts?.scripts || []) if (s.kind !== 'committed' && s.kind !== 'uncommitted') unsure.push(`${s.path}: ${s.note || 'the hub could not resolve it to a file'}`);
+    let shown = [];
+    try { shown = await scriptTexts(scripts ? scripts.scripts : [], { diff: file => changedDiff(file, git ? { git } : {}) }); } catch (e) { console.warn('Script text not read:', e?.message || e); }
+    // Everything else the hub could not read is an ordinary doubt for the model to weigh, as for any request (decision 73), one
+    // line per file: it is not a reason to escalate by itself.
+    for (const s of scripts?.scripts || []) {
+      if (s.kind === 'uncommitted') unsure.push(...(s.doubts || []));
+      else if (s.kind !== 'committed' && s.notShown !== true) unsure.push(`${s.path}: ${s.note || 'the hub could not resolve it to a file'}`);
+    }
     for (const l of scripts?.inlineLoads || []) unsure.push(`code written in the command loads something the hub has not seen (${l})`);
-    if (g.mode === 'shadow') {
-      // Allowed as today. The check reads it beside, and the allow is logged under the same request id so the study can compare.
+    return { clean: false, unsure: [...new Set(unsure)], shown };
+  }
+
+  // Shadow mode, beside the worker (never awaited by it): look at the scripts, and when they are not all committed and unchanged,
+  // log the hub's allow under a request id and let the check read the request, so the study can compare. Never rejects.
+  async shadowGate(p, agent, toolName, input, g, subagent = null) {
+    try {
+      const look = await this.lookUpScripts(p, toolName, input, g);
+      if (look.clean) return;
       const id = randomUUID();
       const i = input || {};
       // An expedition agent's line is filed in its own thread and tagged, never in the orchestrator's (decision 71).
       p.log.append('permission_answer', { thread: agent.expedition ? agent.thread : 'orchestrator', approval: id, worker: agent.name, workerThread: agent.thread, tool: toolName, command: String(i.command || '').slice(0, 400), answer: 'allow', reason: 'Auto mode: it runs a script inside the project (the check reads it in shadow mode only)', by: 'hub', ...(agent.expedition ? { expedition: agent.expedition, ...(subagent ? { subagent } : {}) } : {}) });
-      this.runShadow(id, { p, agent, toolName, input, route: { unsure, cwd: g.cwd, rules: g.rules, scripts: shown } });
-      noteStarts();
-      return { behavior: 'allow', updatedInput: input };
-    }
-    const checkRoute = { to: CHECK_NAME, check: true, stops: [], rules: g.rules, unsure, cwd: g.cwd, scripts: shown };
-    if (agent.expedition) return this.quietCheck(p, agent, toolName, input, checkRoute, { signal, noteStarts, subagent });   // no card, no waiting entry
-    return this.openApproval(p, agent, toolName, input, checkRoute, { signal, title, description, suggestions, waitedMs: Date.now() - g.since, noteStarts });
+      await this.runShadow(id, { p, agent, toolName, input, route: { unsure: look.unsure, cwd: g.cwd, rules: g.rules, scripts: look.shown } });
+    } catch (e) { console.warn('Shadow script gate failed:', e?.message || e); }
   }
 
   // While paused: a card for you. If the request is also a hard stop, its reasons stay on the card next to the pause, so
