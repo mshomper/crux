@@ -40,6 +40,33 @@ export function onCurve(a, c, b, u) {
   return { x: v * v * a.x + 2 * v * u * c.x + u * u * b.x, y: v * v * a.y + 2 * v * u * c.y + u * u * b.y };
 }
 
+// ---------- a worker's own ring (decision 77 A, satellites) ----------
+// How far the ring sits from the station's centre, in station radii: the label and the hover card start beyond it.
+export const RING_REACH = 1.62;
+export const RING_MAX = 161;   // particles one ring writes at most
+// Particles in the worker's hue round its robot, lit clockwise from the top for its share of context (frac, 0..1), with
+// a bright head where the lit arc ends, and gold over its last fifth. Turns fast while it works, slowly when idle,
+// barely when asleep, and breathes while it rests. s: { x, y, r } in panel pixels; n: particles (at most 160).
+export function stationRing(out, o, s, { hue, frac = 0, state = 'idle', t = 0, seed = 0, n = 160, alpha = 1 } = {}) {
+  const busy = state === 'working' || state === 'starting', asleep = state === 'asleep';
+  const sp = busy ? 1.3 : asleep ? 0.1 : 0.4, br = (asleep ? 0.5 : 1) * alpha;
+  const reach = s.r * RING_REACH * (busy ? 1 : 1 + 0.045 * Math.sin(t * 1.5 + seed * 6.283));
+  const warm = clamp((frac - 0.8) / 0.2, 0, 1), on = mix3(hue, TONE.handoff, warm), lit = mix3(on, [1, 1, 1], 0.15), head = mix3(on, [1, 1, 1], 0.5);
+  const k1 = clamp(s.r / 21, 0.55, 1.15);
+  const put = (x, y, size, c, a) => { const k = o++ * STRIDE; out[k] = x; out[k + 1] = y; out[k + 2] = size; out[k + 3] = c[0]; out[k + 4] = c[1]; out[k + 5] = c[2]; out[k + 6] = a; };
+  n = Math.min(n, RING_MAX - 1);
+  for (let i = 0; i < n; i++) {
+    const j = (i * 0.618034 + seed) % 1, a = (i / n) * 2 * Math.PI + t * sp + seed * 6.283, rr = reach * (1 + (j - 0.5) * 0.14);
+    const dx = Math.cos(a), dy = Math.sin(a);
+    let th = Math.atan2(dx, -dy);
+    if (th < 0) th += 2 * Math.PI;
+    const isLit = th / (2 * Math.PI) < frac;
+    put(s.x + dx * rr, s.y + dy * rr, (isLit ? 1.5 : 1.05) * k1, isLit ? lit : hue, (isLit ? 0.85 : 0.14) * br);
+  }
+  if (frac > 0.005) { const ta = frac * 2 * Math.PI; put(s.x + Math.sin(ta) * reach, s.y - Math.cos(ta) * reach, 3.2 * k1, head, br); }
+  return o;
+}
+
 // ---------- pulses, orbiters, dust ----------
 export class Effects {
   constructor() {
@@ -104,7 +131,9 @@ export class Effects {
 
     for (const [id, s] of L.at) {
       const st = info.get(id);
-      if (!st || st.kind !== 'worker') continue;
+      // none for a worker folded into the strip's chip; an orchestrator's own workers wear their particle ring instead
+      // (stationRing, decision 77), so the orbiting dots stay with an expedition's stations
+      if (!st || st.kind !== 'worker' || !st.cluster || (st.fade ?? 1) < 0.05) continue;
       const sp = this.spin.get(id) || { phase: Math.random() * 6.28, boostUntil: 0 };
       this.spin.set(id, sp);
       const boosted = now < sp.boostUntil;
