@@ -175,7 +175,7 @@ export class Agent {
 
   // The Lead's gatherer definition for the query's `agents` option (decision 68 C): the expedition-gatherer type file, with
   // the model and effort the launch screen picked for the gatherers (hub.json defaults and the file otherwise). The Lead
-  // calls it with the Agent tool; the limit of 4 at once and one second round is in its file and brief. null for anyone else.
+  // calls it with the Agent tool; the allowance (4 at once, 8 runs in all) is in its file and brief and enforced in the hook below (decision 75). null for anyone else.
   expeditionAgents() {
     if (this.expeditionRole !== 'lead' || !this.expedition) return null;
     const p = this.project;
@@ -246,7 +246,7 @@ export class Agent {
         this.noteCwd(input); this.noteSubagent(input);
         // A tool the Lead has only to hand on to its gatherers is not the Lead's to use: research is theirs, in cheap contexts.
         const borrowedUse = !input?.agent_id && borrowed.includes(input?.tool_name) ? `${input.tool_name} is for your gatherers: send one with the Agent tool` : null;
-        const why = borrowedUse || (input?.agent_id ? null : this.hub.expeditionToolBlock?.(p, this, input?.tool_name)) || this.hub.expeditionFrozenBlock?.(p, this, input);
+        const why = borrowedUse || (input?.agent_id ? this.hub.gathererToolBlock?.(this, input) : this.hub.expeditionToolBlock?.(p, this, input?.tool_name, input)) || this.hub.expeditionFrozenBlock?.(p, this, input);
         return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : {};
       }] }] },
       ...(builtIn?.length ? { tools: builtIn } : {}),
@@ -410,6 +410,8 @@ export class Agent {
       this.inTurn = false;
       this.logUsage(m);
       if (this.expedition) this.hub.expeditionWatch?.onResult(this);   // the result's figure replaces the estimate
+      // The Lead's turn is over: a gatherer call it was let make that never started a task will not start one now.
+      if (this.expeditionRole === 'lead') new Expedition(this.project, this.expedition).gathererExpire({ all: true });
       // A refused effort level may come back as an error result instead: lower it and run the message again.
       const errText = m.is_error ? [m.result, ...(m.errors || [])].filter(Boolean).join(' ') : '';
       if (errText && this.q === q && this.lowerForRefusal(errText)) return this.restartAfterRefusal();
@@ -443,7 +445,7 @@ export class Agent {
 
   // The Expedition module (decision 68 C, plan 2b item 5): the Lead's gatherers are Claude Code subagents inside its query.
   // The SDK says when one starts, how far it has got, and how it ended; the hub counts them (the map's badge) and logs each
-  // as an expedition_subagent event. It does not cap them: the limit of 4 at once and one second round is in the Lead's
+  // as an expedition_subagent event. It does not cap them (the PreToolUse hook does, decision 75); the allowance is also in the Lead's
   // file and brief. Background and housekeeping tasks (a shell, a watcher) are not gatherers and are left out.
   onTask(m) {
     if (m.ambient || m.skip_transcript || (m.task_type && m.task_type !== 'local_agent')) return;
@@ -466,16 +468,29 @@ export class Agent {
       if (!t) return;   // not one the hub saw start (a restart in between): nothing to close
       live.delete(id);
       const tokens = Number.isFinite(m.usage?.total_tokens) ? m.usage.total_tokens : t.tokens;
-      ex.subagent({ phase: 'ended', subagentType: t.type, taskId: id, tokens, status: m.status || null });
+      ex.subagent({ phase: 'ended', subagentType: t.type, taskId: id, tokens, status: m.status || null, ...this.takeGathererUse(id) });
     }
   }
 
-  // A new query cannot have the old one's subagents: any the log still shows as running ended with it.
+  // The gatherer's web search and page open counts (hub.gathererToolBlock keeps them by its id), taken out of memory as it ends
+  // and put on its ended event: { searches, opens }, or nothing when none were counted. A gatherer never outlives its query, and
+  // a restarted query closes every open one (below), so there is nothing to restore from the log.
+  takeGathererUse(id) {
+    const u = this.gathererUse?.get(id);
+    if (!u) return {};
+    this.gathererUse.delete(id);
+    return { searches: u.searches, opens: u.opens };
+  }
+
+  // A new query cannot have the old one's subagents: any the log still shows as running ended with it. Gatherer calls the hub
+  // let through that never became tasks are given up too (decision 75), so they hold neither a slot nor a run.
   closeOpenSubagents() {
     const ex = new Expedition(this.project, this.expedition);
     const open = new Map();
     for (const e of ex.state().subagents) { if (e.phase === 'started') open.set(e.taskId, e); else open.delete(e.taskId); }
-    for (const e of open.values()) ex.subagent({ phase: 'ended', subagentType: e.subagentType, taskId: e.taskId, status: 'stopped' });
+    for (const e of open.values()) ex.subagent({ phase: 'ended', subagentType: e.subagentType, taskId: e.taskId, status: 'stopped', ...this.takeGathererUse(e.taskId) });
+    ex.gathererExpire({ all: true });
+    this.gathererUse = new Map();
     this.subagents = new Map();
   }
 

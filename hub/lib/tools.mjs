@@ -139,7 +139,7 @@ export function cruxTools(hub, project, agent) {
           test_files: z.array(z.object({ name: z.string().describe('CHECKLIST.md or run.json (a plain file name).'), content: z.string() })).optional().describe('Only when the user named the test. Otherwise leave out: the Lead drafts it.'),
           hours: z.number().positive().optional().describe('Time limit in hours. Leave out for the default.'),
           percent: z.number().positive().optional().describe('Budget as a percent of the week\'s plan. Leave out for the default.'),
-          gatherers: z.number().int().min(1).max(4).optional().describe('How many gatherers at once (up to 4).'),
+          gatherers: z.number().int().min(1).max(4).optional().describe('How many gatherers at once (up to 4). Whatever this is, an expedition gets one second round and 8 gatherer runs in all; the hub refuses a ninth.'),
           sites: z.array(z.object({ host: z.string(), access: z.enum(['pages', 'downloads']).optional(), pin: z.string().optional().describe('A path like /owner/repo, required to allow downloads from an open host.') })).optional().describe('Sites the expedition may read without asking.'),
           packages: z.array(z.object({ eco: z.enum(['npm', 'pip', 'huggingface']), name: z.string(), baseMajor: z.number().int().optional(), revision: z.string().optional().describe('Hugging Face only: the full 40-character commit.') })).optional().describe('Packages the expedition may install without asking.')
         },
