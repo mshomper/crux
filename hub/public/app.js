@@ -317,7 +317,8 @@ function renderHubMenu() {
     ? `<div class="hm-confirm"><b>Restart the hub now?</b>
         <p class="faint">${busy.length ? `${list} ${busy.length === 1 ? 'is' : 'are'} working; ${busy.length === 1 ? 'it resumes' : 'they resume'} on ${busy.length === 1 ? 'its' : 'their'} own after the restart${busy.length > 1 ? ', a few seconds apart' : ''}.` : 'No agent is working, so none needs resuming; resting agents wake on their next message.'} The page reconnects by itself.</p>
         <div class="row"><button class="btn primary" data-restart-go>${icon('restart')}Restart</button><button class="btn ghost" data-hub-menu-close>Cancel</button></div></div>`
-    : `<button class="hm-item" role="menuitem" data-hub-settings>${icon('hub')}<span><b>Whole hub</b><span class="faint">Who answers requests, the wait, handoff defaults</span></span></button>
+    : `<button class="hm-item" role="menuitem" data-account>${icon('user')}<span><b>Account</b><span class="faint">Which account the agents use, and your profile</span></span></button>
+       <button class="hm-item" role="menuitem" data-hub-settings>${icon('hub')}<span><b>Whole hub</b><span class="faint">Who answers requests, the wait, handoff defaults</span></span></button>
        <button class="hm-item" role="menuitem" data-devices>${icon('key')}<span><b>Devices</b><span class="faint">${guardUI.paired ? 'Paired devices, passkeys and notifications' : 'This device is not paired: pair it'}</span></span></button>
        <button class="hm-item" role="menuitem" data-restart>${icon('restart')}<span><b>Restart hub</b><span class="faint">Stops and starts the server; agents resume</span></span></button>
        <button class="hm-item" role="menuitem" data-phone-check>${icon('pulse')}<span><b>${phoneCheck.on ? 'Hide phone check' : 'Phone check'}</b><span class="faint">${phoneCheck.on ? 'Turns the screen numbers off' : 'Live screen numbers, for a screenshot'}</span></span></button>`;
@@ -366,7 +367,8 @@ function showRestarting(title, sub, warn = false, done = false) {
 $('#rs-close').addEventListener('click', () => { $('#restarting').hidden = true; });
 $('#hub-menu-btn').addEventListener('click', () => { S.hubMenu = S.hubMenu ? null : 'menu'; renderHubMenu(); $('#hub-menu .hm-item')?.focus(); });
 $('#hub-menu').addEventListener('click', e => {
-  if (e.target.closest('[data-hub-settings]')) { closeHubMenu(); settingsCards.openHub(); }
+  if (e.target.closest('[data-account]')) { closeHubMenu(); accountCard.show(); }   // the same card as the usage panel's Account button (decision 78 A)
+  else if (e.target.closest('[data-hub-settings]')) { closeHubMenu(); settingsCards.openHub(); }
   else if (e.target.closest('[data-devices]')) { closeHubMenu(); guardUI.paired ? guardUI.openDevices() : guardUI.openPair(); }
   else if (e.target.closest('[data-restart]')) { S.hubMenu = 'confirm'; renderHubMenu(); $('#hub-menu [data-restart-go]')?.focus(); }
   else if (e.target.closest('[data-restart-go]')) act(restartHub);
