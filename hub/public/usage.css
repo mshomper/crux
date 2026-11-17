@@ -13,6 +13,10 @@
 
 .um{--c:var(--mh,var(--hud-cyan));display:grid;grid-template-columns:36px minmax(0,1fr) 30px;align-items:center;gap:6px;font-size:10.5px;line-height:13px;letter-spacing:.02em;white-space:nowrap}
 .um-r{display:none}
+/* the tight strip (set by the map from the layout): three thin bars with no words; the percent is the hover text */
+.strip-tight .usage-meters{gap:8px;padding:8px 7px}
+.strip-tight .um{grid-template-columns:minmax(0,1fr)}
+.strip-tight .um-l,.strip-tight .um-p{display:none}
 .um-l{font-style:normal;letter-spacing:.06em;text-transform:uppercase;color:var(--hud-dim);overflow:hidden;text-overflow:ellipsis}
 .um-p{font-style:normal;text-align:right;color:var(--hud-ice)}
 .um-r{text-decoration:none;text-align:right;color:var(--hud-dim)}

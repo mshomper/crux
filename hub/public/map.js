@@ -39,6 +39,7 @@ const ICON = {
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   ghost: '<circle cx="12" cy="6" r="2.5"/><circle cx="6" cy="17" r="2.5"/><circle cx="18" cy="17" r="2.5"/><path d="M11 8.2L7.2 14.8M13 8.2l3.8 6.6"/>'
 };
 const svg = (name, cls = 'hud-i') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]}</svg>`;
@@ -109,7 +110,7 @@ export class LiveMap {
         <div class="hud-bg"></div>
         <canvas class="hud-lines" aria-hidden="true"></canvas>
         <canvas class="hud-glow" aria-hidden="true"></canvas>
-        <div class="hud-stations"></div>
+        <div class="hud-stations"><button type="button" class="hud-more" hidden></button></div>
         <div class="hud-exp" hidden>
           <b class="ex-t"></b><span class="ex-s"></span>
           <button type="button" class="ex-stop" data-exp-stop hidden>${svg('stop')}</button>
@@ -140,6 +141,7 @@ export class LiveMap {
     this.glCanvas = q('.hud-glow');
     this.lineCanvas = q('.hud-lines');
     this.stationsEl = q('.hud-stations');
+    this.moreEl = q('.hud-more');
     this.expEl = q('.hud-exp');
     this.warnEl = q('.ex-warn');
     this.feedEl = q('.tele-feed ol');
@@ -436,8 +438,10 @@ export class LiveMap {
       ? (count ? `${count} waiting for your call across ${this.hub.projects} projects (${needs} here). Opens All projects` : `Nothing waiting in any of the ${this.hub.projects} projects. Opens All projects`)
       : (count ? `${count} waiting for your call` : 'Nothing waiting for you');
     for (const el of this.needsEls) {
-      const html = count ? `${svg('alert')}<span>Needs you</span><b>${count}</b>` : `<span>All clear</span>`;
+      // the label (.nl) drops out in the tight strip and at 100 or more (the icon and count stay; the tooltip has the words)
+      const html = count ? `${svg('alert')}<span class="nl">Needs you</span><b>${count}</b>` : `${svg('check', 'hud-i chk')}<span class="nl">All clear</span>`;
       if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; }
+      el.classList.toggle('tight', count > 99);
       el.classList.toggle('hot', count > 0);
       el.setAttribute('aria-label', tip);
       el.title = tip;
@@ -536,10 +540,11 @@ export class LiveMap {
     this.hud.resize(w, h, dpr);
     this.renderer?.resize(w, h, Math.min(dpr, 1.5));
     const origin = { x: rect.left, y: rect.top };
+    this.origin = origin;
     let A, B, L;
     if (this.hubMode) {
       // decision 57 C: the Conductor and You in the strip, project bays either side; open, one sector per project
-      A = stripLayout(slot, [], this.phone);
+      A = stripLayout(slot, [], this.phone, null, { all: false });
       const H = hubLayout(tgt, this.places, this.phone);
       B = { core: H.core, at: new Map([['you', H.you]]), labels: true, compact: false, reserve: H.reserve };
       L = blendLayouts(A, B, E, origin);
@@ -551,7 +556,7 @@ export class LiveMap {
       // it sits inside the left zone, which the layout already reserves
       const lead = this.phone && this.panel.classList.contains('up') ? 36 : 0;
       const cl = this.cluster ? { lead: { id: this.cluster.lead.id }, stations: this.cluster.stations.map(s => ({ id: s.id })) } : null;
-      A = stripLayout(lead ? { ...slot, left: slot.left + lead, width: slot.width - lead } : slot, this.workers, this.phone, cl);
+      A = stripLayout(lead ? { ...slot, left: slot.left + lead, width: slot.width - lead } : slot, this.workers, this.phone, cl, { all: this.panel.classList.contains('up') });
       B = radialLayout(tgt, this.workers, this.phone, cl);
       L = blendLayouts(A, B, E, origin);
       this.H = null;
@@ -564,6 +569,8 @@ export class LiveMap {
     this.zoneVars(A);
     this.panel.style.setProperty('--cx', L.core.x.toFixed(1) + 'px');
     this.panel.style.setProperty('--cy', L.core.y.toFixed(1) + 'px');
+    L.fold = A.fold;   // workers folded into the strip's "+N" chip; they come out as the map opens
+    L.foldE = E;
     this.L = L;
     this.size = { w, h };
     this.placeCluster(L);
@@ -576,7 +583,19 @@ export class LiveMap {
     const z = A.zones, s = this.slot.style;
     this.slot.classList.toggle('strip-zoned', !!z);
     this.slot.classList.toggle('strip-wide', !!A.wide);
+    this.slot.classList.toggle('strip-tight', !!A.tight);
+    // the "+N" chip for workers that do not fit in the lane (panel-local coordinates; it fades as the map opens)
+    const f = A.fold;
+    this.moreEl.hidden = !f;
+    if (f) {
+      const txt = `+${f.n}`;
+      if (this.moreEl.textContent !== txt) this.moreEl.textContent = txt;
+      const tip = `${f.n} more agent${f.n === 1 ? '' : 's'}: open the full map to see ${f.n === 1 ? 'it' : 'them'}`;
+      if (this.moreEl.title !== tip) { this.moreEl.title = tip; this.moreEl.setAttribute('aria-label', tip); }
+      this.moreEl.style.transform = `translate(${(f.chip.x - this.origin.x - f.chip.r).toFixed(1)}px,${(f.chip.y - this.origin.y - f.chip.r).toFixed(1)}px)`;
+    }
     if (!z) return;
+    s.setProperty('--tick-y', A.tickerY + 'px');
     s.setProperty('--zl', z.left.w + 'px');
     s.setProperty('--zr', z.right.w + 'px');
     s.setProperty('--lane-x', Math.round(z.lane.x - (z.left.x)) + 'px');
@@ -619,6 +638,10 @@ export class LiveMap {
       const s = info.get(id);
       if (s) info.set(id, { ...s, fade: u });
     }
+    if (L.fold) for (const id of L.fold.ids) {   // folded into the strip's "+N" chip: nothing of them shows until the map opens
+      const s = info.get(id);
+      if (s) info.set(id, { ...s, fade: Math.min(s.fade ?? 1, clamp(L.foldE * 2, 0, 1)) });
+    }
     return info;
   }
 
@@ -632,7 +655,7 @@ export class LiveMap {
       // an expedition's role stations wait on their Lead in the lane (radius 0): nothing of them shows until the map opens
       const folded = !!info.get(id)?.cluster && !info.get(id)?.lead && s.r < 6;
       el.style.opacity = f == null && !folded ? '' : String(folded ? 0 : clamp(f, 0, 1));
-      el.style.pointerEvents = folded ? 'none' : '';
+      el.style.pointerEvents = folded || (f != null && f < 0.05) ? 'none' : '';
     }
   }
 

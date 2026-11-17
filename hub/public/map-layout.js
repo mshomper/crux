@@ -11,7 +11,11 @@ export const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2,
 // inside it), the lane (You, workers, core, workers, Board) in the middle, and the Needs you pill with the expand
 // button at the right. stripLayout returns these numbers; map.js writes them to the page as CSS variables and a
 // class, and the CSS keys off those alone, so the layout and the styles cannot disagree about widths.
-export const STRIP_ZONE = { left: 176, right: 156, ticker: 700 };   // ticker: the narrowest lane that shows the one-line "latest"
+// Normal zones: the meters with their labels at the left, "Needs you" plus a two-digit badge at the right. When the
+// slot is narrow (the thread list and the board panel take their share of the window) the lane would be under
+// `tightBelow`, so the strip goes tight: three thin unlabelled bars and the pill as icon and count, and workers that do
+// not fit at `minStep` apart fold into one "+N" chip. ticker: the narrowest lane that shows the one-line "latest".
+export const STRIP_ZONE = { left: 176, right: 168, ticker: 700, tightBelow: 480, tightLeft: 96, tightLeftBare: 56, tightRight: 112, minStep: 28, chipR: 10 };
 
 // On a phone the plan meters get a row of their own under the map's lane, so they never share a line with the
 // stations. The row's height here must match usage.css (a test checks it).
@@ -25,26 +29,43 @@ export function stripLane(rect, phone, meters) {
 
 // cluster (the Expedition module): its Lead takes a station of its own in the lane (the nearest the core), and its
 // five role stations wait on the Lead at radius 0, so the zoom lets them glide out to the cluster (blendLayouts).
-export function stripLayout(rect, workers, phone, cluster = null) {
+// opts.all: the ALL button is shown (the tight left zone then makes room for it).
+export function stripLayout(rect, workers, phone, cluster = null, opts = {}) {
   if (cluster) workers = [{ id: cluster.lead.id }, ...workers];
   const { left, top, width: w, height: h } = rect;
+  const Z = STRIP_ZONE;
   const at = new Map();
   // zones (desktop only; a phone keeps its one lane and the meters' own row)
-  const zl = phone ? 0 : STRIP_ZONE.left, zr = phone ? 0 : STRIP_ZONE.right;
+  const tight = !phone && w - Z.left - Z.right < Z.tightBelow;
+  const zl = phone ? 0 : tight ? (opts.all ? Z.tightLeft : Z.tightLeftBare) : Z.left;
+  const zr = phone ? 0 : tight ? Z.tightRight : Z.right;
   const laneL = left + zl, laneW = Math.max(0, w - zl - zr);
   const zones = phone ? null : { left: { x: left, w: zl }, right: { x: left + w - zr, w: zr }, lane: { x: laneL, w: laneW }, top, height: h };
   const cx = laneL + laneW / 2, cy = top + h / 2;
+  const small = !phone && laneW < 330;   // a very narrow lane: a smaller core and closer ends
   // a phone's lane is low: the core is sized so its tick scale stays inside it (the outer scale is not drawn there)
-  const coreR = phone ? h * 0.3 : h * 0.25;
+  const coreR = phone ? h * 0.3 : h * (small ? 0.2 : 0.25);
   const sr = phone ? 6 : 12;
-  const pad = phone ? 20 : 10;
+  const pad = phone ? 20 : tight ? 6 : 10;
   const sy = phone ? cy : top + h * 0.42;   // stations sit a little high so labels fit underneath
   const youX = laneL + pad + sr, boardX = laneL + laneW - pad - sr;
   at.set('you', { x: youX, y: sy, r: sr });
   at.set('board', { x: boardX, y: sy, r: sr });
 
-  const right = workers.filter((_, i) => i % 2 === 0), leftSide = workers.filter((_, i) => i % 2 === 1);
-  const gap = coreR * (phone ? 1.9 : 2.3);
+  const gap = coreR * (phone ? 1.9 : small ? 2.1 : 2.3);
+  // Workers that do not fit at minStep apart fold into one "+N" chip, which takes a slot of its own (the workers kept
+  // are the first in the list: the ones that matter most now). The folded ones wait at the chip at radius 0.
+  let items = workers, folded = [];
+  if (!phone) {
+    const span = boardX - sr * 2 - (cx + gap);
+    const cap = Math.max(0, Math.floor(span / Z.minStep - 0.6));
+    if (workers.length > cap * 2) {
+      const keep = Math.max(cluster ? 1 : 0, cap * 2 - 1);
+      items = [...workers.slice(0, keep), { id: '__more' }];
+      folded = workers.slice(keep);
+    }
+  }
+  const right = items.filter((_, i) => i % 2 === 0), leftSide = items.filter((_, i) => i % 2 === 1);
   let spacing = Infinity;
   const place = (list, from, to) => {
     const n = list.length;
@@ -55,11 +76,20 @@ export function stripLayout(rect, workers, phone, cluster = null) {
   };
   place(right, cx + gap, boardX - sr * 2);
   place(leftSide, cx - gap, youX + sr * 2);
+  let fold = null;
+  if (folded.length) {
+    const c = at.get('__more');
+    at.delete('__more');
+    fold = { n: folded.length, ids: folded.map(s => s.id), chip: { x: c.x, y: c.y, r: Z.chipR } };
+    for (const s of folded) at.set(s.id, { x: c.x, y: c.y, r: 0 });
+  }
   if (cluster) { const lead = at.get(cluster.lead.id); for (const s of cluster.stations) at.set(s.id, { x: lead.x, y: lead.y, r: 0 }); }
   const gapPx = Math.min(spacing, 170);
   return {
     core: { x: cx, y: cy, r: coreR }, at, labels: !phone && spacing > 50, compact: phone, spacing: gapPx,
-    zones, wide: !phone && laneW >= STRIP_ZONE.ticker,   // wide: the lane has room for the "latest" line
+    zones, tight, fold, wide: !phone && laneW >= Z.ticker,   // wide: the lane has room for the "latest" line
+    // the ticker's line sits below the worker names (labelBottom), measured from the strip's own top
+    tickerY: phone ? null : Math.round(h - 16), labelBottom: phone ? null : sy + sr + 8 + 13 - top,
     labelW: Math.round(clamp(gapPx - (phone ? 10 : 8), 40, 150))   // a worker's name: one line, as wide as its neighbours allow
   };
 }

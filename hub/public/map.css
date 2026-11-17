@@ -177,13 +177,25 @@
      lane        You, workers, core, workers, Board; the "latest" ticker runs along its bottom edge
      right zone  the Needs you / All clear pill and the expand button, side by side */
 .hud-read{display:none;position:absolute;opacity:clamp(0,calc(1 - var(--e) * 2.4),1);pointer-events:none}
-.strip-zoned .hud-read-r{display:flex;align-items:center;right:46px;top:50%;transform:translateY(-50%);max-width:calc(var(--zr, 156px) - 52px)}
-.strip-zoned.strip-wide .hud-read-l{display:block;left:var(--lane-x);width:var(--lane-w);bottom:3px;box-sizing:border-box;padding:0 30px;text-align:center}
+.strip-zoned .hud-read-r{display:flex;align-items:center;right:46px;top:50%;transform:translateY(-50%);max-width:calc(var(--zr, 168px) - 52px)}
+/* the ticker's line (--tick-y) comes from the layout and sits below the worker names */
+.strip-zoned.strip-wide .hud-read-l{display:block;left:var(--lane-x);width:var(--lane-w);top:var(--tick-y, 108px);box-sizing:border-box;padding:0 30px;text-align:center}
 .hud-ticker{display:block;font-size:10.5px;line-height:13px;letter-spacing:.04em;color:var(--hud-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hud-read-r .hud-needs{pointer-events:auto;min-width:0;max-width:100%}
-.hud-read-r .hud-needs>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hud-ticker::before{content:"Latest";margin-right:10px;font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--hud-faint)}
+.hud-read-r .hud-needs{pointer-events:auto;min-width:0;max-width:100%;white-space:nowrap}
+.hud:not(.docked) .hud-read-r .hud-needs{pointer-events:none}   /* the map is open (or opening): the invisible pill takes no clicks */
 .hud-read-r .hud-needs{letter-spacing:.04em;gap:6px;padding:4px 9px}
 .hud-read-r .hud-needs .hud-i{display:none}
+.hud-needs .chk{display:none}
+/* the tight strip, and a count of 100 or more: the icon and the count, never a cut-off word (the tooltip has the words) */
+.strip-tight .hud-read-r .hud-needs .hud-i,.hud-read-r .hud-needs.tight .hud-i{display:inline;flex:none}
+.strip-tight .hud-read-r .hud-needs .nl,.hud-read-r .hud-needs.tight .nl{display:none}
+.strip-tight .hud-read-r .hud-needs{padding:4px 8px}
+/* workers that do not fit in a narrow lane fold into this chip (the layout places it) */
+.hud-more{position:absolute;left:0;top:0;box-sizing:border-box;width:20px;height:20px;padding:0;border-radius:50%;display:grid;place-items:center;pointer-events:auto;cursor:pointer;
+  font:600 10px/1 var(--mono);letter-spacing:-.02em;color:var(--hud-ice);background:rgba(8,14,22,.9);border:1px solid var(--hud-dim);opacity:clamp(0,calc(1 - var(--e) * 3),1)}
+.hud-more:hover{border-color:var(--hud-ice);box-shadow:0 0 12px rgba(111,227,255,.3)}
+.hud-more[hidden],.hud:not(.docked) .hud-more{display:none}
 
 
 .hud-needs{font:inherit;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;cursor:pointer;

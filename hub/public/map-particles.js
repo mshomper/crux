@@ -104,7 +104,7 @@ export class Effects {
 
     for (const [id, s] of L.at) {
       const st = info.get(id);
-      if (!st || st.kind !== 'worker') continue;
+      if (!st || st.kind !== 'worker' || (st.fade ?? 1) < 0.05) continue;   // none for a worker folded into the strip's chip
       const sp = this.spin.get(id) || { phase: Math.random() * 6.28, boostUntil: 0 };
       this.spin.set(id, sp);
       const boosted = now < sp.boostUntil;
