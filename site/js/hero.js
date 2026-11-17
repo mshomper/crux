@@ -1,6 +1,8 @@
-// The hero: the Hub's own live core (js/core is copied from hub/public, unchanged) with three worker stations.
-// Under prefers-reduced-motion it draws one still frame and stops.
-import { ReservoirCore, stream } from './core/map-core.js';
+// The hero: the Hub's own live core, the dense particle swarm (js/core is copied from hub/public, unchanged), with
+// three worker stations. Particle budget for a public page: about 30,000 on a desktop and 10,000 on a phone (the Hub
+// itself draws 60,000 on its open map). The core's own frame-time probe sheds particles on a slow screen, and the
+// hero stops drawing while it is off screen. Under prefers-reduced-motion it draws one still frame and stops.
+import { SwarmCore, stream } from './core/map-core.js';
 import { createRenderer } from './core/map-gl.js';
 import { HudPainter } from './core/map-hud.js';
 import { STRIDE, bend } from './core/map-particles.js';
@@ -11,11 +13,16 @@ class HeroCore {
     this.glow = el.querySelector('#core-glow');
     this.lines = el.querySelector('#core-lines');
     this.still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    this.core = new ReservoirCore({ light: innerWidth <= 860, seed: 11 });
-    this.mood = { state: 'working', ctx: 42, model: 'claude-opus-5-5', effort: 'high' };
+    const phone = innerWidth <= 860;
+    this.core = new SwarmCore({ light: phone, seed: 11 });
+    // the page's budget, set before the renderer uploads its seeds (the budget object is the core's own)
+    Object.assign(this.core.budget, phone ? { open: 10000, strip: 6000 } : { open: 30000, strip: 15000 });
+    this.core.swarmOut.max = this.core.budget.open;
+    // 36 of 60 used: the lit core fills about three fifths of the sphere (it turns gold only near the handoff mark)
+    this.mood = { state: 'working', ctx: 36, retireAt: 60, model: 'claude-opus-5-5', effort: 'high' };
     this.core.setMood(this.mood);
     this.core.settle();
-    this.renderer = createRenderer(this.glow);
+    this.renderer = createRenderer(this.glow, { power: 'low-power' });
     this.hud = new HudPainter(this.lines);
     this.buf = new Float32Array((this.core.capacity + 120) * STRIDE);
     // angle (radians, 0 = right, clockwise on screen), colour, and whether a stream of particles runs to it
@@ -28,14 +35,25 @@ class HeroCore {
     this.coreLabel = el.querySelector('.c-core');
     new ResizeObserver(() => this.layout()).observe(el);
     this.layout();
-    if (this.still) { for (let k = 0; k < 420; k++) { this.core.step(1 / 60); if (k >= 380) this.draw(0.66); } this.paint(7); return; }
-    let last = performance.now();
+    if (this.still) { this.drawStill(); return; }
+    let last = performance.now(), on = true, running = false;
     const frame = now => {
+      if (!on) { running = false; return; }
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
       this.core.step(dt); this.draw(0.66); this.paint(now / 1000);
       requestAnimationFrame(frame);
     };
-    requestAnimationFrame(frame);
+    const start = () => { if (running) return; running = true; last = performance.now(); requestAnimationFrame(frame); };
+    // no drawing while the hero is scrolled out of sight or the tab is hidden
+    new IntersectionObserver(([e]) => { on = e.isIntersecting; if (on) start(); }).observe(el);
+    start();
+  }
+
+  // One frame of the swarm at its context, no motion: the same frame laid down a few times so it is as bright as the moving one.
+  drawStill() {
+    this.core.settle();
+    this.draw(0.66, true);
+    this.paint(7);
   }
 
   layout() {
@@ -57,18 +75,20 @@ class HeroCore {
     });
     this.coreLabel.style.left = this.t.x + 'px';
     this.coreLabel.style.top = Math.max(0, this.t.y - r * 1.9 - 46) + 'px';
-    if (this.still) { this.draw(0.66); this.paint(7); }
+    if (this.still) this.drawStill();
   }
 
-  draw(trail) {
+  draw(trail, still = false) {
     const t = this.t;
     let o = this.core.project(t.x, t.y, t.r, this.buf, 0);
+    if (this.renderer.kind === 'canvas') o = this.core.cpuSwarm(this.buf, o);   // no WebGL2: a sample of the swarm on the CPU
     this.stations.forEach((s, k) => {
       if (!s.flow) return;
       const via = bend(t, s, 0.17, 60), len = Math.hypot(s.x - t.x, s.y - t.y);
       o = stream(this.buf, o, t, via, s, this.core.t, this.core.look.hue, { u0: Math.min(0.5, t.r * 1.05 / len), u1: 1 - (s.r + 3) / len, n: 9, pace: 0.25 + 0.4 * this.core.look.energy, seed: k * 0.37 });
     });
-    this.renderer.draw(this.buf, o, trail);
+    if (still) { this.renderer.clear(); for (let i = 0; i < 10; i++) this.renderer.draw(this.buf, o, trail, [this.core.swarm()]); }
+    else this.renderer.draw(this.buf, o, trail, [this.core.swarm()]);
   }
 
   paint(time) {
