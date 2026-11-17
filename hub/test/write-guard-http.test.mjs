@@ -103,7 +103,9 @@ test('every POST route refuses a request with no device cookie (one request per 
   // 35 with voice (decision 61 A): /api/voice/switch, /setup, /listen and /say, paired like any change (decision 48).
   // 38 with Matt's trusted sites and approved packages (plan v3 A10): /api/lists/add, /access and /remove.
   // 41 with the Expedition module's launch, Stop and draft dismissal (phase 5): /api/expedition, /stop and /dismiss.
-  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 41, `41 routes need a paired device: ${routes.join(' ')}`);
+  // 43 with the Account card (decision 78 A): /api/account and /api/account/signin.
+  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 43, `43 routes need a paired device: ${routes.join(' ')}`);
+  for (const r of ['/api/account', '/api/account/signin']) assert.ok(routes.includes(r), `${r} is among the routes checked`);
   for (const r of ['/api/voice/switch', '/api/voice/setup', '/api/voice/listen', '/api/voice/say', '/api/lists/add', '/api/lists/access', '/api/lists/remove', '/api/expedition', '/api/expedition/stop', '/api/expedition/dismiss']) assert.ok(routes.includes(r), `${r} is among the routes checked`);
   for (const path of routes.filter(r => !OPEN.includes(r))) {
     const r = await call('POST', path, { body: {} });

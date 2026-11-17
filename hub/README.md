@@ -37,6 +37,18 @@ npm start -- ~/path/to/project-a
 
 `CRUX_HUB_USE_API_KEY=1` is required: without it the hub removes `ANTHROPIC_API_KEY` from what its agents see, and they will not use the key. To keep the key across sessions, set both as user environment variables (Windows: Settings, search "environment variables"). The API-key start-up is read from the code (`lib/agent.mjs`) and has not yet been tested end to end on a fresh machine.
 
+### Choosing the account
+
+The agents run on either an **API key** (Anthropic bills the tokens to it) or this PC's **Claude Code plan sign-in** (they draw on that plan's limits; for your own personal use). You choose in the hub: click the usage meters in the top strip, then **Account** in the panel. The card shows which one is in use ("Plan sign-in: Alex Doe" or "API key ending ...a1b2"). Pick **Plan sign-in** or **API key**, paste a key if you pick the key, and press **Switch**. The hub restarts (the page reconnects by itself, and agents carry on after it); **Cancel** or the X closes the card without changing anything.
+
+- **The key is kept protected for your Windows user** (Windows' own per-user protection, DPAPI) in the hub's data folder, `~/.crux-hub/secrets.json`, next to the hub's other keys: never in a project, a repo, the event log, a notice, a summary or the page. The page only ever gets the last four characters. Another Windows user, or the same file copied to another PC, cannot open it. While the saved key is in use it is **not put in the environment** that agents inherit (so `env` or a test dumping `process.env` does not show it): the hub holds it in memory for its own calls, and Claude Code reads it for the agents through its `apiKeyHelper` setting, a small command (`lib/key-helper.mjs`) that opens the key when asked. A key you set in the environment yourself (below) is, of course, in the environment.
+- **Sign in as someone else** opens a terminal window on this PC that runs Claude Code's own sign-in (`claude auth login`; the browser opens), and the card re-reads who is signed in while it waits. This switches the sign-in for every Claude Code session on this PC, not only the hub's.
+- **Environment variables still work and win.** If `ANTHROPIC_API_KEY` and `CRUX_HUB_USE_API_KEY=1` are set, the card says so and cannot switch under them: remove them and restart the hub to choose in the card.
+- **Not Windows (Mac, Linux, untested):** the key cannot be protected there, so the card says so and does not save one. Use the environment variables above.
+- **Usage:** a plan sign-in shows plan meters in the strip and panel; an API key shows estimated dollars and tokens used instead (there are no plan limits on a key).
+- **Without the app, switching by hand:** set or remove the two environment variables above and restart the hub; to change the plan sign-in, run `npm run login` in the hub folder (or `claude auth login` in a terminal) and restart. **Back to the plan sign-in without the page:** delete `~/.crux-hub/account.json` (the file that holds the card's choice) and restart the hub.
+- **A saved key that cannot be opened** (saved by another Windows user or on another PC) is reported on the card in plain words; the agents use the plan sign-in until you paste the key again.
+
 Then open http://crux.localhost:4747 (http://localhost:4747 takes you there; see "Paired devices" for the first pairing). With no folders given, it uses `~/crux/hub.json` (`{ "projects": ["C:/path/a"] }`) or the current folder. Each project should be a git repo (see "Where your picks land").
 
 Options: `--port 4747`, `--retire-at 60` (the starting hub default for when the orchestrator hands off, in % of context; once changed in the hub menu's Whole hub panel the saved value wins, and each project can set its own), `--no-agents` (a test hub: messages are kept but no agent starts; also automatic when `CRUX_HUB_DATA` points inside the temp folder, and `CRUX_HUB_AGENTS=1` overrides both), `--test-pair` (a test hub only: one fake device counts as paired and the page gets its cookie, for screenshots and tests; the hub refuses to start with it on port 4747, with real agents, or with its data folder outside the temp folder).
@@ -51,7 +63,7 @@ In the box at the bottom, Enter sends; Alt+Enter or Shift+Enter starts a new lin
 
 | Setting | What it does |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | Your Anthropic API key. Used only when `CRUX_HUB_USE_API_KEY=1`. |
+| `ANTHROPIC_API_KEY` | Your Anthropic API key. Used only when `CRUX_HUB_USE_API_KEY=1`. When set this way it wins over the Account card (see "Choosing the account"). |
 | `CRUX_HUB_USE_API_KEY` | Set to `1` so agents use the key. |
 | `CRUX_HUB_PORT` | Port to listen on, if `--port` is not given (default 4747). |
 | `CRUX_HOME` | Your private memory folder: profile, conventions, roll-up, and pictures agents post. Default `~/crux`. |
@@ -240,7 +252,7 @@ The seven `expedition-*.md` agent files are put into `~/.claude/agents` by the h
 
 ## Usage and billing
 
-Agents run through the Claude Agent SDK on this PC. With `CRUX_HUB_USE_API_KEY=1` they use your Anthropic API key, and Anthropic bills the tokens they use to that key. Several agents at once use more, faster. (Without the switch, agents fall back to whatever Claude Code sign-in is already on the PC; that is for your own personal use only, and the hub neither offers nor manages it.)
+Agents run through the Claude Agent SDK on this PC. With an API key (chosen on the Account card, or `CRUX_HUB_USE_API_KEY=1` with `ANTHROPIC_API_KEY`) they use your Anthropic API key, and Anthropic bills the tokens they use to that key. Several agents at once use more, faster. (Without a key, agents use whatever Claude Code sign-in is on the PC; that is for your own personal use only. The Account card shows whose it is and can start a different sign-in, but the hub never sees your password or the plan's credentials.)
 
 **Spend estimate.** The usage panel shows estimated spend today and since the hub started, per model and per agent. With an API key, open it by adding `?usagepanel` to the hub's address (http://crux.localhost:4747/?usagepanel). Spend is estimated from list prices, not a bill; your Anthropic Console has the real figures.
 

@@ -118,6 +118,11 @@ export class Hub {
   // Left out, it is made on first use: the Agent SDK on this machine's sign-in, or the API when a key is set up.
   constructor({ projects, memory = new Memory(), defaults = {}, agentHome = homedir(), settings = new HubSettings(), noAgents = false, conductorDir = null, checker = null, expeditionWatch = {}, rotateLogs = !noAgents, summariser = null }) {
     this.noAgents = !!noAgents;
+    // The API key the hub itself calls with (the permission check, the month summaries): the environment's, or the saved one
+    // the server hands over (decision 78 A). A saved key is never put in the environment the agents inherit: they get
+    // apiKeyHelper instead, a command Claude Code runs to read it when it needs it.
+    this.apiKey = () => (process.env.CRUX_HUB_USE_API_KEY === '1' ? process.env.ANTHROPIC_API_KEY || '' : '');
+    this.apiKeyHelper = null;
     // Decision 74 B: old events move to the archive when a log is due. Never on a test hub (it may be looking at a real
     // folder another hub is writing), unless a test asks; CRUX_HUB_NO_ROTATE=1 turns it off, recovery included.
     this.rotatesLogs = rotateLogs !== false && process.env.CRUX_HUB_NO_ROTATE !== '1';
@@ -1345,7 +1350,7 @@ export class Hub {
   // ANTHROPIC_API_KEY, the same switch the agents use); else the Agent SDK on this machine's sign-in.
   get checker() {
     if (this.checkerMade) return this.checkerMade;
-    const key = process.env.CRUX_HUB_USE_API_KEY === '1' ? process.env.ANTHROPIC_API_KEY : '';
+    const key = this.apiKey();
     const call = key ? apiCall({ apiKey: key }) : async arg => {
       const { query } = await import('@anthropic-ai/claude-agent-sdk');
       return sdkCall({ query, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir() })(arg);
@@ -2292,7 +2297,7 @@ export class Hub {
   // permission check), one call per thread-month, no tools. Made on first use; tests pass their own.
   get summariser() {
     if (this.summariserMade) return this.summariserMade;
-    const key = process.env.CRUX_HUB_USE_API_KEY === '1' ? process.env.ANTHROPIC_API_KEY : '';
+    const key = this.apiKey();
     return (this.summariserMade = key ? apiCall({ apiKey: key, model: SUMMARY_MODEL }) : async arg => {
       const { query } = await import('@anthropic-ai/claude-agent-sdk');
       return sdkCall({ query, model: SUMMARY_MODEL, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir() })(arg);
