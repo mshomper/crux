@@ -1,0 +1,87 @@
+{
+ "id": 78,
+ "slug": "hub-account-choice",
+ "title": "Where do you choose which account the hub's agents run on?",
+ "date": "2026-11-17",
+ "mode": "quick",
+ "lenses": [
+  "UI",
+  "architecture"
+ ],
+ "status": "open",
+ "lead": "Should the hub get an Account card where you see which account the agents use and switch between a plan sign-in and an API key, with the key kept in Windows' protected storage? I recommend it: switching today means environment variables and a terminal sign-in.",
+ "for_you": [
+  "Click the usage meters to open the Account card: it shows the account in use and lets you switch, with a Cancel exit",
+  "Switching restarts the hub, and running agents stop their turn and carry on afterwards",
+  { "text": "A pasted API key is kept in Windows' protected storage for your user, never in a project folder or the repo", "kind": "setup" },
+  { "text": "Switching the plan sign-in also switches Claude Code for your other sessions on this PC until you switch back", "kind": "undo" }
+ ],
+ "context": "Matt (2026-11-17) is testing how the hub works on another plan for a colleague. Today agents use the PC's Claude Code sign-in; with ANTHROPIC_API_KEY plus CRUX_HUB_USE_API_KEY=1 set before start they use an API key instead (hub/README.md, lib/agent.mjs; the API-key start has not been tested end to end). Usage shows as plan meters in the strip (decision 36), which only exist for a plan sign-in. Per-project settings live on a card opened from each project's level chip (decision 44). A plan sign-in is meant for its owner; a colleague is best tested on their own machine or Windows user, or with an API key.",
+ "depends_on": [
+  36,
+  38,
+  44,
+  48
+ ],
+ "conflicts": [],
+ "options": [
+  {
+   "key": "A",
+   "name": "Account card, one account for the hub",
+   "summary": "An Account card opened from the usage meters: shows the account in use, chooses Plan sign-in (with Sign in as someone else) or API key (paste field), kept in Windows' protected storage; Switch restarts the hub. Plan meters for a plan; tokens and dollars for a key.",
+   "pros": [
+    "No terminal or environment variables; you always see which account is billing",
+    "Key never sits in a file in a project or the repo"
+   ],
+   "cons": [
+    "One account for all projects at a time",
+    "A plan switch also changes your other Claude Code sessions on this PC"
+   ],
+   "effort": "Medium",
+   "source": "Claude's judgment"
+  },
+  {
+   "key": "B",
+   "name": "A, plus an account per project",
+   "summary": "As A, and each project's card can use a different API key, with a badge on its thread when it differs from the hub's.",
+   "pros": [
+    "A colleague's or client's work can bill to its own key"
+   ],
+   "cons": [
+    "More to build and test; usage and budgets split by key"
+   ],
+   "effort": "Large",
+   "source": "Claude's judgment"
+  },
+  {
+   "key": "C",
+   "name": "Show the account only",
+   "summary": "The usage panel says which account is active and links to how to switch outside the app.",
+   "pros": [
+    "Smallest; nothing new holds a key"
+   ],
+   "cons": [
+    "Switching stays a terminal job"
+   ],
+   "effort": "Small",
+   "source": "Claude's judgment"
+  }
+ ],
+ "criteria": [],
+ "recommended": "A",
+ "recommendation": "A: one Account card for the hub, key in Windows' protected storage. Per-project keys (B) can come later if a project really needs its own bill.",
+ "confidence": "medium",
+ "change_mind": "If a project must bill to someone else's key while others run on yours, take B.",
+ "chosen": null,
+ "reason": null,
+ "decided_on": null,
+ "superseded_by": null,
+ "challenge": null,
+ "settles": [
+  {
+   "key": "agent account selection",
+   "value": "chosen in the hub's UI (plan sign-in or API key), one account for the hub; API key kept in the OS's per-user protected storage, never in a project or repo; switching restarts the hub"
+  }
+ ],
+ "images": []
+}
