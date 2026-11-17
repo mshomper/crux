@@ -44,7 +44,7 @@ Then open http://localhost:4747. API use is billed per token by Anthropic. The d
 
 ## Status
 
-Early software. Hub version 0.18, desktop app 0.2. Built and used on Windows first; Mac and Linux are untested. Made for one person, running on your own PC.
+Early software. Built and used on Windows first; Mac and Linux are untested. Made for one person, running on your own PC.
 
 ## License
 
