@@ -152,34 +152,157 @@ function placeCluster(at, region, cluster, phone) {
   };
 }
 
-function radialIn(ax, ay, aw, ah, workers, phone, res) {
-  const cx = ax + aw / 2, cy = ay + ah / 2;
-  const m = Math.min(aw, ah);
-  const coreR = clamp(m * 0.13, 34, 104);
-  const sr = phone ? 17 : 21;
-  const ringOuter = coreR * 1.75 + sr + 14;
-  const rx = Math.max(ringOuter, Math.min(aw / 2 - 74, aw * 0.42));
-  const ry = Math.max(ringOuter * 0.8, ah / 2 - sr - 38);   // room for the label under You
-  const at = new Map();
-  at.set('board', { x: cx, y: cy - ry, r: sr });
-  at.set('you', { x: cx, y: cy + ry, r: sr });
+// ---------- the open map's satellites (decision 77 A) ----------
+// What a satellite's label takes up, from map.css: the name in 10.5px mono with .06em spacing (.hs-label b) on a 16px
+// line, the red "Waiting on you" line in 11.5px sans (.hs.sat.asks .hs-label i, 17px with its gap), a handoff word in
+// 10.5px mono capitals with .1em spacing (14px). The px per character run a little wide of the real fonts (Cascadia
+// Mono, Consolas or the system monospace), so the layout errs towards room. ring: how far a worker's particle ring
+// reaches, in station radii, with its breathing and particle size (map-particles.js RING_REACH is 1.62); labelTop: the
+// label's top under a satellite, in station radii plus px (map.css .hs.sat .hs-label); gap: the least clear space
+// between any two things.
+export const SAT = { name: 6.9, sub: 7.4, ask: 6.6, pad: 4, line: 16, subLine: 14, askLine: 17, ring: 1.7, ringPx: 1, labelTop: 1.62, labelTopPx: 6, gap: 4, chipR: 12 };
+// The core's HUD scales reach 1.6 core radii plus 6 px (map-hud.js R3 + 6): nothing else may come inside them.
+export const coreKeep = r => r * 1.6 + 6;
+// The second line under a satellite: only when it waits on you or is handing over (Matt, 2026-11-17).
+export const satSub = s => s.needs ? 'Waiting on you' : s.handoff === 'writing' ? 'writing handoff' : s.handoff === 'overlap' ? 'handing over' : '';
+// A satellite's label box, w by h, with its name cut at `cap` px (the page cuts it there too, with an ellipsis).
+export function satLabel(s, cap = 150) {
+  const sub = satSub(s), ask = !!s.needs;
+  const w = Math.max(Math.min(cap, String(s.name ?? '').length * SAT.name + SAT.pad), sub ? Math.min(170, sub.length * (ask ? SAT.ask : SAT.sub) + SAT.pad) : 0);
+  return { w, h: SAT.line + (sub ? (ask ? SAT.askLine : SAT.subLine) : 0) };
+}
 
-  const right = workers.filter((_, i) => i % 2 === 0), left = workers.filter((_, i) => i % 2 === 1);
-  const gapDeg = 34;
+// Steps down when the room is short: robots and rings smaller, names cut shorter, the core a little smaller. When even the
+// last step does not fit, the workers at the end of the list fold into a "+N" chip, one at a time.
+const SAT_STEPS = [{ s: 1, lw: 150, core: 1 }, { s: 0.85, lw: 120, core: 0.85 }, { s: 0.72, lw: 96, core: 0.72 }, { s: 0.62, lw: 76, core: 0.62 }];
+const MORE = '__more';
+
+// The shapes a station takes up: its ring (a circle) and its label (a box under it).
+function satShapes(p) {
+  if (p.more) return [{ c: true, x: p.x, y: p.y, r: SAT.chipR + 2 }];
+  const ring = { c: true, x: p.x, y: p.y, r: p.r * SAT.ring + SAT.ringPx };
+  const y0 = p.y + p.r * SAT.labelTop + SAT.labelTopPx;
+  return [ring, { c: false, x0: p.x - p.lab.w / 2, x1: p.x + p.lab.w / 2, y0, y1: y0 + p.lab.h }];
+}
+function endShapes(p) {   // the Board and You: the disc (with its hover growth) and the label under it
+  const y0 = p.y + p.r + 8;
+  return [{ c: true, x: p.x, y: p.y, r: p.r * 1.12 }, { c: false, x0: p.x - p.lab.w / 2, x1: p.x + p.lab.w / 2, y0, y1: y0 + p.lab.h }];
+}
+function hit(a, b, g) {
+  if (a.c && b.c) return Math.hypot(a.x - b.x, a.y - b.y) < a.r + b.r + g;
+  if (!a.c && !b.c) return a.x0 < b.x1 + g && b.x0 < a.x1 + g && a.y0 < b.y1 + g && b.y0 < a.y1 + g;
+  const c = a.c ? a : b, r = a.c ? b : a;
+  return Math.hypot(c.x - clamp(c.x, r.x0, r.x1), c.y - clamp(c.y, r.y0, r.y1)) < c.r + g;
+}
+const hits = (A, B, g) => A.some(a => B.some(b => hit(a, b, g)));
+function inside(S, box) {
+  return S.every(s => s.c ? s.x - s.r >= box.x0 && s.x + s.r <= box.x1 && s.y - s.r >= box.y0 && s.y + s.r <= box.y1
+    : s.x0 >= box.x0 && s.x1 <= box.x1 && s.y0 >= box.y0 && s.y1 <= box.y1);
+}
+
+// Try one arrangement: core size, station size, orbit and spread. Returns the placed stations, or null if any two
+// things touch (rings, labels, the Board, You, the core's scales) or anything leaves the area.
+// tilt (degrees) turns both arcs towards the front (positive) or the back, mirrored, so a lone worker on a side can
+// leave the core's level on a narrow map.
+function satTry(G, step, items, rx, ry, spanDeg, tilt = 0) {
+  const { cx, cy, box, sr, coreR, ends } = G;
+  const core = [{ c: true, x: cx, y: cy, r: coreKeep(coreR) }];
+  const placed = [];
+  const right = items.filter((_, i) => i % 2 === 0), left = items.filter((_, i) => i % 2 === 1);
   const arc = (list, a0, a1) => list.forEach((s, i) => {
     const t = list.length === 1 ? 0.5 : i / (list.length - 1);
-    const a = (lerp(a0, a1, t) * Math.PI) / 180;
-    at.set(s.id, { x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry, r: sr });
+    const a = (lerp(a0, a1, t) * Math.PI) / 180, depth = (Math.sin(a) + 1) / 2;
+    const p = { id: s.id, more: s.id === MORE, x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry, r: sr * (0.88 + 0.24 * depth), depth };
+    if (!p.more) p.lab = satLabel(s, step.lw);
+    placed.push(p);
   });
-  const span = n => Math.min(90 - gapDeg, 14 * n);   // a few workers bunch near the middle; many use the whole arc
-  arc(right, -span(right.length), span(right.length));
-  arc(left, 180 + span(left.length), 180 - span(left.length));
-  return { core: { x: cx, y: cy, r: coreR }, at, labels: true, compact: false, reserve: res };
+  arc(right, -spanDeg + tilt, spanDeg + tilt);
+  arc(left, 180 + spanDeg - tilt, 180 - spanDeg - tilt);
+  const shapes = placed.map(satShapes);
+  for (let i = 0; i < placed.length; i++) {
+    const S = shapes[i];
+    if (!inside(S, box) || hits(S, core, SAT.gap) || ends.some(E => hits(S, E, SAT.gap))) return null;
+    for (let j = 0; j < i; j++) if (hits(S, shapes[j], SAT.gap)) return null;
+  }
+  return placed;
+}
+
+// The open map (decision 77 A, satellites): a larger core, and the workers pulled in close round it on a tilted orbit
+// (about 30% of the width), front ones a little larger and brighter (depth 0 at the back to 1 at the front). The Board
+// sits at the top of the area and You at the bottom. Rings, labels, the Board, You and the core's scales never touch:
+// when the room is short the stations step down in size (SAT_STEPS), and workers that still do not fit fold into a
+// "+N" chip (fold: { n, ids, chip }); a folded worker waits at the chip at radius 0. Each worker's entry carries lw, the
+// width its name may take.
+function radialIn(ax, ay, aw, ah, workers, phone, res) {
+  const cx = ax + aw / 2, cy = ay + ah / 2;
+  const box = { x0: ax, y0: ay, x1: ax + aw, y1: ay + ah };
+  const baseCore = clamp(Math.min(aw, ah) * 0.16, 34, 116), baseSr = phone ? 17 : 21;
+  const youLab = { w: 10 * SAT.sub + SAT.pad, h: SAT.line + 1 + 13 }, boardLab = { w: 5 * SAT.name + SAT.pad, h: SAT.line };
+  const attempt = (items, step) => {
+    const sr = baseSr * step.s, coreR = Math.max(Math.min(baseCore, 34), baseCore * step.core);
+    // the Board at the top edge, You at the bottom with its two-line label under it
+    const board = { x: cx, y: ay + sr * 1.12 + 2, r: sr, lab: boardLab }, you = { x: cx, y: ay + ah - sr - 8 - youLab.h - 2, r: sr, lab: youLab };
+    const ends = [endShapes(board), endShapes(you)];
+    const coreS = [{ c: true, x: cx, y: cy, r: coreKeep(coreR) }];
+    const G = { cx, cy, box, sr, coreR, ends };
+    const fallback = { items, step, G, board, you, placed: null };
+    if (ends.some(E => hits(E, coreS, SAT.gap))) return fallback;
+    const nR = Math.ceil(items.length / 2);
+    const halfW = Math.max(sr * 1.12 * SAT.ring + SAT.ringPx, ...items.map(s => s.id === MORE ? SAT.chipR : satLabel(s, step.lw).w / 2));
+    const rxMax = aw / 2 - halfW - 1;
+    const rxPref = Math.min(rxMax, Math.max(coreKeep(coreR) + sr * SAT.ring + SAT.gap, Math.min(aw / 2 - 90, aw * 0.30)));
+    const rxs = [...new Set([rxPref, (rxPref + rxMax) / 2, rxMax].map(Math.round))].filter(v => v > 0);
+    const ryPref = ah * 0.29, ryCap = ah / 2;
+    const rys = [...new Set([ryPref, ryPref * 1.25, ryPref * 1.5, ryPref * 0.75].map(v => Math.round(Math.min(ryCap, v))))];
+    const span0 = Math.min(56, 14 * nR);   // a few workers bunch near the middle; many use the whole arc
+    const spans = [...new Set([span0, span0 + 12, span0 + 24, Math.max(8, span0 - 12)].map(v => Math.min(84, v)))];
+    for (const tilt of [0, 30, -30]) for (const rx of rxs) for (const ry of rys) for (const sp of spans) {
+      const placed = satTry(G, step, items, rx, ry, sp, tilt);
+      if (placed) return { ...fallback, placed };
+    }
+    return fallback;
+  };
+  let fit = null;
+  for (let keep = workers.length; keep >= 0 && !fit; keep--) {
+    const items = keep < workers.length ? [...workers.slice(0, keep), { id: MORE }] : workers;
+    for (const step of SAT_STEPS) {
+      const a = attempt(items, step);
+      if (a.placed) { fit = { ...a, keep }; break; }
+    }
+  }
+  // nothing fits (a tiny window): keep every worker at the smallest step on the preferred orbit, and say so
+  const g = fit || (() => {
+    const step = SAT_STEPS[SAT_STEPS.length - 1], a = attempt(workers, step);
+    const G = a.G, rx = Math.max(1, aw * 0.3), ry = ah * 0.29;
+    const placed = [];
+    const right = workers.filter((_, i) => i % 2 === 0), left = workers.filter((_, i) => i % 2 === 1);
+    const arc = (list, a0, a1) => list.forEach((s, i) => {
+      const t = list.length === 1 ? 0.5 : i / (list.length - 1), an = (lerp(a0, a1, t) * Math.PI) / 180, depth = (Math.sin(an) + 1) / 2;
+      placed.push({ id: s.id, x: G.cx + Math.cos(an) * rx, y: G.cy + Math.sin(an) * ry, r: G.sr * (0.88 + 0.24 * depth), depth, lab: satLabel(s, step.lw) });
+    });
+    arc(right, -56, 56); arc(left, 236, 124);
+    return { ...a, placed, keep: workers.length, crowded: true };
+  })();
+  const at = new Map();
+  at.set('board', { x: g.board.x, y: g.board.y, r: g.board.r });
+  at.set('you', { x: g.you.x, y: g.you.y, r: g.you.r });
+  let fold = null;
+  for (const p of g.placed) {
+    if (p.more) continue;
+    at.set(p.id, { x: p.x, y: p.y, r: p.r, depth: p.depth, lw: g.step.lw });
+  }
+  const chip = g.placed.find(p => p.more);
+  if (chip) {
+    const rest = workers.slice(g.keep);
+    fold = { n: rest.length, ids: rest.map(s => s.id), chip: { x: chip.x, y: chip.y, r: SAT.chipR } };
+    for (const s of rest) at.set(s.id, { x: chip.x, y: chip.y, r: 0, depth: 1 });
+  }
+  return { core: { x: cx, y: cy, r: g.G.coreR }, at, labels: true, compact: false, reserve: res, fold, crowded: !!g.crowded };
 }
 
 // Blend two layouts (viewport coordinates) and return panel-local coordinates.
 export function blendLayouts(a, b, e, origin) {
-  const mix = (p, q) => ({ x: lerp(p.x, q.x, e) - origin.x, y: lerp(p.y, q.y, e) - origin.y, r: lerp(p.r, q.r, e) });
+  const mix = (p, q) => ({ x: lerp(p.x, q.x, e) - origin.x, y: lerp(p.y, q.y, e) - origin.y, r: lerp(p.r, q.r, e), depth: lerp(p.depth ?? 1, q.depth ?? 1, e), lw: q.lw ?? p.lw });
   const at = new Map();
   for (const [id, q] of b.at) {
     const p = a.at.get(id) || q;

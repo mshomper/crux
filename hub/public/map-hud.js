@@ -3,7 +3,7 @@
 // station rings, red halos where something needs you, and pings where pulses land.
 
 import { clamp, lerp } from './map-layout.js';
-import { bend, onCurve, COLORS, TONE } from './map-particles.js';
+import { bend, onCurve, COLORS, TONE, RING_REACH } from './map-particles.js';
 import { hueOf, rgb01, pipCount } from './models.js';
 import { paintGlass } from './map-core.js';
 
@@ -73,6 +73,15 @@ export class HudPainter {
       }
       const scale = lerp(0.75, 1.15, e);
       const needs = st.needs;
+      if (st.kind === 'worker') {
+        // a satellite (decision 77): its spoke is a stream of particles (map.js streams), over a faint guide line
+        path();
+        c.setLineDash([]);
+        c.strokeStyle = needs ? rgb(COLORS.red, 0.22 * fade) : rgb(COLORS.cyan, 0.07 * fade);
+        c.lineWidth = 1;
+        c.stroke();
+        continue;
+      }
       // base spoke: thicker where more work went
       path();
       c.setLineDash([]);
@@ -226,12 +235,27 @@ export class HudPainter {
     c.beginPath(); c.arc(x, y, r * 1.5, 0, TAU); c.fill();
   }
 
-  stations({ L, t, info }) {
+  stations({ L, t, info, e = 1 }) {
     const c = this.c;
     for (const [id, s] of L.at) {
       const st = info.get(id);
       if (!st || (st.cluster && s.r < 4)) continue;   // an expedition station still waiting on its Lead in the lane
       const fade = st.fade ?? 1;
+      if (st.kind === 'worker' && !st.cluster) {
+        // a satellite (decision 77): its particle ring is its edge (map-particles.js stationRing) and on the open map its
+        // robot wears its own effort pips; in the strip, where the robot is too small for them, the pips sit over the ring
+        const hue = rgb01(hueOf(st.model));
+        if (hue && e < 0.5 && s.r >= 8) {
+          const n = pipCount(st.effort), pr = s.r * RING_REACH + 5, step = 0.3;
+          for (let k = 0; k < 5; k++) {
+            const ang = -Math.PI / 2 + (k - 2) * step * (13 / Math.max(13, pr - 5));
+            c.beginPath(); c.arc(s.x + Math.cos(ang) * pr, s.y + Math.sin(ang) * pr, 1.7, 0, TAU);
+            if (!n) { c.lineWidth = 1; c.strokeStyle = rgb(hue, 0.75 * fade); c.stroke(); }
+            else { c.fillStyle = rgb(hue, (k < n ? 0.95 : 0.22) * fade); c.fill(); }
+          }
+        }
+        continue;
+      }
       // A worker's ring is its model's hue (decision 20), also while it waits on you: only You turns red
       // (decision 31; a worker shows a red count badge instead). Errors are amber, a handoff gold.
       const hue = st.kind === 'worker' ? rgb01(hueOf(st.model)) : null;
