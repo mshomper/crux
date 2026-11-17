@@ -20,8 +20,9 @@ const noSave = process.argv.includes('--no-save');
 function hidden(promptText) {
   return new Promise(resolve => {
     const { stdin, stdout } = process;
+    // Not a real terminal (Git Bash, a pipe): the key would be echoed, so refuse.
+    if (!stdin.isTTY) { console.log('This needs a real terminal so the key stays hidden. Run it from PowerShell or Windows Terminal, not Git Bash.'); process.exit(2); }
     stdout.write(promptText);
-    if (!stdin.isTTY) { let b = ''; stdin.setEncoding('utf8'); stdin.on('data', d => { b += d; if (b.includes('\n')) { stdin.pause(); resolve(b.split(/\r?\n/)[0]); } }); return; }
     let buf = '';
     stdin.setRawMode(true); stdin.resume(); stdin.setEncoding('utf8');
     const onData = ch => {
@@ -46,9 +47,9 @@ if (PRESETS[provider].needsKey) {
   }
 }
 try {
-  const client = new ProviderClient({ provider, model, apiKey, timeoutMs: 30000 });
+  const client = new ProviderClient({ provider, model, apiKey });   // each preset keeps its own timeout (Ollama 120 s)
   const r = await client.chat({ system: 'Answer in one short sentence.', user: 'Say that the outside model call works.', maxTokens: 60 });
-  console.log(`${r.provider}  ${r.model}  tokens ${r.tokens.input}+${r.tokens.output}  ${r.costUSD == null ? 'dollars unknown (model not in the price table)' : `$${r.costUSD.toFixed(6)}`}  ${r.ms} ms  ok`);
+  console.log(`${r.provider}  ${r.model}  tokens ${r.tokens.input}+${r.tokens.output}  ${r.costUSD == null ? 'dollars unknown (model not in the price table)' : r.costUnit === 'credits' ? `${r.costUSD.toFixed(6)} credits (as reported)` : `$${r.costUSD.toFixed(6)}`}  ${r.ms} ms  ok`);
 } catch (e) {
   const kind = e instanceof ProviderError ? e.kind : 'network';
   console.log(`${provider}  ${model}  error: ${kind}${e?.status ? ` (${e.status})` : ''}${e?.retryAfterSec != null ? ` retry after ${e.retryAfterSec} s` : ''}`);

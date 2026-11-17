@@ -18,13 +18,22 @@ import { totalsOf, sumCost } from '../public/usage.js';
 export const KEY_FORMAT = /^\S{8,400}$/;
 
 export class ProviderKeys {
-  constructor({ env = process.env, file = join(dataDir(env), 'provider-keys.json'), protector = defaultProtector() } = {}) { Object.assign(this, { env, file, protector }); }
+  constructor({ env = process.env, file = join(dataDir(env), 'provider-keys.json'), protector = defaultProtector() } = {}) { Object.assign(this, { env, file, protector, opened: new Map() }); }
   read() { try { return JSON.parse(readFileSync(this.file, 'utf8').replace(/^﻿/, '')) || {}; } catch { return {}; } }
   // The key, opened. Only when a call is about to be made, never for a page.
+  // Opened once and kept in this object's memory (the Windows open is a blocking PowerShell run, too slow for every call);
+  // the copy is dropped when a key is saved. A key that could not be opened is not remembered, so the next call tries again.
   get(provider) {
     const e = this.read()[provider];
     if (!e || typeof e.protected !== 'string' || !this.protector) return null;
-    try { const k = this.protector.unprotect(e.protected); return typeof k === 'string' && KEY_FORMAT.test(k) ? k : null; } catch { return null; }
+    const cached = this.opened.get(provider);
+    if (cached && cached.sealed === e.protected) return cached.key;
+    try {
+      const k = this.protector.unprotect(e.protected);
+      if (typeof k !== 'string' || !KEY_FORMAT.test(k)) return null;
+      this.opened.set(provider, { sealed: e.protected, key: k });
+      return k;
+    } catch { return null; }
   }
   save(provider, key) {
     if (!PRESETS[provider] || !PRESETS[provider].needsKey) throw new Error(`${provider} takes no key.`);
@@ -36,6 +45,7 @@ export class ProviderKeys {
     const tmp = `${this.file}.tmp`;
     writeFileSync(tmp, JSON.stringify({ ...this.read(), [provider]: { protected: sealed, end: k.slice(-4) } }, null, 1), { mode: 0o600 });
     renameSync(tmp, this.file);
+    this.opened.delete(provider);
   }
   // What a page may see: which providers have a key, and its last four characters.
   view() {
@@ -91,6 +101,7 @@ export class Offload {
   // estimated dollars in the last day. Returns a ProviderError 'budget' or null.
   overBudget(project) {
     const { callsPerHour, usdPerDay } = this.settings.outsideLimits(project.dir), now = this.now();
+    // An unpriced model (costUSD null) adds 0 to the day's dollars, so it is held by the calls per hour only.
     let calls = 0, usd = 0;
     for (const e of project.log.events) {
       if (e.type !== 'usage' || e.via !== 'outside' || e.purpose !== 'ask_outside_model') continue;

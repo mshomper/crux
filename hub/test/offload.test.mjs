@@ -459,7 +459,20 @@ test('S6. prices: a known model is estimated, an unlisted one costs null and is 
   assert.deepEqual([ku.costKnown, ku.estimated, ku.costUnit], [true, true, 'usd']);
 });
 
-test('S7. an empty answer is bad-answer, its usage is still logged, and the token field name follows the preset', async t => {
+test('D1. the key is opened once for many calls and again after a save', async t => {
+  reset();
+  const root = makeTmp('crux-offload-keys-', t);
+  let opens = 0;
+  const counting = { ...protector, unprotect: s => { opens++; return protector.unprotect(s); } };
+  const keys = new ProviderKeys({ env: { CRUX_HUB_DATA: root }, protector: counting });
+  keys.save('openai', DUMMY_KEY);
+  assert.equal(keys.get('openai'), DUMMY_KEY); assert.equal(keys.get('openai'), DUMMY_KEY);
+  assert.equal(opens, 1, 'two reads, one open');
+  keys.save('openai', DUMMY_KEY + 'x');
+  assert.equal(keys.get('openai'), DUMMY_KEY + 'x'); assert.equal(opens, 2, 'a save drops the remembered key');
+});
+
+test('S7. an empty answer is bad-answer, its usage is still logged, and the token field name follows the preset (Google\'s field name is unconfirmed until the live check)', async t => {
   reset('empty');
   const w = world(t);
   const rt = cruxTools(w.hub, w.p, agentOf).instance._registeredTools;

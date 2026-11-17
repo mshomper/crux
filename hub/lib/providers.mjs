@@ -14,8 +14,7 @@ import { execFile } from 'node:child_process';
 // The outside price table is its own: it never borrows permission-check's listCost. List prices in dollars per million
 // tokens (input, output); from = the date the price took effect or was first read, until = the last day it holds (null: no
 // end known), seen = the day it was read. After `until` the price is not used: the cost is unknown, never a stale number.
-// Read 2026-11-17 from the providers' own pages where they could be opened (Gemini) and from third-party listings otherwise
-// (OpenAI: see the expedition notes). A model not listed costs null (unknown); OpenRouter answers with its own cost.
+// Read 2026-11-17 from the providers' own pricing pages (OpenAI: expedition notes-4; Gemini: notes-1). A model not listed costs null (unknown); OpenRouter answers with its own cost.
 export const PRICES_DATED = '2026-11-17';
 const P = (input, output, until = null) => ({ input, output, from: '2026-11-17', until, seen: '2026-11-17' });
 export const PRICES = {
@@ -32,6 +31,7 @@ export const PRICES = {
 
 export const PRESETS = {
   openai: { baseUrl: 'https://api.openai.com/v1/', needsKey: true, tokenField: 'max_completion_tokens', imageModel: 'gpt-image-2', local: false, timeoutMs: 30000 },
+  // Google's token-cap field name is unconfirmed (the compatibility page does not say); max_tokens is the guess, and the live check settles it.
   google: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', needsKey: true, tokenField: 'max_tokens', imageModel: 'gemini-3.1-flash-image', local: false, timeoutMs: 30000 },
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1/', needsKey: true, tokenField: 'max_tokens', imageModel: null, local: false, timeoutMs: 30000 },
   ollama: { baseUrl: 'http://127.0.0.1:11434/v1/', needsKey: false, tokenField: 'max_tokens', imageModel: null, local: true, timeoutMs: 120000 }
