@@ -5,7 +5,7 @@
 import { openSync, readSync, closeSync, fstatSync, existsSync, mkdirSync, readFileSync, writeFileSync, writeSync,
   appendFileSync, statSync, readdirSync, renameSync, rmSync, createReadStream } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { gzipSync, gunzipSync, createGunzip } from 'node:zlib';
 import { createInterface } from 'node:readline';
@@ -145,7 +145,9 @@ function buildIndex(events) {
 function payloadFrom(state, recentByThread, open) {  // recentByThread: Map thread -> { type: [events] }
   const threads = {};
   for (const [t, m] of recentByThread) { const o = {}; for (const [type, n] of RECENT) if (m[type]?.length) o[type] = m[type].slice(-n); threads[t] = o; }
-  return { name: 'project', agents: state.agents, board: { entries: state.entries }, picks: state.picks, settings: state.settings, threads, openApprovals: [...open.values()] };
+  // Agents the page needs: every agent not retired plus the last 20 retired ones.
+  const agents = [...state.agents.filter(a => !a.retired), ...state.agents.filter(a => a.retired).slice(-20)];
+  return { name: 'project', agents, board: { entries: state.entries }, picks: state.picks, settings: state.settings, threads, openApprovals: [...open.values()] };
 }
 const lastMsgIds = threads => { const m = new Map(); for (const [t, o] of Object.entries(threads)) if (o.message?.length) m.set(t, o.message.slice(-N_RECENT).map(e => e.id)); return m; };
 const sameIds = (a, b) => a.size === b.size && [...a].every(([t, ids]) => { const o = b.get(t); return o && o.length === ids.length && o.every((x, i) => x === ids[i]); });
@@ -175,7 +177,7 @@ async function runDataset(label, file, info, rep) {
   const tag = label;
   const cutoff = new Date(Date.parse(info.lastTs) - LIVE_DAYS * DAY).toISOString();
   const res = {};
-  let refIds = null, lastMsg = null;
+  let refIds = null, lastMsg = null, pageScanMs = null;
 
   // ---- current: whole log in memory, the whole state JSON at each open and each refresh
   {
@@ -204,6 +206,7 @@ async function runDataset(label, file, info, rep) {
     if (label === 'synth') {   // search over the archived part, in memory
       res.currentSearch = QUERIES.map(q => { const ms = [], hits = []; for (let i = 0; i < rep; i++) { const t = now(); let h = 0; const ql = q.toLowerCase(); for (const e of events) if (e.type === 'message' && e.ts < cutoff && typeof e.text === 'string' && e.text.toLowerCase().includes(ql)) h++; ms.push(now() - t); hits.push(h); } return { option: 'current', query: q, ms: round(median(ms)), hits: hits[0] }; });
     }
+    if (pageMod) pageScanMs = pageScan(events, foldState(events.filter(e => LONG.has(e.type))), rep);
     events = null;
   }
 
@@ -232,7 +235,7 @@ async function runDataset(label, file, info, rep) {
 
   // ---- sqlite
   if (sqlite) res.sqlite = await runSqlite(label, file, info, rep, lastMsg, refIds, cutoff);
-  return { res, cutoff };
+  return { res, cutoff, pageScanMs };
 }
 
 function finishMemoryOption({ startMs, idx, rep, lastMsg, refIds, diskBytes, eventsStored, appendFile }) {
@@ -259,17 +262,96 @@ function writeFilesLayout(file, dir, cutoff) {
   // The last N messages of every thread stay in the snapshot even when older than the live window, so a quiet thread still opens with its recent chat without reading an archive.
   const tailKeep = new Set(); const perThread = new Map();
   for (let i = parsed.length - 1; i >= 0; i--) { const e = parsed[i][0]; if (e.type !== 'message') continue; const t = e.thread || ''; const n = perThread.get(t) || 0; if (n < N_RECENT) { perThread.set(t, n + 1); tailKeep.add(i); } }
+  // Keep rule v2 (what the snapshot holds forever; everything else is live while recent, then a monthly archive):
+  //  - entries (+status/retired), picks, project settings, lessons, expedition_* records, handoff Q&A, merge passes, dismissed questions;
+  //  - agent_created/session/settings/retired only for an agent that is not retired, or was retired within the live window (from its latest creation on);
+  //  - summaries: the latest per agent, plus any older one still open (it asked something and no later message by the user in its thread and no dismissal followed);
+  //  - approvals with no result yet, and messages carrying a Conductor request with no reply yet;
+  //  - the last N messages of every thread (tail).
+  const lastCreated = new Map(), lastLife = new Map(), retiredTs = new Map(), latestSummary = new Map(), lastYou = new Map();
+  const dismissed = new Set(), resolvedAppr = new Set(), repliedReq = new Set();
+  for (let i = 0; i < parsed.length; i++) {
+    const e = parsed[i][0];
+    if (e.type === 'agent_created') { lastCreated.set(e.agent, i); lastLife.set(e.agent, 'c'); }
+    else if (e.type === 'agent_retired') { lastLife.set(e.agent, 'r'); retiredTs.set(e.agent, e.ts); }
+    else if (e.type === 'summary') latestSummary.set(e.from, i);
+    else if (e.type === 'message' && e.from === 'you') lastYou.set(e.thread || '', i);
+    else if (e.type === 'question_dismissed') dismissed.add(e.question);
+    else if (e.type === 'approval_result') resolvedAppr.add(e.approval);
+    else if (e.type === 'conductor_reply') repliedReq.add(e.request);
+  }
+  const nonEmpty = v => Array.isArray(v) ? v.length > 0 : !!v;
+  const AGENT = new Set(['agent_created', 'agent_session', 'agent_settings', 'agent_retired']);
+  const ALWAYS = new Set(['entry', 'entry_status', 'entry_retired', 'pick', 'project_settings', 'lesson_proposed', 'lesson_result', 'lesson', 'handoff_qa', 'merge_pass', 'question_dismissed']);
+  const kept = (e, i) => {
+    const t = e.type;
+    if (ALWAYS.has(t) || t.startsWith('expedition_')) return true;
+    if (AGENT.has(t)) return lastCreated.has(e.agent) && i >= lastCreated.get(e.agent) && (lastLife.get(e.agent) === 'c' || retiredTs.get(e.agent) >= cutoff);
+    if (t === 'summary') return latestSummary.get(e.from) === i || ((nonEmpty(e.questions) || nonEmpty(e.decisions_needed) || nonEmpty(e.open_questions)) && !(lastYou.get(e.thread || '') > i) && !dismissed.has(e.id));
+    if (t === 'approval') return !resolvedAppr.has(e.approval);
+    if (t === 'message') return !!e.request && !repliedReq.has(e.request);
+    return false;
+  };
+  let v1Bytes = 0; const byTypeSnap = {};
   for (let i = 0; i < parsed.length; i++) {
     const [e, l] = parsed[i];
-    if (LONG.has(e.type)) { snap.push(l); nSnap++; }
-    else if (e.ts < cutoff && tailKeep.has(i)) { snap.push(l); nTail++; }
+    if (LONG.has(e.type) || (e.ts < cutoff && tailKeep.has(i))) v1Bytes += Buffer.byteLength(l) + 1;   // size under the first rule (every long-lived type forever), for comparison
+    if (kept(e, i)) { snap.push(l); nSnap++; byTypeSnap[e.type] = (byTypeSnap[e.type] || 0) + Buffer.byteLength(l) + 1; }
+    else if (e.ts < cutoff && tailKeep.has(i)) { snap.push(l); nTail++; byTypeSnap['message (old tail)'] = (byTypeSnap['message (old tail)'] || 0) + Buffer.byteLength(l) + 1; }
     else if (e.ts >= cutoff) { live.push(l); nLive++; }
     else { const m = e.ts.slice(0, 7); let a = arch.get(m); if (!a) arch.set(m, a = []); a.push(l); nArch++; }
   }
   writeFileSync(join(dir, 'snapshot.jsonl.tmp'), snap.join('\n') + '\n'); renameSync(join(dir, 'snapshot.jsonl.tmp'), join(dir, 'snapshot.jsonl'));   // temp + rename
   writeFileSync(join(dir, 'live.jsonl'), live.length ? live.join('\n') + '\n' : '');
   for (const [m, a] of arch) writeFileSync(join(dir, 'archive', `${m}.jsonl.gz`), gzipSync(a.join('\n') + '\n', { level: 6 }));
-  return { snapshotEvents: nSnap, snapshotOldMessageTail: nTail, liveEvents: nLive, archivedEvents: nArch };
+  return { snapshotEvents: nSnap, snapshotOldMessageTail: nTail, liveEvents: nLive, archivedEvents: nArch, snapshotRuleV1Bytes: v1Bytes, snapshotBytesByType: byTypeSnap };
+}
+
+// Does every id referenced by a kept event (snapshot + live) still resolve after rotation?
+const ID_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|req-\d+|[A-Z]\d{2,})(~p\d+)?$/;
+const REF_FIELDS_CHECK = ['summary', 'approval', 'request', 'reply', 'replies', 'card', 'question', 'draft', 'lesson', 'supersedes', 'handoffEntry', 'entryId'];
+function checkRefs(dir) {
+  const defLive = new Set(), defAll = new Set(); const refs = [];
+  const define = (e, ...sets) => {
+    const ids = [e.id];
+    if (e.type === 'approval') ids.push(e.approval); if (e.type === 'entry') ids.push(e.entryId);
+    if (e.type === 'message' && e.request) ids.push(e.request); if (e.type === 'lesson_proposed') ids.push(e.lesson);
+    for (const s of sets) for (const x of ids) if (x) s.add(x);
+  };
+  for (const f of ['snapshot.jsonl', 'live.jsonl']) for (const e of parseLines(readFileSync(join(dir, f), 'utf8'))) {
+    const origin = f.split('.')[0];
+    define(e, defLive, defAll);
+    for (const k of REF_FIELDS_CHECK) {
+      if ((k === 'approval' && e.type === 'approval') || (k === 'entryId' && e.type === 'entry') || (k === 'request' && e.type === 'message') || (k === 'lesson' && e.type === 'lesson_proposed')) continue;
+      for (const x of Array.isArray(e[k]) ? e[k] : [e[k]]) if (typeof x === 'string') { const s = x.slice(x.lastIndexOf(':') + 1); if (ID_RE.test(s)) refs.push([s, k, origin]); }
+    }
+  }
+  for (const f of readdirSync(join(dir, 'archive'))) for (const e of parseLines(gunzipSync(readFileSync(join(dir, 'archive', f))).toString('utf8'))) define(e, defAll);
+  let missingFromLive = 0, missingEverywhere = 0;
+  const byField = {}, byOrigin = {};
+  for (const [r, k, o] of refs) {
+    for (const b of [(byField[k] ||= { checked: 0, missingFromLive: 0, missingEverywhere: 0 }), (byOrigin[o] ||= { checked: 0, missingFromLive: 0, missingEverywhere: 0 })]) {
+      b.checked++; if (!defLive.has(r)) b.missingFromLive++; if (!defAll.has(r)) b.missingEverywhere++;
+    }
+    if (!defLive.has(r)) missingFromLive++; if (!defAll.has(r)) missingEverywhere++;
+  }
+  for (const b of [...Object.values(byField), ...Object.values(byOrigin)]) b.onlyInArchive = b.missingFromLive - b.missingEverywhere;
+  return { checked: refs.length, missingFromLive, missingEverywhere, onlyInArchive: missingFromLive - missingEverywhere, byOrigin, byField };
+}
+
+// The page's own "what waits for you" rules (hub/public/all-projects.js, questions.js): pure functions, so they load in Node.
+let pageMod = null, pageModErr = 'hub/public/all-projects.js not found next to the bench';
+for (const rel of [['..', '..', '..', '..'], ['..', '..']]) {
+  const p = join(HERE, ...rel, 'hub', 'public', 'all-projects.js');
+  if (existsSync(p)) { try { pageMod = await import(pathToFileURL(p).href); pageModErr = null; } catch (e) { pageModErr = String(e.message); } break; }
+}
+function pageScan(events, st, rep) {   // one full pass of hubView on the project's state, as every render does
+  const done = new Set(); for (const e of events) if (e.type === 'approval_result') done.add(e.approval);
+  const pending = new Set(); for (const e of events) if (e.type === 'approval' && !done.has(e.approval)) pending.add(e.approval);
+  const p = { name: 'project', agents: st.agents.map(a => ({ ...a, state: a.retired ? 'retired' : 'idle' })), events, board: { decisions: [] }, permissionMode: 'auto' };
+  const t = [];
+  for (let i = 0; i < rep; i++) { const a = now(); pageMod.hubView([p], pending); t.push(now() - a); if (t[0] > 5000) break; }
+  return median(t);
 }
 
 // ---------- sqlite ----------
@@ -387,6 +469,13 @@ log('measuring the real copy ...');
 const real = await runDataset('real', copyFile, copyInfo, realRep);
 log('measuring the synthetic log ...');
 const synth = await runDataset('synth', synthFile, synthInfo, synthRep);
+// H4: do references still resolve after rotation?
+const refsSynth = checkRefs(join(OUT, 'files-synth')), refsReal = checkRefs(join(OUT, 'files-real'));
+const dir2d = join(OUT, 'files-real-2d'); rmSync(dir2d, { recursive: true, force: true }); mkdirSync(join(dir2d, 'archive'), { recursive: true });
+writeFilesLayout(copyFile, dir2d, new Date(Date.parse(copyInfo.lastTs) - 2 * DAY).toISOString());
+const refsReal2d = checkRefs(dir2d);
+let real2dStored = parseLines(readFileSync(join(dir2d, 'snapshot.jsonl'), 'utf8')).length + parseLines(readFileSync(join(dir2d, 'live.jsonl'), 'utf8')).length;
+for (const f of readdirSync(join(dir2d, 'archive'))) real2dStored += parseLines(gunzipSync(readFileSync(join(dir2d, 'archive', f))).toString('utf8')).length;
 const search = [...synth.res.currentSearch, ...await searchFiles(join(OUT, 'files-synth'), synth.cutoff, synthRep), ...(synth.res.sqlite?.search || [])];
 if (synth.res.sqlite) delete synth.res.sqlite.search;
 delete synth.res.currentSearch;
@@ -453,11 +542,17 @@ const results = {
   },
   searchNotes: 'Queries run over the archived part (older than 14 days) of the synthetic log, message text only, case-insensitive. files and current and LIKE scan for the substring, so a word inside a longer word counts; FTS5 MATCH uses the word (prefix form, query*) so a hit needs the word to start at a token boundary (unicode61 tokenizer splits on punctuation and underscores). Hit counts can therefore differ slightly. current scans events already in memory (load time excluded); files stream-gunzips every monthly archive each time; the sqlite LIKE row scans the message-text table without the full-text index. The synthetic log repeats the same text, so hits are multiples of the real count; times show scan cost, not realistic hit density.',
   notes: {
-    snapshotTypes: [...LONG].join(', '),
+    snapshotTypes: 'kept forever in the files snapshot (rule v2): entry, entry_status, entry_retired, pick, project_settings, lesson_proposed, lesson_result, lesson, handoff_qa, merge_pass, question_dismissed, every expedition_* record; agent_created/agent_session/agent_settings/agent_retired only for agents not retired or retired within 14 days (from their latest creation on); summaries: the latest per agent plus older ones still open; approvals with no result; messages carrying a Conductor request with no reply. Everything else is live for 14 days, then a monthly archive.',
+    snapshotOpenRule: 'An older summary counts as open when it carries questions, decisions_needed or open_questions and no later message by the user arrived in its thread and no question_dismissed event names it. This is an approximation: the data has no direct "answered" flag, picks do not close it, and a summary id is not cited by approvals or Conductor requests in the copy, so those are kept as events themselves rather than through a cited summary.',
     snapshotTail: `plus, for files, the last ${N_RECENT} messages of every thread even when older than 14 days (so quiet threads open without reading an archive); they are not duplicated in the archives.`,
+    snapshotRuleV1Bytes: { real: real.res.files.layout.snapshotRuleV1Bytes, synth: synth.res.files.layout.snapshotRuleV1Bytes, rule: 'first rule: every long-lived type forever (incl. all summaries and agent events) plus the per-thread message tail' },
+    snapshotBytes: { real: real.res.files.layout.snapshotBytes, synth: synth.res.files.layout.snapshotBytes },
+    snapshotGrowthBytesPerDay: { v2: Math.round((synth.res.files.layout.snapshotBytes - real.res.files.layout.snapshotBytes) / (measuredDays - realDays)), v1: Math.round((synth.res.files.layout.snapshotRuleV1Bytes - real.res.files.layout.snapshotRuleV1Bytes) / (measuredDays - realDays)), note: 'two-point slope real copy to synthetic log; the synthetic log reuses agent names and thread names, so retired-agent and per-agent-summary growth is understated (a real year adds new names)' },
+    refsResolved: { ...refsSynth, variants: { synth14d: refsSynth, real14d: refsReal, real2dWindow: refsReal2d }, rule: 'every id-shaped value in summary, approval, request, reply, replies, card, question, draft, lesson, supersedes, handoffEntry, entryId of an event kept in snapshot or live; missingFromLive = not defined by any snapshot/live event; missingEverywhere = not defined anywhere including the archives (these dangle in the source log itself, e.g. approvals of other agents that were never logged as approval events: rotation did not cause them); onlyInArchive = missingFromLive - missingEverywhere = references that rotation pushed out of reach and need an archive lookup or a rule to keep the target. real2dWindow rotates the real copy with a 2-day live window so rotation is exercised on real references too.', realWindow2dEventsStored: real2dStored },
+    pageScanMs: pageMod ? { real: round(real.pageScanMs, 1), synth: round(synth.pageScanMs, 1), what: 'one hubView() pass (waiting + threadWaiting for every agent) from hub/public/all-projects.js and questions.js, imported in Node unchanged, on the state of this one project; browser render and DOM time are not included' } : { skipped: pageModErr },
     payloadPartsBytesReal: payloadParts(copyFile),
-    snapshotWhy:'long-lived records that rebuild the board, agent list, picks, settings, summaries and cards; small, read at every start, never archived.',
-    payloadRule: `board (entries rebuilt from entry events) + agents (latest per agent) + picks + latest project settings + per thread the last ${N_RECENT} messages, last 20 summaries, notices and visuals + every approval with no result yet. Older chat is fetched on demand (not measured). Decisions from .decisions/*.json are not in the stand-in board for any option.`,
+    payloadPartsBytesSynth: payloadParts(synthFile),
+    payloadRule: `board (entries rebuilt from entry events) + agents (all not retired plus the last 20 retired) + picks + latest project settings + per thread the last ${N_RECENT} messages, last 20 summaries, notices and visuals + every approval with no result yet. Older chat is fetched on demand (not measured). Decisions from .decisions/*.json are not in the stand-in board for any option.`,
     currentShape: 'Stand-in for GET /api/state: { name, agents, board, events: every event } for this one project; the real response also carries every other project and the Conductor, so current is a lower bound.',
     sqliteStart: 'sqlite startMs = open the file, read the long-lived records except summaries, list threads. files startMs = read snapshot + live file, parse, build the per-thread index. loadless startMs = read + parse the whole log + index.',
     gzipTime: 'firstOpenMs for loadless, files and sqlite includes server gzip; current is sent uncompressed today so has none. Browser gunzip is not timed.'
