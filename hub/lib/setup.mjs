@@ -79,6 +79,20 @@ export function saveProjects(folders, file = hubConfigFile()) {
   return cfg.projects;
 }
 
+// Saves a dollar limit as the default for every expedition launch (defaults.expedition.envelope.dollars), keeping the rest of
+// hub.json. For an API-key user with no dollars-per-percent figure. Returns the saved figure.
+export function saveDollarCap(dollars, file = hubConfigFile()) {
+  const n = Math.round(Number(dollars) * 100) / 100;
+  if (!(n > 0)) throw new Error('A dollar limit must be a number above 0.');
+  const cfg = readHubConfig(file);
+  const defaults = cfg.defaults && typeof cfg.defaults === 'object' ? cfg.defaults : (cfg.defaults = {});
+  const ex = defaults.expedition && typeof defaults.expedition === 'object' ? defaults.expedition : (defaults.expedition = {});
+  ex.envelope = { ...(ex.envelope && typeof ex.envelope === 'object' ? ex.envelope : {}), dollars: n };
+  mkdirSync(resolve(file, '..'), { recursive: true });
+  writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+  return n;
+}
+
 // The Windows folder picker, shown on this PC's screen, on top. Resolves to the chosen path, or '' when closed.
 export function pickFolder({ run = execFile } = {}) {
   if (process.platform !== 'win32') return Promise.resolve('');

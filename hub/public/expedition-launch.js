@@ -80,6 +80,9 @@ export function startDraft(state = null, seed = {}) {
     sites: (seed.preApprovals?.sites || []).map(s => ({ host: String(s.host || s), access: s.access || 'pages' })),
     packages: (seed.preApprovals?.packages || []).map(x => ({ eco: x.eco || 'npm', name: String(x.name || x) })),
     roles, gatherers: Math.min(GATHERER_LIMIT, Math.max(1, Number.isFinite(n) ? Math.round(n) : 3)),
+    // The dollar limit for this run, used only while no dollars-per-percent figure is confirmed: a kept default or a draft's figure comes pre-filled.
+    dollars: st?.dollarsPerPercent > 0 ? '' : String(seed.envelope?.dollars ?? st?.dollars ?? ''),
+    remember: false,
     editing: null,   // the role whose model and effort are open
     add: null        // 'site' | 'package': the small add form
   };
@@ -126,13 +129,17 @@ export function teamTotals(d, family = id => (/opus|sonnet|haiku|fable/i.exec(id
 // The budget in dollars, from the confirmed dollars-per-plan-percent figure (decision 69), or null while it is not set.
 export const estimateUSD = (percent, st) => { const f = Number(st?.defaults?.dollarsPerPercent ?? st?.dollarsPerPercent); return f > 0 ? Math.round(percent * f * 100) / 100 : null; };
 export const money = v => `$${v >= 10 ? Math.round(v) : Math.round(v * 10) / 10}`;
+// A dollar limit typed for this run ("12", "$12.50"): a number above 0, or null. Used only while no dollars-per-percent figure is confirmed.
+export const typedDollars = s => { const n = Number(String(s ?? '').replace(/[$,\s]/g, '')); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
+// The dollar cap this launch runs under: the confirmed figure's estimate, else the figure typed here, else null.
+export const capUSD = (d, st) => estimateUSD(d.percent, st) ?? typedDollars(d.dollars);
 
 // What stops Launch (block) and what only warns (warn), each in plain words for the amber mark. ctx: { level: 'standard' | 'auto'
 // | 'trusted', check: 'off' | 'shadow' | 'on', running: bool (an expedition is live in this project), st, family }.
 export function problems(d, ctx = {}) {
   const out = [], fam = ctx.family || (id => (/opus|sonnet|haiku|fable/i.exec(id || '') || [])[0]?.toLowerCase() || null);
-  if (ctx.running) out.push({ id: 'running', level: 'block', text: 'An expedition is already running in this project. One at a time: stop it or wait for its report.' });
-  if (ctx.level === 'standard') out.push({ id: 'ask', level: 'block', text: 'This project is at Ask. An expedition needs Auto or Trusted, because it has nobody to ask. Raise the level on the project card first.' });
+  if (ctx.running) out.push({ id: 'running', level: 'block', short: 'Another expedition is running here: one at a time.', text: 'An expedition is already running in this project. One at a time: stop it or wait for its report.' });
+  if (ctx.level === 'standard') out.push({ id: 'ask', level: 'block', short: 'This project is at Ask. Raise it to Auto on the project card to launch.', text: 'This project is at Ask. An expedition needs Auto or Trusted, because it has nobody to ask. Raise the level on the project card first.' });
   if (!d.question.trim()) out.push({ id: 'question', level: 'block', text: 'Write the question first.' });
   if (fam(d.roles.verifier.model) && fam(d.roles.verifier.model) === fam(d.roles.builder.model)) out.push({ id: 'same', level: 'block', text: 'The Verifier and the Builder run on the same model. The Verifier must be a different model from the Builder: change one of them.' });
   const items = d.success.filter(t => t.text.trim());
@@ -141,10 +148,14 @@ export function problems(d, ctx = {}) {
   if (ctx.check && ctx.check !== 'on') out.push({ id: 'check', level: 'warn', text: 'The permission check is off in this project: anything the hub cannot settle by itself is parked, never asked.' });
   if (ctx.level === 'auto' && !d.sites.length) out.push({ id: 'web', level: 'warn', text: 'At Auto, gatherers cannot open arbitrary web pages. Name the sites they should read under Pre-approved, or use Trusted.' });
   // Only once the envelope or More has been opened: on a default launch it would be permanent noise.
-  if (d.touched && ctx.st && !(estimateUSD(d.percent, ctx.st) > 0)) out.push({ id: 'dollars', level: 'warn', text: ctx.st.budgetNote || 'No dollar figure is confirmed yet, so there is no dollar cap. The time limit still applies.' });
+  const hasFigure = estimateUSD(d.percent, ctx.st) != null, typed = typedDollars(d.dollars);
+  if (ctx.st && !hasFigure && String(d.dollars ?? '').trim() && typed == null) out.push({ id: 'badcap', level: 'block', short: 'The dollar limit must be a number above 0.', text: 'The dollar limit must be a number above 0, for example 10.' });
+  // Under an API key there are no plan meters, so a dollar limit is the only budget guard: Launch waits for one.
+  else if (ctx.st?.defaults?.meterGuard === false && !hasFigure && typed == null) out.push({ id: 'cap', level: 'block', short: 'Type a dollar limit to launch.', text: 'Type a dollar limit for this run first. Under an API key there are no plan meters, so the dollar limit is what stops the spending.' });
+  if (d.touched && ctx.st && !(capUSD(d, ctx.st) > 0)) out.push({ id: 'dollars', level: 'warn', text: ctx.st.budgetNote || 'No dollar figure is confirmed yet, so there is no dollar cap. The time limit still applies.' });
   if (ctx.st?.defaults && ctx.st.defaults.meterGuard === false) out.push({ id: 'meters', level: 'warn', text: 'The plan meters are not watching this run, so only the dollar cap guards the budget.' });
   // The hub's own answer (it also refuses at launch): shown as the reason Launch is off.
-  if (ctx.st?.launch && ctx.st.launch.ok === false && ctx.st.launch.reason && !out.some(p => p.level === 'block' && (p.id === 'running' || p.id === 'ask'))) out.push({ id: 'hub', level: 'block', text: ctx.st.launch.reason });
+  if (ctx.st?.launch && ctx.st.launch.ok === false && ctx.st.launch.reason && !out.some(p => p.level === 'block' && (p.id === 'running' || p.id === 'ask'))) out.push({ id: 'hub', level: 'block', short: ctx.st.launch.reason, text: ctx.st.launch.reason });
   return out;
 }
 
@@ -157,7 +168,7 @@ export const briefText = d => d.question.trim();
 export function launchBody(project, d, st = null) {
   const roles = {};
   for (const r of ROLE_LIST) roles[r.key] = { model: d.roles[r.key].model, effort: d.roles[r.key].effort };
-  const dollars = estimateUSD(d.percent, st);
+  const figure = estimateUSD(d.percent, st), typed = figure == null ? typedDollars(d.dollars) : null, dollars = figure ?? typed;
   return {
     project,
     brief: briefText(d),
@@ -165,6 +176,7 @@ export function launchBody(project, d, st = null) {
     ...(Object.keys(testFiles(d.success)).length ? { test: testFiles(d.success) } : {}),   // none written: only the question goes; the team writes the test while it plans
     envelope: { hours: d.hours, percent: d.percent, ...(dollars != null ? { dollars } : {}) },
     gatherers: d.gatherers,
+    ...(typed != null && d.remember ? { rememberDollars: true } : {}),   // keep this limit as the default: the hub saves it into hub.json
     roles,
     preApprovals: { sites: d.sites.map(s => ({ host: s.host, access: s.access })), packages: d.packages.map(x => ({ eco: x.eco, name: x.name })) }
   };
@@ -177,6 +189,7 @@ const tips = {
   question: 'The one question the team answers. Write it so you could tell from the report whether it was answered.',
   test: 'The success test is frozen once the plan is approved: the team cannot change it afterwards. Each item says how it is judged.',
   envelope: 'The expedition stops by itself at the first limit it reaches. The last tenth of each is kept for writing the report.',
+  cap: 'The most this run may spend, in estimated dollars. The run stops when it gets there. With a plan login the plan meter also guards it; with an API key this limit is the only money guard, so it is needed.',
   pre: 'Sites and packages the team may use without asking, for this expedition only. Nothing is added to your own lists.',
   team: 'Each role runs on the model and effort shown. Change one for this run only; lasting changes go in the project\'s .claude/agents files or hub.json.'
 };
@@ -222,7 +235,8 @@ export function panelHtml(d, ctx, h) {
           <textarea class="xp-in xp-q" data-xp-q rows="4" placeholder="Say it in your own words. The team plans the rest." aria-label="What you want done or answered" spellcheck="true">${esc(d.question)}</textarea>${d.reason ? `<p class="xp-reason">${esc(d.reason)}</p>` : ''}</section>
         <section><h3 class="xp-h">Envelope ${help(tips.envelope)}</h3>
           <div class="xp-env"><span class="xp-eico" title="Time limit">${ic('clock')}</span><span class="xp-seg" role="radiogroup" aria-label="Time limit">${HOURS.map(v => segBtn('hours', v, `${v} h`, d.hours === v)).join('')}</span></div>
-          <div class="xp-env"><span class="xp-eico" title="Share of your plan">${ic('coin')}</span><span class="xp-seg" role="radiogroup" aria-label="Share of your plan">${PERCENTS.map(v => segBtn('percent', v, `${v} %`, d.percent === v)).join('')}</span><span class="xp-usd" title="${usd == null ? 'No dollar figure is confirmed yet' : 'The dollar cap the hub enforces: this share of the plan at the confirmed rate'}">${usd == null ? 'no dollar cap yet' : `≈ ${money(usd)}`}</span></div></section>
+          <div class="xp-env"><span class="xp-eico" title="Share of your plan">${ic('coin')}</span><span class="xp-seg" role="radiogroup" aria-label="Share of your plan">${PERCENTS.map(v => segBtn('percent', v, `${v} %`, d.percent === v)).join('')}</span><span class="xp-usd" title="${usd == null ? 'No dollar figure is confirmed yet' : 'The dollar cap the hub enforces: this share of the plan at the confirmed rate'}">${usd == null ? 'dollar limit below' : `≈ ${money(usd)}`}</span></div>
+          ${usd == null ? `<div class="xp-env xp-capr"><span class="xp-eico" title="Dollar limit">${ic('coin')}</span><span class="xp-cap"><span class="xp-cur" aria-hidden="true">$</span><input class="xp-in xp-dollars" data-xp-dollars value="${esc(d.dollars)}" inputmode="decimal" placeholder="${ctx.st?.defaults?.meterGuard === false ? 'limit' : 'limit (optional)'}" aria-label="Dollar limit for this run" title="${esc(tips.cap)}" autocomplete="off" spellcheck="false"></span><label class="xp-rem" title="Use this limit for every expedition from now on. It is saved in hub.json, and you can change it there."><input type="checkbox" data-xp-remember ${d.remember ? 'checked' : ''}><span>Keep as default</span></label>${help(tips.cap)}</div>` : ''}</section>
         <details class="xp-more" data-xp-more ${d.more ? 'open' : ''}><summary><span>More</span><em>${d.more ? '' : 'a success test, pre-approved sites and packages (optional)'}</em></summary>
           <section><h3 class="xp-h">Success test ${help(tips.test)}</h3>
             <p class="xp-opt-note">Optional. Leave it empty and the team writes one while it plans.</p>
@@ -243,6 +257,7 @@ export function panelHtml(d, ctx, h) {
     <footer class="xp-foot">
       <p class="xp-fixed">${ic('branch')}<span>Ends at one branch and a draft PR. It never merges.</span></p>
       <div class="xp-acts">
+        ${blocks.some(p => p.short) ? `<p class="xp-why" role="status">${esc(blocks.find(p => p.short).short)}</p>` : ''}
         ${warnMark(warns)}
         <button type="button" class="btn ghost xp-cancel" data-xp-cancel title="Close without launching">Cancel</button>
         <button type="button" class="btn primary xp-go" data-xp-go ${blocks.length ? 'disabled' : ''} title="${esc(blocks.length ? blocks.map(p => p.text).join(' ') : 'Start the expedition')}">${ic('compass')}Launch</button>
@@ -331,13 +346,16 @@ export class ExpeditionPanel {
   input(e) {
     const d = this.d, t = e.target; if (!d) return;
     if (t.matches('[data-xp-q]')) d.question = t.value;
+    else if (t.matches('[data-xp-dollars]')) d.dollars = t.value;
     else if (t.matches('[data-xp-t]')) d.success[Number(t.dataset.xpT)].text = t.value;
     else if (t.matches('[data-xp-c]')) d.success[Number(t.dataset.xpC)].command = t.value;
     else return;
     this.refreshFoot();
   }
   change(e) {
-    const d = this.d, t = e.target; if (!d || t.type !== 'radio') return;
+    const d = this.d, t = e.target; if (!d) return;
+    if (t.matches?.('[data-xp-remember]')) { d.remember = t.checked; return; }
+    if (t.type !== 'radio') return;
     const m = /^x([me])-(\w+)$/.exec(t.name); if (!m) return;
     const r = d.roles[m[2]]; if (!r) return;
     if (m[1] === 'm') r.model = t.value; else r.effort = t.value;   // '' = what the role's agent file says
@@ -349,6 +367,11 @@ export class ExpeditionPanel {
     const go = dlg.querySelector('[data-xp-go]');
     go.disabled = blocks.length > 0;
     go.title = blocks.length ? blocks.map(p => p.text).join(' ') : 'Start the expedition';
+    // The plain reason beside Launch follows the typing without a redraw (a redraw would drop the cursor).
+    const why = blocks.find(p => p.short)?.short || '', whyEl = dlg.querySelector('.xp-why');
+    if (why && whyEl) whyEl.textContent = why;
+    else if (why) { const el = document.createElement('p'); el.className = 'xp-why'; el.setAttribute('role', 'status'); el.textContent = why; dlg.querySelector('.xp-acts')?.prepend(el); }
+    else whyEl?.remove();
     const mark = dlg.querySelector('.xp-acts .xp-warn');
     if (ps.length) {
       const tip = ps.map(p => p.text).join('\n');

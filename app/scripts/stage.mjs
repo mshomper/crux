@@ -7,6 +7,7 @@
 //   runtime/hub/                   the hub's tracked files (no tests, no Windows shortcuts for clones) + bundled.json
 //   runtime/hub/node_modules/      npm ci from hub/package-lock.json, without optional packages: the Agent SDK's
 //                                  330 MB Claude Code program is one of those, and is downloaded at first run instead
+//   runtime/agent-types/starter/   the expedition agent files the hub adds to ~/.claude/agents on start (hub/lib/starter-refresh.mjs)
 //   runtime/crux/                  the Crux scripts and templates the hub builds decision pages with
 //   runtime/stop-bundled-hub.mjs   what the installer runs to stop this hub before replacing or removing its files
 //   runtime/THIRD-PARTY.md         what is inside and under which terms
@@ -31,7 +32,7 @@ mkdirSync(out, { recursive: true });
 // 1. The hub and the Crux scripts: files git tracks only, so nothing local (logs, a guard-off file, a stray file
 // not yet committed) ever ships. Commit new files before building.
 const SKIP = [/^hub\/test\//, /^hub\/Crux Hub\.cmd$/, /^hub\/Restart Crux Hub\.vbs$/, /^crux\/lenses\//, /^crux\/SKILL\.md$/, /(^|\/)guard-off$/];
-const tracked = execFileSync('git', ['-C', repo, 'ls-files', '-z', '--', 'hub', 'crux'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+const tracked = execFileSync('git', ['-C', repo, 'ls-files', '-z', '--', 'hub', 'crux', 'agent-types/starter'], { encoding: 'utf8' }).split('\0').filter(Boolean);
 let files = 0;
 for (const f of tracked) {
   if (SKIP.some(r => r.test(f))) continue;

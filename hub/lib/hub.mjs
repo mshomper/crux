@@ -615,6 +615,13 @@ export class Hub {
   // else supplies it and none is invented: without it there is no dollar cap, and a launch runs on time and the meter only.
   dollarsPerPercent() { const n = Number(this.expeditionConfig().dollarsPerPercent); return Number.isFinite(n) && n > 0 ? n : null; }
 
+  // A dollar limit the user chose to keep (the launch panel's "remember"): hub.json already has it; this makes the running hub use it.
+  rememberDollarCap(dollars) {
+    const d = this.defaults && typeof this.defaults === 'object' ? this.defaults : (this.defaults = {});
+    const ex = d.expedition && typeof d.expedition === 'object' ? d.expedition : (d.expedition = {});
+    ex.envelope = { ...(ex.envelope || {}), dollars: Number(dollars) };
+  }
+
   // The envelope a launch starts from: built-ins (6 h, 7%), then hub.json, then this launch's own picks. dollars: this launch's
   // figure, else hub.json's, else percent x the confirmed dollars-per-percent, else null (no cap).
   expeditionEnvelope(over = {}) {
@@ -661,7 +668,7 @@ export class Hub {
     if (running) return `Expedition ${running.id} is still ${running.phase === 'stopped' ? 'writing up' : running.phase}: one expedition runs per project at a time.`;
     if (this.permissionMode(p) === 'standard') return 'This project is at Ask. An expedition needs Auto or Trusted: at Ask every request that is more than a read would wait for an orchestrator, and an expedition has nobody to ask. Raise the level on the project card first.';
     const types = this.agentTypes(p);
-    for (const d of Object.values(expeditionDefaultRoles())) if (!types.get(d.type)) return `The agent type ${d.type} is not set up. Copy the expedition-*.md files from agent-types/starter into ~/.claude/agents (or this project's .claude/agents).`;
+    for (const d of Object.values(expeditionDefaultRoles())) if (!types.get(d.type)) return `The agent type ${d.type} is not set up: it is not in ${join(this.agentHome, '.claude', 'agents')}, and the hub could not add it there when it started (it adds the expedition files itself, so that folder may not be writable). Copy the expedition-*.md files from agent-types/starter into that folder, or this project's .claude/agents.`;
     return null;
   }
 
