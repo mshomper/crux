@@ -1,10 +1,10 @@
 # 0074 How long does the hub keep raw chat and activity?
 
-- Status: open
-- Date: 2026-11-16
+- Status: decided
+- Date: 2026-11-16, decided 2026-11-16
 - Lenses: data model
 - Builds on: 0002, 0009
-- Settles: shared agent state retention = board entries, decisions, handoffs, latest summaries and usage totals kept live for good; raw chat, permission lines and activity kept live about two weeks, then archived as compressed plain-text files per month (read back for scroll-back and search); the page loads a bounded recent window with small updates
+- Settles: shared agent state retention = board entries, decisions, handoffs, latest summaries and usage totals kept live for good; raw chat, permission lines and activity kept live about two weeks, then archived as compressed plain-text files per month (read back for scroll-back and search); months older than six months also get a model-written summary per thread, raw archive kept; the page loads a bounded recent window with small updates
 
 ## In short
 
@@ -17,6 +17,12 @@ For you:
 - Old chat stays searchable (about half a second per search over three months); decisions, the board, handoffs and summaries stay live for good
 - Hard to undo: Without step 2 the hub stops starting at all after about eight months of Crux at today's pace
 - Nothing to set up
+
+## Decision
+
+**B: A first, then archive older chat in plain files.** Step A as above. Then step B: board entries, decisions, handoffs, latest summaries and usage totals stay live; chat, permission lines and activity older than about two weeks move to one compressed plain-text file per month, read back for scroll-back, search and the permission study. The hub starts from a snapshot plus recent events.
+
+Reason: Matt (2026-11-16): B in two steps, plus monthly summaries: past six months, each month's chat is summarised per thread by a model on a rolling basis, and the raw month is still kept as a compressed archive file (not deleted).
 
 ## Context
 
@@ -33,7 +39,7 @@ Keep the full log; finish loading less: small updates instead of full re-downloa
 - Con: 813 MB on disk at a year
 - Effort: Medium
 
-### B: A first, then archive older chat in plain files (recommended)
+### B: A first, then archive older chat in plain files (chosen) (recommended)
 
 Step A as above. Then step B: board entries, decisions, handoffs, latest summaries and usage totals stay live; chat, permission lines and activity older than about two weeks move to one compressed plain-text file per month, read back for scroll-back, search and the permission study. The hub starts from a snapshot plus recent events.
 - Pro: At a year: start about 0.5 s instead of 3 s, 313 MB on disk instead of 813 MB

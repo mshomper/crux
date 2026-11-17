@@ -7,7 +7,7 @@
  "lenses": [
   "data model"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the hub keep only the last two weeks of chat live and move older chat into compressed monthly files, built in two steps with the page loading less first? I recommend that: the expedition measured it as the option that stays fast and small for a year without adding anything new or deleting anything.",
  "for_you": [
   "Step 1 (loading less, part already merged in the phone fix): the page gets small updates instead of re-downloading everything, so the phone opens in about 0.7 s instead of 6.4 s (estimate) and stays quick as chat grows",
@@ -93,15 +93,15 @@
  "recommendation": "B, in two steps: step A fixes the phone now, step B keeps start-up and disk small over a year with no new dependency and nothing deleted. A database index for fast search can be added beside the plain files later if searching old chat becomes a habit.",
  "confidence": "firm",
  "change_mind": "If you expect to search old chat often, D's fast search may be worth its size and the new storage layer.",
- "chosen": null,
- "reason": "",
- "decided_on": null,
+ "chosen": "B",
+ "reason": "Matt (2026-11-16): B in two steps, plus monthly summaries: past six months, each month's chat is summarised per thread by a model on a rolling basis, and the raw month is still kept as a compressed archive file (not deleted).",
+ "decided_on": "2026-11-16",
  "superseded_by": null,
  "challenge": null,
  "settles": [
   {
    "key": "shared agent state retention",
-   "value": "board entries, decisions, handoffs, latest summaries and usage totals kept live for good; raw chat, permission lines and activity kept live about two weeks, then archived as compressed plain-text files per month (read back for scroll-back and search); the page loads a bounded recent window with small updates"
+   "value": "board entries, decisions, handoffs, latest summaries and usage totals kept live for good; raw chat, permission lines and activity kept live about two weeks, then archived as compressed plain-text files per month (read back for scroll-back and search); months older than six months also get a model-written summary per thread, raw archive kept; the page loads a bounded recent window with small updates"
   }
  ],
  "images": []
