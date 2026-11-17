@@ -229,7 +229,10 @@ test('scripts: a committed, unchanged project script is "committed"; any other f
   assert.equal(by('edited.mjs').kind, 'uncommitted', 'changed in the tree');
   assert.equal(by('worker.mjs').kind, 'uncommitted', 'not tracked');
   assert.equal(r.unread, false, 'every script was found as a file');
-  for (const s of r.scripts) assert.deepEqual(Object.keys(s).sort(), ['kind', 'path'], 'only the path and the kind: no text, size or budget (decision 73)');
+  // the path, the kind and, for an uncommitted one, the failed files of its chain: no text, size or budget kept here (the check's
+  // request reads the text itself, permission-check.mjs scriptTexts)
+  for (const s of r.scripts) assert.deepEqual(Object.keys(s).sort(), s.kind === 'committed' ? ['kind', 'path'] : ['files', 'kind', 'path'], 'no text, size or budget kept');
+  assert.deepEqual(by('edited.mjs').files.map(f => f.path), [by('edited.mjs').path], 'the changed file itself is the failed one');
   // changed from main by a commit on the worker's branch: not main's script
   assert.equal(await isProjectScript(join(proj, 'tools', 'tracked.mjs'), { projectDir: proj, git: fakeGitB({ tracked: ['tracked.mjs'], changedFromMain: ['tracked.mjs'] }) }), false);
   assert.equal(await isProjectScript(join(proj, 'tools', 'tracked.mjs'), { projectDir: proj, git: fakeGitB({ tracked: ['tracked.mjs'], noMain: true }) }), false, 'no main to compare with: not trusted');

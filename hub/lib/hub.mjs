@@ -1336,6 +1336,7 @@ export class Hub {
       rulesId: rules?.entryId, rulesBody: rules?.body, worker: agent.name,
       goal: agent.goal || String(agent.task || '').split('\n')[0].slice(0, 200),
       tool: toolName, input, cwd, doubts: route.unsure || [], scripts: route.scripts || [],
+      madeTemp: [...(agent.tempDirs || [])],   // the temp folders this agent made, the hub's own record (R005: its own to delete)
       testPorts: [...(agent.testHubs || [])]   // plan A7: the test hubs this agent started, the hub's own record
     };
   }
@@ -1569,7 +1570,11 @@ export class Hub {
       : 'Auto mode would allow it because it runs a script inside the project, and the hub could not look at the script'];
     // The text of the uncommitted or changed scripts goes with the request, as the orchestrator could read it (capped; a script too
     // big or unreadable is listed as not shown, and the model escalates). Nothing is scanned or held back in code (decision 73).
-    const shown = scriptTexts(scripts ? scripts.scripts : [{ path: '(the command)', kind: 'unknown', note: 'the hub could not look up which scripts it runs' }]);
+    const shown = scriptTexts(scripts ? scripts.scripts : []);
+    // Everything else the hub could not read is an ordinary doubt for the model to weigh, as for any request (decision 73): it is
+    // not a reason to escalate by itself.
+    for (const s of scripts?.scripts || []) if (s.kind !== 'committed' && s.kind !== 'uncommitted') unsure.push(`${s.path}: ${s.note || 'the hub could not resolve it to a file'}`);
+    for (const l of scripts?.inlineLoads || []) unsure.push(`code written in the command loads something the hub has not seen (${l})`);
     if (g.mode === 'shadow') {
       // Allowed as today. The check reads it beside, and the allow is logged under the same request id so the study can compare.
       const id = randomUUID();

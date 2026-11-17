@@ -1,7 +1,8 @@
 // Which scripts a worker's command runs, and whether each is "committed and unchanged from main" (decision 67's Auto gate in
 // hub.mjs). The gate's routing is all this serves (decision 73): a command whose scripts are all committed, with everything
 // they load and start, stays allowed at Auto at once; any other goes to the permission check (On) or is shadow-read (Shadow).
-// A script the hub cannot resolve to a file makes the command "unread". The model is not sent any script text.
+// A script the hub cannot resolve to a file makes the command "unread". The text of an uncommitted or changed file in the chain
+// is sent with the request (permission-check.mjs scriptTexts), capped; nothing here holds an allow back or scans it for words.
 //
 // It FAILS CLOSED. A command counts as read only when every part of it is a shape this file positively recognises and
 // has resolved. A program it does not know that carries an interpreter or a script file anywhere in its words is
@@ -108,7 +109,24 @@ export function lex(raw, shell = 'bash') {
   return { segs, subs, bodies, why };
 }
 
-const dynamic = x => x.includes(DYN) || /\$[\w{(]|%\w+%|^~/.test(x);
+// $TEMP, $TMP, $TMPDIR, ${TEMP}, $env:TEMP or %TEMP% at the start of a word, followed by a slash or the end, is the temp folder (the
+// folder the hub's rules call temp), not a path built at run time.
+const TEMP_START = /^(?:\$\{?(?:TEMP|TMP|TMPDIR)\}?|\$env:(?:TEMP|TMP)|%(?:TEMP|TMP)%)(?=[\\/]|$)/i;
+const expandTemp = w => { const m = TEMP_START.exec(w); return m ? tmpdir() + w.slice(m[0].length) : w; };
+
+// The words of a command without its output redirects: ">" or ">>" (with an optional number in front) and the word after it, or
+// the same with the target attached (>file, 2>>log), and 2>&1. Input redirects stay (they name a file the program reads).
+function dropRedirects(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (/^\d*>>?&?\d*$/.test(w) && !/&\d/.test(w)) { i++; continue; }   // "> file": the operator, then its target
+    if (/^\d*>>?(&\d|\S)/.test(w)) continue;                                // ">file" and "2>&1"
+    out.push(w);
+  }
+  return out;
+}
+const dynamic = x =>x.includes(DYN) || /\$[\w{(]|%\w+%|^~/.test(x);
 const bareSpec = s => !/^(\.{1,2}[\\/]|[\\/]|[A-Za-z]:|file:)/.test(s);   // a package name: dependency code, not a file here
 const SHELLS = /^(bash|sh|zsh|dash|ksh|ash)$/;
 const NODEISH = /^(node|nodejs|tsx|ts-node|ts-node-esm)$/;
@@ -249,8 +267,10 @@ export function parseCommand(cmd, { shell = 'bash', cwd = '' } = {}) {
       continue;
     }
     if (INTERP.test(head)) {
-      if (rest.some(dynamic)) { out.unread.push({ head, why: 'its arguments are built at run time' }); continue; }
-      starts(head, rest, out, { shell, body, cwd, at });
+      // Where output goes (> "$TEMP/x.log", 2>&1) is not an argument the program runs: it is not part of "built at run time".
+      const args = dropRedirects(rest).map(expandTemp);
+      if (args.some(dynamic)) { out.unread.push({ head, why: 'its arguments are built at run time' }); continue; }
+      starts(head, args, out, { shell, body, cwd, at });
     } else if (SAFE_HEADS.has(head)) {   // reads, writes or reports; only the long options on the short list
       const bad = rest.slice(0, rest.indexOf('--') < 0 ? rest.length : rest.indexOf('--')).find(x => x.startsWith('--') && !SAFE_LONG.test(x));
       if (bad) out.unread.push({ head, why: `an option the hub does not read (${bad}), which could name a program to run` });
@@ -573,25 +593,33 @@ function resolveImport(abs, python) {
 // name, followed all the way down. A dynamic import, a computed require, a spawn it cannot name, or an import that
 // cannot be found makes it false: such a script is attached instead, and the unread rule applies to it.
 export async function isProjectScript(file, opts = {}) {
-  const cache = opts.cache || new Map(), seen = new Set(), todo = [file];
+  return (await projectScriptChain(file, opts)).ok;
+}
+
+// The same walk, with the answer in parts (M054): ok, and `bad`, the files of the chain that failed the test, each
+// { path, note? }: no note = the file is there but not committed or changed (its text can be shown); a note = a file the chain
+// loads that cannot be named or followed (the text cannot be shown, and the note says why). The whole chain is walked
+// (up to MAX_FILES), so everything the permission check should be told about is listed, not only the first failure.
+export async function projectScriptChain(file, opts = {}) {
+  const cache = opts.cache || new Map(), seen = new Set(), todo = [file], bad = [];
   while (todo.length) {
     const f = todo.pop(), k = norm(f);
     if (seen.has(k)) continue;
     seen.add(k);
-    if (seen.size > MAX_FILES) return false;
-    if (!(await isCommittedFile(f, { ...opts, cache }))) return false;
+    if (seen.size > MAX_FILES) { bad.push({ path: f, note: `the chain loads more than ${MAX_FILES} files, the rest are not listed` }); break; }
+    if (!(await isCommittedFile(f, { ...opts, cache }))) bad.push({ path: f });
     if (!/\.(mjs|cjs|js|jsx|ts|tsx|py)$/i.test(f)) continue;   // other kinds are not followed
     let text;
-    try { if (statSync(f).size > MAX_FILE_BYTES) return false; text = readFileSync(f, 'utf8'); } catch { return false; }
+    try { if (statSync(f).size > MAX_FILE_BYTES) { bad.push({ path: f, note: 'too big to follow what it loads' }); continue; } text = readFileSync(f, 'utf8'); } catch { bad.push({ path: f, note: 'could not be read to follow what it loads' }); continue; }
     const { specs, unresolvable } = importsOf(text, f);
-    if (unresolvable) return false;
+    if (unresolvable) bad.push({ path: f, note: 'it loads a file named at run time, not shown' });
     for (const s of specs) {
       const r = resolveImport(s, /\.py$/i.test(f));
-      if (!r) return false;
+      if (!r) { bad.push({ path: f, note: `it loads ${basename(s)}, which could not be found, so it is not shown` }); continue; }
       if (!/\.json$/i.test(r)) todo.push(r);
     }
   }
-  return true;
+  return { ok: bad.length === 0, bad };
 }
 
 function expandGlob(path) {
@@ -608,8 +636,11 @@ const DIRECT_EXT = ['', '.ps1', '.bat', '.cmd', '.exe', '.com'];      // what Po
 function itemsFor(files, base0, projectDir) {
   const items = [];
   const add = f => items.push({ path: f });
-  for (const { path: r, mode, at, known } of files) {
+  for (const { path: r0, mode, at, known } of files) {
     const base = at ? resolve(base0, at) : base0;   // after a cd in the command, where it really runs
+    // $TEMP, $TMPDIR, ${TEMP}, $env:TEMP, %TEMP% at the start of a path is the temp folder (the same folder the hub's rules call
+    // temp), not a path built at run time.
+    const r = expandTemp(r0);
     if (/[$`\u0001]|^~|%\w+%/.test(r)) { items.push({ path: r, kind: 'unknown', note: 'its path is built from a variable or a command' }); continue; }
     const abs = isAbsolute(r) ? r : resolve(base, r);
     if (mode === 'module') {
@@ -669,9 +700,10 @@ function findPackageJson(from, projectDir) {
   return null;
 }
 
-// What the Auto gate (hub.mjs gateScript) learns about each script the command runs. Nothing is sent to the check. Each entry:
+// What the Auto gate (hub.mjs gateScript) learns about each script the command runs. Each entry:
 //   { path, kind: 'committed' }                              project script, committed and unchanged (and everything it loads)
-//   { path, kind: 'uncommitted' }                            a file that exists but is not, or loads one that is not: the check judges it
+//   { path, kind: 'uncommitted', files }                     a file that exists but is not, or loads one that is not: the check judges it.
+//                                                            files: the failed files of its chain, { path, note? } (a note: not shown)
 //   { path, kind: 'missing' | 'unreadable' | 'unknown', note } a script the hub could not resolve to a file
 // `unread` is true when a script could not be resolved to a file, or inline code loads one the hub has not seen. The gate lets a
 // command through at once only when `unread` is false and every entry is 'committed'.
@@ -732,7 +764,10 @@ export async function scriptsFor(cmd, { cwd, projectDir, git = defaultGit, mainR
     try { st = statSync(it.path); } catch { out.push({ path: it.path, kind: 'missing', note: 'the file does not exist' }); continue; }
     if (!st.isFile()) { out.push({ path: it.path, kind: 'unreadable', note: 'not a file' }); continue; }
     // A script that is not committed and unchanged from main (or loads one that is not): the gate sends the command to the check.
-    out.push({ path: it.path, kind: (await isProjectScript(it.path, opts)) ? 'committed' : 'uncommitted' });
+    // `files` (only when not committed): the files of its chain that failed, so the check is shown those and not the unchanged top
+    // script (a committed script that imports a changed file: the changed file is what matters).
+    const chain = await projectScriptChain(it.path, opts);
+    out.push(chain.ok ? { path: it.path, kind: 'committed' } : { path: it.path, kind: 'uncommitted', files: chain.bad });
   }
   // Text run as a command (iex, eval) is never a file the hub could read, wherever it sits in the command.
   if (/\b(?:iex|Invoke-Expression|Add-Type|Import-Module|ipmo|Invoke-Command|icm|Invoke-Item|Start-Job)\b|(?:^|[;&|(\s])eval\s/i.test(String(cmd || '')) && !inlineLoads.includes('evals text')) inlineLoads.push('evals text');
