@@ -29,7 +29,7 @@
 <body>
 <div id="sheet"><canvas id="lines"></canvas><canvas id="glow"></canvas><header></header></div>
 <script type="module">
-import { ReservoirCore, paintGlass, stream } from '../map-core.js';
+import { SwarmCore, stream } from '../map-core.js';
 import { createRenderer } from '../map-gl.js';
 import { HudPainter } from '../map-hud.js';
 import { STRIDE, bend } from '../map-particles.js';
@@ -40,15 +40,16 @@ const W = Number(q.get('w')) || innerWidth, phone = W <= 720;
 document.body.style.width = W + 'px';
 const sheet = document.getElementById('sheet');
 sheet.classList.toggle('phone', phone);
-sheet.querySelector('header').innerHTML = `<b>Core · glass reservoir</b><span>The liquid level is context used; a full sphere means hand off. ${live ? 'Live: click a sphere for a spark.' : ''}</span>`;
+sheet.querySelector('header').innerHTML = `<b>Core · swarm</b><span>The bright core's reach is context used; the whole sphere lit means hand off. ${live ? 'Live: click a sphere for a spark.' : ''}</span>`;
 
+// context is given as a share of the way to the 60% handoff: 18% of context is 30% of the way
 const OPUS = 'claude-opus-5-5';
 const S = {
   hero: { cap: 'Working', sub: 'Opus, high effort, 42% context', in: { state: 'working', ctx: 42, model: OPUS, effort: 'high' } },
-  idle: { cap: 'Idle', sub: '8% context', in: { state: 'idle', ctx: 8, model: OPUS, effort: 'high' } },
-  work: { cap: 'Working', sub: '30% context', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' } },
-  near: { cap: 'Near handoff', sub: '58% of 60%', in: { state: 'working', ctx: 58, model: OPUS, effort: 'high' } },
-  wait: { cap: 'Waiting on you', sub: 'red flare at the edge', in: { state: 'idle', ctx: 30, model: OPUS, effort: 'high', needs: true } },
+  idle: { cap: 'Idle', sub: '30% of the way to handoff', in: { state: 'idle', ctx: 18, model: OPUS, effort: 'high' } },
+  work: { cap: 'Working', sub: '60% of the way', in: { state: 'working', ctx: 36, model: OPUS, effort: 'high' } },
+  near: { cap: 'Near handoff', sub: '85% of the way', in: { state: 'working', ctx: 51, model: OPUS, effort: 'high' } },
+  wait: { cap: 'Waiting on you', sub: 'red flare, 45% of the way', in: { state: 'idle', ctx: 27, model: OPUS, effort: 'high', needs: true } },
   spark: { cap: 'Permission spark', sub: 'request allowed', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' }, spark: 'allowed' },
   deny: { cap: 'Permission spark', sub: 'sent to you', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high' }, spark: 'escalated' },
   due: { cap: 'Handoff due', sub: 'gold pulse', in: { state: 'idle', ctx: 61, model: OPUS, effort: 'high' } },
@@ -57,7 +58,7 @@ const S = {
   sonnet: { cap: 'Sonnet · low effort', sub: 'working, 30%', in: { state: 'working', ctx: 30, model: 'claude-sonnet-5-5', effort: 'low' } },
   haiku: { cap: 'Haiku · medium', sub: 'working, 20%', in: { state: 'working', ctx: 20, model: 'claude-haiku-5-5', effort: 'medium' } },
   fable: { cap: 'Fable · max effort', sub: 'working, 45%, two workers in flight', in: { state: 'working', ctx: 45, model: 'claude-fable-5-2', effort: 'max' } },
-  still: { cap: 'Reduced motion', sub: 'the still: no particles', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high', needs: true }, still: true }
+  still: { cap: 'Reduced motion', sub: 'one still frame', in: { state: 'working', ctx: 30, model: OPUS, effort: 'high', needs: true }, still: true }
 };
 
 // ---- lay the sheet out: big tiles (the open map's core size), then the strip as it sits over the chat ----
@@ -104,7 +105,7 @@ for (const r of rules) sheet.insertAdjacentHTML('beforeend', `<div class="rule" 
 for (const s of strips) sheet.insertAdjacentHTML('afterbegin', `<div class="strip" style="left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px"><u>${s.text}</u></div>`);
 
 // ---- cores: the phone sheet runs the phone's particle budget ----
-tiles.forEach((t, i) => { t.core = new ReservoirCore({ light: phone, seed: 11 + i * 7 }); t.core.setMood(t.in); t.core.settle(); });
+tiles.forEach((t, i) => { t.core = new SwarmCore({ light: phone, seed: 11 + i * 7 }); t.core.setMood(t.in); t.core.settle(); });
 const dpr = Math.min(devicePixelRatio || 1, 2);
 const renderer = createRenderer(document.getElementById('glow'));
 renderer.resize(W, H, dpr);
@@ -113,17 +114,22 @@ hud.resize(W, H, dpr);
 for (const cv of sheet.querySelectorAll('canvas')) { cv.style.width = W + 'px'; cv.style.height = H + 'px'; }
 const buf = new Float32Array(tiles.reduce((n, t) => n + t.core.capacity + 40, 0) * STRIDE);
 
-function draw(trail) {
+// last: the final frame of a still sheet, the only one the reduced-motion tile is drawn in (it has no trails)
+function draw(trail, last = false) {
   let o = 0;
+  const swarms = [];
   for (const t of tiles) {
-    if (t.still) continue;
+    if (t.still && !last) continue;
     o = t.core.project(t.x, t.y, t.r, buf, o);
+    if (renderer.kind === 'canvas') o = t.core.cpuSwarm(buf, o);
+    swarms.push(t.core.swarm());
+    if (t.still) continue;
     for (const [k, s] of t.stations.entries()) {
       const core = { x: t.x, y: t.y }, via = bend(core, s, 0.17, 60), len = Math.hypot(s.x - t.x, s.y - t.y);
       o = stream(buf, o, core, via, s, t.core.t, t.core.look.hue, { u0: Math.min(0.5, t.r * 1.05 / len), u1: 1 - (s.r + 3) / len, n: t.r < 20 ? 5 : 9, pace: 0.25 + 0.4 * t.core.look.energy, seed: k * 0.37 });
     }
   }
-  renderer.draw(buf, o, trail);
+  renderer.draw(buf, o, trail, swarms);
 }
 
 function lines(time) {
@@ -168,7 +174,7 @@ if (live) {
   for (let k = 0; k < N; k++) {
     stepAll(1 / 60);
     if (k === N - lead) for (const t of tiles) if (t.spark || t.id === 'hero') t.core.spark(t.spark || 'allowed', -0.6);
-    if (k >= N - 40) draw(0.66);
+    if (k >= N - 40) draw(0.66, k === N - 1);
   }
   lines(7);
   document.title = 'ready';
