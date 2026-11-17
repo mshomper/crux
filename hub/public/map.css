@@ -139,7 +139,7 @@
 .hs.sat .hs-label i:empty,.hs.board .hs-label i:empty{display:none}
 .hs.sat.asks .hs-label i{text-transform:none;letter-spacing:.02em;font-family:system-ui,"Segoe UI",sans-serif;font-size:11.5px;line-height:1.3;height:calc(16px * var(--e))}
 .hs.sat .hs-badge{right:calc(var(--r) * -.62);top:calc(var(--r) * -.62)}
-.hs-card{position:absolute;top:0;left:calc(var(--r) * 1.62 + 12px);transform:translateY(-50%);display:none;min-width:200px;max-width:290px;padding:8px 11px 9px;text-align:left;white-space:normal;
+.hs-card{position:absolute;top:0;left:calc(var(--r) * 1.62 + 12px);transform:translateY(-50%);display:none;width:max-content;min-width:200px;max-width:290px;padding:8px 11px 9px;text-align:left;white-space:normal;
   border:1px solid color-mix(in srgb,var(--mh,#6fe3ff) 45%,transparent);border-radius:4px;background:linear-gradient(180deg,rgba(10,20,32,.97),rgba(6,11,18,.97));
   box-shadow:0 0 18px rgba(111,227,255,.16);clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%);pointer-events:none;z-index:8}
 .hs[data-card="left"] .hs-card{left:auto;right:calc(var(--r) * 1.62 + 12px)}
