@@ -24,8 +24,16 @@ export const roleOfType = type => Object.keys(ROLES).find(r => ROLES[r].type ===
 // Spec lesson 9: a subagent once created a stray scheduled task. No expedition agent (the Lead, the five hub roles, and
 // the gatherers inside the Lead) gets scheduling or trigger tools; settings files are denied on write (hub.mjs).
 export const DISALLOWED_TOOLS = ['CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger', 'ScheduleWakeup'];
-// Gatherers at once, and rounds: enforced in expedition-lead.md and the Lead's brief; the hub counts and logs them.
+// The gatherer allowance (decision 75 A): at most GATHERER_LIMIT at once, one second round, GATHERER_RUNS gatherer runs in all
+// (a reader run, sent with only a page list, counts too). The hub enforces the at-once limit and the total on the Lead's Agent
+// calls (Expedition.gathererBlock). The per-gatherer limits (searches, page opens, at least two opened) are in the agent file and
+// the Lead's brief; the hub counts a gatherer's calls and logs them (expedition_subagent ended, searches and opens).
 export const GATHERER_LIMIT = 4;
+export const GATHERER_RUNS = 8;
+export const GATHERER_ROUND1 = { searches: 8, opens: 6, minOpened: 2 };
+export const GATHERER_TYPE = 'expedition-gatherer';
+// One sentence for every place that states the rule, so the numbers read the same everywhere.
+export const gathererRule = (atOnce = GATHERER_LIMIT) => `Gatherers (Agent tool, type ${GATHERER_TYPE}): at most ${atOnce} at once, and one second round, ${GATHERER_RUNS} gatherer runs in all (the hub refuses a ${GATHERER_RUNS + 1}th). Round 1: up to ${GATHERER_ROUND1.searches} web searches and ${GATHERER_ROUND1.opens} page opens each, and at least ${GATHERER_ROUND1.minOpened} pages actually opened; notes cite only pages opened. Round 2: each gatherer gets a list of pages (the gaps round 1 flagged) to read, not open-ended searching. A reader run (a page list to read, no searching) is allowed and counts inside the ${GATHERER_RUNS}.`;
 export const defaultRoles = () => Object.fromEntries(Object.entries(ROLES).map(([r, x]) => [r, { type: x.type, model: x.model, effort: x.effort }]));
 
 // Spec 4.4: 6 hours and 7% of the plan, by default. dollars: the cap the watchdog enforces (null until Matt confirms the
@@ -360,6 +368,29 @@ export class Expedition {
   stepEvent(step) { return this.state().stepEvents.get(step) || null; }
   // The Lead's one summary may go to the orchestrator once the report, branch and card are done (phase 5 order), and only once.
   summaryDue() { const s = this.state(); return s.phase === 'stopped' && s.steps.has('card'); }
+  // A gatherer run the hub let through (the Lead's Agent call), logged at the call, before the SDK says the task started.
+  // Idempotent by tool call id.
+  gathererCall(toolUseId) {
+    const id = String(toolUseId || '');
+    if (id && this.state().notes.some(e => e.kind === 'gatherer-call' && e.toolUseId === id)) return null;
+    return this.record('expedition_note', { note: 'gatherer run allowed', kind: 'gatherer-call', toolUseId: id });
+  }
+  // Gatherer runs so far: calls let through, or tasks started if more (a restart can lose a call, never a task).
+  gathererRuns() {
+    const s = this.state();
+    const calls = new Set(s.notes.filter(e => e.kind === 'gatherer-call').map(e => e.toolUseId)).size;
+    const started = new Set(s.subagents.filter(e => e.phase === 'started' && e.subagentType === GATHERER_TYPE).map(e => e.taskId)).size;
+    return { calls, started, total: Math.max(calls, started), running: this.runningSubagents(), pending: Math.max(0, calls - started) };
+  }
+  // Plain-words reason the Lead's next gatherer run is refused, or null. atOnce: this expedition's launch pick, at most GATHERER_LIMIT.
+  gathererBlock(toolUseId, atOnce = GATHERER_LIMIT) {
+    const r = this.gathererRuns(), id = String(toolUseId || '');
+    if (id && this.state().notes.some(e => e.kind === 'gatherer-call' && e.toolUseId === id)) return null;   // a repeat of a call already let through
+    if (r.total >= GATHERER_RUNS) return `This expedition has used all ${GATHERER_RUNS} gatherer runs it is allowed (${GATHERER_LIMIT} at once plus one second round). Work from the notes you have, give the Synthesizer what exists, and say in the report which gaps stayed open.`;
+    const limit = Math.min(GATHERER_LIMIT, Math.max(1, Math.round(Number(atOnce)) || GATHERER_LIMIT));
+    if (r.running + r.pending >= limit) return `${r.running + r.pending} gatherers are already running and ${limit} is the most at once. Wait for one to finish, then send the next (${GATHERER_RUNS - r.total} of ${GATHERER_RUNS} runs left).`;
+    return null;
+  }
   // Gatherers running right now, from the started/ended events (a count for the map's badge).
   runningSubagents() {
     const open = new Set();

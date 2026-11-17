@@ -7,7 +7,7 @@
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-export const GATHERER_LIMIT = 4;   // fixed: at once, and one second round (expedition-lead.md); the stepper means "up to N at once"
+export const GATHERER_LIMIT = 4;   // fixed: at once; one second round, 8 gatherer runs in all, enforced by the hub (decision 75, lib/expedition.mjs)
 export const HOURS = [2, 6, 12, 24];
 export const PERCENTS = [3, 7, 15];
 export const DEFAULT_ENVELOPE = { hours: 6, percent: 7 };
@@ -18,7 +18,7 @@ export const JUDGES = [['checklist', 'Checklist', 'Judged by the Verifier from w
 export const ROLE_LIST = [
   { key: 'lead', label: 'Lead', blurb: 'Plans, splits the work, makes in-scope calls, writes the report', model: 'opus', effort: 'medium' },
   { key: 'advisor', label: 'Advisor', blurb: 'Reviews the plan once, then is on call for decisions and stuck points', model: 'fable', effort: 'medium' },
-  { key: 'gatherer', label: 'Gatherers', blurb: 'One sub-question each, up to this many at once', model: 'haiku', effort: 'low', count: true },
+  { key: 'gatherer', label: 'Gatherers', blurb: 'One sub-question each, up to this many at once; 8 runs in all', model: 'haiku', effort: 'low', count: true },
   { key: 'synthesizer', label: 'Synthesizer', blurb: 'Turns the notes into findings, an options table and a recommendation', model: 'opus', effort: 'medium' },
   { key: 'skeptic', label: 'Skeptic', blurb: 'Reads the notes and the synthesis in its own context and argues against them', model: 'sonnet', effort: 'high' },
   { key: 'builder', label: 'Builder', blurb: 'Builds the prototype in its own worktree against the frozen test', model: 'sonnet', effort: 'medium' },

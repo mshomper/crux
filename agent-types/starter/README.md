@@ -29,7 +29,7 @@ An expedition is a self-running research-and-build job (decisions 68 to 72). The
 |---|---|---|---|
 | `expedition-lead` | Opus · medium | hub agent | Plans, splits the work, makes in-scope calls, writes the report. Has the Agent tool. |
 | `expedition-advisor` | Fable · medium | hub agent | Reviews the plan once at the gate; on call for escalated decisions |
-| `expedition-gatherer` | Haiku · low | subagent | Answers one sub-question with notes and links it opened |
+| `expedition-gatherer` | Haiku · low | subagent | Answers one sub-question with notes and links it opened (up to 8 searches, 6 page opens; at most 4 at once, 8 runs per expedition; page-list "reader" runs allowed) |
 | `expedition-synthesizer` | Opus · medium | hub agent | Notes into cited findings and a recommendation |
 | `expedition-skeptic` | Sonnet · high | hub agent | Tries to break the notes and the synthesis |
 | `expedition-builder` | Sonnet · medium | hub agent | Builds the prototype in its own worktree against the frozen test |

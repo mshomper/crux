@@ -29,7 +29,7 @@ import { summariseDue, SUMMARY_MODEL } from './month-summaries.mjs';
 import { approvals, gitState, gitLines, realRun, unansweredQuestions, tidyUps, clip, INSTRUCTION_MAX, INDEX_LINES_MAX } from './handoff-facts.mjs';
 import { Conductor, CONDUCTOR, CONDUCTOR_ROLE, briefText } from './conductor.mjs';
 import { ExpeditionWatchdog, HUB_STOPS as EXPEDITION_HUB_STOPS } from './expedition-watchdog.mjs';
-import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, DEFAULT_ENVELOPE, runJsonProblem, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
+import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES, GATHERER_LIMIT, GATHERER_TYPE, GATHERER_ROUND1, GATHERER_RUNS, gathererRule, DEFAULT_ENVELOPE, runJsonProblem, ID_PATTERN as EXPEDITION_ID, defaultRoles as expeditionDefaultRoles, roleOfType as expeditionRoleOfType } from './expedition.mjs';
 import { ExpeditionEnd } from './expedition-end.mjs';
 import { pageEvents, olderPage, waitingOf, agentsFor, partsOf, diffParts } from './feed.mjs';
 import { isProposal, proposalsOf } from './expedition-report.mjs';
@@ -524,7 +524,7 @@ export class Hub {
     const ex = this.leadScope(p, lead), s = ex.state();
     return {
       expedition: ex.id, phase: s.phase,
-      gatherers: { running: ex.runningSubagents(), limit: GATHERER_LIMIT, note: `Gatherers are subagents you call with the Agent tool: at most ${GATHERER_LIMIT} at once, and one second round of the same size for gaps they flagged.` },
+      gatherers: { running: ex.runningSubagents(), limit: GATHERER_LIMIT, runs: ex.gathererRuns().total, runsLimit: GATHERER_RUNS, note: gathererRule(GATHERER_LIMIT) },
       team: p.workers({ expedition: ex.id }).filter(w => w.expeditionRole !== 'lead').map(w => ({
         name: w.name, role: w.expeditionRole, state: w.state, goal: w.goal, context_pct: w.contextPct ?? null,
         model: w.model || w.modelSeen || null, effort: w.effort || null, type: w.type || null
@@ -597,7 +597,7 @@ export class Hub {
       Object.keys(test).length
         ? `The success test came with the launch: it is in test/ (${Object.keys(test).join(', ')}). Keep it; the Advisor reviews it with your plan at the gate.`
         : 'No success test came with the launch, only the question. While you plan, draft it yourself in test/: CHECKLIST.md (numbered items, each saying how it is judged) and test/run.json where commands help (see your agent file for its shape). The Advisor reviews it at the plan gate, and the gate freezes it.',
-      `Gatherers: up to ${limit} at once with the Agent tool (type expedition-gatherer), and one second round of the same size, only for gaps they flagged. Hard limit ${GATHERER_LIMIT}.`,
+      `${gathererRule(limit)} This launch: ${limit} at once.`,
       `Your tools: start_worker (type one of expedition-advisor, expedition-synthesizer, expedition-skeptic, expedition-builder, expedition-verifier), message_agent, retire_worker and list_agents, all limited to this expedition, plus the Agent tool. Nobody is available to answer questions: decide inside the brief or park the line of work.`,
       `The end: when the success test passes call expedition_finish; when your report (REPORT.md) is written and the Verifier's claims pass is applied, call expedition_report_ready. The hub then copies the report onto the branch, pushes it, opens a draft pull request and posts the finished card, and tells you when to send your one post_summary. You never merge.`,
       '', 'The brief:', '', text
@@ -833,10 +833,32 @@ export class Hub {
   // After a hub stop (time, budget, the user's Stop) the Lead may not call the Agent tool: its gatherers are gone with the
   // interrupt, and a new one would spend budget that is used up. Asked from the PreToolUse hook (the Agent call does not reach
   // canUseTool, M046), which can deny. A plain-words reason, or null.
-  expeditionToolBlock(p, agent, toolName) {
+  // Decision 75 A: and a gatherer run past the allowance (8 in all, 4 at once) is refused with the reason. hookInput: the hook's
+  // input (tool_use_id, tool_input); without it only the stop is checked.
+  expeditionToolBlock(p, agent, toolName, hookInput = null) {
     if (agent?.expeditionRole !== 'lead' || !agent.expedition || !['Agent', 'Task'].includes(toolName)) return null;
-    const stopped = this.expeditionOf(p, agent).state().stopped;
-    return stopped && EXPEDITION_HUB_STOPS.includes(stopped.reason) ? `The expedition was stopped by the hub (${stopped.reason}): no gatherer can be started now. Write the report from what exists and say the claims were not checked.` : null;
+    const ex = this.expeditionOf(p, agent), s = ex.state();
+    const stopped = s.stopped;
+    if (stopped && EXPEDITION_HUB_STOPS.includes(stopped.reason)) return `The expedition was stopped by the hub (${stopped.reason}): no gatherer can be started now. Write the report from what exists and say the claims were not checked.`;
+    if (hookInput?.tool_input?.subagent_type !== GATHERER_TYPE) return null;
+    const why = ex.gathererBlock(hookInput.tool_use_id, s.started?.envelope?.gatherers);
+    if (why) return why;
+    ex.gathererCall(hookInput.tool_use_id);
+    return null;
+  }
+
+  // A gatherer's own WebSearch and WebFetch (hook calls with agent_id): up to 8 searches and 6 page opens each (decision 75 A).
+  // Counted by the gatherer's id on the Lead's agent object; the count goes into the log when the gatherer ends. A plain reason or null.
+  gathererToolBlock(agent, hookInput) {
+    if (!agent?.expedition || hookInput?.agent_type !== GATHERER_TYPE || !hookInput.agent_id) return null;
+    const kind = hookInput.tool_name === 'WebSearch' ? 'searches' : hookInput.tool_name === 'WebFetch' ? 'opens' : null;
+    if (!kind) return null;
+    const use = ((agent.gathererUse ||= new Map()).get(hookInput.agent_id) || (agent.gathererUse.set(hookInput.agent_id, { searches: 0, opens: 0 }), agent.gathererUse.get(hookInput.agent_id)));
+    if (use[kind] >= GATHERER_ROUND1[kind]) return kind === 'searches'
+      ? `You have used your ${GATHERER_ROUND1.searches} web searches. Open the pages you have not read yet, or stop and write your notes and gaps.`
+      : `You have opened your ${GATHERER_ROUND1.opens} pages. Write your notes and list what is left as gaps.`;
+    use[kind]++;
+    return null;
   }
 
   // The user's Stop (reason 'Matt'): the watchdog's stop sequence for one expedition (spec 4.4 and 4.8). POST /api/expedition/stop
