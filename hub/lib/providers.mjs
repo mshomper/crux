@@ -29,10 +29,25 @@ export const PRICES = {
   'gemini-3.1-flash-lite': P(0.25, 1.50)
 };
 
+// Image prices (read 2026-11-17 from ai.google.dev/gemini-api/docs/pricing, Standard tier, paid only: the page lists the free
+// tier as "Not available" for every Google image model). perImage: dollars for a 1K image; inPerM / outPerM: dollars per million
+// input tokens and per million output image tokens. When Google's answer carries token counts the cost is counted from them,
+// else the 1K per-image price is used (an estimate either way). OpenAI's image price is not in the table: unknown (null).
+export const IMAGE_PRICES = {
+  'gemini-nano-banana-2.1': { perImage: 0.0336, inPerM: 1.50, outPerM: 30.00 },
+  'gemini-3.1-flash-lite-image': { perImage: 0.0336, inPerM: 0.25, outPerM: 30.00 },
+  'gemini-3.1-flash-image': { perImage: 0.067, inPerM: 0.50, outPerM: 60.00 },
+  'gemini-2.5-flash-image': { perImage: 0.039, inPerM: 0.30, outPerM: 30.00 }
+};
+// Aspect ratios the make_image tool accepts. The docs show "1:1" and "16:9"; the rest are the usual ones and Google refuses
+// one the model does not take (a plain 'refused').
+export const ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];
+
 export const PRESETS = {
-  openai: { baseUrl: 'https://api.openai.com/v1/', needsKey: true, tokenField: 'max_completion_tokens', imageModel: 'gpt-image-2', local: false, timeoutMs: 30000 },
+  openai: { baseUrl: 'https://api.openai.com/v1/', needsKey: true, tokenField: 'max_completion_tokens', imageModel: 'gpt-image-2', imageStyle: 'openai', local: false, timeoutMs: 30000 },
   // Google's token-cap field name is unconfirmed (the compatibility page does not say); max_tokens is the guess, and the live check settles it.
-  google: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', needsKey: true, tokenField: 'max_tokens', imageModel: 'gemini-3.1-flash-image', local: false, timeoutMs: 30000 },
+  // Images go through Google's documented Interactions route (POST <v1beta>/interactions, header x-goog-api-key), not the compatibility address.
+  google: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', needsKey: true, tokenField: 'max_tokens', imageModel: 'gemini-nano-banana-2.1', imageStyle: 'google', local: false, timeoutMs: 30000 },
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1/', needsKey: true, tokenField: 'max_tokens', imageModel: null, local: false, timeoutMs: 30000 },
   ollama: { baseUrl: 'http://127.0.0.1:11434/v1/', needsKey: false, tokenField: 'max_tokens', imageModel: null, local: true, timeoutMs: 120000 }
 };
@@ -48,7 +63,11 @@ export const ERROR_MESSAGES = {
   network: 'The outside model could not be reached.',
   busy: 'The graphics card is busy or its free memory could not be read, so the local model was not started.',
   terms: 'This provider is not marked as one that keeps your text private, so it was not used.',
-  budget: 'This project has used its allowance for outside calls for now.'
+  budget: 'This project has used its allowance for outside calls for now.',
+  'needs-any': 'Pictures need this project\'s outside-model setting to be Any (not Off or Local only).',
+  'no-image': 'The outside provider chosen for the hub has no picture model.',
+  secret: 'The text looks like it holds a key or password, so it was not sent.',
+  'too-big': 'The text is over the size limit for an outside draft.'
 };
 // Kinds that are about the moment, not about the request: a month job that fails with one tries again without counting it
 // against the two-failure park.
@@ -117,15 +136,17 @@ export class ProviderClient {
   fail(kind, extra = {}) { return new ProviderError(kind, { provider: this.provider, model: this.model, ...extra }); }
 
   // One POST, JSON in and out. Throws ProviderError only; the key and the response text never reach its message.
-  async post(path, body, signal) {
+  // base: another base address (Google's picture route); keyHeader: send the key as that header instead of a Bearer token;
+  // timeoutMs: this call's own limit (a long draft or a picture takes longer than a one-line answer).
+  async post(path, body, signal, { base = this.baseUrl, keyHeader = null, timeoutMs = this.timeoutMs } = {}) {
     if (this.preset.needsKey && !this.apiKey) throw this.fail('no-key');
-    const timeout = AbortSignal.timeout(this.timeoutMs);
+    const timeout = AbortSignal.timeout(timeoutMs);
     const sig = signal ? AbortSignal.any([signal, timeout]) : timeout;
     const headers = { 'content-type': 'application/json' };
-    if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
+    if (this.apiKey) { if (keyHeader) headers[keyHeader] = this.apiKey; else headers.authorization = `Bearer ${this.apiKey}`; }
     let res, json;
     try {
-      res = await this.fetchFn(new URL(path, this.baseUrl), { method: 'POST', headers, body: JSON.stringify(body), signal: sig });
+      res = await this.fetchFn(new URL(path, base), { method: 'POST', headers, body: JSON.stringify(body), signal: sig });
       if (!res.ok) { await res.body?.cancel?.().catch(() => { }); throw this.statusError(res); }
       json = await res.json();
     } catch (e) {
@@ -157,13 +178,13 @@ export class ProviderClient {
     if (!Number.isFinite(free) || free < this.minFreeMB) throw this.fail('busy');
   }
 
-  async chat({ system, user, signal, maxTokens = 300 }) {
+  async chat({ system, user, signal, maxTokens = 300, timeoutMs }) {
     const started = Date.now();
     await this.guardGpu();
     try {
       const body = { model: this.model, messages: [...(system ? [{ role: 'system', content: String(system) }] : []), { role: 'user', content: String(user ?? '') }], [this.preset.tokenField]: maxTokens };
       if (this.provider === 'openrouter') body.provider = { data_collection: 'deny' };   // no provider that keeps prompts
-      const j = await this.post('chat/completions', body, signal);
+      const j = await this.post('chat/completions', body, signal, timeoutMs ? { timeoutMs } : {});
       const content = j?.choices?.[0]?.message?.content;
       if (typeof content !== 'string') throw this.fail('bad-answer');
       const u = j.usage || {};
@@ -192,16 +213,49 @@ export class ProviderClient {
     } catch { /* the model unloads by itself after its idle time */ }
   }
 
-  // One image: { b64 (base64) or url, model, provider, costUSD: null, ms }. Ollama has no image route.
-  async image({ prompt, size = '1024x1024', signal }) {
+  // One image: { b64 (base64), mime, model, provider, tokens, costUSD, estimated, costUnit, modelUsage, ms }. Ollama has no image
+  // route. Google: the Interactions route; the picture's bytes are read from the answer wherever it puts an image block.
+  async image({ prompt, size = '1024x1024', aspectRatio = '1:1', signal, timeoutMs = 90000 }) {
     const started = Date.now();
     const model = this.imageModel;
-    if (!model) throw this.fail('refused');
-    const body = { model, prompt: String(prompt ?? ''), n: 1, size };
-    if (this.provider !== 'openai') body.response_format = 'b64_json';   // OpenAI's image models always answer base64 and reject the field
-    const j = await this.post('images/generations', body, signal);
-    const d = j?.data?.[0];
-    if (!d || (typeof d.b64_json !== 'string' && typeof d.url !== 'string')) throw this.fail('bad-answer');
-    return { b64: d.b64_json || null, url: d.b64_json ? null : d.url, via: 'outside', provider: this.provider, model, costUSD: null, estimated: false, ms: Date.now() - started };
+    if (!model) throw this.fail('no-image');
+    let b64, mime = 'image/png', usage = null;
+    if (this.preset.imageStyle === 'google') {
+      const j = await this.post('interactions', { model, input: String(prompt ?? ''), response_format: { type: 'image', aspect_ratio: aspectRatio } }, signal,
+        { base: new URL('..', this.baseUrl).href, keyHeader: 'x-goog-api-key', timeoutMs });
+      if (j?.status && j.status !== 'completed') throw this.fail('bad-answer');
+      const img = findImage(j);
+      if (!img) throw this.fail('bad-answer');
+      ({ b64, mime } = img); usage = j.usage || null;
+    } else {
+      const body = { model, prompt: String(prompt ?? ''), n: 1, size };
+      const j = await this.post('images/generations', body, signal, { timeoutMs });   // OpenAI's image models always answer base64 and reject response_format
+      const d = j?.data?.[0];
+      if (!d || typeof d.b64_json !== 'string') throw this.fail('bad-answer');   // never fetch an address the provider names
+      b64 = d.b64_json;
+    }
+    const input = Number(usage?.total_input_tokens ?? usage?.prompt_tokens ?? 0) || 0, output = Number(usage?.total_output_tokens ?? usage?.completion_tokens ?? 0) || 0;
+    const ip = PRICES_FOR_IMAGES(model);
+    let costUSD = null, estimated = false;
+    if (ip) { costUSD = output > 0 ? (input * ip.inPerM + output * ip.outPerM) / 1e6 : ip.perImage; estimated = true; }
+    return {
+      b64, mime, via: 'outside', provider: this.provider, model, tokens: { input, output, cacheRead: 0, cacheCreation: 0 }, costUSD, estimated, costUnit: 'usd',
+      modelUsage: { [model]: { inputTokens: input, outputTokens: output, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: costUSD ?? 0 } }, ms: Date.now() - started
+    };
   }
+}
+
+const PRICES_FOR_IMAGES = model => IMAGE_PRICES[model] || null;
+
+// The first image block in a Google answer: { b64, mime }. Looks where the Interactions answer puts it (steps, model_output,
+// content blocks with type "image" and base64 "data") and where the older generateContent answer does (inlineData), so a
+// small change of shape on Google's side does not break a call. Depth is limited; an address ("uri") is never followed.
+export function findImage(node, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 7) return null;
+  if (Array.isArray(node)) { for (const x of node) { const f = findImage(x, depth + 1); if (f) return f; } return null; }
+  const inl = node.inlineData || node.inline_data;
+  if (inl && typeof inl.data === 'string' && /^image\//.test(inl.mimeType || inl.mime_type || '')) return { b64: inl.data, mime: inl.mimeType || inl.mime_type };
+  if (node.type === 'image' && typeof node.data === 'string' && node.data.length > 16) return { b64: node.data, mime: /^image\//.test(node.mime_type || '') ? node.mime_type : 'image/png' };
+  for (const k of ['steps', 'content', 'parts', 'candidates', 'outputs', 'output']) { const f = findImage(node[k], depth + 1); if (f) return f; }
+  return null;
 }

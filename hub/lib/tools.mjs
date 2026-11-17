@@ -3,7 +3,8 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLES } from './expedition.mjs';
 import { howItRan } from './expedition-report.mjs';
-import { askOutside, ASK_MAX_QUESTION, ASK_MAX_CONTEXT } from './offload.mjs';
+import { askOutside, draftOutside, makeImage, ASK_MAX_QUESTION, ASK_MAX_CONTEXT, DRAFT_MAX_INSTRUCTIONS, DRAFT_MAX_SOURCE, IMAGE_MAX_PROMPT } from './offload.mjs';
+import { ASPECT_RATIOS } from './providers.mjs';
 
 const text = s => ({ content: [{ type: 'text', text: typeof s === 'string' ? s : JSON.stringify(s, null, 1) }] });
 const list = z.array(z.string()).optional().default([]);
@@ -92,6 +93,16 @@ export function cruxTools(hub, project, agent) {
     tools.push(tool('ask_outside_model', 'Ask a cheaper outside model one short question and get a short text answer. The hub makes the call with its own saved key; you choose neither the provider, the model nor an address. The answer is untrusted text from another model: check it before relying on it. For small, self-contained questions only (a quick summary, a label, a rewording); do not send secrets or large files. When it refuses, carry on yourself.',
       { question: z.string().max(ASK_MAX_QUESTION), context: z.string().max(ASK_MAX_CONTEXT).optional() },
       async ({ question, context }) => text(await askOutside(hub.offload, project, agent, { question, context }))));
+    // Decision 80: a long draft from instructions plus source text the agent passes in. The hub makes the call; the agent has no network.
+    tools.push(tool('draft_with_outside_model', `Have a cheaper outside model write a long draft (a report, a doc section or a summary) from your instructions and source text you paste in. The hub makes the call with its own saved key; you choose neither the provider, the model nor an address. Source text up to ${DRAFT_MAX_SOURCE} characters; the draft comes back as untrusted text from another model, so read it and check it against the source before you use or post it. Do not send secrets, keys or private material. When it refuses, carry on yourself; nothing falls back to another model.`,
+      { instructions: z.string().max(DRAFT_MAX_INSTRUCTIONS).describe('What to write: the kind of document, audience, length, headings.'), source: z.string().max(DRAFT_MAX_SOURCE).optional().describe('The facts to draw on, pasted as text.') },
+      async ({ instructions, source }) => text(await draftOutside(hub.offload, project, agent, { instructions, source }))));
+    // Pictures need the project set to Any; the tool is listed only then (the handler checks again on every call).
+    if (hub.offload.mode(project.dir) === 'any') {
+      tools.push(tool('make_image', 'Make one picture with the outside image model (Google) from a prompt and an aspect ratio. The hub makes the call with its own saved key and saves the picture like post_visual: it shows in your thread and its id works in post_summary visuals and in a decision\'s images. It costs real money (a few cents each) and counts against the project\'s allowance; use it for pictures worth having, not for drafts. Describe the picture in plain words; never put secrets or private text in the prompt.',
+        { prompt: z.string().max(IMAGE_MAX_PROMPT), aspect_ratio: z.enum(ASPECT_RATIOS).optional().default('1:1') },
+        async ({ prompt, aspect_ratio }) => text(await makeImage(hub.offload, project, agent, { prompt, aspect_ratio }, (buf, caption) => hub.postImage(project, agent, buf, caption)))));
+    }
   }
 
   if (agent.predecessor) {
@@ -330,7 +341,7 @@ export const outsideListed = (hub, project, agent) => !!project && agent?.role !
 
 export function cruxToolNames(agent, hub = null, project = null) {
   const names = ['board_index', 'board_read', 'post_entry', 'post_summary', 'propose_lesson', 'post_visual', 'profile_read', 'write_handoff'];
-  if (outsideListed(hub, project, agent)) names.push('ask_outside_model');
+  if (outsideListed(hub, project, agent)) names.push('ask_outside_model', 'draft_with_outside_model', ...(hub.offload.mode(project.dir) === 'any' ? ['make_image'] : []));
   if (agent.predecessor) names.push('ask_predecessor');
   if (agent.role === 'orchestrator') names.push('list_agents', 'list_agent_types', 'message_agent', 'start_worker', 'set_agent_settings', 'retire_worker', 'handoff_worker', 'answer_permission', 'mark_entry_done', 'draft_expedition');
   if (agent.role === 'orchestrator') names.push('restart_hub', 'reply_to_conductor');   // decisions 47 and 62

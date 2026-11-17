@@ -15,7 +15,7 @@ import { CommandPolicy } from './permissions.mjs';
 import { classify, rulesEntry, touchesSecrets, defaultRules, connectorTool, frozenWrite, expeditionFolderWrite } from './permission-rules.mjs';
 import { normalizeOverlay, parseHttpsUrl } from './permission-lists.mjs';
 import { PermissionLists, suggest as suggestList, downloadsFrom, quarantineMarks, validPackage, pipName, ECOSYSTEMS } from './permission-lists.mjs';
-import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, projectKey } from './settings.mjs';
+import { HubSettings, HANDOFF_NUMBERS, CHECK_MODES, OUTSIDE_MODES, projectKey } from './settings.mjs';
 import { CommandSummary } from './summarize.mjs';
 import { RETIRE_MESSAGE, SUCCESSOR_MESSAGE, RESUME_MESSAGE } from './prompts.mjs';
 import { AgentTypes, EFFORTS, EffortCeilings, modelId, effortLevel, modelLabel } from './agent-types.mjs';
@@ -1150,6 +1150,31 @@ export class Hub {
     if (!VISUAL_TYPES[ext]) throw new Error(`Visuals must be one of ${Object.keys(VISUAL_TYPES).join(', ')}`);
     const { file, kind } = this.memory.storeVisual(p.name, path);
     return p.log.append('visual', { thread: agent.thread, from: agent.name, visual: file, kind, caption });
+  }
+
+  // A picture the hub itself made (make_image): stored and posted exactly like a post_visual PNG, so it shows in the thread
+  // and "<id>" works in a summary's visuals and a decision's images. Returns the id; throws a plain reason when it is not a picture.
+  postImage(p, agent, buf, caption) {
+    const attachment = p.attachments.save(buf, undefined, { imageOnly: true, label: 'That picture' });
+    p.log.append('visual', { thread: agent.thread, from: agent.name, visual: attachment.id, kind: 'image', attachment, caption: String(caption || '').slice(0, 200) });
+    return attachment.id;
+  }
+
+  // ---------- outside models (decision 80): the per-project switch, kept in hub settings only ----------
+  outsideMode(p) { return this.settings.outsideMode?.(p.dir) || 'off'; }
+  setOutsideMode(p, mode, by = 'you') {
+    if (!OUTSIDE_MODES.includes(mode)) return this.outsideMode(p);
+    const was = this.outsideMode(p);
+    this.settings.setProject(p.dir, { outsideModels: mode });
+    if (mode === was) return mode;
+    p.log.append('project_settings', { outsideModels: mode, was, by, thread: 'orchestrator' });
+    const who = by === 'you' ? 'You' : by;
+    this.notice(p, 'orchestrator', {
+      off: `${who} turned outside models off for ${p.name}: no text or picture goes to another provider.`,
+      local: `${who} set outside models to Local only for ${p.name}: drafts may go to a model on this computer; pictures stay off.`,
+      any: `${who} set outside models to Any for ${p.name}: the hub may send an agent's short questions, draft text and picture prompts to the provider chosen for the hub, within its allowance. Agents started from now on can use ask_outside_model, draft_with_outside_model and make_image.`
+    }[mode]);
+    return mode;
   }
 
   readProfile(p, agent, section, reason) {
@@ -2434,6 +2459,7 @@ export class Hub {
       permissionRules: this.rulesFor(p)?.entryId || null,
       permissionMode: this.permissionMode(p),
       permissionCheck: this.checkMode(p),   // decision 66: off, shadow or on
+      outsideModels: this.outsideMode(p),   // decision 80: off, local or any
       paused: this.isPaused(p),
       connectors: this.connectorsOn(p),
       // Decision 44 B: the handoff numbers in force here, and the project's own (null = the hub default).

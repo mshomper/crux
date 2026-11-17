@@ -195,10 +195,8 @@ test('F. the image call goes to the images route and returns the base64 picture'
   assert.ok(r.path.endsWith('/images/generations'));
   assert.deepEqual([r.body.prompt, r.body.size, r.body.model], ['a small red cube', '1024x1024', 'gpt-image-2']);
   assert.equal(r.body.response_format, undefined, 'OpenAI image models always answer base64 and reject the field');
-  const g = new ProviderClient({ provider: 'google', model: 'gemini-3.5-flash-lite', apiKey: DUMMY_KEY, baseUrl: MOCK });
-  await g.image({ prompt: 'x' });
-  assert.equal(mock.requests.at(-1).body.response_format, 'b64_json');
-  await assert.rejects(() => new ProviderClient({ provider: 'ollama', model: 'm', baseUrl: MOCK }).image({ prompt: 'x' }), e => e.kind === 'refused', 'Ollama has no image route');
+  // Google's pictures go to the Interactions route (covered in outside-jobs.test.mjs), not the images route
+  await assert.rejects(() => new ProviderClient({ provider: 'ollama', model: 'm', baseUrl: MOCK }).image({ prompt: 'x' }), e => e.kind === 'no-image', 'Ollama has no image route');
 });
 
 test('G. the agent tool takes a question and short context only, and the request reaches the mock from the hub process', async t => {
