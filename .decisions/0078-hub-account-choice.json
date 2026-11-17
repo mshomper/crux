@@ -91,28 +91,28 @@
  ],
  "images": [
   {
-   "from": "2111a1c740fc3ff5af60b565ffbdbdd6",
+   "from": ".crux/attachments/2111a1c740fc3ff5af60b565ffbdbdd6.png",
    "caption": "A: Account card on a plan sign-in (built, fake data)",
    "option": "A",
    "kind": "screenshot",
    "missing": "not found"
   },
   {
-   "from": "6892365fd28a03f5fd4a2345317eadbb",
+   "from": ".crux/attachments/6892365fd28a03f5fd4a2345317eadbb.png",
    "caption": "A: Account card on an API key (built, fake key)",
    "option": "A",
    "kind": "screenshot",
    "missing": "not found"
   },
   {
-   "from": "6098aa68b461b7169b4f648f05080a7b",
+   "from": ".crux/attachments/6098aa68b461b7169b4f648f05080a7b.png",
    "caption": "A: the card on a phone, plan sign-in",
    "option": "A",
    "kind": "screenshot",
    "missing": "not found"
   },
   {
-   "from": "1eb865e1ba0d186d1a48de0d7b2151ac",
+   "from": ".crux/attachments/1eb865e1ba0d186d1a48de0d7b2151ac.png",
    "caption": "A: usage panel on an API key: tokens and dollars instead of plan meters",
    "option": "A",
    "kind": "screenshot",

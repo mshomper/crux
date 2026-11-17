@@ -87,10 +87,24 @@
  ],
  "images": [
   {
-   "from": "b8d51fbc6ca1a822143697d7c2900154",
+   "from": ".crux/attachments/b8d51fbc6ca1a822143697d7c2900154.png",
    "caption": "A: Profile section in the Account card, new user, with the first-run prompt",
    "option": "A",
    "kind": "mockup",
+   "missing": "not found"
+  },
+  {
+   "from": ".crux/attachments/ed6d77b772d8a67891fbedd7b4633a5b.png",
+   "caption": "A as built: import from another assistant (fake export)",
+   "option": "A",
+   "kind": "screenshot",
+   "missing": "not found"
+  },
+  {
+   "from": ".crux/attachments/26bae8a349b4418b158ab24bf00920cd.png",
+   "caption": "A as built: the one batch card you approve in Needs you",
+   "option": "A",
+   "kind": "screenshot",
    "missing": "not found"
   }
  ]
