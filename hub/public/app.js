@@ -174,7 +174,7 @@ function applyPatch(name, patch) {
 // "Show older": the next page of a thread's conversation, from the hub (and, past its live log, from the archive).
 function showOlder(p, t, feed = null) {
   // The page of older items ends at the oldest conversation event this page holds for the thread.
-  const oldest = threadEvents(p, t).find(x => DISPLAY.has(x.type)), before = oldest?.id || '';
+  const oldest = threadEvents(p, t).find(isShown), before = oldest?.id || '';
   const top = feed?.scrollTop || 0, height = feed?.scrollHeight || 0;
   act(async () => {
     const { events, left, stale } = await api(`/api/older?project=${encodeURIComponent(p.name)}&thread=${encodeURIComponent(t)}&before=${encodeURIComponent(before)}&ts=${encodeURIComponent(oldest?.ts || '')}`);
@@ -497,6 +497,9 @@ function draftChanged(box) {
   for (const b of box.closest('.qrow')?.querySelectorAll('.qquick') || []) { const on = box.value === b.dataset.word; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
 }
 // (Text boxes grow with their text without the list moving: growBox, in conversation.js.)
+// What the thread's "Show older" counts as its oldest item: a conversation event, or a month's summary card (which sits just before it).
+const isShown = e => DISPLAY.has(e.type) || e.type === 'month_summary';
+const monthName = ym => { const d = new Date(`${ym}-01T00:00:00Z`); return Number.isNaN(+d) ? String(ym) : d.toLocaleDateString([], { month: 'long', year: 'numeric', timeZone: 'UTC' }); };
 function threadEvents(p, t) {
   const agentThread = new Map(p.agents.map(a => [a.name, a.thread]));
   return p.events.filter(e => e.thread === t || (e.type === 'entry' && agentThread.get(e.from) === t));
@@ -1093,7 +1096,7 @@ function feedFor(t) {
     const more = p.older?.[t] || 0;
     const olderBtn = more ? `<div class="older-row"><button type="button" class="btn ghost" data-older="${esc(t)}">Show ${more > 150 ? '150 of ' : ''}${more} older ${more === 1 ? 'item' : 'items'}</button></div>` : '';
     // Lines of other kinds from before the oldest conversation event held here (a pick, a lesson) wait behind the button too.
-    const first = more ? evs.findIndex(e => DISPLAY.has(e.type)) : -1;
+    const first = more ? evs.findIndex(isShown) : -1;
     // A thread whose newest conversation is older than the hub's live log (it has little or none of it here) loads its
     // newest page from the archive when it is opened, once, so it does not open empty.
     if (more && evs.filter(e => DISPLAY.has(e.type)).length < 6 && !S.autoOlder.has(key(p.name, t))) { S.autoOlder.add(key(p.name, t)); queueMicrotask(() => showOlder(p, t)); }
@@ -1104,6 +1107,8 @@ function feedFor(t) {
         case 'summary': return summaryCard(p, ev, once(ev), reps.get(ev.id));
         // the hub's own lines (handoffs, restarts) name agents: orchestrators show as their project and "vN"
         case 'notice': return `<div class="notice"><span>${NM.namesInHtml(ev.text, p.name)}</span></div>`;
+        // A month older than six months, summarised by a small model (lib/month-summaries.mjs): folded, opens on request.
+        case 'month_summary': return `<div class="notice month-sum"><details><summary>Summary of ${esc(monthName(ev.month))}</summary><p>${esc(ev.text)}</p></details></div>`;
         case 'pick': return `<div class="notice">You picked D${pad(ev.decision)} · ${esc(ev.label)}</div>`;
         case 'approval': return approvalCard(ev, p);
         case 'entry': return `<div class="notice"><span>${NM.nameHtml(ev.from, p.name)} posted ${esc(ev.entryId)} to the board: ${esc(ev.title)}</span></div>`;
