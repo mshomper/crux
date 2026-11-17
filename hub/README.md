@@ -236,6 +236,8 @@ Standing instructions, added to the agent's start-up prompt.
 
 The orchestrator sees the list and picks a type for each worker, or follows yours ("put a reviewer on it"). It can also change a running agent with `set_agent_settings`, which does the same as the chip ("put w1 on Sonnet"); each change is noted in that agent's thread and in the orchestrator's. Defaults per role can go in `~/crux/hub.json`: `{ "defaults": { "worker": { "model": "sonnet", "effort": "medium" }, "orchestrator": { "effort": "high" } } }`. Unset means Claude Code's own default.
 
+The seven `expedition-*.md` agent files are put into `~/.claude/agents` by the hub when it starts, if any is missing. To change one, edit it (an edited copy is never replaced) rather than delete it, or the hub puts the original back at the next start.
+
 ## Usage and billing
 
 Agents run through the Claude Agent SDK on this PC. With `CRUX_HUB_USE_API_KEY=1` they use your Anthropic API key, and Anthropic bills the tokens they use to that key. Several agents at once use more, faster. (Without the switch, agents fall back to whatever Claude Code sign-in is already on the PC; that is for your own personal use only, and the hub neither offers nor manages it.)

@@ -10,7 +10,7 @@ import { makeTmp } from './helpers/tmp.mjs';
 import { recordAgents, stubHub } from './helpers/expedition-stub.mjs';
 import { addMissingExpeditionFiles, refreshExpeditionFiles } from '../lib/starter-refresh.mjs';
 import { saveDollarCap, readHubConfig } from '../lib/setup.mjs';
-import { startDraft, problems, launchBody, panelHtml, typedDollars, capUSD } from '../public/expedition-launch.js';
+import { startDraft, problems, launchBody, panelHtml, typedDollars, dollarsProblem, capUSD } from '../public/expedition-launch.js';
 import { family, hueOf, modelLabel, pips } from '../public/models.js';
 
 recordAgents();
@@ -95,8 +95,11 @@ const h = { family, hueOf, modelLabel, pips, modelPicker: () => '', effortPicker
 test('typedDollars reads a plain figure and refuses anything that is not a number above 0', () => {
   assert.equal(typedDollars('12'), 12);
   assert.equal(typedDollars('$12.505'), 12.51);
-  assert.equal(typedDollars(' 1,200 '), 1200);
-  for (const bad of ['', '  ', '0', '-3', 'abc', null, undefined, '1e999999']) assert.equal(typedDollars(bad), null, String(bad));
+  assert.equal(typedDollars(' 500 '), 500);
+  for (const bad of ['', '  ', '0', '-3', 'abc', null, undefined, '1e999999', '1,5', '1,200', '501', '$500.01', '12 dollars']) assert.equal(typedDollars(bad), null, String(bad));
+  assert.match(dollarsProblem('1,5'), /plain number above 0/, 'a comma is refused, not read as 15');
+  assert.equal(dollarsProblem('501'), 'The dollar limit for one run is at most $500.');
+  assert.equal(dollarsProblem('500'), null);
 });
 
 test('under an API key with no cap Launch waits for a dollar limit; typing one lets it through and it goes in the envelope', () => {
@@ -105,13 +108,22 @@ test('under an API key with no cap Launch waits for a dollar limit; typing one l
   assert.equal(problems(d, ctx(st)).find(p => p.id === 'cap').short, 'Type a dollar limit to launch.');
   d.dollars = 'twelve';
   assert.deepEqual(ids(d, ctx(st)), ['badcap']);
+  d.dollars = '1,5';
+  assert.deepEqual(ids(d, ctx(st)), ['badcap'], 'a comma is refused, never read as 15');
+  d.dollars = '501';
+  assert.equal(problems(d, ctx(st)).find(p => p.id === 'badcap').short, 'The dollar limit for one run is at most $500.');
   d.dollars = '12';
   assert.deepEqual(ids(d, ctx(st)), []);
   const b = launchBody('demo', d, st);
   assert.equal(b.envelope.dollars, 12);
-  assert.equal(b.rememberDollars, true, 'Keep as default starts ticked');
+  assert.equal(b.rememberDollars, true, 'Keep as default starts ticked on the API-key route');
   d.remember = false;
   assert.equal('rememberDollars' in launchBody('demo', d, st), false, 'unticked: this run only');
+  // With the plan meters (a plan login) it starts unticked, so nothing is saved unless the user ticks it.
+  const plan = ST({ meterGuard: true }), dp = startDraft(plan, { question: 'Q?' });
+  dp.dollars = '12';
+  assert.equal(dp.remember, false);
+  assert.equal('rememberDollars' in launchBody('demo', dp, plan), false);
 });
 
 test('with the plan meters the field is optional and never blocks; with a confirmed figure it is not shown and the figure wins', () => {
@@ -157,6 +169,31 @@ test('saveDollarCap keeps the rest of hub.json and refuses a figure that is not 
   saveDollarCap(7, fresh);
   assert.deepEqual(readHubConfig(fresh), { defaults: { expedition: { envelope: { dollars: 7 } } } });
   assert.ok(existsSync(fresh));
+  for (const bad of ['1,5', '500.01', '501']) assert.throws(() => saveDollarCap(bad, fresh), /plain number above 0|at most \$500/, bad);
+  assert.equal(saveDollarCap(500, fresh), 500);
+});
+
+test('a hub.json that cannot be read is never rewritten: Keep as default refuses and the file is untouched', () => {
+  const dir = makeTmp('crux-setup-'), file = join(dir, 'hub.json');
+  const broken = '{ "projects": ["C:/a", "C:/b"], "defaults": { oops ';
+  writeFileSync(file, broken);
+  assert.throws(() => saveDollarCap(10, file), /hub\.json could not be read.*dollar limit was not saved/);
+  assert.equal(readFileSync(file, 'utf8'), broken);
+  writeFileSync(file, '[1,2]');
+  assert.throws(() => saveDollarCap(10, file), /is not a JSON object/);
+  assert.equal(readFileSync(file, 'utf8'), '[1,2]');
+  writeFileSync(file, '');
+  assert.equal(saveDollarCap(10, file), 10, 'an empty file holds nothing to lose');
+});
+
+test('the hub refuses a figure above $500 or one that is not a plain number, before anything is written; cents are kept', () => {
+  const env = stubHub({ level: 'auto' }), { hub, p } = env, before = p.log.events.length;
+  for (const [dollars, why] of [[501, /at most \$500/], ['1,5', /plain number above 0/], ['abc', /plain number above 0/], [-4, /plain number above 0/], [0, /plain number above 0/]]) {
+    assert.throws(() => hub.launchExpedition(p, { question: 'Q?', envelope: { dollars } }), why, String(dollars));
+  }
+  assert.equal(p.log.events.length, before, 'nothing written');
+  const r = hub.launchExpedition(p, { question: 'Q?', envelope: { dollars: 12.346 } });
+  assert.equal(r.dollarCap.dollars, 12.35, 'cent-rounded');
 });
 
 test('a launch with a typed limit runs under it; a remembered limit becomes the default for the next one', () => {

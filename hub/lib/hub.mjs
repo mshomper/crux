@@ -7,6 +7,7 @@ import { Board } from './board.mjs';
 import { DecisionsDesk } from './decisions-desk.mjs';
 import { Agent, cleanEnv as checkEnv } from './agent.mjs';
 import { Memory, VISUAL_TYPES } from './memory.mjs';
+import { checkDollars } from './setup.mjs';
 import { Attachments, MAX_PER_MESSAGE } from './attachments.mjs';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { extname } from 'node:path';
@@ -632,7 +633,8 @@ export class Hub {
     // The hub's own confirmed figure always wins over a dollar figure a page sends along (decision 69 C); with none confirmed,
     // a figure the user typed is theirs and stands, and otherwise there is no dollar cap.
     const per = this.dollarsPerPercent();
-    const dollars = per ? Math.round(percent * per * 100) / 100 : (pos(over.dollars) ?? pos(cfg.dollars) ?? null);
+    const typed = pos(over.dollars) ?? pos(cfg.dollars);
+    const dollars = per ? Math.round(percent * per * 100) / 100 : typed == null ? null : Math.round(typed * 100) / 100;
     return { hours, percent, dollars };
   }
 
@@ -700,6 +702,9 @@ export class Hub {
     // No test is needed at launch (Matt, 2026-11-16: a launch is one plain ask): the Lead drafts CHECKLIST.md, and run.json where
     // commands help, in test/ while planning, and the plan gate freezes it. One that does come is checked here, not at the gate.
     if (files['run.json']) { const bad = runJsonProblem(files['run.json']); if (bad) throw new Error(bad); }
+    // A dollar figure the page sends is a plain number of dollars, 500 at most (checked only while it is the user's own: with the
+    // confirmed figure the hub's own figure wins and a page's is ignored).
+    if (this.dollarsPerPercent() == null && envelope?.dollars != null && envelope.dollars !== '') { const c = checkDollars(envelope.dollars); if (c.problem) throw new Error(c.problem); }
     const env = this.expeditionEnvelope(envelope || {});
     if (this.usage?.available === false && env.dollars == null) throw new Error('Under an API key the plan meters are hidden, so the only budget guard is a dollar cap, and none is set. Give the envelope a dollar figure, or set defaults.expedition.dollarsPerPercent in hub.json.');
     const cfgG = Number(this.expeditionConfig().gatherers);

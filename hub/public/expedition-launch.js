@@ -82,7 +82,7 @@ export function startDraft(state = null, seed = {}) {
     roles, gatherers: Math.min(GATHERER_LIMIT, Math.max(1, Number.isFinite(n) ? Math.round(n) : 3)),
     // The dollar limit for this run, used only while no dollars-per-percent figure is confirmed: a kept default or a draft's figure comes pre-filled.
     dollars: st?.dollarsPerPercent > 0 ? '' : String(seed.envelope?.dollars ?? st?.dollars ?? ''),
-    remember: true,   // "Keep as default" starts ticked: type the figure once (Matt, 2026-11-17)
+    remember: st?.meterGuard === false,   // "Keep as default" starts ticked on the API-key route only (no plan meter): type the figure once (Matt, 2026-11-17)
     editing: null,   // the role whose model and effort are open
     add: null        // 'site' | 'package': the small add form
   };
@@ -130,7 +130,14 @@ export function teamTotals(d, family = id => (/opus|sonnet|haiku|fable/i.exec(id
 export const estimateUSD = (percent, st) => { const f = Number(st?.defaults?.dollarsPerPercent ?? st?.dollarsPerPercent); return f > 0 ? Math.round(percent * f * 100) / 100 : null; };
 export const money = v => `$${v >= 10 ? Math.round(v) : Math.round(v * 10) / 10}`;
 // A dollar limit typed for this run ("12", "$12.50"): a number above 0, or null. Used only while no dollars-per-percent figure is confirmed.
-export const typedDollars = s => { const n = Number(String(s ?? '').replace(/[$,\s]/g, '')); return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null; };
+// Plain number only ("12", "$12.50"), never "1,5" read as 15; at most MAX_RUN_DOLLARS (the hub checks the same, lib/setup.mjs).
+export const MAX_RUN_DOLLARS = 500;
+export const dollarsProblem = s => {
+  const t = String(s ?? '').trim().replace(/^\$/, '');
+  if (!/^\d+(\.\d+)?$/.test(t) || !(Number(t) > 0)) return 'The dollar limit must be a plain number above 0, for example 10.';
+  return Math.round(Number(t) * 100) / 100 > MAX_RUN_DOLLARS ? `The dollar limit for one run is at most $${MAX_RUN_DOLLARS}.` : null;
+};
+export const typedDollars = s => (dollarsProblem(s) ? null : Math.round(Number(String(s).trim().replace(/^\$/, '')) * 100) / 100);
 // The dollar cap this launch runs under: the confirmed figure's estimate, else the figure typed here, else null.
 export const capUSD = (d, st) => estimateUSD(d.percent, st) ?? typedDollars(d.dollars);
 
@@ -149,7 +156,7 @@ export function problems(d, ctx = {}) {
   if (ctx.level === 'auto' && !d.sites.length) out.push({ id: 'web', level: 'warn', text: 'At Auto, gatherers cannot open arbitrary web pages. Name the sites they should read under Pre-approved, or use Trusted.' });
   // Only once the envelope or More has been opened: on a default launch it would be permanent noise.
   const hasFigure = estimateUSD(d.percent, ctx.st) != null, typed = typedDollars(d.dollars);
-  if (ctx.st && !hasFigure && String(d.dollars ?? '').trim() && typed == null) out.push({ id: 'badcap', level: 'block', short: 'The dollar limit must be a number above 0.', text: 'The dollar limit must be a number above 0, for example 10.' });
+  if (ctx.st && !hasFigure && String(d.dollars ?? '').trim() && typed == null) out.push({ id: 'badcap', level: 'block', short: dollarsProblem(d.dollars), text: dollarsProblem(d.dollars) });
   // Under an API key there are no plan meters, so a dollar limit is the only budget guard: Launch waits for one.
   else if (ctx.st?.defaults?.meterGuard === false && !hasFigure && typed == null) out.push({ id: 'cap', level: 'block', short: 'Type a dollar limit to launch.', text: 'Type a dollar limit for this run first. Under an API key there are no plan meters, so the dollar limit is what stops the spending.' });
   if (d.touched && ctx.st && !(capUSD(d, ctx.st) > 0)) out.push({ id: 'dollars', level: 'warn', text: ctx.st.budgetNote || 'No dollar figure is confirmed yet, so there is no dollar cap. The time limit still applies.' });
