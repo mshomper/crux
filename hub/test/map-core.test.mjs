@@ -1,7 +1,7 @@
-// The live map's core (M013): how the orchestrator's state becomes what the glass sphere shows.
+// The live map's core (decision 76): how the orchestrator's state becomes what the swarm shows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { coreLook, levelFor, coreBudget, ReservoirCore, SPARK_COLOR } from '../public/map-core.js';
+import { coreLook, litRadius, coreBudget, SwarmCore, SPARK_COLOR, swarmSeeds, swarmPoint } from '../public/map-core.js';
 import { STRIDE, COLORS, TONE } from '../public/map-particles.js';
 import { MapModel } from '../public/map-model.js';
 import { coreReadout } from '../public/map-readout.js';
@@ -57,83 +57,141 @@ test('waiting on Matt, Auto or Ask, and an error', () => {
   assert.deepEqual([SPARK_COLOR.allowed, SPARK_COLOR.denied, SPARK_COLOR.escalated], [COLORS.good, COLORS.amber, COLORS.red], 'spark colours: green allowed, amber denied, red sent to Matt');
 });
 
-test('the level is honest about volume', () => {
-  assert.ok(levelFor(0) < -0.95 && levelFor(1) > 0.95);
-  assert.ok(Math.abs(levelFor(0.5)) < 1e-3, 'half the volume is the equator');
-  let last = -2;
-  for (let f = 0; f <= 1.0001; f += 0.05) { const l = levelFor(f); assert.ok(l > last, 'rises with fill'); last = l; }
+test('the bright core grows with context: nothing lit when empty, the whole sphere at the handoff', () => {
+  assert.equal(litRadius(0), 0);
+  assert.ok(near(litRadius(1), 0.97), 'full: the whole swarm (it fills 0.97 of the glass)');
+  assert.ok(near(litRadius(0.3), 0.97 * 0.3 ** 0.75), '30% of the way: 0.39 of the radius');
+  let last = -1;
+  for (let f = 0; f <= 1.0001; f += 0.05) { const r = litRadius(f); assert.ok(r > last, 'grows with context'); last = r; }
+  assert.ok(litRadius(1, 1) < litRadius(1, 0), 'a little tighter in the last fifth');
 });
 
-test('a phone carries about a third of the particles', () => {
+test('budgets: 60k open and 30k strip on a desktop, about 10k on a phone (Matt, 2026-11-17)', () => {
   const d = coreBudget(false), p = coreBudget(true);
-  const sum = b => Object.values(b).reduce((a, n) => a + n, 0);
-  assert.ok(sum(p) < sum(d) * 0.42 && sum(p) > sum(d) * 0.25, `${sum(p)} of ${sum(d)}`);
+  assert.deepEqual([d.open, d.strip], [60000, 30000]);
+  assert.ok(p.open >= 8000 && p.open <= 12000 && p.strip <= p.open, `phone ${p.open} / ${p.strip}`);
 });
 
-// Run a core for a while and collect what it draws.
-function run(info, { seconds = 3, light = false, before } = {}) {
-  const core = new ReservoirCore({ light });
+// Run a core for a while and collect what it draws on the CPU (flare, motes, sparks), plus the swarm's uniforms.
+function run(info, { seconds = 3, light = false, before, r = 50 } = {}) {
+  const core = new SwarmCore({ light });
   core.setMood(info); core.settle();
   before?.(core);
   for (let i = 0; i < seconds * 60; i++) core.step(1 / 60);
   const out = new Float32Array((core.capacity + 8) * STRIDE);
-  const n = core.project(100, 100, 50, out, 0);
-  return { core, out, n };
+  const n = core.project(100, 100, r, out, 0);
+  return { core, out, n, swarm: core.swarm() };
+}
+// The swarm as the GPU draws it, through the same maths in JS: n particles, with each one's radius and how lit it is.
+function swarmOf(core, n = 4000) {
+  const S = swarmSeeds(n), { u } = core.swarm(), out = new Float32Array(n * STRIDE), info = {}, pts = [];
+  for (let i = 0; i < n; i++) { swarmPoint(S, i, u, out, i * STRIDE, info); pts.push({ ...info }); }
+  return { out, n, pts };
 }
 const count = ({ out, n }, pred) => { let c = 0; for (let i = 0; i < n; i++) { const k = i * STRIDE; if (pred(out[k + 3], out[k + 4], out[k + 5], out[k + 6], out[k], out[k + 1])) c++; } return c; };
 const isRed = (r, g, b, a) => a > 0.05 && r > 0.9 && g < 0.6 && b < 0.6;
 const isGold = (r, g, b, a) => a > 0.05 && r > 0.9 && g > 0.7 && b < 0.62;
 const isGreen = (r, g, b, a) => a > 0.05 && g > r + 0.2 && g > b;
 
-test('the simulation stays inside its budget and draws finite numbers', () => {
+test('the CPU particles stay inside their budget and everything drawn is finite', () => {
   for (const light of [false, true]) {
     const r = run({ state: 'working', ctx: 30, model: OPUS, effort: 'max', needs: true, mode: 'ask' }, { light, before: c => { c.spark('allowed', 0); c.spark('escalated', 2); c.handoff(); } });
-    assert.ok(r.n <= r.core.capacity, `${r.n} particles within ${r.core.capacity}`);
+    assert.ok(r.n <= r.core.capacity - r.core.budget.fallback, `${r.n} particles within ${r.core.capacity}`);
     for (let i = 0; i < r.n * STRIDE; i++) assert.ok(Number.isFinite(r.out[i]), 'finite');
+    for (const [k, v] of Object.entries(r.swarm.u)) for (const x of [v].flat()) assert.ok(Number.isFinite(x), `uniform ${k} finite`);
+    const s = swarmOf(r.core, 3000);
+    for (let i = 0; i < s.n * STRIDE; i++) assert.ok(Number.isFinite(s.out[i]), 'swarm finite');
   }
 });
 
-test('what the particles show: fill, gold near the handoff, red only when Matt is needed', () => {
-  const liquid = c => { let n = 0; for (let i = 0; i < c.n; i++) if (c.w[i] > 0.5) n++; return n / c.n; };
-  assert.ok(Math.abs(liquid(run({ state: 'idle', ctx: 30, model: OPUS }).core) - 0.5) < 0.06, 'half the particles are liquid at half fill');
-  assert.ok(liquid(run({ state: 'idle', ctx: 6, model: OPUS }).core) < 0.16);
-  assert.equal(count(run({ state: 'working', ctx: 30, model: OPUS }), isGold), 0, 'no gold at 30%');
-  assert.ok(count(run({ state: 'working', ctx: 58, model: OPUS }), isGold) > 100, 'gold near the threshold');
-  assert.equal(count(run({ state: 'working', ctx: 58, model: OPUS }), isRed), 0, 'near the handoff is gold, not red');
+test('the swarm fills the whole sphere at any context; context is how much of it is lit', () => {
+  for (const ctx of [0, 18, 36, 51]) {
+    const { pts } = swarmOf(run({ state: 'idle', ctx, model: OPUS }).core);
+    const outer = pts.filter(p => p.rr > 0.6).length / pts.length;
+    assert.ok(outer > 0.65, `the outer shell is full at ${ctx}% (${outer.toFixed(2)})`);   // (0.97^3 - 0.6^3) / 0.97^3 = 0.76
+    assert.ok(pts.every(p => p.rr < 1.0), 'nothing outside the glass when calm');
+  }
+  // the share of particles inside the lit radius follows its volume: fill^2.25 (the nucleus adds about 5%)
+  for (const [ctx, fill] of [[18, 0.3], [36, 0.6], [51, 0.85]]) {
+    const { pts } = swarmOf(run({ state: 'idle', ctx, model: OPUS }).core), want = fill ** 2.25;
+    const lit = pts.filter(p => !p.nuc && p.lit > 0.5).length / pts.filter(p => !p.nuc).length;
+    assert.ok(Math.abs(lit - want) < 0.06, `${ctx}% context: ${lit.toFixed(3)} lit, expected about ${want.toFixed(3)}`);
+  }
+  const none = swarmOf(run({ state: 'idle', ctx: 0, model: OPUS }).core).pts.filter(p => p.lit > 0).length;
+  assert.equal(none, 0, 'no context: nothing lit but the nucleus');
+  const full = swarmOf(run({ state: 'idle', ctx: 61, model: OPUS }).core).pts;
+  assert.ok(full.filter(p => p.lit > 0.5).length / full.length > 0.95, 'handoff due: the whole sphere lit');
+});
+
+test('what the particles show: gold near the handoff, red only when Matt is needed', () => {
+  const gold = ctx => count(swarmOf(run({ state: 'working', ctx, model: OPUS }).core), isGold);
+  assert.equal(gold(30), 0, 'no gold at half way');
+  assert.ok(gold(58) > 300, 'gold near the threshold');
+  assert.equal(count(swarmOf(run({ state: 'working', ctx: 58, model: OPUS }).core), isRed), 0, 'near the handoff is gold, not red');
   assert.ok(count(run({ state: 'idle', ctx: 30, model: OPUS, needs: true }), isRed) > 40, 'the red flare when something waits on Matt');
   assert.equal(count(run({ state: 'error', ctx: 30, model: OPUS }), isRed), 0, 'an error is not red');
+  assert.equal(count(swarmOf(run({ state: 'error', ctx: 30, model: OPUS }).core), isRed), 0, 'nor is its swarm');
+});
+
+test('working turns the swarm faster and gives it arms', () => {
+  const idle = run({ state: 'idle', ctx: 30, model: OPUS, effort: 'high' }), work = run({ state: 'working', ctx: 30, model: OPUS, effort: 'high' });
+  assert.ok(work.swarm.u.uRot > idle.swarm.u.uRot * 2, 'faster');
+  assert.ok(work.swarm.u.uSwirl === 1 && idle.swarm.u.uSwirl < 0.2, 'the vortex arms come with work');
 });
 
 test('a permission answer throws sparks that burn out', () => {
   const lit = run({ state: 'working', ctx: 30, model: OPUS }, { seconds: 0.1, before: c => c.spark('allowed', 0) });
   assert.ok(lit.core.nsp > 40 && count(lit, isGreen) > 20, 'a green burst');
-  assert.ok(lit.core.tvx !== 0, 'the liquid feels it');
+  assert.ok(lit.core.lx < 0, 'the swarm recoils from the strike');
   const sent = run({ state: 'working', ctx: 30, model: OPUS }, { seconds: 0.1, before: c => c.spark('escalated', 0) });
   assert.ok(count(sent, isRed) > 20, 'red when it went to Matt');
   assert.equal(run({ state: 'working', ctx: 30, model: OPUS }, { seconds: 3, before: c => c.spark('allowed', 0) }).core.nsp, 0, 'all gone after three seconds');
 });
 
-test('the handoff pulse disturbs the liquid', () => {
-  const calm = run({ state: 'idle', ctx: 30, model: OPUS }, { seconds: 4 }).core;
-  const due = run({ state: 'idle', ctx: 61, model: OPUS }, { seconds: 4 }).core;
-  assert.equal(calm.ripples.length, 0);
-  assert.ok(due.ripples.length > 0, 'rings run over the surface while the handoff is due');
+test('a handoff throws the swarm out and it settles back; the due pulse swells it', () => {
+  const thrown = run({ state: 'idle', ctx: 30, model: OPUS }, { seconds: 0.15, before: c => c.handoff() });
+  assert.ok(thrown.core.kick > 0.1, `thrown out (${thrown.core.kick})`);
+  assert.ok(Math.abs(run({ state: 'idle', ctx: 30, model: OPUS }, { seconds: 4, before: c => c.handoff() }).core.kick) < 0.01, 'settled after four seconds');
+  assert.equal(run({ state: 'idle', ctx: 30, model: OPUS }, { seconds: 4 }).core.kick, 0, 'calm when nothing happens');
+  assert.equal(run({ state: 'idle', ctx: 61, model: OPUS }, { seconds: 4 }).swarm.u.uDue, 1, 'the gold pulse runs while due');
 });
 
-test('the budget adapts when frames run long, and never below half', () => {
-  const core = new ReservoirCore();
-  core.setMood({ state: 'working', ctx: 30 });
-  for (let i = 0; i < 60 * 4; i++) core.step(1 / 60);
-  assert.equal(core.q, 1, 'steady 60 fps keeps the full budget');
-  for (let i = 0; i < 30 * 20; i++) core.step(1 / 30);
-  assert.ok(core.q < 1 && core.q >= 0.5, `slow frames shed particles (${core.q})`);
+test('the count follows the core size, and the frame-time probe scales it down and back up to the budget', () => {
+  const c = new SwarmCore();
+  c.setMood({ state: 'working', ctx: 30 });
+  const at = r => { c.project(0, 0, r, new Float32Array(c.capacity * STRIDE), 0); return c.swarm().count; };
+  assert.equal(at(104), 60000, 'open map');
+  assert.equal(at(31), 30000, 'strip');
+  assert.equal(at(200), 60000, 'never above the budget');
+  // the glow per pixel stays the same: particles brighten as the count drops
+  const dOpen = (at(104), c.swarm().u.uDens), dStrip = (at(31), c.swarm().u.uDens);
+  assert.ok(near(dOpen, 1, 1e-9) && dStrip > 0.5 && dStrip < 2, `${dOpen}, ${dStrip}`);
+  for (let i = 0; i < 60 * 4; i++) c.step(1 / 60);
+  assert.equal(c.q, 1, 'steady 60 fps keeps the full budget');
+  for (let i = 0; i < 165 * 4; i++) c.step(1 / 165);
+  assert.equal(c.q, 1, 'a 165 Hz screen too');
+  for (let i = 0; i < 30 * 20; i++) c.step(1 / 30);
+  assert.ok(c.q < 1 && c.q >= 0.2, `slow frames shed particles (${c.q})`);
+  const low = c.q;
+  for (let i = 0; i < 60 * 3; i++) c.step(1 / 60);
+  assert.equal(c.q, low, 'it waits before adding any back');
+  for (let i = 0; i < 60 * 90; i++) c.step(1 / 60);
+  assert.equal(c.q, 1, 'and recovers to the full budget once frames run well');
 });
 
-test('the line where liquid meets glass stays inside the sphere', () => {
+test('the canvas fallback draws a CPU sample of the swarm, within the buffer', () => {
+  const c = new SwarmCore();
+  c.setMood({ state: 'working', ctx: 30, model: OPUS });
+  const out = new Float32Array(c.capacity * STRIDE);
+  const o = c.project(100, 100, 104, out, 0), end = c.cpuSwarm(out, o);
+  assert.equal(end - o, c.budget.fallback);
+  assert.ok(end <= c.capacity);
+  for (let i = o * STRIDE; i < end * STRIDE; i++) assert.ok(Number.isFinite(out[i]));
+});
+
+test('the glass takes the model hue', () => {
   const { core } = run({ state: 'working', ctx: 45, model: OPUS, effort: 'max' });
-  const v = core.view();
-  for (let i = 0; i < v.ring.length; i += 2) assert.ok(Math.hypot(v.ring[i], v.ring[i + 1]) < 1.02);
-  assert.deepEqual([...v.hue].map(x => +x.toFixed(2)), rgb01(MODEL_HUES.opus).map(x => +x.toFixed(2)));
+  assert.deepEqual([...core.view().hue].map(x => +x.toFixed(2)), rgb01(MODEL_HUES.opus).map(x => +x.toFixed(2)));
 });
 
 // ---------- wiring: the map model and the readout ----------

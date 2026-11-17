@@ -284,8 +284,8 @@ export class HudPainter {
     }
   }
 
-  // The core's glass sphere and the liquid in it (map-core.js). With reduced motion this is the whole core:
-  // a still sphere at the right level, with a red rim when something waits on Matt.
+  // The core's glass (map-core.js): a thin rim, its bright edge and the highlights over the swarm. With reduced
+  // motion it also draws a red rim when something waits on Matt, beside the still frame of the swarm.
   glass({ L, glass, staticCore }) {
     if (glass) paintGlass(this.c, L.core.x, L.core.y, L.core.r, glass, { still: !!staticCore });
   }

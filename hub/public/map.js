@@ -1,8 +1,8 @@
 // Crux hub live map (decision 0017): an always-on strip over the conversation that zooms into
 // the centre of the screen as the full map when you engage it.
-//   centre   - the orchestrator role as a glass sphere of liquid light (map-core.js, M013): level = context
-//              used, hue = model, stir = effort and state, red flare = waiting on you, sparks = permission
-//              answers; nothing is written on it, the numbers are in its hover or tap readout
+//   centre   - the orchestrator role as a swarm of particles filling a glass sphere (map-core.js, decision 76):
+//              the bright core's reach = context used, hue = model, swirl = effort and state, red flare = waiting
+//              on you, sparks = permission answers; nothing is written on it, the numbers are in its readout
 //   stations - workers, plus You and the Board; red when something needs you
 //   pulses   - messages, summaries, board posts, picks and approvals flying along the edges
 // Driven by the hub's SSE events. With prefers-reduced-motion it draws a still map.
@@ -15,7 +15,7 @@
 import { MapModel } from './map-model.js';
 import { stripLayout, stripLane, radialLayout, blendLayouts, easeInOut, clamp, lerp } from './map-layout.js';
 import { Effects, STRIDE, bend } from './map-particles.js';
-import { ReservoirCore, stream } from './map-core.js';
+import { SwarmCore, stream } from './map-core.js';
 import { createRenderer } from './map-gl.js';
 import { HudPainter } from './map-hud.js';
 import { NeedsPopover } from './map-needs.js';
@@ -75,7 +75,7 @@ export class LiveMap {
     this.build();
     this.sectors = new SectorView(this.panel);
     this.hud = new HudPainter(this.lineCanvas);
-    this.core = new ReservoirCore({ light: this.phone });   // a phone carries about a third of the particles
+    this.core = new SwarmCore({ light: this.phone });   // a phone carries about a sixth of the particles
     this.fx = new Effects();
     this.buf = new Float32Array((this.core.capacity + 700 + 12 * 9) * STRIDE);
     this.setMotion();
@@ -96,8 +96,9 @@ export class LiveMap {
   get reduced() { return this.reducedMq.matches || !this.renderer; }
 
   setMotion() {
-    if (!this.reducedMq.matches && !this.renderer) {
-      try { this.renderer = createRenderer(this.glCanvas); } catch { this.renderer = null; }
+    // the renderer is made under reduced motion too: the still map draws one frame of the swarm
+    if (!this.renderer && !this.glFailed) {
+      try { this.renderer = createRenderer(this.glCanvas); } catch { this.renderer = null; this.glFailed = true; }
     }
     this.panel.classList.toggle('still', this.reduced);
     this.reduced ? this.drawStatic() : this.kick();
@@ -538,7 +539,7 @@ export class LiveMap {
     const w = rect.width, h = rect.height;
     const dpr = Math.min(devicePixelRatio || 1, 2);
     this.hud.resize(w, h, dpr);
-    this.renderer?.resize(w, h, Math.min(dpr, 1.5));
+    this.renderer?.resize(w, h, dpr);
     const origin = { x: rect.left, y: rect.top };
     this.origin = origin;
     let A, B, L;
@@ -684,10 +685,11 @@ export class LiveMap {
       p => { if (p.from === 'core') { const b = L.at.get(p.to); if (b) this.core.burst(b.x - L.core.x, b.y - L.core.y); } },
       p => { if (p.to === 'core') this.core.absorb(); });
     let o = this.core.project(L.core.x, L.core.y, L.core.r, this.buf, 0);
+    if (this.renderer.kind === 'canvas') o = this.core.cpuSwarm(this.buf, o);   // no WebGL2: a CPU sample of the swarm
     o = this.fx.project(this.buf, o, L, info, now, this.size.w, this.size.h, this.buf.length / STRIDE - 12 * 9);
     o = this.streams(o, L, info);
-    try { this.renderer.draw(this.buf, o, zooming ? 0.35 : lerp(0.72, 0.6, E)); }
-    catch (err) { console.warn('Live map renderer stopped:', err); this.renderer = null; this.setMotion(); return; }
+    try { this.renderer.draw(this.buf, o, zooming ? 0.35 : lerp(0.72, 0.6, E), [this.core.swarm()]); }
+    catch (err) { console.warn('Live map renderer stopped:', err); this.renderer = null; this.glFailed = true; this.setMotion(); return; }
     this.hud.paint({ L, e: E, t: now / 1000, boot: this.boot, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: this.fx.pings, now, exp: this.cluster });
     if (this.H) this.sectors.draw(this.hud.c, { L, H: this.H, e: E, t: now / 1000, still: false, now, size: this.size });
     this.positionStations(L, info);
@@ -734,8 +736,14 @@ export class LiveMap {
     const L = this.place(this.e);
     this.entering.clear(); this.leaving.clear();   // a still has no fades: stations are simply there or not
     const info = this.withTransitions(L, performance.now());
-    this.renderer?.clear?.();
-    this.core.settle();   // the still shows the sphere at its level, with no motion
+    this.core.settle();   // the still: one frame of the swarm at its context, no trails, no motion
+    if (this.renderer) {
+      let o = this.core.project(L.core.x, L.core.y, L.core.r, this.buf, 0);
+      if (this.renderer.kind === 'canvas') o = this.core.cpuSwarm(this.buf, o);
+      // the same frame laid down a few times with the open map's trail, so the still is as bright as the moving map
+      try { this.renderer.clear(); for (let i = 0; i < 8; i++) this.renderer.draw(this.buf, o, 0.6, [this.core.swarm()]); }
+      catch (err) { console.warn('Live map still not drawn:', err); }
+    }
     this.hud.paint({ L, e: this.e, t: 0, boot: 1, core: this.coreInfo || this.model.core(), glass: this.core.view(), info, pings: [], now: 0, staticCore: true, exp: this.cluster });
     if (this.H) this.sectors.draw(this.hud.c, { L, H: this.H, e: this.e, t: 0, still: true, now: 0, size: this.size });
     this.positionStations(L, info);
