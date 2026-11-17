@@ -414,7 +414,7 @@ function wantBatch(id) {
 function lessonsCard(all, p = proj()) {
   const { batches, plain: ls } = splitLessons(all);
   for (const b of batches) wantBatch(b.lesson);
-  const imports = batches.map(b => batchCard(b, S.batches?.[b.lesson] || null)).join('');
+  const imports = batches.map(b => batchCard(b, S.batches?.[b.lesson] || null, S.projects.map(x => x.name))).join('');
   return imports + (ls.length ? plainLessonsCard(ls, p) : '');
 }
 function plainLessonsCard(ls, p) {

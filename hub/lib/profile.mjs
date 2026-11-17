@@ -31,8 +31,9 @@ const slurp = f => { try { return readFileSync(f, 'utf8'); } catch { return null
 // ---------- what the card shows ----------
 export function profileView(memory, { promptDismissed = false } = {}) {
   const exists = existsSync(join(memory.profileDir, 'core.md'));
+  const missing = exists ? [['profile/packs/_index.md', join(memory.packsDir, '_index.md')], ['profile/private.md', join(memory.profileDir, 'private.md')]].filter(([, f]) => !existsSync(f)).map(([n]) => n) : [];
   return {
-    exists, packs: exists ? memory.packs().length : 0,
+    exists, missing, packs: exists ? memory.packs().length : 0,
     hasPrivate: exists && existsSync(join(memory.profileDir, 'private.md')),
     isRepo: existsSync(join(memory.home, '.git')),
     importCap: IMPORT_CAP,
@@ -41,9 +42,10 @@ export function profileView(memory, { promptDismissed = false } = {}) {
 }
 
 // ---------- Create ----------
-// Returns { created: [relative names], skipped: [...], git: 'initialised' | 'already' | 'unavailable' }.
+// Fills in what is missing and leaves what is there alone, so with a profile in place it only completes it (the card offers
+// that as "Create missing files"). Returns { created: [relative names], skipped: [...], git: 'initialised' | 'already' |
+// 'inside' (the home folder sits inside another repository: left as it is) | 'unavailable' (no git on this PC) }.
 export function createProfile(memory, { templateDir = TEMPLATE_DIR, run = execFileSync } = {}) {
-  if (existsSync(join(memory.profileDir, 'core.md'))) throw new Error('A profile already exists here, so nothing was changed.');
   const created = [], skipped = [];
   const put = (file, text, name) => {
     if (existsSync(file)) return void skipped.push(name);
@@ -56,11 +58,19 @@ export function createProfile(memory, { templateDir = TEMPLATE_DIR, run = execFi
   put(join(memory.profileDir, 'private.md'), '', 'profile/private.md');
   let git = 'already';
   if (!existsSync(join(memory.home, '.git'))) {
-    try {
-      run('git', ['init'], { cwd: memory.home, stdio: 'ignore', windowsHide: true, timeout: 20000 });   // local only: no remote is added
-      git = 'initialised';
-      put(join(memory.home, '.gitignore'), 'media/\n', '.gitignore');
-    } catch { git = 'unavailable'; }
+    const opts = { cwd: memory.home, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, timeout: 20000 };
+    let hasGit = true, inside = false;
+    try { run('git', ['--version'], opts); } catch { hasGit = false; }
+    if (hasGit) { try { const top = run('git', ['rev-parse', '--show-toplevel'], opts); inside = typeof top === 'string' && top.trim() !== ''; } catch { /* not in a repository: the normal case */ } }
+    if (!hasGit) git = 'unavailable';
+    else if (inside) git = 'inside';
+    else {
+      try {
+        run('git', ['init'], opts);   // local only: no remote is added
+        git = 'initialised';
+        put(join(memory.home, '.gitignore'), 'media/\n', '.gitignore');
+      } catch { git = 'unavailable'; }
+    }
   }
   return { created, skipped, git };
 }
@@ -109,8 +119,12 @@ export function parseBatch(answer) {
   const out = { core: clean(j.core, MAX.core), packs, private: clean(j.private, MAX.private), left };
   return out.core.length || Object.keys(packs).length || out.private.length ? out : null;
 }
-export const countsOf = b => ({ core: b.core.length, packs: Object.values(b.packs).reduce((n, l) => n + l.length, 0), packNames: Object.keys(b.packs), private: b.private.length, left: b.left || 0 });
-export const countsLine = c => `${c.core} for the core profile, ${c.packs} for ${c.packNames.length} project pack${c.packNames.length === 1 ? '' : 's'}, ${c.private} private${c.left ? `; ${c.left} line${c.left === 1 ? '' : 's'} left out` : ''}`;
+// Counts only (they go in the event log); no pack names, which are the person's own words.
+export const countsOf = b => ({ core: b.core.length, packs: Object.values(b.packs).reduce((n, l) => n + l.length, 0), packCount: Object.keys(b.packs).length, private: b.private.length, left: b.left || 0 });
+export const countsLine = c => `${c.core} for the core profile, ${c.packs} for ${c.packCount} project pack${c.packCount === 1 ? '' : 's'}, ${c.private} private notes${c.left ? `; ${c.left} line${c.left === 1 ? '' : 's'} left out` : ''}`;
+// An answer that stops before its JSON closes was cut off: the export was too long for one pass.
+export const looksCut = text => { const s = String(text ?? ''), a = s.indexOf('{'); if (a < 0) return false; try { JSON.parse(s.slice(a, s.lastIndexOf('}') + 1)); return false; } catch { return true; } };
+export const TOO_LONG = 'That export is too long; split it and import each part.';
 
 // ---------- the batch, kept until it is answered ----------
 export class BatchStore {

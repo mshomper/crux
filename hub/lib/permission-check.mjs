@@ -225,7 +225,7 @@ export function sdkCall({ query, model = CHECK_MODEL, claudePath = null, env = p
     const byModel = res?.modelUsage || {};
     const used = Object.entries(byModel);
     const t = used.reduce((a, [, u]) => { const x = tokensOf(u); for (const k of Object.keys(a)) a[k] += x[k]; return a; }, { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
-    return { text, via: 'sdk', modelUsage: byModel, tokens: t, costUSD: Number(res?.total_cost_usd) || used.reduce((s, [, u]) => s + (Number(u?.costUSD) || 0), 0) };
+    return { text, via: 'sdk', stopReason: res?.stop_reason || null, modelUsage: byModel, tokens: t, costUSD: Number(res?.total_cost_usd) || used.reduce((s, [, u]) => s + (Number(u?.costUSD) || 0), 0) };
   };
 }
 
@@ -242,7 +242,7 @@ export function apiCall({ apiKey, model = CHECK_MODEL, fetchFn = globalThis.fetc
     const j = await res.json();
     const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
     const t = tokensOf(j.usage);
-    return { text, via: 'api', modelUsage: { [model]: { inputTokens: t.input, outputTokens: t.output, cacheReadInputTokens: t.cacheRead, cacheCreationInputTokens: t.cacheCreation, costUSD: listCost(model, t) } }, tokens: t, costUSD: listCost(model, t) };
+    return { text, via: 'api', stopReason: j.stop_reason || null, modelUsage: { [model]: { inputTokens: t.input, outputTokens: t.output, cacheReadInputTokens: t.cacheRead, cacheCreationInputTokens: t.cacheCreation, costUSD: listCost(model, t) } }, tokens: t, costUSD: listCost(model, t) };
   };
 }
 

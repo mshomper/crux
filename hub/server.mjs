@@ -345,7 +345,7 @@ const routes = {
     if (hub.noAgents) return { opened: false, test: true };
     const opened = openSignInWindow({ hubDir: here, claudePath: hub.claudeCode?.() || null });
     // The hub watches for a new name (the card may be closed by then) and restarts itself, so running agents use the new sign-in.
-    if (opened) { stopSignInWatch?.(); stopSignInWatch = watchSignIn({ onChange: name => { console.log(`Signed in as ${name}: restarting so the agents use it.`); setTimeout(restart, 1500); } }); }
+    if (opened) { stopSignInWatch?.(); stopSignInWatch = watchSignIn({ onChange: () => { console.log('A different person signed in: restarting so the agents use it.'); setTimeout(restart, 1500); } }); }
     return { opened, command: 'claude auth login' };
   },
   // Download the exact Claude Code this hub's SDK expects; the page follows its progress through GET /api/setup.
@@ -483,7 +483,7 @@ const routes = {
   // Only an answer the page marks as your own words ({ index, text, own: true }) can pre-approve a merge (decision 64);
   // without the mark (the Conductor's pre-fill, Take all, an older page) it is sent as yours but gives no pass.
   'POST /api/answer': ({ project, question, answers }) => hub.answerQuestions(hub.place(project), String(question || ''), answers),
-  'POST /api/lessons': ({ project, ids, accept }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept) }),
+  'POST /api/lessons': ({ project, ids, accept }, { local }) => ({ answered: hub.answerLessons(hub.place(project), ids || [], !!accept, { local }) }),
   'POST /api/worker': ({ project, name, task, type, model, effort }) => ({ name: hub.startWorker(hub.project(project), name, task, 'you', '', { type: type || undefined, model: model || undefined, effort: effort || undefined }).name }),
   // ---------- the Expedition module (decisions 69 to 72), phase 5 ----------
   // Launch: { project, brief, question?, test: { 'CHECKLIST.md': '...', 'run.json': '...' }, envelope?: { hours, percent, dollars },

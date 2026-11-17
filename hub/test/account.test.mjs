@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { makeTmp, removeTmp } from './helpers/tmp.mjs';
-import { Account, defaultProtector, planName, openSignInWindow, watchSignIn, ENV_WINS } from '../lib/account.mjs';
+import { Account, defaultProtector, planName, planId, openSignInWindow, watchSignIn, ENV_WINS } from '../lib/account.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { createServer } from 'node:net';
 import { Secrets } from '../lib/setup.mjs';
@@ -49,8 +49,14 @@ test('who is signed in comes from Claude Code\'s own file, name first, email as 
     assert.equal(planName(env), 'Alex Doe');
     writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'sam@example.invalid', extra: 'a much longer file than before so the size changes' } }));
     assert.equal(planName(env), 'sam@example.invalid', 'a changed file is read again');
+    // two people can share a display name: the id tells them apart, and the page only gets a short hash of it
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { displayName: 'Alex Doe', accountUuid: 'uuid-1', emailAddress: 'a1@example.invalid' } }));
+    const one = planId(env);
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { displayName: 'Alex Doe', accountUuid: 'uuid-2', emailAddress: 'a2@example.invalid', pad: 'x' } }));
+    assert.notEqual(planId(env), one); assert.equal(planName(env), 'Alex Doe');
+    assert.match(planId(env), /^[0-9a-f]{12}$/); assert.ok(!planId(env).includes('uuid'));
     writeFileSync(join(dir, '.claude.json'), '{ not json');
-    assert.equal(planName(env), null);
+    assert.equal(planName(env), null); assert.equal(planId(env), null);
   } finally { removeTmp(dir); }
 });
 
@@ -193,6 +199,11 @@ test('the hub watches for a new signed-in name by itself (card closed or not), o
   ticks(); assert.deepEqual(seen, [], 'same person: nothing');
   name = null; ticks(); assert.deepEqual(seen, [], 'nobody readable for a moment: nothing');
   name = 'Sam Roe'; ticks(); assert.deepEqual(seen, [['Sam Roe', 'Alex Doe']]); assert.ok(cleared >= 1, 'it stops itself');
+  // a baseline that could not be read is replaced by the first person that can, never counted as a change
+  const seen2 = []; let who = null; ticks = null;
+  watchSignIn({ read: () => who, onChange: (n, b) => seen2.push([n, b]), now: () => t, timers, forMs: 60000 });
+  ticks(); who = 'idA'; ticks(); assert.deepEqual(seen2, [], 'nobody, then the same person as before: no restart');
+  who = 'idB'; ticks(); assert.deepEqual(seen2, [['idB', 'idA']]);
   let late = 0; ticks = null; t = 0;
   watchSignIn({ read: () => name, onChange: () => late++, now: () => t, timers, forMs: 60000 });
   t = 61000; name = 'Someone Else'; ticks(); assert.equal(late, 0, 'after the time is up it does not act');

@@ -34,7 +34,7 @@ import { Expedition, ROLES as EXPEDITION_ROLES, HUB_ROLES as EXPEDITION_HUB_ROLE
 import { ExpeditionEnd } from './expedition-end.mjs';
 import { pageEvents, olderPage, waitingOf, agentsFor, partsOf, diffParts } from './feed.mjs';
 import { isProposal, proposalsOf } from './expedition-report.mjs';
-import { profileView, createProfile, SYSTEM as IMPORT_SYSTEM, buildUser as importUser, parseBatch, countsOf, countsLine, applyBatch, BatchStore, IMPORT_CAP, IMPORT_MODEL } from './profile.mjs';
+import { profileView, createProfile, SYSTEM as IMPORT_SYSTEM, buildUser as importUser, parseBatch, looksCut, TOO_LONG, countsOf, countsLine, applyBatch, BatchStore, IMPORT_CAP, IMPORT_MODEL } from './profile.mjs';
 import { dataDir } from './relaunch.mjs';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -1080,8 +1080,8 @@ export class Hub {
   get importer() {
     if (this.profileCall) return this.profileCall;
     if (this.noAgents) return async () => { throw new Error('A test hub makes no model call.'); };
-    const key = process.env.CRUX_HUB_USE_API_KEY === '1' ? process.env.ANTHROPIC_API_KEY : '';
-    return (this.profileCall = key ? apiCall({ apiKey: key, model: IMPORT_MODEL, maxTokens: 4000 }) : async arg => {
+    const key = this.apiKey();   // the environment's key or the Account card's saved one, as the checker uses
+    return (this.profileCall = key ? apiCall({ apiKey: key, model: IMPORT_MODEL, maxTokens: 16000 }) : async arg => {
       const { query } = await import('@anthropic-ai/claude-agent-sdk');
       return sdkCall({ query, model: IMPORT_MODEL, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir() })(arg);
     });
@@ -1093,13 +1093,18 @@ export class Hub {
     if (!t) throw new Error('Paste or drop an export first.');
     if (t.length > IMPORT_CAP) throw new Error(`That export is ${t.length.toLocaleString('en-US')} characters; at most ${IMPORT_CAP.toLocaleString('en-US')} are taken in one go. Paste the part you care about, or split it.`);
     if (this.pendingLessons(p).some(e => e.batch)) throw new Error('An import is already waiting in Needs you. Accept or cancel it first.');
-    const res = await this.importer({ system: IMPORT_SYSTEM, user: importUser(t), signal: AbortSignal.timeout(120000) });
+    let res;
+    try { res = await this.importer({ system: IMPORT_SYSTEM, user: importUser(t), signal: AbortSignal.timeout(120000) }); }
+    catch (e) { if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw new Error(TOO_LONG); throw e; }   // 120 s and no answer: too much for one pass
     if (res?.modelUsage && Object.keys(res.modelUsage).length) {
       const models = totalsOf(res.modelUsage);
       p.log.append('usage', { agent: 'profile import', project: p.name, agentType: 'summary', role: 'summary', model: IMPORT_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null });
     }
+    if (res?.stopReason === 'max_tokens' || looksCut(res?.text)) throw new Error(TOO_LONG);   // the answer was cut off before it closed
     const batch = parseBatch(res?.text);
     if (!batch) throw new Error('Nothing usable was found in that export. Nothing was changed.');
+    // Another import may have finished while the model was working: one waiting batch at a time, so never two cards.
+    if (this.pendingLessons(p).some(e => e.batch)) throw new Error('An import is already waiting in Needs you. Accept or cancel it first.');
     const id = this.batches.save(batch), counts = countsOf(batch);
     p.log.append('lesson_proposed', { thread: 'orchestrator', from: 'profile import', lesson: id, text: `Profile import: ${countsLine(counts)}`, batch: true, counts });
     return { counts };
@@ -1111,8 +1116,10 @@ export class Hub {
     return { core: b.core, packs: b.packs, private: local ? b.private : b.private.map(() => '(shown on the PC only)'), left: b.left || 0 };
   }
 
-  answerLessons(p, ids, accept) {
+  // local: whether the answer comes from this PC. An import with private notes is accepted on the PC only (a phone may cancel it).
+  answerLessons(p, ids, accept, { local = true } = {}) {
     const pending = this.pendingLessons(p).filter(e => ids.includes(e.lesson));
+    if (accept && !local && pending.some(e => e.batch && this.batches.read(e.lesson)?.private?.length)) throw new Error('Accept this on the PC: it adds private notes. You can cancel it from here.');
     for (const e of pending) {
       if (e.batch) {   // a profile import: written only now, on Accept; Cancel drops the proposed text
         let ok = false;

@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, statSync } from 'no
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { dataDir } from './relaunch.mjs';
+import { createHash } from 'node:crypto';
 
 const ENTROPY = 'crux-hub-api-key-v1';   // ties a protected key to this use of DPAPI
 
@@ -41,18 +42,25 @@ export const NO_PROTECT = 'This computer cannot protect a saved key (Windows onl
 // ---------- who is signed in ----------
 // Claude Code writes the signed-in person's name beside its settings (.claude.json, in CLAUDE_CONFIG_DIR when that is set).
 // Only the name and email are read from it, nothing else, and nothing from it is ever logged. Cached by file time.
-let planCache = { file: '', mtime: 0, size: 0, name: null };
-export function planName(env = process.env, { home = homedir() } = {}) {
+let planCache = { file: '', mtime: 0, size: 0, who: null };
+// { name, id } of the signed-in person, or null. name is for showing (display name, else email). id tells two people apart even
+// when they share a display name (account id, else email, else name): it is only ever compared, and the page gets a short hash.
+export function planWho(env = process.env, { home = homedir() } = {}) {
   const file = join(env.CLAUDE_CONFIG_DIR || home, '.claude.json');
   try {
     const st = statSync(file);
-    if (planCache.file === file && planCache.mtime === st.mtimeMs && planCache.size === st.size) return planCache.name;
+    if (planCache.file === file && planCache.mtime === st.mtimeMs && planCache.size === st.size) return planCache.who;
     const acct = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''))?.oauthAccount;
-    const name = [acct?.displayName, acct?.emailAddress].map(s => String(s || '').trim().slice(0, 80)).find(Boolean) || null;
-    planCache = { file, mtime: st.mtimeMs, size: st.size, name };
-    return name;
+    const clip = s => String(s || '').trim().slice(0, 80);
+    const name = [acct?.displayName, acct?.emailAddress].map(clip).find(Boolean) || null;
+    const id = [acct?.accountUuid, acct?.emailAddress, acct?.displayName].map(clip).find(Boolean) || null;
+    const who = name ? { name, id } : null;
+    planCache = { file, mtime: st.mtimeMs, size: st.size, who };
+    return who;
   } catch { return null; }
 }
+export const planName = (env, opts) => planWho(env, opts)?.name || null;
+export const planId = (env, opts) => { const id = planWho(env, opts)?.id; return id ? createHash('sha256').update(id).digest('hex').slice(0, 12) : null; };
 
 // ---------- the choice ----------
 export class Account {
@@ -120,6 +128,7 @@ export class Account {
       problem: this.problem,
       savedEnd: this.secrets.savedEnd,
       planName: planName(this.env),
+      planId: planId(this.env),
       canProtect: this.canProtect,
       platform: this.platform
     };
@@ -142,12 +151,17 @@ export const ENV_WINS = 'The API key comes from the environment variables (ANTHR
 // After "Sign in as someone else" opens its window, the hub itself watches for the signed-in name to change, even if the card
 // was closed meanwhile, and calls onChange(now, before) once (the server restarts the hub then, so running agents pick the new
 // sign-in up). Gives up after forMs. Returns a function that stops the watch. read and timers are injectable.
-export function watchSignIn({ read = () => planName(process.env), onChange, everyMs = 3000, forMs = 5 * 60 * 1000, now = Date.now, timers = { setInterval, clearInterval } } = {}) {
-  const before = read(), end = now() + forMs;
+// It compares the person's id (not the display name, which two people can share), and a baseline that could not be read is
+// replaced by the first person it can read, never counted as a change (an unreadable moment is not a new sign-in).
+export function watchSignIn({ read = () => planId(process.env), onChange, everyMs = 3000, forMs = 5 * 60 * 1000, now = Date.now, timers = { setInterval, clearInterval } } = {}) {
+  let before = read();
+  const end = now() + forMs;
   const t = timers.setInterval(() => {
     if (now() > end) return timers.clearInterval(t);
     const cur = read();
-    if (cur && cur !== before) { timers.clearInterval(t); onChange(cur, before); }
+    if (!cur) return;
+    if (!before) { before = cur; return; }
+    if (cur !== before) { timers.clearInterval(t); onChange(cur, before); }
   }, everyMs);
   t.unref?.();
   return () => timers.clearInterval(t);

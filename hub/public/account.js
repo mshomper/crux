@@ -58,8 +58,8 @@ export function profileSection(pf, d) {
   const packs = pf.packs ? `, ${pf.packs} project pack${pf.packs === 1 ? '' : 's'}` : '';
   return `<section class="ps-sec ps-last ac-profile"><div class="ps-sec-head">Profile</div>
     <div class="ac-now"><span class="ps-hex ${pf.exists ? 'on' : ''}">${ic('file-text')}</span>
-      <div><b>${pf.exists ? 'Profile found' : 'No profile yet'}</b><span class="ac-sub">${pf.exists ? `Core${packs}${pf.hasPrivate ? ', private notes' : ''}.` : 'Agents start without notes on how you like to work.'}</span></div></div>
-    <div class="ac-row ac-pf-row">${pf.exists ? '' : `<button type="button" class="btn primary" data-pf-create ${d.pfBusy ? 'disabled' : ''}>${ic('plus')}Create profile</button>`}
+      <div><b>${pf.exists ? 'Profile found' : 'No profile yet'}</b><span class="ac-sub">${pf.exists ? `Core${packs}${pf.hasPrivate ? ', private notes' : ''}.${pf.missing?.length ? ' Some files are missing.' : ''}` : 'Agents start without notes on how you like to work.'}</span></div></div>
+    <div class="ac-row ac-pf-row">${pf.exists && !pf.missing?.length ? '' : `<button type="button" class="btn primary" data-pf-create ${d.pfBusy ? 'disabled' : ''}>${ic('plus')}${pf.exists ? 'Create missing files' : 'Create profile'}</button>`}
       <button type="button" class="btn" data-pf-open aria-expanded="${!!d.pfOpen}">${ic('download')}Import from another assistant</button></div>
     ${d.pfNote ? `<p class="ps-dflt diff ac-pf-note">${esc(d.pfNote)}</p>` : ''}
     ${d.pfOpen ? `<div class="ac-import">
@@ -196,13 +196,16 @@ export class AccountCard {
     try {
       const r = await this.host.api('/api/profile/create', {});
       this.host.setProfile?.(r.profile); this.d.profile = r.profile;
-      this.d.pfNote = `Profile created${r.git === 'initialised' ? ', and a local git repository was started in your home Crux folder (nothing is sent anywhere)' : ''}. Fill it in with Import, or let agents add lessons as you work.`;
+      const git = { initialised: ', and a local git repository was started in your home Crux folder (nothing is sent anywhere)', unavailable: '. Git is not installed on this PC, so the folder is not under version control', inside: '. Your home Crux folder sits inside another git repository, so it was left as it is: check that repository is private' }[r.git] || '';
+      this.d.pfNote = `${r.created?.length ? (r.skipped?.length ? 'Missing profile files created' : 'Profile created') : 'Nothing was missing'}${git}. Fill it in with Import, or let agents add lessons as you work.`;
     } catch (e) { this.d.pfError = e.message; }
     this.d.pfBusy = false; this.render();
   }
   async takeFile(file) {
     if (!file) return;
     const cap = this.d.profile?.importCap || 60000;
+    // The size is checked before the file is read: a huge file is never loaded into the page (a character is at most 4 bytes).
+    if (file.size > cap * 4) { this.d.pfOpen = true; this.d.pfError = `That file is ${(file.size / 1048576).toFixed(1)} MB; at most ${cap.toLocaleString('en-US')} characters are taken in one go. Cut it down first.`; return this.render(); }
     try {
       const text = await file.text();
       this.d.pfOpen = true; this.d.pfText = text; this.d.pfError = text.length > cap ? `That file is ${text.length.toLocaleString('en-US')} characters; at most ${cap.toLocaleString('en-US')} are taken in one go. Cut it down first.` : '';
@@ -227,16 +230,18 @@ export class AccountCard {
     try {
       const r = await this.host.api('/api/account/signin', {});
       this.d.busy = false;
-      if (r.opened) { this.d.waiting = true; this.watch(); }
+      if (r.opened) { this.d.waiting = true; this.d.baseId = this.view.planId || null; this.watch(); }
       else this.d.signinNote = r.test ? 'A test hub opens no sign-in window.' : `Open a terminal on this PC and run: ${r.command || 'claude auth login'}`;
     } catch (e) { this.d.busy = false; this.d.error = e.message; }
     this.render();
   }
   async refresh() {
     try {
-      const was = this.view.planName;
       this.v = await this.host.api('/api/account');
-      const changed = this.d?.waiting && this.v.planName && this.v.planName !== was;
+      // The person is compared by id (two people can share a display name); an unreadable first look is replaced by the first
+      // one that can be read, never counted as a change (the hub itself watches and restarts, this only words the card).
+      if (this.d?.waiting && !this.d.baseId && this.v.planId) this.d.baseId = this.v.planId;
+      const changed = this.d?.waiting && this.d.baseId && this.v.planId && this.v.planId !== this.d.baseId;
       if (changed) { this.d.waiting = false; this.stopWatching(); this.d.signinNote = `Signed in as ${this.v.planName}. The hub restarts in a moment so its agents use it.`; }
       this.render();
       if (changed) setTimeout(() => this.close(), 2500);   // the hub restarts by itself when it sees the new name (even with this card closed)
