@@ -13,6 +13,7 @@
 
 import { readFileSync, unlinkSync } from 'node:fs';
 import { DISPLAY } from '../public/feed-rules.js';
+import { SOFT_KINDS } from './providers.mjs';
 import { readIndex, readMonth, readMonthSummary, summariesFile, writeAtomic } from './archive.mjs';
 
 const DAY = 86400e3;
@@ -92,10 +93,13 @@ export function monthsDue(dir, now = Date.now()) {
 // onUsage(res, thread) is called after each model call that answered.
 // Threads that already got their answer are kept in archive/YYYY-MM.summaries.partial.json (keyed on the event count), so a
 // retry after a failure redoes only the thread that failed and never pays twice for one that succeeded.
-export async function summariseMonth(dir, ym, count, { summarise, onUsage = null, now = Date.now() }) {
+// source names who answers ('claude' or 'provider:model'): a partial file written for another source is not reused, and each
+// thread records the provider and model that really answered it (res.provider, res.model), so a file never carries a model
+// name that did not answer.
+export async function summariseMonth(dir, ym, count, { summarise, onUsage = null, now = Date.now(), source = 'claude' }) {
   const events = readMonth(dir, ym), partialFile = summariesFile(dir, ym).replace(/\.summaries\.json$/, '.summaries.partial.json');
   let threads = {};
-  try { const j = JSON.parse(readFileSync(partialFile, 'utf8')); if (j?.events === count && j.threads) threads = j.threads; } catch { /* none */ }
+  try { const j = JSON.parse(readFileSync(partialFile, 'utf8')); if (j?.events === count && j.threads && (j.source || 'claude') === source) threads = j.threads; } catch { /* none */ }
   const usage = (res, thread) => { try { if (res?.modelUsage) onUsage?.(res, thread); } catch { /* a usage line that cannot be written is not a failed summary */ } };
   let calls = 0;
   for (const [thread, evs] of threadsOf(events)) {
@@ -108,13 +112,15 @@ export async function summariseMonth(dir, ym, count, { summarise, onUsage = null
     usage(res, thread);   // before the empty check: a billed empty answer counts too
     const text = tidy(res?.text, SUMMARY_CAP);
     if (!text) throw new Error(`The model gave no summary for ${thread} in ${ym}.`);
-    threads[thread] = { text, events: evs.length };
-    try { writeAtomic(partialFile, JSON.stringify({ events: count, threads })); } catch { /* only a saving; the retry would pay again */ }
+    threads[thread] = { text, events: evs.length, provider: res.provider || 'claude', model: res.model || SUMMARY_MODEL };
+    try { writeAtomic(partialFile, JSON.stringify({ events: count, source, threads })); } catch { /* only a saving; the retry would pay again */ }
   }
   // the month may have been rewritten by a rotation while the model worked: then this would describe the wrong month
   const now0 = readIndex(dir).months[ym];
   if (!now0 || now0.events !== count) throw new Error(`${ym} changed while it was being summarised.`);
-  writeAtomic(summariesFile(dir, ym), JSON.stringify({ version: 1, month: ym, events: count, at: new Date(now).toISOString(), model: SUMMARY_MODEL, threads }));
+  const answered = [...new Set(Object.values(threads).map(t => t.model).filter(Boolean))];
+  const model = answered.length === 1 ? answered[0] : answered.length ? 'mixed' : (source === 'claude' ? SUMMARY_MODEL : null);   // only a model that answered
+  writeAtomic(summariesFile(dir, ym), JSON.stringify({ version: 1, month: ym, events: count, at: new Date(now).toISOString(), model, ...(source === 'claude' ? {} : { source }), threads }));
   try { unlinkSync(partialFile); } catch { /* none */ }
   return { ym, threads: Object.keys(threads).length, calls };
 }
@@ -124,15 +130,16 @@ export async function summariseMonth(dir, ym, count, { summarise, onUsage = null
 // is the hub's own map, kept between ticks; a month a rotation rewrote has a new key). Never throws.
 // Returns [{ ym, ... } | { ym, error }].
 export const MAX_FAILURES = 2;
-export async function summariseDue(dir, { summarise, onUsage = null, now = Date.now(), log = console.error, label = '', failures = new Map() } = {}) {
+export async function summariseDue(dir, { summarise, onUsage = null, now = Date.now(), log = console.error, label = '', failures = new Map(), source = 'claude' } = {}) {
   const done = [];
   let due;
   try { due = monthsDue(dir, now).filter(m => (failures.get(`${dir}|${m.ym}|${m.events}`) || 0) < MAX_FAILURES).slice(0, MAX_MONTHS_PER_RUN); } catch (e) { log(`Month summaries${label}: could not read the archive: ${e.message}`); return done; }
   for (const { ym, events } of due) {
     const key = `${dir}|${ym}|${events}`;
-    try { done.push(await summariseMonth(dir, ym, events, { summarise, onUsage, now })); failures.delete(key); }
+    try { done.push(await summariseMonth(dir, ym, events, { summarise, onUsage, now, source })); failures.delete(key); }
     catch (e) {
-      const n = (failures.get(key) || 0) + 1; failures.set(key, n);
+      // a failure about the moment (rate limit, timeout, busy card, network) is not the month's fault: it does not count toward the park
+      const n = (failures.get(key) || 0) + (SOFT_KINDS.includes(e?.kind) ? 0 : 1); failures.set(key, n);
       log(`Month summaries${label}: ${ym} not summarised: ${e.message} ${n >= MAX_FAILURES ? `Giving up on it until the hub restarts (${n} failures).` : '(will try again)'}`);
       done.push({ ym, error: e.message });
     }

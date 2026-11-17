@@ -35,6 +35,11 @@ export const LEVELS = ['standard', 'auto', 'trusted'];
 // The one-shot permission check per project (decision 66): off (the orchestrator answers, as before), shadow (it runs
 // beside the orchestrator and only logs), on (it answers allow, deny or escalate to you; the orchestrator is asked only when it gives no valid answer).
 export const CHECK_MODES = ['off', 'shadow', 'on'];
+// Outside models per project (expedition 20261117): off (default), local (only a model on this machine), any.
+// Kept only here, never read from a repo file. Which provider and model answer is hub-wide: `outsideProvider`
+// { provider: 'openai'|'google'|'openrouter'|'ollama', model, baseUrl (ollama only, loopback) }.
+export const OUTSIDE_MODES = ['off', 'local', 'any'];
+const OUTSIDE_PRESETS = ['openai', 'google', 'openrouter', 'ollama'];
 
 export class HubSettings {
   constructor({ dir = process.env.CRUX_HUB_DATA || join(homedir(), '.crux-hub'), initial = {}, file } = {}) {
@@ -71,6 +76,9 @@ export class HubSettings {
     return this.all();
   }
   project(dir) { return this.projects[projectKey(dir)] || null; }
+  // The project's outside-models switch: 'off' when unset or anything else.
+  outsideLimits(dir) { const p = this.project(dir) || {}; return { callsPerHour: p.outsideCallsPerHour ?? 30, usdPerDay: p.outsideUsdPerDay ?? 0.50 }; }
+  outsideMode(dir) { const m = this.project(dir)?.outsideModels; return OUTSIDE_MODES.includes(m) ? m : 'off'; }
   // A handoff number for one project: its own when set, else the hub default.
   projectNumber(dir, k) {
     const own = this.project(dir)?.[k];
@@ -88,6 +96,14 @@ export class HubSettings {
     // settings: never read from a file in the repo, so a cloned repo cannot turn the check on or off.
     if (CHECK_MODES.includes(changes.permissionCheck)) { cur.permissionCheck = changes.permissionCheck; changed = true; }
     if (typeof changes.paused === 'boolean') { cur.paused = changes.paused; changed = true; }
+    if (OUTSIDE_MODES.includes(changes.outsideModels)) { cur.outsideModels = changes.outsideModels; changed = true; }
+    // the agent tool's allowance per project: calls per hour and estimated dollars per day (null clears to the default)
+    for (const n of ['outsideCallsPerHour', 'outsideUsdPerDay']) {
+      if (!(n in changes)) continue;
+      const v = changes[n];
+      if (v === null || v === '') { if (n in cur) { delete cur[n]; changed = true; } continue; }
+      if (Number.isFinite(Number(v)) && Number(v) >= 0) { cur[n] = Number(v); changed = true; }
+    }
     for (const [n, range] of Object.entries(HANDOFF_NUMBERS)) {
       if (!(n in changes)) continue;
       const v = changes[n];
@@ -119,6 +135,17 @@ function pick(o = {}) {
   if (typeof o.routePermissions === 'boolean') out.routePermissions = o.routePermissions;
   if (typeof o.conductorWakes === 'boolean') out.conductorWakes = o.conductorWakes;
   if (typeof o.voice === 'boolean') out.voice = o.voice;
+  const op = o.outsideProvider;
+  if (op && typeof op === 'object' && OUTSIDE_PRESETS.includes(op.provider) && typeof op.model === 'string' && op.model.trim()) {
+    // dataTerms: what the user knows of the provider's terms for this key: 'paid' (the provider does not train on or keep it
+    // beyond the usual window), 'free' or 'unknown' (default). 'any' mode sends nothing off this machine unless 'paid'.
+    out.outsideProvider = {
+      provider: op.provider, model: op.model.trim().slice(0, 120),
+      dataTerms: ['paid', 'free', 'unknown'].includes(op.dataTerms) ? op.dataTerms : 'unknown',
+      ...(op.provider === 'ollama' && typeof op.baseUrl === 'string' && op.baseUrl.trim() ? { baseUrl: op.baseUrl.trim().slice(0, 200) } : {}),
+      ...(Number.isFinite(Number(op.minFreeMB)) && op.minFreeMB !== null && op.minFreeMB !== '' && Number(op.minFreeMB) >= 0 ? { minFreeMB: Number(op.minFreeMB) } : {})
+    };
+  }
   const t = Number(o.permissionTimeoutSec);
   if (o.permissionTimeoutSec != null && o.permissionTimeoutSec !== '' && Number.isFinite(t) && t >= 10 && t <= 3600) out.permissionTimeoutSec = t;
   for (const [n, range] of Object.entries(HUB_NUMBERS)) {   // out of range or not a number: ignored, the saved or default stays
