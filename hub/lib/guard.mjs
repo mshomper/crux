@@ -40,7 +40,7 @@ const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';   // no 0/O, 1/I/L
 
 // The only POSTs a device without the cookie may make: the steps of pairing it.
 export const OPEN_POSTS = new Set(['/api/pair/code', '/api/pair/options', '/api/pair/finish']);
-export const PURPOSES = new Set(['project', 'hub', 'push', 'pair', 'unpair', 'lists', 'account']);
+export const PURPOSES = new Set(['project', 'hub', 'push', 'pair', 'unpair', 'lists', 'account', 'outside-key']);
 export const NOT_PAIRED = 'This device is not paired with the hub, so it cannot make changes. Pair it first: "Pair this device" on the hub page.';
 
 export class GuardError extends Error {
@@ -473,6 +473,9 @@ function needFor(route, body, hub) {
     case 'POST /api/push/subscribe': return { purpose: 'push', scope: 'push', why: 'Add this device to the hub\'s notifications' };
     // Decision 78 A: switching the account, or pasting a key, from a remote device asks for Face ID, like raising to Trusted.
     case 'POST /api/account': return { purpose: 'account', scope: `account;${body.mode === 'key' ? (body.apiKey ? 'key;new' : 'key') : 'plan'}`, why: body.mode === 'key' ? (body.apiKey ? 'Use a new API key for the agents' : 'Switch the agents to the saved API key') : 'Switch the agents to the plan sign-in' };
+    // Decision 81 A: saving, replacing or removing an outside provider's key from a remote device asks for Face ID, like the
+    // Anthropic key above. The key itself is never part of the scope or the reason.
+    case 'POST /api/outside/key': return { purpose: 'outside-key', scope: `outside-key;${String(body.provider || '').slice(0, 20)};${body.remove === true ? 'remove' : 'save'}`, why: body.remove === true ? 'Remove an outside provider\'s key' : 'Save an outside provider\'s key' };
     case 'POST /api/pair/issue': return { purpose: 'pair', scope: 'pair', why: 'Pair another device' };
     case 'POST /api/devices/remove': return { purpose: 'unpair', scope: `device=${String(body.id || '').slice(0, 40)}`, why: 'Unpair a device and its passkey' };
     default: return null;

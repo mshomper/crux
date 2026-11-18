@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { PRESETS, looksSecret } from './providers.mjs';
 
 //   conductorWakes: projects' summaries and cards wake the Conductor (decision 55). The off switch: false in
 //     settings.json (or hub.json) and it wakes only for your messages and its reminders.
@@ -36,9 +37,11 @@ export const LEVELS = ['standard', 'auto', 'trusted'];
 // beside the orchestrator and only logs), on (it answers allow, deny or escalate to you; the orchestrator is asked only when it gives no valid answer).
 export const CHECK_MODES = ['off', 'shadow', 'on'];
 // Outside models per project (expedition 20261117): off (default), local (only a model on this machine), any.
-// Kept only here, never read from a repo file. Which provider and model answer is hub-wide: `outsideProvider`
-// { provider: 'openai'|'google'|'openrouter'|'ollama', model, baseUrl (ollama only, loopback) }.
+// Kept only here, never read from a repo file.
+// Decision 81: which provider and model answer is set per job type, hub-wide: ask (a short question), draft (a long draft),
+// image (a picture); see pickOutside below. Agents never choose any of it.
 export const OUTSIDE_MODES = ['off', 'local', 'any'];
+export const OUTSIDE_JOBS = ['ask', 'draft', 'image'];
 const OUTSIDE_PRESETS = ['openai', 'google', 'openrouter', 'ollama'];
 
 export class HubSettings {
@@ -127,6 +130,12 @@ export class HubSettings {
     mkdirSync(join(this.file, '..'), { recursive: true });
     let saved = {};
     try { saved = JSON.parse(readFileSync(this.file, 'utf8')); } catch { }
+    if ('outsideRoutes' in c) {
+      // The older single setting is replaced by the routes, not kept beside them. Its plan terms were read from it at load, so
+      // they are written now with the routes (this.values already holds them): dropping it must not lose "paid".
+      delete saved.outsideProvider;
+      if (!('outsideTerms' in c) && this.values.outsideTerms) saved.outsideTerms = this.values.outsideTerms;
+    }
     writeFileSync(this.file, JSON.stringify({ ...saved, ...c, timeoutRaised: TIMEOUT_RAISED }, null, 2));
   }
 }
@@ -134,22 +143,52 @@ export class HubSettings {
 // One key per project folder, however it was typed: forward slashes, lower case, no trailing slash.
 export const projectKey = dir => String(dir).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
+// One job's route: { provider, model, baseUrl? (Ollama), minFreeMB? }. A picture route's model may be empty (the provider's own
+// picture model is used); a text route's may not. A provider with no picture model cannot take the picture job.
+function pickRoute(job, r) {
+  if (!r || typeof r !== 'object' || !OUTSIDE_PRESETS.includes(r.provider)) return null;
+  const model = typeof r.model === 'string' ? r.model.trim().slice(0, 120) : '';
+  if (looksSecret(model)) return null;   // a key pasted into a model box is never kept: it would sit in plain text and go to the page
+  if (job === 'image' ? !PRESETS[r.provider].imageModel : !model) return null;
+  return {
+    provider: r.provider, model: model || null,
+    ...(r.provider === 'ollama' && typeof r.baseUrl === 'string' && r.baseUrl.trim() ? { baseUrl: r.baseUrl.trim().slice(0, 200) } : {}),
+    ...(Number.isFinite(Number(r.minFreeMB)) && r.minFreeMB !== null && r.minFreeMB !== '' && Number(r.minFreeMB) >= 0 ? { minFreeMB: Number(r.minFreeMB) } : {})
+  };
+}
+
+// Outside routing (decision 81): outsideRoutes { ask, draft, image } (a job with no entry is not set up) and outsideTerms
+// { provider: 'paid' | 'free' | 'unknown' } (what the user knows of each provider's terms for their key: 'paid' means it does
+// not train on or keep what is sent; Any mode sends nothing to a provider unless 'paid'). The older single `outsideProvider`
+// { provider, model, dataTerms, ... } is read once as all three jobs on that provider, so a setup made before decision 81
+// keeps working; it is ignored whenever outsideRoutes is present.
+function pickOutside(o) {
+  const out = {};
+  let routes = null, terms = null;
+  if (o.outsideRoutes && typeof o.outsideRoutes === 'object') {
+    routes = {};
+    for (const job of OUTSIDE_JOBS) { const r = pickRoute(job, o.outsideRoutes[job]); if (r) routes[job] = r; }
+  } else if (o.outsideProvider && typeof o.outsideProvider === 'object') {
+    const op = o.outsideProvider;
+    routes = {};
+    for (const job of OUTSIDE_JOBS) { const r = pickRoute(job, job === 'image' ? { ...op, model: null } : op); if (r) routes[job] = r; }
+    if (OUTSIDE_PRESETS.includes(op.provider)) terms = { [op.provider]: ['paid', 'free', 'unknown'].includes(op.dataTerms) ? op.dataTerms : 'unknown' };
+  }
+  if (o.outsideTerms && typeof o.outsideTerms === 'object') {
+    terms = { ...(terms || {}) };
+    for (const p of OUTSIDE_PRESETS) if (['paid', 'free', 'unknown'].includes(o.outsideTerms[p])) terms[p] = o.outsideTerms[p];
+  }
+  if (routes) out.outsideRoutes = routes;
+  if (terms) out.outsideTerms = terms;
+  return out;
+}
+
 function pick(o = {}) {
   const out = {};
   if (typeof o.routePermissions === 'boolean') out.routePermissions = o.routePermissions;
   if (typeof o.conductorWakes === 'boolean') out.conductorWakes = o.conductorWakes;
   if (typeof o.voice === 'boolean') out.voice = o.voice;
-  const op = o.outsideProvider;
-  if (op && typeof op === 'object' && OUTSIDE_PRESETS.includes(op.provider) && typeof op.model === 'string' && op.model.trim()) {
-    // dataTerms: what the user knows of the provider's terms for this key: 'paid' (the provider does not train on or keep it
-    // beyond the usual window), 'free' or 'unknown' (default). 'any' mode sends nothing off this machine unless 'paid'.
-    out.outsideProvider = {
-      provider: op.provider, model: op.model.trim().slice(0, 120),
-      dataTerms: ['paid', 'free', 'unknown'].includes(op.dataTerms) ? op.dataTerms : 'unknown',
-      ...(op.provider === 'ollama' && typeof op.baseUrl === 'string' && op.baseUrl.trim() ? { baseUrl: op.baseUrl.trim().slice(0, 200) } : {}),
-      ...(Number.isFinite(Number(op.minFreeMB)) && op.minFreeMB !== null && op.minFreeMB !== '' && Number(op.minFreeMB) >= 0 ? { minFreeMB: Number(op.minFreeMB) } : {})
-    };
-  }
+  Object.assign(out, pickOutside(o));
   const t = Number(o.permissionTimeoutSec);
   if (o.permissionTimeoutSec != null && o.permissionTimeoutSec !== '' && Number.isFinite(t) && t >= 10 && t <= 3600) out.permissionTimeoutSec = t;
   for (const [n, range] of Object.entries(HUB_NUMBERS)) {   // out of range or not a number: ignored, the saved or default stays

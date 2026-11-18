@@ -281,7 +281,7 @@ const routes = {
   // The conductor alone (its events change often; the page reads this instead of the whole state), and one entry's words.
   'GET /api/conductor': () => ({ conductor: hub.conductor?.view() || null, seq: streamSeq }),
   'GET /api/entry': ({ project, id }) => hub.entryBody(project, id),
-  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), outsideKeys: hub.offload?.keys?.view?.() || {}, boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: accountView(), profile: hub.profileView(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
+  'GET /api/state': (_, { local }) => ({ stream: { boot: BOOT, seq: streamSeq }, voice:{ ...voice.view(), canSetup: local }, projects: hub.state(), conductor: hub.conductor?.view() || null, retireAt: hub.retireAt, models: MODELS, efforts: EFFORTS, settings: hub.settings.all(), outsideInfo: hub.offload?.info?.() || null, boot: BOOT, testHub: hub.noAgents, version: VERSION, build: BUILD, resumed: hub.resumed, usage: hub.usage.view(), account: accountView(), profile: hub.profileView(), bootAt: hub.bootAt, setup: { needed: setupState(false).needed } }),
   // Decision 50: one decision's brief, for the card's pop-up (read only, like the state).
   'GET /api/older': ({ project, thread, before, ts }) => hub.older(project, thread, before, ts),
   // Search chat and summaries in a project's log, archive included: words must all appear. { hits: [{ id, ts, type, thread, from, snippet }] }
@@ -290,6 +290,22 @@ const routes = {
     const b = hub.project(String(project || '')).board.brief(id);
     if (!b) throw new Error(`No decision ${id}`);
     return b;
+  },
+  // ---------- decision 81 A: outside providers' keys, from the Whole hub panel ----------
+  // { provider, apiKey } saves (or replaces) that provider's key; { provider, remove: true } removes it. Same handling as the
+  // Account card's key: same-origin JSON, protected with the Windows per-user protection in provider-keys.json, never put in an
+  // event, a usage line, a log line or an answer. The answer carries only which providers have a key and its last four characters.
+  // From a remote device it asks for Face ID, like pasting the Anthropic key (lib/guard.mjs).
+  'POST /api/outside/key': ({ provider, apiKey, remove }) => {
+    const keys = hub.offload?.keys;
+    if (!keys) throw new Error('Outside models are not available in this hub.');
+    const p = String(provider || '');
+    if (remove === true) keys.remove(p);
+    else {
+      if (!keys.canProtect) throw new Error(NO_PROTECT);
+      keys.save(p, apiKey);   // shape-checked there; its messages never repeat the key
+    }
+    return { outsideInfo: hub.offload.info() };
   },
   // ---------- decisions 52 and 54: the desktop app's first run (PC only, desktop app's hub only) ----------
   'GET /api/setup': (_, { local }) => setupState(local),
@@ -377,10 +393,10 @@ const routes = {
   // workerHandoffFloorPct (decision 46 A) is hub-wide only.
   // Decision 66: { project, permissionCheck: 'off' | 'shadow' | 'on', paused: bool }. Turning the check on needs the
   // step-up (lib/guard.mjs settingsNeed); it is kept in hub settings, never read from the repo.
-  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, permissionCheck, paused, outsideModels, outsideProvider }) => {
+  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, permissionCheck, paused, outsideModels, outsideRoutes, outsideTerms }) => {
     const p = project ? hub.project(project) : null;
     if (!p) {
-      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, outsideProvider }).filter(([, v]) => v != null));
+      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, outsideRoutes, outsideTerms }).filter(([, v]) => v != null));
       if (Object.keys(hubWide).length) hub.settings.set(hubWide);
     }
     if (p && outsideModels) hub.setOutsideMode(p, outsideModels);   // decision 80: off, local or any; needs the step-up to go from off (lib/guard.mjs)
@@ -641,7 +657,7 @@ async function handle(req, res) {
       // with that same prompt (no code); where Windows Hello is not available it goes ahead, with a push.
       let need = ctx.device && !ctx.device.off ? stepUpNeed(key, input, hub) : null;
       if (need && ctx.device.local && key === 'POST /api/pair/issue') need = null;
-      if (need && ctx.device.local && need.purpose === 'account') need = null;   // the PC needs no Windows Hello to switch the account; a phone does (decision 78 A)
+      if (need && ctx.device.local && ['account', 'outside-key'].includes(need.purpose)) need = null;   // the PC needs no Windows Hello to switch the account or save an outside provider's key (decisions 48 and 78 A); a phone does
       if (need && ctx.device.local && !guard.pcHasPasskey()) need = { ...need, enroll: true };
       if (need) {
         ctx.stepUp = guard.verifyStepUp({ headers: req.headers, device: ctx.device, stepUp: input.stepUp, need });

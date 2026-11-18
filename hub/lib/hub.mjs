@@ -2412,14 +2412,14 @@ export class Hub {
         // off by default) and whose switch allows a set-up provider is summarised by it, and by nothing else (a failure
         // leaves the month for the next tick; it never drops to Claude). Otherwise Claude, as before: allowing outside jobs
         // does not send archived chat outside.
-        const outside = this.settings.outsideSummaries?.(p.dir) ? (this.offload?.plan(p.dir) || null) : null;
+        const outside = this.settings.outsideSummaries?.(p.dir) ? (this.offload?.plan(p.dir, 'draft') || null) : null;   // month summaries use the long-draft route
         const onUsage = res => {
           if (!res?.modelUsage || !Object.keys(res.modelUsage).length) return;
           if (res.via === 'outside') { this.offload.logUsage(p, res, { agent: 'month summaries', agentType: 'summary', role: 'summary', purpose: 'month summary' }); return; }
           const models = totalsOf(res.modelUsage);
           p.log.append('usage', { agent: 'month summaries', project: p.name, agentType: 'summary', role: 'summary', model: Object.keys(res.modelUsage)[0] || SUMMARY_MODEL, effort: null, models, costUSD: sumCost(models), listUSD: res.listUSD ?? null, via: res.via || null });
         };
-        const summarise = outside ? (arg => this.offload.chat(p.dir, { ...arg, maxTokens: 400 })) : (arg => this.summariser(arg));
+        const summarise = outside ? (arg => this.offload.chat(p.dir, { ...arg, maxTokens: 400 }, 'draft')) : (arg => this.summariser(arg));
         const source = outside ? `${outside.provider}:${outside.model}` : 'claude';
         const r = await summariseDue(p.log.dir, { summarise, onUsage, source, label: `: ${p.name}`, failures: this.summaryFailures });
         const ok = r.filter(x => !x.error);

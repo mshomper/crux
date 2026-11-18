@@ -50,6 +50,12 @@ export function fallbackCostUSD(purpose, tokens = null) {
   return (input * Math.max(...top.map(p => p.input)) + output * Math.max(...top.map(p => p.output))) / 1e6;
 }
 
+// What looks like a key or a password: known key shapes, and the "password: ..." / "password=..." form (a password, secret,
+// token or key given as a value). Plain sentences ("the password is required") do not match. Not a scanner, only a catch for
+// the plain mistake: used on text sent outside (offload.mjs) and on model names saved in settings (settings.mjs).
+const SECRET = /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAIza[0-9A-Za-z_-]{30,}|\bsk-[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{30,}|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b(?:password|passwd|pwd|passphrase|secret|api[_ -]?key|(?:access[_ -]?|auth[_ -]?)?token)\b["']?\s*[:=]\s*["']?[^\s"']{6,}/i;
+export const looksSecret = s => SECRET.test(String(s || ''));
+
 // Aspect ratios the make_image tool accepts. The docs show "1:1" and "16:9"; the rest are the usual ones and Google refuses
 // one the model does not take (a plain 'refused').
 export const ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];
@@ -71,7 +77,8 @@ export const ERROR_MESSAGES = {
   refused: 'The outside model refused the request.',
   'key-rejected': 'The provider did not accept the saved key.',
   'unknown-model': 'The provider does not know that model name.',
-  'local-only': 'This project is set to Local only, and the hub\'s provider is not on this computer.',
+  'no-route': 'No outside provider is set for this kind of job in the Whole hub panel.',
+  'local-only':'This project is set to Local only, and the hub\'s provider is not on this computer.',
   'bad-answer': 'The outside model gave an answer the hub could not read.',
   off: 'Outside models are off for this project.',
   network: 'The outside model could not be reached.',
@@ -198,7 +205,7 @@ export class ProviderClient {
     await this.guardGpu();
     try {
       const body = { model: this.model, messages: [...(system ? [{ role: 'system', content: String(system) }] : []), { role: 'user', content: String(user ?? '') }], [this.preset.tokenField]: maxTokens };
-      if (this.provider === 'openrouter') body.provider = { data_collection: 'deny' };   // no provider that keeps prompts
+      if (this.provider === 'openrouter') { body.provider = { data_collection: 'deny' }; body.usage = { include: true }; }   // no provider that keeps prompts; and its own cost figure back in usage.cost
       const j = await this.post('chat/completions', body, signal, timeoutMs ? { timeoutMs } : {});
       const content = j?.choices?.[0]?.message?.content;
       if (typeof content !== 'string') throw this.fail('bad-answer');

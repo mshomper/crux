@@ -129,14 +129,35 @@
 .ps-conn .ps-seg{max-width:100%}
 .ps-conn .ps-seg button{min-width:0;padding-inline:10px}
 
+/* decision 81 A: key boxes and one line per job */
+.ps-keys,.ps-jobs{display:grid;gap:10px}
+.ps-keybox,.ps-job{display:grid;gap:8px;padding:10px 12px;border:1px solid var(--hud-line);border-radius:2px;background:rgba(18,26,37,.6);min-width:0}
+.ps-key-top,.ps-job-top,.ps-key-plan{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.ps-key-name{font:700 13px var(--font);color:var(--text)}
+.ps-keystat{display:inline-flex;align-items:center;gap:5px;margin-left:auto;font:500 11.5px/1.3 var(--mono);color:var(--faint)}
+.ps-keystat .icon{width:13px;height:13px}
+.ps-keystat.ok{color:var(--hud-cyan)}
+.ps-keystat.warn{color:var(--hud-amber,#f3b955)}
+.ps-keyin{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.ps-keyin .ps-keyfield{flex:1 1 180px;min-width:0;width:auto;margin:0}
+.ps-key-plan .ps-seg{margin-left:auto}
+.ps-job .ps-model{width:100%}
+.ps-warnmark{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;margin-left:auto;padding:0;color:var(--hud-amber,#f3b955);background:none;border:1px solid rgba(243,185,85,.45);border-radius:2px;cursor:pointer}
+.ps-warnmark .icon{width:14px;height:14px;filter:drop-shadow(0 0 4px rgba(243,185,85,.55))}
+.ps-warnmark:focus-visible{outline:none;box-shadow:0 0 0 1px var(--hud-amber,#f3b955)}
+.ps-job-note{align-items:flex-start;line-height:1.4}
+
 /* ---------- phone: the card fills the screen; thumb-sized targets ---------- */
 @media (max-width:720px){
   .ps-row{grid-template-columns:minmax(0,1fr)}
   .ps-row .ps-seg,.ps-row .ps-model{justify-self:stretch;width:100%}
   .ps-row .ps-seg button{flex:1}
-  [data-ps-provider] .ps-seg{grid-auto-flow:row;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
-  [data-ps-provider] .ps-seg button:nth-child(odd){border-left:0}
-  [data-ps-provider] .ps-seg button:nth-child(n+3){border-top:1px solid var(--hud-edge)}
+  .ps-job .ps-seg{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));width:100%}
+  .ps-job .ps-seg button:nth-child(3n+1){border-left:0}
+  .ps-job .ps-seg button:nth-child(n+4){border-top:1px solid var(--hud-edge)}
+  .ps-key-plan .ps-seg{margin-left:0;width:100%}
+  .ps-key-plan .ps-seg button{flex:1}
+  .ps-keyin .btn{min-height:44px}
   .pset,.pset.hubp{inset:0;left:0!important;top:0!important;width:100%;max-width:none;height:100%;max-height:none;border:0;clip-path:none;box-shadow:none;background:linear-gradient(180deg,#0d131b,#0a0e14)}
   .pset::backdrop{background:#0a0e14}
   .ps-head{padding:calc(10px + env(safe-area-inset-top)) 12px 10px;background:linear-gradient(180deg,#121b27,#0d141d)}
