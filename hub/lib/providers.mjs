@@ -94,7 +94,8 @@ export const ERROR_MESSAGES = {
   'too-big': 'The text is over the size limit for an outside draft.'
 };
 // Kinds that are about the moment, not about the request: a month job that fails with one tries again without counting it
-// against the two-failure park.
+// against the two-failure park. That is a later month tick (the next run of the background job), never an immediate retry:
+// no call is repeated, and nothing else answers instead. 'unreachable' (a second PC that is off or asleep) is one of them.
 export const SOFT_KINDS = ['rate-limit', 'timeout', 'busy', 'network', 'unreachable'];
 
 export class ProviderError extends Error {
@@ -204,7 +205,7 @@ export class ProviderClient {
     }
     if (s === 401 || s === 403) return this.fail('key-rejected', { status: s });
     if (s === 404) return this.fail('unknown-model', { status: s });
-    if (s >= 500) return this.fail('network', { status: s });
+    if (s >= 500) return this.remote ? this.fail('unreachable', { status: s, message: `Ollama at ${this.address.host} answered with an error.` }) : this.fail('network', { status: s });
     return this.fail('refused', { status: s });
   }
 

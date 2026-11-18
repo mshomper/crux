@@ -127,7 +127,8 @@ export class Offload {
     return new ProviderClient({
       provider: plan.provider, model: plan.model, ...(job === 'image' ? { imageModel: plan.model } : {}),
       apiKey: PRESETS[plan.provider].needsKey ? this.keys.get(plan.provider) : null,
-      baseUrl: plan.provider === 'ollama' ? (r.baseUrl || null) : null,
+      // Ollama's one hub-wide address (a route saved before it had its own setting may still carry one): checked again by the client
+      baseUrl: plan.provider === 'ollama' ? (this.settings?.get?.('outsideOllamaAddress') || r.baseUrl || null) : null,
       ...(this.baseUrls[plan.provider] ? { baseUrl: this.baseUrls[plan.provider] } : {}),
       ...(this.timeoutMs ? { timeoutMs: this.timeoutMs } : {}), fetchFn: this.fetchFn, freeGpu: this.freeGpu,
       ...(this.vramReader ? { vramReader: this.vramReader } : {}), ...(Number.isFinite(r.minFreeMB) ? { minFreeMB: r.minFreeMB } : {})

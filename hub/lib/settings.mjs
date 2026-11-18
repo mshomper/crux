@@ -51,6 +51,12 @@ export class HubSettings {
     let saved = {};
     if (this.file && existsSync(this.file)) { try { saved = JSON.parse(readFileSync(this.file, 'utf8')); } catch { } }
     this.values = { ...SETTING_DEFAULTS, ...pick(initial), ...pick(saved) };
+    // An Ollama address saved on a route before it had a setting of its own becomes the hub's one address (never over a saved one,
+    // not even an empty one: that was chosen).
+    if (this.values.outsideOllamaAddress === undefined) {
+      const old = Object.values(this.values.outsideRoutes || {}).find(r => r.provider === 'ollama' && r.baseUrl);
+      if (old) this.values.outsideOllamaAddress = old.baseUrl;
+    }
     // Per project, keyed by its folder: { permissionMode: 'standard' | 'auto' | 'trusted', connectors: bool,
     // idleHandoffMin, idleFloorPct, retireAt } (decisions 34, 44 and 45). A number left out uses the hub default.
     this.projects = saved.projects && typeof saved.projects === 'object' ? saved.projects : {};
@@ -136,6 +142,8 @@ export class HubSettings {
       // they are written now with the routes (this.values already holds them): dropping it must not lose "paid".
       delete saved.outsideProvider;
       if (!('outsideTerms' in c) && this.values.outsideTerms) saved.outsideTerms = this.values.outsideTerms;
+      // Likewise an Ollama address that was read from an old route: the routes saved now carry none, so it is written on its own.
+      if (!('outsideOllamaAddress' in c) && this.values.outsideOllamaAddress !== undefined) saved.outsideOllamaAddress = this.values.outsideOllamaAddress;
     }
     writeFileSync(this.file, JSON.stringify({ ...saved, ...c, timeoutRaised: TIMEOUT_RAISED }, null, 2));
   }
@@ -189,6 +197,14 @@ function pickOutside(o) {
   }
   if (routes) out.outsideRoutes = routes;
   if (terms) out.outsideTerms = terms;
+  // One Ollama address for the whole hub, read by every Ollama route and kept whether or not a job uses Ollama (decision 82 A):
+  // empty means this PC's default; else this PC on another port, or one of the owner's Tailscale machines. Any other address is
+  // not saved. Kept as the address the hub calls.
+  if (typeof o.outsideOllamaAddress === 'string') {
+    const t = o.outsideOllamaAddress.trim();
+    if (!t) out.outsideOllamaAddress = '';
+    else { const a = ollamaAddress(t); if (a.ok) out.outsideOllamaAddress = a.base; }
+  }
   return out;
 }
 

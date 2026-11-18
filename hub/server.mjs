@@ -393,10 +393,10 @@ const routes = {
   // workerHandoffFloorPct (decision 46 A) is hub-wide only.
   // Decision 66: { project, permissionCheck: 'off' | 'shadow' | 'on', paused: bool }. Turning the check on needs the
   // step-up (lib/guard.mjs settingsNeed); it is kept in hub settings, never read from the repo.
-  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, permissionCheck, paused, outsideModels, outsideRoutes, outsideTerms }) => {
+  'POST /api/settings': ({ routePermissions, project, permissionMode, connectors, handoff, permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, permissionCheck, paused, outsideModels, outsideRoutes, outsideTerms, outsideOllamaAddress }) => {
     const p = project ? hub.project(project) : null;
     if (!p) {
-      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, outsideRoutes, outsideTerms }).filter(([, v]) => v != null));
+      const hubWide = Object.fromEntries(Object.entries({ permissionTimeoutSec, idleHandoffMin, idleFloorPct, retireAt: ra, workerHandoffFloorPct, workerRetireAt, outsideRoutes, outsideTerms, outsideOllamaAddress }).filter(([, v]) => v != null));
       if (Object.keys(hubWide).length) hub.settings.set(hubWide);
     }
     if (p && outsideModels) hub.setOutsideMode(p, outsideModels);   // decision 80: off, local or any; needs the step-up to go from off (lib/guard.mjs)

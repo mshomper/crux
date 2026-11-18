@@ -96,6 +96,48 @@ test('a second PC that does not answer fails plainly, once, with the name, and n
   await assert.rejects(() => here.chat({ system: 's', user: 'u' }), e => e.kind === 'network');
 });
 
+test('a second PC that answers with a server error gets the plain words and the name too', async () => {
+  const f = async (url, init) => { f.calls++; return new Response('boom', { status: 503 }); }; f.calls = 0;
+  const c = new ProviderClient({ provider: 'ollama', model: 'm', baseUrl: 'https://my-pc.tail1234.ts.net:11434', fetchFn: f });
+  await assert.rejects(() => c.chat({ system: 's', user: 'u' }), e => e.kind === 'unreachable' && e.message === 'Ollama at my-pc.tail1234.ts.net answered with an error.' && e.status === 503);
+  assert.equal(f.calls, 1, 'not repeated');
+  const here = new ProviderClient({ provider: 'ollama', model: 'm', baseUrl: 'http://127.0.0.1:11434/v1/', fetchFn: f, vramReader: async () => 16000 });
+  await assert.rejects(() => here.chat({ system: 's', user: 'u' }), e => e.kind === 'network', 'this PC keeps its own words');
+});
+
+test('the Ollama address is its own hub setting: read by every Ollama route, kept with no Ollama job, an older route\'s address migrates', t => {
+  const root = makeTmp('crux-ollama-addr-', t), file = join(root, 'settings.json'), data = join(root, 'data'), dir = join(root, 'proj');
+  mkdirSync(data, { recursive: true }); mkdirSync(dir, { recursive: true });
+  // a setting made before: the address sits on the route
+  writeFileSync(file, JSON.stringify({ outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b', baseUrl: 'http://100.101.102.103:11434' } } }));
+  const s = new HubSettings({ file });
+  assert.equal(s.get('outsideOllamaAddress'), `${REMOTE}/v1/`, 'migrated to the hub-wide setting');
+  s.setProject(dir, { outsideModels: 'local' });
+  const offload = new Offload({ settings: s, keys: new ProviderKeys({ env: { CRUX_HUB_DATA: data }, protector }), fetchFn: fakeFetch() });
+  assert.equal(offload.client(dir, 'ask').baseUrl, `${REMOTE}/v1/`);
+  // routes saved now carry no address; it is written on its own and survives a restart
+  s.set({ outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b' }, draft: { provider: 'ollama', model: 'gemma3:12b' } } });
+  const after = new HubSettings({ file });
+  assert.equal(after.get('outsideOllamaAddress'), `${REMOTE}/v1/`);
+  assert.equal(after.get('outsideRoutes').draft.baseUrl, undefined);
+  const o2 = new Offload({ settings: after, keys: new ProviderKeys({ env: { CRUX_HUB_DATA: data }, protector }), fetchFn: fakeFetch() });
+  assert.equal(o2.client(dir, 'ask').baseUrl, `${REMOTE}/v1/`); assert.equal(o2.client(dir, 'draft').baseUrl, `${REMOTE}/v1/`, 'every Ollama route reads it');
+  // with no Ollama job at all it is still kept
+  after.set({ outsideRoutes: { ask: { provider: 'google', model: 'm' } } });
+  assert.equal(new HubSettings({ file }).get('outsideOllamaAddress'), `${REMOTE}/v1/`);
+  // changing it, loopback on another port, an empty one (this PC), and refused addresses (not saved)
+  after.set({ outsideOllamaAddress: 'http://127.0.0.1:11500' });
+  assert.equal(after.get('outsideOllamaAddress'), 'http://127.0.0.1:11500/v1/');
+  after.set({ outsideRoutes: { ask: { provider: 'ollama', model: 'm' } } });
+  const o3 = new Offload({ settings: after, keys: new ProviderKeys({ env: { CRUX_HUB_DATA: data }, protector }), fetchFn: fakeFetch(), vramReader: async () => 16000 });
+  assert.equal(o3.client(dir, 'ask').baseUrl, 'http://127.0.0.1:11500/v1/', 'the hub calls the port that was saved');
+  after.set({ outsideOllamaAddress: 'http://192.168.1.20:11434' });
+  assert.equal(after.get('outsideOllamaAddress'), 'http://127.0.0.1:11500/v1/', 'a refused address does not replace it');
+  assert.ok(!readFileSync(file, 'utf8').includes('192.168'));
+  after.set({ outsideOllamaAddress: '' });
+  assert.equal(new HubSettings({ file }).get('outsideOllamaAddress'), '', 'cleared: this PC again, and not brought back from an old route');
+});
+
 test('a redirect is never followed to another address; every bad address is refused when the client is made', async () => {
   const f = fakeFetch('redirect');
   const c = new ProviderClient({ provider: 'ollama', model: 'm', baseUrl: REMOTE, fetchFn: f });
@@ -181,7 +223,7 @@ test('the panel has an Ollama address box (placeholder this PC), says what an ad
   assert.match(html, /data-ps-ollama placeholder="This PC"/);
   assert.match(html, /Using Ollama on this PC\./);
   assert.match(html, /name ending|your own machines on Tailscale/, 'hover help says what is accepted');
-  const good = panel({ outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b', baseUrl: `${REMOTE}/v1/` } } });
+  const good = panel({ outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b' } }, outsideOllamaAddress: `${REMOTE}/v1/` });
   assert.equal(good.o.ollama, REMOTE, 'the box shows the saved address without /v1/');
   assert.match(hubPanel(good.d), /Your Tailscale machine 100\.101\.102\.103\. Jobs there count as Local\./);
   assert.deepEqual(jobNotes('ask', good.o), []);
@@ -196,16 +238,29 @@ test('the panel has an Ollama address box (placeholder this PC), says what an ad
   assert.equal(ollamaStatus('my-pc.tail1234.ts.net:11434').cls, 'ok');
 });
 
-test('Done sends the address on every Ollama job, leaves cloud jobs alone, and an empty box means this PC', () => {
-  const settings = { outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b' }, draft: { provider: 'google', model: 'gemini-3.5-flash-lite' } }, outsideTerms: { google: 'paid' } };
-  const set = panel(settings, o => { o.ollama = 'https://my-pc.tail1234.ts.net:11434'; o.routes.draft = { provider: 'ollama', model: 'gemma3:12b' }; });
+test('Done sends the address as a setting of its own: kept with no Ollama job, an empty box means this PC, loopback on another port is saved', () => {
+  const settings = { outsideRoutes: { ask: { provider: 'google', model: 'gemini-3.5-flash-lite' } }, outsideTerms: { google: 'paid' } };
+  // typed before any job uses Ollama: it is sent (and so kept), not lost
+  const set = panel(settings, o => { o.ollama = 'https://my-pc.tail1234.ts.net:11434'; });
   const ch = outsideChanges({ ...PSET, ...settings }, set.o);
   assert.deepEqual(ch.errors, {});
-  assert.deepEqual(ch.body.outsideRoutes, { ask: { provider: 'ollama', model: 'gemma3:12b', baseUrl: 'https://my-pc.tail1234.ts.net:11434/v1/' }, draft: { provider: 'ollama', model: 'gemma3:12b', baseUrl: 'https://my-pc.tail1234.ts.net:11434/v1/' } });
-  const cleared = panel({ outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b', baseUrl: `${REMOTE}/v1/` } } }, o => { o.ollama = ''; });
-  assert.deepEqual(outsideChanges({ ...PSET, outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b', baseUrl: `${REMOTE}/v1/` } } }, cleared.o).body.outsideRoutes, { ask: { provider: 'ollama', model: 'gemma3:12b' } });
-  const same = panel({ outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b', baseUrl: `${REMOTE}/v1/` } } });
-  assert.deepEqual(outsideChanges({ ...PSET, outsideRoutes: { ask: { provider: 'ollama', model: 'gemma3:12b', baseUrl: `${REMOTE}/v1/` } } }, same.o).body, {}, 'unchanged: nothing is sent');
+  assert.deepEqual(ch.body, { outsideOllamaAddress: 'https://my-pc.tail1234.ts.net:11434/v1/' }, 'only the address; no job changed');
+  // the routes carry no address any more
+  const jobs = panel(settings, o => { o.ollama = REMOTE; o.routes.draft = { provider: 'ollama', model: 'gemma3:12b' }; });
+  const both = outsideChanges({ ...PSET, ...settings }, jobs.o).body;
+  assert.deepEqual(both.outsideRoutes.draft, { provider: 'ollama', model: 'gemma3:12b' });
+  assert.equal(both.outsideOllamaAddress, `${REMOTE}/v1/`);
+  // this PC on another port is a good address and is saved
+  const port = panel(settings, o => { o.ollama = 'http://127.0.0.1:11500'; });
+  assert.equal(ollamaStatus('http://127.0.0.1:11500').text, 'Using Ollama on this PC, port 11500.');
+  assert.deepEqual(outsideChanges({ ...PSET, ...settings }, port.o).body, { outsideOllamaAddress: 'http://127.0.0.1:11500/v1/' });
+  // an empty box clears it; an unchanged one sends nothing
+  const saved = { ...settings, outsideOllamaAddress: `${REMOTE}/v1/` };
+  assert.deepEqual(outsideChanges({ ...PSET, ...saved }, panel(saved, o => { o.ollama = ''; }).o).body, { outsideOllamaAddress: '' });
+  assert.deepEqual(outsideChanges({ ...PSET, ...saved }, panel(saved).o).body, {}, 'unchanged: nothing is sent');
+  assert.equal(panel(saved).o.ollama, REMOTE, 'the box shows the saved address without /v1/');
+  // a legacy address on a route still shows in the box
+  assert.equal(panel({ outsideRoutes: { ask: { provider: 'ollama', model: 'm', baseUrl: `${REMOTE}/v1/` } } }).o.ollama, REMOTE);
   // typing updates the line in place and keeps the draft
   const line = { className: '', innerHTML: '' }, box = { querySelector: () => line }, input = { matches: s => s === '[data-ps-ollama]', value: 'http://100.101.102.103:11434', closest: () => box };
   outsideInput(input, set.o);

@@ -37,7 +37,8 @@ export function outsideDraft(settings = {}, info = null) {
   for (const p of KEYED) terms[p] = settings.outsideTerms?.[p] || 'unknown';
   // errors: the same object as the panel's own (project-settings.js keeps the two in step), so a key's line can be cleared here
   // Ollama's address (decision 82 A): one box for the hub, shown without the /v1/ the hub adds; empty means this PC.
-  const ollama = showAddress(JOBS.map(j => settings.outsideRoutes?.[j.k]).find(r => r?.provider === 'ollama' && r.baseUrl)?.baseUrl || '');
+  // It has its own hub-wide setting, kept whether or not a job uses Ollama (an address left on an older route is read as it too).
+  const ollama = showAddress(settings.outsideOllamaAddress || JOBS.map(j => settings.outsideRoutes?.[j.k]).find(r => r?.provider === 'ollama' && r.baseUrl)?.baseUrl || '');
   return { routes, terms, ollama, info: info || null, typed: {}, replacing: {}, busy: {}, keyErr: {}, warnOpen: {}, touched: false, errors: {} };
 }
 
@@ -87,7 +88,8 @@ export function ollamaStatus(text) {
   if (!String(text || '').trim()) return { cls: '', text: 'Using Ollama on this PC.' };
   const a = ollamaAddress(text);
   if (!a.ok) return { cls: 'warn', text: `Refused: ${a.why}` };
-  return a.kind === 'loopback' ? { cls: '', text: 'Using Ollama on this PC.' } : { cls: 'ok', text: `Your Tailscale machine ${a.host}. Jobs there count as Local.` };
+  if (a.kind === 'loopback') return { cls: '', text: a.port && a.port !== '11434' ? `Using Ollama on this PC, port ${a.port}.` : 'Using Ollama on this PC.' };
+  return { cls: 'ok', text: `Your Tailscale machine ${a.host}. Jobs there count as Local.` };
 }
 
 function ollamaBox(d) {
@@ -143,10 +145,15 @@ export function outsideChanges(settings = {}, d) {
     if (looksLikeKey(model)) { errors[`route-${j.k}`] = 'That looks like a key, not a model name. Keys go in the key box above, and nothing is saved here.'; continue; }
     if (j.k !== 'image' && !model) { errors[`route-${j.k}`] = 'Needs a model name'; continue; }
     const old = settings.outsideRoutes?.[j.k];
-    routes[j.k] = { provider: r.provider, model: model || null, ...(r.provider === 'ollama' && addr?.ok && addr.kind === 'tailscale' ? { baseUrl: addr.base } : {}), ...(old?.provider === r.provider && old.minFreeMB != null ? { minFreeMB: old.minFreeMB } : {}) };
+    routes[j.k] = { provider: r.provider, model: model || null, ...(old?.provider === r.provider && old.minFreeMB != null ? { minFreeMB: old.minFreeMB } : {}) };
   }
-  const key = o => JOBS.map(j => `${o?.[j.k]?.provider || ''}/${o?.[j.k]?.model || ''}/${o?.[j.k]?.baseUrl || ''}`).join('|');
+  const key = o => JOBS.map(j => `${o?.[j.k]?.provider || ''}/${o?.[j.k]?.model || ''}`).join('|');
   if (!Object.keys(errors).length && key(routes) !== key(settings.outsideRoutes)) body.outsideRoutes = routes;
+  // The address is a setting of its own (empty: this PC), sent when it differs from the saved one, whether or not a job uses Ollama
+  if (!Object.keys(errors).length) {
+    const wanted = addr?.ok ? addr.base : '';
+    if (wanted !== (settings.outsideOllamaAddress || '')) body.outsideOllamaAddress = wanted;
+  }
   if (KEYED.some(p => d.terms[p] !== (settings.outsideTerms?.[p] || 'unknown'))) body.outsideTerms = { ...d.terms };
   return { body, errors };
 }
