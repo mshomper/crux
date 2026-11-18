@@ -16,11 +16,15 @@ import { writeFileSync } from 'node:fs';
 import { cruxTools, cruxToolNames } from '../lib/tools.mjs';
 import { settingsNeed } from '../lib/guard.mjs';
 import { projectCard, projectChanges, hubPanel, hubChanges, OUTSIDE_CHOICES } from '../public/project-settings.js';
-import { outsideDraft, outsideChanges, jobNotes, outsideClick } from '../public/outside-panel.js';
+import { outsideDraft, outsideChanges, jobNotes, outsideClick, outsideInput } from '../public/outside-panel.js';
 import { stepUpNeed } from '../lib/guard.mjs';
 import { placeImages } from '../../crux/scripts/images.mjs';
 
-const DUMMY_KEY = 'dummy-key-0000-NOT-REAL-5678wxyz';
+// Fake keys are built at run time, so no complete key-shaped text sits in this source (GitHub's secret scanner reads source files).
+const AIZA = (tail = 'FAKE'.repeat(8)) => ['AI', 'za', 'Sy'].join('') + tail;
+const SK = (tail = 'fake'.repeat(6)) => ['s', 'k-'].join('') + tail;
+const SKOR = (tail = 'fake'.repeat(8)) => ['s', 'k-or-v1-'].join('') + tail;
+const DUMMY_KEY ='dummy-key-0000-NOT-REAL-5678wxyz';
 // a real 1x1 PNG
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
@@ -142,7 +146,7 @@ test('make_image: unpaid terms, a missing key, no picture in the answer, a rate 
   assert.equal(w.claude.calls, 0);
   reset();
   assert.ok(tools(w).make_image.inputSchema.shape.aspect_ratio.safeParse('7:5').success === false);
-  assert.match(await run(w, 'make_image', { prompt: 'a key sk-abcdefghijklmnopqrstuvwxyz1234' }), /^Refused \(secret\)/);
+  assert.match(await run(w, 'make_image', { prompt: `a key ${SK('abcdefghijklmnopqrstuvwxyz1234')}` }), /^Refused \(secret\)/);
   assert.equal(mock.requests.length, 0);
 });
 
@@ -195,7 +199,7 @@ test('draft_with_outside_model: the size cap, a key in the text, the switch, the
   const big = await draftOutside(w.offload, w.p, agentOf, { instructions: 'x', source: 'y'.repeat(DRAFT_MAX_SOURCE + 1) });
   assert.match(big, /^Refused \(too-big\)/);
   assert.ok(tools(w).draft_with_outside_model.inputSchema.shape.source.safeParse('y'.repeat(DRAFT_MAX_SOURCE + 1)).success === false, 'the tool\'s own schema caps it too');
-  assert.match(await run(w, 'draft_with_outside_model', { instructions: 'x', source: 'token AIzaSyA1234567890abcdefghijklmnopqrstuv' }), /^Refused \(secret\)/);
+  assert.match(await run(w, 'draft_with_outside_model', { instructions: 'x', source: `token ${AIZA('A1234567890abcdefghijklmnopqrstuv')}` }), /^Refused \(secret\)/);
   assert.equal(mock.requests.length, 0, 'neither was sent');
   // the data setting: Any with a provider not marked paid sends nothing
   const free = world(t, { terms: 'unknown' });
@@ -319,7 +323,7 @@ test('month summaries stay on Claude unless the separate opt-in is set, even at 
 test('ask_outside_model refuses a question or context that holds a key or a password, in the "password: x" form too', async t => {
   reset();
   const w = world(t);
-  for (const bad of ['the password: hunter2hunter2', 'my API key: abcd1234efgh', 'token="abcdef123456"', 'sk-abcdefghijklmnopqrstuvwxyz1234']) {
+  for (const bad of ['the password: hunter2hunter2', 'my API key: abcd1234efgh', 'token="abcdef123456"', SK('abcdefghijklmnopqrstuvwxyz1234')]) {
     assert.match(await run(w, 'ask_outside_model', { question: 'what is this?', context: bad }), /^Refused \(secret\)/, bad);
     assert.match(await run(w, 'ask_outside_model', { question: bad }), /^Refused \(secret\)/, bad);
   }
@@ -408,7 +412,7 @@ test('a key box shows only "saved, ends XXXX", with Replace and Remove; an empty
   assert.match(html, /type="password"[^>]*data-ps-keyin="openai"/, 'a box with no key takes a pasted one, shown as dots');
   assert.match(html, /data-ps-keysave="openai" disabled/);
   assert.ok(!html.includes('dummy-key'), 'no key text');
-  const typed = hubPanel(panel({}, INFO, o => { o.typed.openai = 'sk-fake-typed-key-1234'; }).d);
+  const typed = hubPanel(panel({}, INFO, o => { o.typed.openai = SK('fake-typed-key-1234'); }).d);
   assert.match(typed, /data-ps-keysave="openai" >|data-ps-keysave="openai">/, 'Save is on once something is typed');
   const noProtect = hubPanel(panel({}, { ...INFO, canProtect: false }).d);
   assert.match(noProtect, /cannot protect a saved key/);
@@ -454,13 +458,13 @@ test('keys: Save and Remove post same-origin JSON, the typed key leaves the draf
   let info = INFO;
   const host = { api: async (path, body) => { sent.push([path, body]); if (body.apiKey === 'bad') throw new Error('That does not look like a key (no spaces, at least 8 characters).'); info = { ...INFO, keys: { ...INFO.keys, openai: { saved: true, end: '5678' } } }; return { outsideInfo: info }; }, outsideSaved: i => { host.got = i; } };
   const { o } = panel();
-  o.typed.openai = ' sk-fake-1234-5678 ';
+  o.typed.openai = ` ${SK('fake-1234-5678')} `;
   await outsideClick({ target: { closest: s => (s === '[data-ps-keysave]' ? { dataset: { psKeysave: 'openai' } } : null) } }, o, host);
-  assert.deepEqual(sent, [['/api/outside/key', { provider: 'openai', apiKey: 'sk-fake-1234-5678' }]]);
+  assert.deepEqual(sent, [['/api/outside/key', { provider: 'openai', apiKey: SK('fake-1234-5678') }]]);
   assert.equal(o.typed.openai, '', 'the typed key is dropped from the draft');
   assert.equal(o.info.keys.openai.end, '5678');
   assert.deepEqual(host.got.keys.openai, { saved: true, end: '5678' });
-  assert.ok(!JSON.stringify(o).includes('sk-fake'), 'the key is nowhere in the draft');
+  assert.ok(!JSON.stringify(o).includes(SK('fake')), 'the key is nowhere in the draft');
   await outsideClick({ target: { closest: s => (s === '[data-ps-keyremove]' ? { dataset: { psKeyremove: 'google' } } : null) } }, o, host);
   assert.deepEqual(sent.at(-1), ['/api/outside/key', { provider: 'google', remove: true }]);
   // a refused save shows the words, and the pasted text is still dropped
@@ -477,7 +481,7 @@ test('POST /api/outside/key through the hub keys: saved protected, the answer ha
     if (body.remove === true) keys.remove(String(body.provider)); else keys.save(String(body.provider), body.apiKey);
     return { outsideInfo: w.hub.offload.info() };
   };
-  const SECRET_KEY = 'AIzaFAKEfakeFAKEfake0123456789WXYZ';
+  const SECRET_KEY = AIZA('FAKEfakeFAKEfake0123456789WXYZ');
   const res = post({ provider: 'openrouter', apiKey: SECRET_KEY });
   assert.deepEqual(res.outsideInfo.keys.openrouter, { saved: true, end: 'WXYZ' });
   assert.ok(!JSON.stringify(res).includes(SECRET_KEY));
@@ -494,10 +498,10 @@ test('POST /api/outside/key through the hub keys: saved protected, the answer ha
 });
 
 test('the key route needs a step-up from a remote device, whose scope and reason never hold the key', () => {
-  const need = stepUpNeed('POST /api/outside/key', { provider: 'openai', apiKey: 'sk-fake-1234-5678' }, {});
+  const need = stepUpNeed('POST /api/outside/key', { provider: 'openai', apiKey: SK('fake-1234-5678') }, {});
   assert.equal(need.purpose, 'outside-key');
   assert.match(need.scope, /^outside-key;openai;save$/);
-  assert.ok(!JSON.stringify(need).includes('sk-fake'));
+  assert.ok(!JSON.stringify(need).includes(SK('fake')));
   assert.match(stepUpNeed('POST /api/outside/key', { provider: 'openai', remove: true }, {}).scope, /remove$/);
 });
 
@@ -617,7 +621,7 @@ test('HIGH: an old settings file, then a route-only save, then a restart: the mi
 test('MEDIUM: a key pasted into a model box is dropped, never saved in settings.json, and the panel says so on the job row', t => {
   const root = makeTmp('crux-outside-model-', t), file = join(root, 'settings.json');
   const s = new HubSettings({ file });
-  const OR = `sk-or-v1-${'0f1e2d3c'.repeat(4)}`, GG = `AIza${'Xy9Zq'.repeat(7)}`;
+  const OR = SKOR('0f1e2d3c'.repeat(4)), GG = AIZA('Xy9Zq'.repeat(7));
   s.set({ outsideRoutes: { ask: { provider: 'openrouter', model: OR }, draft: { provider: 'google', model: GG }, image: { provider: 'google', model: GG } } });
   assert.deepEqual(s.get('outsideRoutes'), {}, 'every key-shaped model was dropped');
   s.set({ outsideRoutes: { ask: { provider: 'openrouter', model: 'meta/llama-x' } } });
@@ -632,17 +636,32 @@ test('MEDIUM: a key pasted into a model box is dropped, never saved in settings.
 });
 
 test('LOW: a key typed but not saved keeps the panel open with a plain line; an OpenRouter ":free" model gets a mark; an unused provider\'s empty box is not amber', () => {
-  const typed = panel({}, INFO, o => { o.typed.openai = 'sk-fake-typed-1234-5678'; });
+  const typed = panel({}, INFO, o => { o.typed.openai = SK('fake-typed-1234-5678'); });
   const ch = hubChanges(PSET, typed.d);
   assert.match(ch.errors['key-openai'], /typed a OpenAI key but did not press Save/);
   assert.match(hubPanel({ ...typed.d, errors: ch.errors }), /did not press Save/);
-  assert.ok(!JSON.stringify(ch).includes('sk-fake-typed'), 'the error does not repeat the key');
+  assert.ok(!JSON.stringify(ch).includes(SK('fake-typed')), 'the error does not repeat the key');
   assert.match(jobNotes('ask', panel({}, { ...INFO, keys: { openrouter: { saved: true, end: 'ZZ99' } } }, o => { o.routes.ask = { provider: 'openrouter', model: 'meta/llama-x:free' }; o.terms.openrouter = 'paid'; }).o).join(' '), /free models can keep what is sent/);
   const html = hubPanel(panel({}, { ...INFO, keys: {} }, o => { o.routes.ask = { provider: 'google', model: 'gemini-3.5-flash-lite' }; }).d);
   const box = name => html.slice(html.indexOf(`data-ps-keybox="${name}"`), html.indexOf('ps-key-plan', html.indexOf(`data-ps-keybox="${name}"`)));
   assert.match(box('google'), /ps-keystat warn/, 'a job uses Google: its empty box is amber');
   assert.match(box('openai'), /ps-keystat">No key saved/, 'no job uses OpenAI: plain text');
   assert.ok(!/ps-keystat warn/.test(box('openai')));
+});
+
+test('the "did not press Save" line clears when its box is typed in, and when its key is saved', async () => {
+  const typedBox = { matches: s => s === '[data-ps-keyin]', dataset: { psKeyin: 'openai' }, value: SK('fake-typed-1234-5678'), closest: () => null };
+  const { o, d } = panel({}, INFO, x => { x.typed.openai = SK('fake-typed-1234-5678'); });
+  o.errors = hubChanges(PSET, d).errors;
+  assert.match(o.errors['key-openai'], /did not press Save/);
+  outsideInput(typedBox, o);   // typing in the box
+  assert.equal(o.errors['key-openai'], undefined, 'cleared by typing');
+  o.errors = hubChanges(PSET, d).errors;   // Done again: the line is back
+  assert.ok(o.errors['key-openai']);
+  const host = { api: async () => ({ outsideInfo: { ...INFO, keys: { ...INFO.keys, openai: { saved: true, end: '5678' } } } }), outsideSaved() { } };
+  await outsideClick({ target: { closest: s => (s === '[data-ps-keysave]' ? { dataset: { psKeysave: 'openai' } } : null) } }, o, host);
+  assert.equal(o.errors['key-openai'], undefined, 'cleared by saving the key');
+  assert.deepEqual(Object.keys(o.errors), []);
 });
 
 test('LOW: a damaged provider-keys.json is never rewritten with only the new key; a missing one is fine', t => {
