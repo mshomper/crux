@@ -1451,10 +1451,15 @@ export class Hub {
     const key = this.apiKey();
     const call = key ? apiCall({ apiKey: key }) : async arg => {
       const { query } = await import('@anthropic-ai/claude-agent-sdk');
-      // No second (haiku) call to name the session, and the 5-minute cache: see sdkCall in permission-check.mjs.
-      return sdkCall({ query, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir(), title: SESSION_TITLE, cacheFiveMinutes: true })(arg);
+      return this.sdkCheckCall(query)(arg);
     };
     return (this.checkerMade = new PermissionCheck({ call }));
+  }
+
+  // The check's call through the Agent SDK. No second (haiku) call to name the session, and the 5-minute cache: see sdkCall in
+  // permission-check.mjs. A method of its own so a test can see the settings the hub really passes.
+  sdkCheckCall(query) {
+    return sdkCall({ query, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir(), title: SESSION_TITLE, cacheFiveMinutes: true });
   }
 
   // The check's usage: one `usage` event, filed under the type "check" in the usage panel (role check). `via` says

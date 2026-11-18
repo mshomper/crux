@@ -198,6 +198,33 @@ test('the SDK call, cost settings: a given title (no second small-model call) an
   assert.deepEqual(cheap.env, { A: '1' }, 'the env object passed in is left as it was');
 });
 
+test('the 5-minute setting with no env given copies process.env, adds the flag to the copy only, and leaves process.env alone', async () => {
+  const had = Object.hasOwn(process.env, 'FORCE_PROMPT_CACHING_5M'), old = process.env.FORCE_PROMPT_CACHING_5M;
+  delete process.env.FORCE_PROMPT_CACHING_5M;
+  try {
+    let seen;
+    const query = ({ options }) => { seen = options; return (async function* () { yield { type: 'result', result: 'x', modelUsage: {} }; })(); };
+    await sdkCall({ query, cacheFiveMinutes: true })({ system: 'S', user: 'U' });
+    assert.equal(seen.env.FORCE_PROMPT_CACHING_5M, '1');
+    assert.equal(process.env.FORCE_PROMPT_CACHING_5M, undefined, 'the process\'s own environment is not changed');
+    assert.notEqual(seen.env, process.env, 'a copy');
+  } finally { if (had) process.env.FORCE_PROMPT_CACHING_5M = old; else delete process.env.FORCE_PROMPT_CACHING_5M; }
+});
+
+test('the hub\'s own checker call passes the session title and the 5-minute cache (the production wiring)', async () => {
+  const root = makeTmp('crux-check-wiring-');
+  const dir = join(root, 'proj');
+  mkdirSync(join(dir, '.crux'), { recursive: true });
+  const hub = new Hub({ projects: [dir], memory: new Memory(join(root, 'home')), settings: new HubSettings({ file: null }) });
+  let seen;
+  const query = ({ options }) => { seen = options; return (async function* () { yield { type: 'result', result: '{"answer":"allow","reason":"ok"}', modelUsage: {} }; })(); };
+  await hub.sdkCheckCall(query)({ system: 'S', user: 'U' });
+  assert.equal(seen.title, SESSION_TITLE);
+  assert.equal(seen.env.FORCE_PROMPT_CACHING_5M, '1');
+  assert.equal(seen.model, CHECK_MODEL);
+  assert.equal(seen.persistSession, false);
+});
+
 test('cache: the stable part (what goes in system) is byte for byte the same for two different requests; only the user part differs', async () => {
   const calls = [];
   const check = new PermissionCheck({ call: async arg => { calls.push(arg); return { text: '{"answer":"allow","reason":"ok"}', via: 'sdk', tokens: { input: 1, output: 1, cacheRead: 0, cacheCreation: 0 }, costUSD: 0, modelUsage: {} }; } });

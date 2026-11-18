@@ -215,6 +215,9 @@ export function listCost(model, t) {
 //   marks the end of the request for caching too, which is written on every call and never read (the request is new each time).
 //   FORCE_PROMPT_CACHING_5M makes that write cost 1.25 times instead. The stable part is still read at a tenth of the price while
 //   checks come less than five minutes apart (a gap longer than that costs one rewrite of about 2.6k tokens).
+//   Checked 2026-11-17: the name FORCE_PROMPT_CACHING_5M comes from strings in Claude Code 2.1.322's binary (Agent SDK 0.3.322),
+//   not from any documentation, and a local stub showed it removes the "ttl":"1h" marker. Re-check after each SDK upgrade; if a
+//   newer binary drops the name the check only goes back to the dearer 1-hour write, never to a wrong answer.
 export const SESSION_TITLE = 'permission check';
 export function sdkCall({ query, model = CHECK_MODEL, claudePath = null, env = process.env, cwd = process.cwd(), title = null, cacheFiveMinutes = false }) {
   return async ({ system, user, signal }) => {
