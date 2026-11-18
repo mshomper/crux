@@ -8,13 +8,16 @@
   "architecture",
   "UI"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the hub's settings panel take a key for each outside provider, and let you pick which provider and model answers each kind of job (short questions, long drafts, pictures)? I recommend it: you set it once, agents still just ask for a draft or a picture, and the hub picks the model.",
  "for_you": [
   "The Whole hub panel gets a key box per provider (Google, OpenAI, OpenRouter; Ollama needs none), like the Claude key box on the Account card",
   "Under it, one line per job type: short questions, long drafts, pictures, each with its provider and model",
   "Agents never choose a provider, model or address; the per-project switch and the spending caps stay as they are",
-  { "text": "Later, at your PC: paste your OpenRouter key into its box once", "kind": "setup" }
+  {
+   "text": "Later, at your PC: paste your OpenRouter key into its box once",
+   "kind": "setup"
+  }
  ],
  "context": "Matt (2026-11-17), after the first live picture test (Google, nano-banana 2.1, about $0.045): he wants a way to enter more than one provider's key, and picked per-job routing (option B in chat) to build in from the start. He has just opened an OpenRouter account. Today (decision 80, PR #145 merged): one provider and model answer for the whole hub, and a key can be saved only by running the live-check script in PowerShell, so the hub panel shows Google as the provider even before anything is saved. Typing a key into the page has precedent: the Account card already takes the Anthropic API key (decision 78), kept with the same Windows per-user protection. OpenRouter alone reaches hundreds of models (Mistral, DeepSeek, Grok, Llama, Qwen and others), so direct boxes for those providers can wait; each one that speaks the same request format needs only its address and prices. Pictures through OpenRouter are untested; only Google is tested live.",
  "depends_on": [
@@ -73,9 +76,9 @@
  "recommendation": "A: key boxes per provider and a provider and model per job type, with the panel showing plainly when a key or a choice isn't saved yet.",
  "confidence": "high",
  "change_mind": "If keys in the page feel like too much exposure, take C and keep adding keys with the script.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-18",
  "superseded_by": null,
  "challenge": null,
  "settles": [

@@ -1,7 +1,7 @@
 # 0081 How do you add keys for several outside providers, and choose a model for each kind of job?
 
-- Status: open
-- Date: 2026-11-17
+- Status: decided
+- Date: 2026-11-17, decided 2026-11-18
 - Lenses: architecture, UI
 - Builds on: 0044, 0078, 0080
 - Settles: outside model routing = the hub picks provider and model per job type (short question, long draft, picture), set by the human in hub settings; agents never choose; keys entered in hub settings, DPAPI-protected per user, page sees the last four only
@@ -17,13 +17,17 @@ For you:
 - Agents never choose a provider, model or address; the per-project switch and the spending caps stay as they are
 - Setup: Later, at your PC: paste your OpenRouter key into its box once
 
+## Decision
+
+**A: Key per provider, model per job type.** Key boxes for each provider in the Whole hub panel (saved protected, page sees the last four only), plus a provider and model chosen for each job type: short questions, long drafts, pictures. The live-check script stays as a test tool.
+
 ## Context
 
 Matt (2026-11-17), after the first live picture test (Google, nano-banana 2.1, about $0.045): he wants a way to enter more than one provider's key, and picked per-job routing (option B in chat) to build in from the start. He has just opened an OpenRouter account. Today (decision 80, PR #145 merged): one provider and model answer for the whole hub, and a key can be saved only by running the live-check script in PowerShell, so the hub panel shows Google as the provider even before anything is saved. Typing a key into the page has precedent: the Account card already takes the Anthropic API key (decision 78), kept with the same Windows per-user protection. OpenRouter alone reaches hundreds of models (Mistral, DeepSeek, Grok, Llama, Qwen and others), so direct boxes for those providers can wait; each one that speaks the same request format needs only its address and prices. Pictures through OpenRouter are untested; only Google is tested live.
 
 ## Options
 
-### A: Key per provider, model per job type (recommended)
+### A: Key per provider, model per job type (chosen) (recommended)
 
 Key boxes for each provider in the Whole hub panel (saved protected, page sees the last four only), plus a provider and model chosen for each job type: short questions, long drafts, pictures. The live-check script stays as a test tool.
 - Pro: Cheapest suitable model for each job, set once
