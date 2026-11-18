@@ -7,8 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { join, basename, relative } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { makeTmp } from './helpers/tmp.mjs';
-import { scriptsFor, parseCommand, isCommittedFile, changedDiff, defaultGit } from '../lib/permission-scripts.mjs';
-import { buildPrefix, buildSuffix, scriptTexts, SCRIPT_MAX_BYTES, SCRIPT_MAX_FILES, SCRIPT_MAX_TOTAL } from '../lib/permission-check.mjs';
+import { scriptsFor, parseCommand, isCommittedFile, changedDiff, defaultGit, resolveJoinTemp } from '../lib/permission-scripts.mjs';
+import { buildPrefix, buildSuffix, scriptTexts, SCRIPT_MAX_BYTES, SCRIPT_MAX_FILES, SCRIPT_MAX_TOTAL, SCRIPT_FACT, TEST_RUN_FACT, HOUSE_RULES_FACT } from '../lib/permission-check.mjs';
 import { classify } from '../lib/permission-rules.mjs';
 
 const dir = makeTmp('crux-check-inputs-');
@@ -53,13 +53,27 @@ test('buildSuffix: the script text sits in a marked block, and a script not show
 
 test('buildPrefix: the rules text carries the script fact and the house rules', () => {
   const p = buildPrefix({ project: 'x', dir: 'C:\\x', temp: 'C:\\t', level: 'Auto', rulesId: 'R005', rulesBody: 'rules' });
-  assert.match(p, /Escalate only when a script FILE the command runs exists but is listed as not shown/);
+  assert.match(p, /Otherwise escalate for an unseen script only when a script FILE the command runs exists but is listed as not shown/);
+  assert.match(p, /A script file that does not exist runs nothing .*so a missing file is an ordinary doubt, not an unseen script: do not escalate for that alone, but if the same command writes that file first, judge what it writes/);
   assert.match(p, /an ordinary doubt: judge it like any request/);
   assert.match(p, /"Temp folders this worker made" \(the hub's own record\)/);
   assert.match(p, /Edit or Write tool, not with sed -i/);
   assert.match(p, /--no-agents/);
   assert.match(p, /folders the worker made in its own worktree or in the temp folder/);
-  assert.match(p, /obviously fake one/, 'the dummy-key exception (R012) is still there');
+  assert.match(p, /obviously fake value, whatever prefix it carries/, 'the dummy-key exception (R012) is still there');
+});
+
+// M063 (2026-11-18): the three facts replayed on the shadow log's escalations, and the house-rules clause PR #139 made unnecessary.
+test('buildPrefix: the plain test-run fact comes right after the script fact; the temp-scripts clause is gone from the house rules', () => {
+  const p = buildPrefix({ project: 'x', dir: 'C:\\x', temp: 'C:\\t', level: 'Auto', rulesId: 'R005', rulesBody: 'rules' });
+  assert.ok(p.includes(SCRIPT_FACT) && p.includes(TEST_RUN_FACT) && p.includes(HOUSE_RULES_FACT));
+  assert.ok(p.indexOf(SCRIPT_FACT) + SCRIPT_FACT.length + 1 === p.indexOf(TEST_RUN_FACT), 'the line right after the script line');
+  assert.ok(p.indexOf(TEST_RUN_FACT) < p.indexOf(HOUSE_RULES_FACT));
+  for (const bit of ['A plain test run is fine even when a test file, or a module it loads, is listed as not shown (too big, or over the count).', 'A plain test run is `node --test <files>` (or `npm test`)',
+    'under a test folder inside the worker\'s own worktree (the folder named in "Runs in", under .claude/worktrees)', 'starts no other program, deletes only folders the worker made, and sends nothing over the network',
+    'A test run from the main project folder (not a worktree), a test file outside the project, or a test run joined to anything else in that list follows the other rules.']) assert.ok(p.includes(bit), bit);
+  assert.ok(!/worker's own temp scripts/.test(p) && !/this holds for/.test(p), 'the clause is dropped');
+  assert.match(p, /or an inline script that rewrites a file \(deny, and say to use Edit\)\. A test hub/);
 });
 
 // A fake git: tracked = file names git calls committed and clean; dirty = tracked but changed (as in permission-check-gate.test.mjs).

@@ -22,6 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { gitReadRuns, gitNoIndex, GIT_SAFE_CONFIG } from './permissions.mjs';
 import { settleLists } from './permission-lists.mjs';
 import { inlineRewrite } from './permission-rewrites.mjs';
+import { resolveJoinTemp } from './permission-scripts.mjs';
 
 const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
@@ -438,7 +439,10 @@ export function classify({ tool, input = {}, projectDir, cwd = null, tmp = tmpdi
   if (out.route !== 'human' && /^(Bash|PowerShell)$/.test(tool)) {
     try { rewrite = inlineRewrite({ tool, command: c.cmdText, cwd: cwd || projectDir, projectDir, tmp, home }); } catch { rewrite = null; }
   }
-  return { ...out, ...(rewrite ? { rewrite } : {}), tempMade: [...c.tempMade], downloaded: [...c.downloaded], hubsStarted: [...c.hubsNow] };
+  // The folders handed to a test hub (hubData) count as made only when the request goes ahead: not on a hard stop, not refused.
+  const handed = out.route !== 'human' && !rewrite ? [...(c.hubTemp || [])] : [];
+  const madeNow = [...c.tempMade]; for (const d of handed) if (!madeNow.some(x => norm(x) === norm(d))) madeNow.push(d);
+  return { ...out, ...(rewrite ? { rewrite } : {}), tempMade: madeNow, downloaded: [...c.downloaded], hubsStarted: [...c.hubsNow] };
 }
 
 function classifyWith(c, tool, input) {
@@ -784,6 +788,7 @@ class Check {
         cmd = cmd.replace(new RegExp(String.raw`\$\(\s*${GTP}\s*\)`, 'gi'), () => '${env:TEMP}\\')
           .replace(new RegExp(String.raw`\(\s*${GTP}\s*\)`, 'gi'), () => '$env:TEMP')
           .replace(new RegExp(GTP, 'gi'), () => '$env:TEMP');
+        cmd = resolveJoinTemp(cmd);   // (Join-Path $env:TEMP 'name') is $env:TEMP\name: matched against the folders the worker made
       }
       // Variables the command sets itself ($s = ...) are its own, not the environment's.
       this.localVars ||= new Set();
@@ -1342,12 +1347,16 @@ class Check {
     const rel = abs.slice(r.length + 1);
     return !/(^|\/)\.\.(\/|$)/.test(rel) && rel !== 'brief.md' && !/^\.test-(restore|old)/.test(rel);
   }
-  noteTemp(p, cwd, dir = false) {
+  // into: where the folder is noted (tempMade, or hubTemp for a folder handed to a test hub, kept only if the request is not refused).
+  // A path that still holds a variable or a glob ($RANDOM, *) names no real folder yet: not noted. The same folder in another
+  // letter case is noted once.
+  noteTemp(p, cwd, dir = false, into = this.tempMade) {
     const top = this.tempTop(p, cwd);
     if (top && this.fresh?.has(norm(top))) return;   // made by $(mktemp) in this command: its real name is not known
-    if (top && !existsSync(top)) this.tempMade?.add(top);
+    const add = d => { if (into && !/[$%`*?]/.test(d) && ![...into].some(x => norm(x) === norm(d))) into.add(d); };
+    if (top && !existsSync(top)) add(top);
     const a = dir && top ? this.abs(p, cwd) : null;
-    if (typeof a === 'string' && !['null', 'tmp', 'outside'].includes(a) && !existsSync(a)) this.tempMade?.add(a);
+    if (typeof a === 'string' && !['null', 'tmp', 'outside'].includes(a) && !existsSync(a)) add(a);
   }
   // R005: an agent's own temp folder is one whose name carries the agent's name, or one it made this session
   // (the folder itself or anything inside it).
@@ -2903,6 +2912,10 @@ class Check {
   hubData(cwd, need) {
     for (const k of ['crux_hub_data', 'crux_home']) {
       const v = this.env().get(k);
+      // The folder handed to a test hub the worker starts, in the temp folder and not there yet: the hub makes it for this worker,
+      // so it is the worker's own to delete later (R005), as if it had made it with mkdir. Not one that already exists.
+      // Kept apart (hubTemp): classify records it only when the request is not refused.
+      if (typeof v === 'string' && this.where(v, cwd) === 'tmp') this.noteTemp(v, cwd, true, this.hubTemp ||= new Set());
       if (v != null && !['inside', 'tmp'].includes(this.where(v, cwd))) this.stop(`Starts a hub on the live hub's data or profile folder (${k.toUpperCase()}=${v})`);
       else if (need && (v == null || this.where(v, cwd) !== 'tmp')) {
         this.unsure(v == null ? `Starts a test hub with no ${k === 'crux_home' ? 'profile' : 'data'} folder of its own (${k.toUpperCase()}), so it would share the live hub's settings` : `Starts a test hub whose ${k.toUpperCase()} is not in the temp folder`, true);
