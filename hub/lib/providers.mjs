@@ -10,6 +10,7 @@
 //   { text, via: 'outside', provider, model, tokens, costUSD, estimated, modelUsage, ms }
 // Node's built-in fetch and node: modules only; no package.
 import { execFile } from 'node:child_process';
+import { ollamaAddress } from '../public/ollama-address.js';
 
 // The outside price table is its own: it never borrows permission-check's listCost. List prices in dollars per million
 // tokens (input, output); from = the date the price took effect or was first read, until = the last day it holds (null: no
@@ -77,7 +78,9 @@ export const ERROR_MESSAGES = {
   refused: 'The outside model refused the request.',
   'key-rejected': 'The provider did not accept the saved key.',
   'unknown-model': 'The provider does not know that model name.',
-  'no-route': 'No outside provider is set for this kind of job in the Whole hub panel.',
+  address: 'The Ollama address must be this PC or one of your Tailscale machines (a 100.64.x.x to 100.127.x.x address or a name ending .ts.net, with a port).',
+  unreachable: 'Ollama did not answer.',
+  'no-route':'No outside provider is set for this kind of job in the Whole hub panel.',
   'local-only':'This project is set to Local only, and the hub\'s provider is not on this computer.',
   'bad-answer': 'The outside model gave an answer the hub could not read.',
   off: 'Outside models are off for this project.',
@@ -91,12 +94,14 @@ export const ERROR_MESSAGES = {
   'too-big': 'The text is over the size limit for an outside draft.'
 };
 // Kinds that are about the moment, not about the request: a month job that fails with one tries again without counting it
-// against the two-failure park.
-export const SOFT_KINDS = ['rate-limit', 'timeout', 'busy', 'network'];
+// against the two-failure park. That is a later month tick (the next run of the background job), never an immediate retry:
+// no call is repeated, and nothing else answers instead. 'unreachable' (a second PC that is off or asleep) is one of them.
+export const SOFT_KINDS = ['rate-limit', 'timeout', 'busy', 'network', 'unreachable'];
 
 export class ProviderError extends Error {
-  constructor(kind, { status = null, retryAfterSec = null, provider = null, model = null } = {}) {
-    super(ERROR_MESSAGES[kind] || ERROR_MESSAGES.network);
+  // message: only for words the hub itself builds from a checked value (never from a provider's answer): "Ollama at <name> did not answer."
+  constructor(kind, { status = null, retryAfterSec = null, provider = null, model = null, message = null } = {}) {
+    super(message || ERROR_MESSAGES[kind] || ERROR_MESSAGES.network);
     this.name = 'ProviderError';
     Object.assign(this, { kind, status, retryAfterSec, provider, model });
   }
@@ -150,9 +155,20 @@ export class ProviderClient {
     this.fetchFn = fetchFn;
     this.vramReader = vramReader;
     this.minFreeMB = minFreeMB;
-    // the loopback rule is the client's own, so no caller can get around it
-    if (preset.local && !isLoopbackUrl(this.baseUrl)) throw new ProviderError('refused', { provider, model });
+    // The address rule is the client's own, so no caller can get around it (decision 82 A): this PC's loopback, or one of the
+    // owner's Tailscale machines. A Tailscale machine is "remote": its graphics memory is not ours to read or unload.
+    this.address = null;
+    if (preset.local) {
+      const a = ollamaAddress(this.baseUrl);
+      if (!a.ok) throw new ProviderError('address', { provider, model });
+      this.address = a;
+      this.baseUrl = a.base;
+    }
   }
+
+  get remote() { return this.address?.kind === 'tailscale'; }
+  // "Ollama at <name> did not answer.": the name is the checked host of the saved address, never text from an answer.
+  unreachable() { return this.fail('unreachable', { message: `Ollama at ${this.address.host} did not answer.` }); }
 
   fail(kind, extra = {}) { return new ProviderError(kind, { provider: this.provider, model: this.model, ...extra }); }
 
@@ -167,15 +183,16 @@ export class ProviderClient {
     if (this.apiKey) { if (keyHeader) headers[keyHeader] = this.apiKey; else headers.authorization = `Bearer ${this.apiKey}`; }
     let res, json;
     try {
-      res = await this.fetchFn(new URL(path, base), { method: 'POST', headers, body: JSON.stringify(body), signal: sig });
+      // Ollama: a redirect is never followed (it could name another address); it comes back as a refusal.
+      res = await this.fetchFn(new URL(path, base), { method: 'POST', headers, body: JSON.stringify(body), signal: sig, ...(this.preset.local ? { redirect: 'manual' } : {}) });
       if (!res.ok) { await res.body?.cancel?.().catch(() => { }); throw this.statusError(res); }
       json = await res.json();
     } catch (e) {
       if (e instanceof ProviderError) throw e;
-      if (timeout.aborted) throw this.fail('timeout');
+      if (timeout.aborted) throw this.remote ? this.unreachable() : this.fail('timeout');
       if (signal?.aborted) throw this.fail('network');
       if (res?.ok) throw this.fail('bad-answer', { status: res.status });
-      throw this.fail('network');
+      throw this.remote ? this.unreachable() : this.fail('network');   // no retry and no other model: a second PC that is off fails plainly
     }
     return json;
   }
@@ -188,13 +205,14 @@ export class ProviderClient {
     }
     if (s === 401 || s === 403) return this.fail('key-rejected', { status: s });
     if (s === 404) return this.fail('unknown-model', { status: s });
-    if (s >= 500) return this.fail('network', { status: s });
+    if (s >= 500) return this.remote ? this.fail('unreachable', { status: s, message: `Ollama at ${this.address.host} answered with an error.` }) : this.fail('network', { status: s });
     return this.fail('refused', { status: s });
   }
 
-  // A local model must not start on a busy card: free memory under the threshold, or unreadable, refuses as 'busy'.
+  // A local model must not start on a busy card: free memory under the threshold, or unreadable, refuses as 'busy'. Only for
+  // this PC: the card on a second machine is not readable from here (nothing trains there), so the guard is skipped for it.
   async guardGpu() {
-    if (!this.preset.local) return;
+    if (!this.preset.local || this.remote) return;
     let free = null;
     try { free = await this.vramReader(); } catch { /* unreadable */ }
     if (!Number.isFinite(free) || free < this.minFreeMB) throw this.fail('busy');
@@ -221,8 +239,8 @@ export class ProviderClient {
       if (!content.trim()) throw Object.assign(this.fail('bad-answer'), used);
       return { text: content, stopReason: j.choices[0].finish_reason || null, ...used };
     } finally {
-      // after every job on a local model, success or not: free the card
-      if (this.provider === 'ollama' && this.freeGpu) await this.unload();
+      // after every job on a model on this PC, success or not: free the card (not for a second machine, which keeps its own model loaded)
+      if (this.provider === 'ollama' && this.freeGpu && !this.remote) await this.unload();
     }
   }
 
@@ -231,7 +249,7 @@ export class ProviderClient {
   async unload() {
     try {
       const url = new URL('/api/generate', this.baseUrl);
-      await this.fetchFn(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: this.model, keep_alive: 0 }), signal: AbortSignal.timeout(5000) }).then(r => r.body?.cancel?.());
+      await this.fetchFn(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: this.model, keep_alive: 0 }), signal: AbortSignal.timeout(5000), redirect: 'manual' }).then(r => r.body?.cancel?.());
     } catch { /* the model unloads by itself after its idle time */ }
   }
 
