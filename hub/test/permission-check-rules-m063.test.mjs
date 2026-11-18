@@ -55,7 +55,12 @@ test('2b: (Join-Path $env:TEMP \'name\') is read as $env:TEMP\\name', () => {
   assert.equal(resolveJoinTemp("Remove-Item -Recurse (Join-Path $env:TEMP 'foo')"), 'Remove-Item -Recurse $env:TEMP\\foo');
   assert.equal(resolveJoinTemp('node (Join-Path $env:TMP "a\\b.mjs") x'), 'node $env:TMP\\a\\b.mjs x');
   assert.equal(resolveJoinTemp("(Join-Path -Path $env:TEMP -ChildPath 'foo')"), '$env:TEMP\\foo');
-  assert.equal(resolveJoinTemp("( join-path ${env:temp} 'foo' )"), '${env:temp}\\foo');
+  assert.equal(resolveJoinTemp("( join-path ${env:temp} 'foo' )"), '$env:TEMP\\foo', 'written as $env:TEMP: the word splitter breaks a ${ } word');
+  // the $( ) form takes its $ with it: never "$$env:TEMP\x" (a relative path inside the project to the rules)
+  assert.equal(resolveJoinTemp('Remove-Item "$(Join-Path $env:TEMP \'x\')"'), 'Remove-Item "$env:TEMP\\x"');
+  assert.equal(resolveJoinTemp("Remove-Item $(Join-Path $env:TEMP 'x')\\*"), 'Remove-Item $env:TEMP\\x\\*');
+  assert.equal(resolveJoinTemp("$( Join-Path ${env:TEMP} 'x' )"), '$env:TEMP\\x');
+  assert.ok(!/\$\$/.test(resolveJoinTemp("\"$(Join-Path $env:TEMP 'x')\" (Join-Path $env:TMP 'y')")));
   // anything but two plain words is left as written
   for (const s of ["(Join-Path $env:TEMP $x)", "(Join-Path $env:TEMP 'a b')", "(Join-Path $env:TEMP '..\\x')", "(Join-Path $env:TEMP 'C:\\x')", "(Join-Path $env:TEMP '\\x')", "(Join-Path $env:TEMP \"a$x\")", "(Join-Path $HOME 'foo')", "(Join-Path $env:TEMP 'foo' 'bar')", "$t = Join-Path $env:TEMP 'foo'"]) assert.equal(resolveJoinTemp(s), s, s);
 });
@@ -76,6 +81,39 @@ test('2b: a delete written with Join-Path is matched against the folders the wor
   assert.notEqual(up.route, 'allow', 'a way out of temp is not resolved');
 });
 
+// Review of #152 (HIGH): "$(Join-Path ...)" is the usual idiom; it must not become "$$env:TEMP\x" (read as a path in the project).
+test('2b: the $( ) form resolves to the real temp path like the bare form: . and * and another agent\'s folder never allow, a made folder may', () => {
+  const mine = `m063-mine-${rnd()}`;
+  const made = [T(mine)];
+  const run = command => classify({ ...ps, madeTemp: made, input: { command } });
+  assert.equal(run(`Remove-Item -Recurse -Force "$(Join-Path $env:TEMP '.')"`).route, 'human', 'the whole temp folder');
+  assert.equal(run(`Remove-Item -Recurse -Force "$(Join-Path $env:TEMP '*')"`).route, 'human', 'a wildcard over temp');
+  assert.equal(run(`Remove-Item -Recurse -Force "$(Join-Path $env:TEMP '*')\\*"`).route, 'human');
+  const other = run(`Remove-Item -Recurse -Force "$(Join-Path $env:TEMP 'someone-else')"`);
+  assert.equal(other.route, 'unsure', `${other.reasons}`);
+  assert.match(other.unsure.join(' '), /not this agent's own/);
+  const otherStar = run(`Remove-Item -Recurse -Force "$(Join-Path $env:TEMP 'someone-else')\\*"`);
+  assert.notEqual(otherStar.route, 'allow');
+  const starMade = run(`Remove-Item -Recurse -Force "$(Join-Path $env:TEMP '${mine}')\\*"`);
+  assert.ok(['allow', 'unsure'].includes(starMade.route), `a made folder's contents: ${starMade.route}`);
+  for (const cmd of [`Remove-Item -Recurse -Force "$(Join-Path $env:TEMP '${mine}')"`, `Remove-Item -Recurse -Force "$(Join-Path \${env:TEMP} '${mine}')"`, `Remove-Item -Recurse -Force "$( Join-Path $env:TEMP '${mine}' )"`]) {
+    const c = run(cmd);
+    assert.equal(c.route, 'allow', `${cmd}: ${c.reasons} ${c.unsure}`);
+  }
+  for (const cmd of [`Remove-Item -Recurse -Force "$(Join-Path $env:TEMP '..')"`, `Remove-Item -Recurse -Force "$(Join-Path $env:TEMP $x)"`, `Remove-Item -Recurse -Force "$(Join-Path $HOME 'x')"`]) assert.equal(run(cmd).route, 'human', cmd);
+});
+
+test('2a: a folder handed to a test hub is recorded only when the request goes ahead, never with a variable still in it, and once per spelling of the case', () => {
+  const stopped = classify({ ...bash, input: { command: `CRUX_HUB_DATA="$TEMP/m063-x-${rnd()}" CRUX_HOME="$TEMP/m063-y-${rnd()}" node server.mjs --port 4747 --no-agents` } });
+  assert.equal(stopped.route, 'human');
+  assert.deepEqual(stopped.tempMade, [], 'a hard stop records nothing');
+  const rand = classify({ ...bash, input: { command: 'CRUX_HUB_DATA="$TEMP/m063-d-$RANDOM" CRUX_HOME="$TEMP/m063-h-$RANDOM" node server.mjs --port 4810 --no-agents' } });
+  assert.ok(!rand.tempMade.some(d => /\$|RANDOM/.test(d)), `no unexpanded variable: ${rand.tempMade}`);
+  const d = `m063-Case-${rnd()}`;
+  const same = classify({ ...bash, input: { command: `CRUX_HUB_DATA="$TEMP/${d}" CRUX_HOME="$TEMP/${d.toUpperCase()}" node server.mjs --port 4811 --no-agents` } });
+  assert.equal(same.tempMade.filter(x => norm(x) === norm(T(d))).length, 1, `${same.tempMade}`);
+});
+
 test('2b: the script look-up finds a script named with Join-Path under temp, as it does for $env:TEMP\\name', async () => {
   const dirMade = makeTmp('m063-s-');
   const name = basename(dirMade);
@@ -84,6 +122,10 @@ test('2b: the script look-up finds a script named with Join-Path under temp, as 
   const a = await scriptsFor(`node (Join-Path $env:TEMP '${name}\\shot.mjs') out`, { cwd: 'C:/proj', projectDir: 'C:/proj', shell: 'powershell', git });
   const b = await scriptsFor(`node $env:TEMP\\${name}\\shot.mjs out`, { cwd: 'C:/proj', projectDir: 'C:/proj', shell: 'powershell', git });
   assert.deepEqual(a.scripts.map(s => [norm(s.path), s.kind]), b.scripts.map(s => [norm(s.path), s.kind]));
+  const braced = await scriptsFor(`node (Join-Path \${env:TEMP} '${name}\\shot.mjs') out`, { cwd: 'C:/proj', projectDir: 'C:/proj', shell: 'powershell', git });
+  assert.deepEqual(braced.scripts.map(s => [norm(s.path), s.kind]), b.scripts.map(s => [norm(s.path), s.kind]), '${env:TEMP} as the base is the temp folder too');
+  const sub = await scriptsFor(`node "$(Join-Path $env:TEMP '${name}\\shot.mjs')" out`, { cwd: 'C:/proj', projectDir: 'C:/proj', shell: 'powershell', git });
+  assert.deepEqual(sub.scripts.map(s => [norm(s.path), s.kind]), b.scripts.map(s => [norm(s.path), s.kind]), 'the $( ) form too');
   assert.equal(a.scripts.length, 1);
   assert.equal(a.scripts[0].kind, 'uncommitted', 'found, so its text can be shown');
   assert.equal(a.unread, b.unread);
