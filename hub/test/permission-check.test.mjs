@@ -16,7 +16,7 @@ import { settingsNeed, stepUpNeed } from '../lib/guard.mjs';
 import { cardsFor } from '../lib/push.mjs';
 import {
   PROMPT, FAILED_CD_FACT, JUNCTION_FACT, KEYS_FACT, OTHER_PROJECTS_FACT, JSON_ONLY, CHECK_MODEL, CHECK_NAME, ANSWERS, PermissionCheck, buildPrefix, buildSuffix, parseAnswer,
-  sdkCall, apiCall, listCost
+  sdkCall, apiCall, listCost, SESSION_TITLE
 } from '../lib/permission-check.mjs';
 
 const sent = [];
@@ -180,6 +180,35 @@ test('the SDK call: one query, no tools, one turn, nothing kept, on the plan sig
   assert.equal((await o.canUseTool('Bash', {})).behavior, 'deny', 'if a tool were ever asked for, the answer is no');
   assert.deepEqual(out.tokens, { input: 20, output: 8, cacheRead: 900, cacheCreation: 0 });
   assert.equal(out.costUSD, 0.0123);
+});
+
+test('the SDK call, cost settings: a given title (no second small-model call) and the 5-minute cache, only when asked; the caller\'s env is not changed', async () => {
+  const run = async extra => {
+    let seen; const env = { A: '1' };
+    const query = ({ options }) => { seen = options; return (async function* () { yield { type: 'result', result: 'x', modelUsage: {} }; })(); };
+    await sdkCall({ query, env, ...extra })({ system: 'S', user: 'U' });
+    return { o: seen, env };
+  };
+  const plain = await run({});
+  assert.equal(plain.o.title, undefined);
+  assert.deepEqual(plain.o.env, { A: '1' });
+  const cheap = await run({ title: SESSION_TITLE, cacheFiveMinutes: true });
+  assert.equal(cheap.o.title, SESSION_TITLE);
+  assert.deepEqual(cheap.o.env, { A: '1', FORCE_PROMPT_CACHING_5M: '1' });
+  assert.deepEqual(cheap.env, { A: '1' }, 'the env object passed in is left as it was');
+});
+
+test('cache: the stable part (what goes in system) is byte for byte the same for two different requests; only the user part differs', async () => {
+  const calls = [];
+  const check = new PermissionCheck({ call: async arg => { calls.push(arg); return { text: '{"answer":"allow","reason":"ok"}', via: 'sdk', tokens: { input: 1, output: 1, cacheRead: 0, cacheCreation: 0 }, costUSD: 0, modelUsage: {} }; } });
+  const project = { project: 'proj', dir: 'C:\\work\\proj', temp: 'C:\\Temp', level: 'Auto', rulesId: 'R005', rulesBody: 'The rules.\nSecond line.' };
+  await check.run({ ...project, worker: 'w1', goal: 'fix the thing', tool: 'Bash', input: { command: 'node a.mjs', description: 'run a' }, cwd: 'C:\\work\\proj', doubts: ['unknown program'], testPorts: [5001], madeTemp: ['C:\\Temp\\x'], scripts: [{ path: 'a.mjs', text: 'console.log(1)' }] });
+  await check.run({ ...project, worker: 'w2', goal: 'something else entirely', tool: 'PowerShell', input: { command: 'Get-Date' }, cwd: 'C:\\work\\proj\\.claude\\worktrees\\w2', doubts: [], testPorts: [], madeTemp: [], scripts: [{ path: 'b.mjs', note: 'note-unique-31337' }] });
+  assert.equal(calls.length, 2);
+  assert.ok(Buffer.from(calls[0].system).equals(Buffer.from(calls[1].system)), 'the same bytes, so one cache entry serves both');
+  assert.notEqual(calls[0].user, calls[1].user);
+  for (const bit of ['w1', 'w2', 'fix the thing', 'node a.mjs', 'Get-Date', 'unknown program', 'console.log(1)', 'note-unique-31337']) assert.ok(!calls[0].system.includes(bit), `nothing of the request in the stable part: ${bit}`);
+  assert.ok(!/<<<[0-9a-f]{12}/.test(calls[0].system), 'the per-call marker is in the user part only');
 });
 
 test('the API call: the prefix marked for caching, usage and list cost read back', async () => {

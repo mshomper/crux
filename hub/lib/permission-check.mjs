@@ -206,7 +206,17 @@ export function listCost(model, t) {
 
 // Through the Agent SDK on this machine's Claude Code sign-in: one query, no tools, one turn, nothing kept on disk.
 // `query` is the SDK's; tests pass a stub.
-export function sdkCall({ query, model = CHECK_MODEL, claudePath = null, env = process.env, cwd = process.cwd() }) {
+//
+// Two settings keep the bill down (measured on the real log, hub 0.39.x: the stable system part was already read from the cache
+// on nearly every call; what cost money was the request itself, and a second small-model call):
+// - title: Claude Code otherwise makes a second call to the small model (haiku) to name the "session", sending it the whole
+//   request again. A given title skips it. Nothing reads the title: the session is not kept (persistSession: false).
+// - cacheFiveMinutes: on a plan sign-in Claude Code asks for the 1-hour cache, whose writes cost twice the input price, and it
+//   marks the end of the request for caching too, which is written on every call and never read (the request is new each time).
+//   FORCE_PROMPT_CACHING_5M makes that write cost 1.25 times instead. The stable part is still read at a tenth of the price while
+//   checks come less than five minutes apart (a gap longer than that costs one rewrite of about 2.6k tokens).
+export const SESSION_TITLE = 'permission check';
+export function sdkCall({ query, model = CHECK_MODEL, claudePath = null, env = process.env, cwd = process.cwd(), title = null, cacheFiveMinutes = false }) {
   return async ({ system, user, signal }) => {
     const abortController = new AbortController();
     signal?.addEventListener('abort', () => abortController.abort(), { once: true });
@@ -214,7 +224,7 @@ export function sdkCall({ query, model = CHECK_MODEL, claudePath = null, env = p
       model, systemPrompt: system, tools: [], allowedTools: [], maxTurns: 1, persistSession: false,
       settingSources: [], strictMcpConfig: true, mcpServers: {}, settings: { disableClaudeAiConnectors: true },
       permissionMode: 'default', canUseTool: async () => ({ behavior: 'deny', message: 'The permission check has no tools.' }),
-      cwd, env, abortController, ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {})
+      cwd, env: cacheFiveMinutes ? { ...env, FORCE_PROMPT_CACHING_5M: '1' } : env, abortController, ...(title ? { title } : {}), ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {})
     };
     let text = '', res = null;
     for await (const m of query({ prompt: user, options })) {

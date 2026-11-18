@@ -23,7 +23,7 @@ import { answerMessage, answerNote, QUESTION_RULES } from '../public/questions.j
 import { family as familyOf } from '../public/models.js';
 import { findPass, passFor, PASS_MS } from './merge-pass.mjs';
 import { Usage, FABLE_NOTE } from './usage.mjs';
-import { PermissionCheck, CHECK_NAME, CHECK_MODEL, sdkCall, apiCall, scriptTexts } from './permission-check.mjs';
+import { PermissionCheck, CHECK_NAME, CHECK_MODEL, SESSION_TITLE, sdkCall, apiCall, scriptTexts } from './permission-check.mjs';
 import { scriptsFor, parseCommand, changedDiff } from './permission-scripts.mjs';
 import { totalsOf, sumCost } from '../public/usage.js';
 import { summariseDue, SUMMARY_MODEL } from './month-summaries.mjs';
@@ -1451,7 +1451,8 @@ export class Hub {
     const key = this.apiKey();
     const call = key ? apiCall({ apiKey: key }) : async arg => {
       const { query } = await import('@anthropic-ai/claude-agent-sdk');
-      return sdkCall({ query, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir() })(arg);
+      // No second (haiku) call to name the session, and the 5-minute cache: see sdkCall in permission-check.mjs.
+      return sdkCall({ query, claudePath: this.claudeCode?.() || null, env: checkEnv(), cwd: tmpdir(), title: SESSION_TITLE, cacheFiveMinutes: true })(arg);
     };
     return (this.checkerMade = new PermissionCheck({ call }));
   }
