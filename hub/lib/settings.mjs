@@ -158,7 +158,9 @@ function pickRoute(job, r) {
   if (!r || typeof r !== 'object' || !OUTSIDE_PRESETS.includes(r.provider)) return null;
   const model = typeof r.model === 'string' ? r.model.trim().slice(0, 120) : '';
   if (looksSecret(model)) return null;   // a key pasted into a model box is never kept: it would sit in plain text and go to the page
-  if (job === 'image' ? !PRESETS[r.provider].imageModel : !model) return null;
+  // A picture route needs a provider that makes pictures, and a model: the provider's own default when it has one, else the one
+  // typed (OpenRouter has no default picture model). A text route always needs its model.
+  if (job === 'image' ? !PRESETS[r.provider].images || (!model && !PRESETS[r.provider].imageModel) : !model) return null;
   // Ollama's address (decision 82 A): this PC, or one of the owner's Tailscale machines; any other address is refused here,
   // so a route with one is not saved (the hub checks again at every call). Kept as the address the hub calls.
   let baseUrl = null;
@@ -176,7 +178,7 @@ function pickRoute(job, r) {
 
 // Outside routing (decision 81): outsideRoutes { ask, draft, image } (a job with no entry is not set up) and outsideTerms
 // { provider: 'paid' | 'free' | 'unknown' } (what the user knows of each provider's terms for their key: 'paid' means it does
-// not train on or keep what is sent; Any mode sends nothing to a provider unless 'paid'). The older single `outsideProvider`
+// not train on what is sent; Any mode sends nothing to a provider unless 'paid'). The older single `outsideProvider`
 // { provider, model, dataTerms, ... } is read once as all three jobs on that provider, so a setup made before decision 81
 // keeps working; it is ignored whenever outsideRoutes is present.
 function pickOutside(o) {

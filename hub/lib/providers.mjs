@@ -43,8 +43,9 @@ export const IMAGE_PRICES = {
 // What an outside call counts as against the daily dollar cap when its real cost is unknown (a model not in a price table, a
 // price that has ended, OpenAI pictures): never 0, so the cap still holds. A picture counts at least 5 cents, or the dearest
 // listed picture price; text counts its tokens at the dearest listed text price (flat 1 cent when the counts are missing).
-export function fallbackCostUSD(purpose, tokens = null) {
-  if (purpose === 'make_image') return Math.max(0.05, ...Object.values(IMAGE_PRICES).map(p => p.perImage));
+// An OpenRouter picture (any typed model, so possibly a dear one) counts at 20 cents when its cost is unknown.
+export function fallbackCostUSD(purpose, tokens = null, provider = null) {
+  if (purpose === 'make_image') return Math.max(provider === 'openrouter' ? 0.20 : 0.05, ...Object.values(IMAGE_PRICES).map(p => p.perImage));
   const input = Number(tokens?.input) || 0, output = Number(tokens?.output) || 0;
   if (!input && !output) return 0.01;
   const top = Object.values(PRICES);
@@ -62,11 +63,14 @@ export const looksSecret = s => SECRET.test(String(s || ''));
 export const ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];
 
 export const PRESETS = {
-  openai: { baseUrl: 'https://api.openai.com/v1/', needsKey: true, tokenField: 'max_completion_tokens', imageModel: 'gpt-image-2', imageStyle: 'openai', local: false, timeoutMs: 30000 },
+  openai: { baseUrl: 'https://api.openai.com/v1/', needsKey: true, tokenField: 'max_completion_tokens', imageModel: 'gpt-image-2', imageStyle: 'openai', images: true, local: false, timeoutMs: 30000 },
   // Google's token-cap field name is unconfirmed (the compatibility page does not say); max_tokens is the guess, and the live check settles it.
   // Images go through Google's documented Interactions route (POST <v1beta>/interactions, header x-goog-api-key), not the compatibility address.
-  google: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', needsKey: true, tokenField: 'max_tokens', imageModel: 'gemini-nano-banana-2.1', imageStyle: 'google', local: false, timeoutMs: 30000 },
-  openrouter: { baseUrl: 'https://openrouter.ai/api/v1/', needsKey: true, tokenField: 'max_tokens', imageModel: null, local: false, timeoutMs: 30000 },
+  google: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', needsKey: true, tokenField: 'max_tokens', imageModel: 'gemini-nano-banana-2.1', imageStyle: 'google', images: true, local: false, timeoutMs: 30000 },
+  // Pictures through OpenRouter's own image route (POST <base>images, documented at openrouter.ai/docs): one request shape for
+  // every image model it carries (Gemini family, image-only models). `images` says the provider can make pictures; there is
+  // deliberately no default picture model (imageModel null): the owner types the one to use, as OpenRouter writes it.
+  openrouter: { baseUrl: 'https://openrouter.ai/api/v1/', needsKey: true, tokenField: 'max_tokens', imageModel: null, imageStyle: 'openrouter', images: true, local: false, timeoutMs: 30000 },
   ollama: { baseUrl: 'http://127.0.0.1:11434/v1/', needsKey: false, tokenField: 'max_tokens', imageModel: null, local: true, timeoutMs: 120000 }
 };
 
@@ -77,16 +81,17 @@ export const ERROR_MESSAGES = {
   'no-key': 'No key is saved for the outside model.',
   refused: 'The outside model refused the request.',
   'key-rejected': 'The provider did not accept the saved key.',
+  'no-credit': 'The provider says the account has no credit for this call. Add credit on its site.',
   'unknown-model': 'The provider does not know that model name.',
   address: 'The Ollama address must be this PC or one of your Tailscale machines (a 100.64.x.x to 100.127.x.x address or a name ending .ts.net, with a port).',
   unreachable: 'Ollama did not answer.',
-  'no-route':'No outside provider is set for this kind of job in the Whole hub panel.',
+  'no-route': 'No outside provider is set for this kind of job in the Whole hub panel.',
   'local-only':'This project is set to Local only, and the hub\'s provider is not on this computer.',
   'bad-answer': 'The outside model gave an answer the hub could not read.',
   off: 'Outside models are off for this project.',
   network: 'The outside model could not be reached.',
   busy: 'The graphics card is busy or its free memory could not be read, so the local model was not started.',
-  terms: 'This provider is not marked as one that keeps your text private, so it was not used.',
+  terms: 'This provider is not marked as one that does not train on your text, so it was not used.',
   budget: 'This project has used its allowance for outside calls for now.',
   'needs-any': 'Pictures need this project\'s outside-model setting to be Any (not Off or Local only).',
   'no-image': 'The outside provider chosen for the hub has no picture model.',
@@ -204,7 +209,10 @@ export class ProviderClient {
       return this.fail('rate-limit', { status: s, retryAfterSec: Number.isFinite(ra) && ra >= 0 ? ra : null });
     }
     if (s === 401 || s === 403) return this.fail('key-rejected', { status: s });
-    if (s === 404) return this.fail('unknown-model', { status: s });
+    if (s === 404) return this.provider === 'openrouter'
+      ? this.fail('unknown-model', { status: s, message: 'No provider for this model meets the no-training rule, or the name is wrong.' })
+      : this.fail('unknown-model', { status: s });
+    if (s === 402) return this.preset.local ? this.fail('refused', { status: s }) : this.fail('no-credit', { status: s });
     if (s >= 500) return this.remote ? this.fail('unreachable', { status: s, message: `Ollama at ${this.address.host} answered with an error.` }) : this.fail('network', { status: s });
     return this.fail('refused', { status: s });
   }
@@ -223,7 +231,7 @@ export class ProviderClient {
     await this.guardGpu();
     try {
       const body = { model: this.model, messages: [...(system ? [{ role: 'system', content: String(system) }] : []), { role: 'user', content: String(user ?? '') }], [this.preset.tokenField]: maxTokens };
-      if (this.provider === 'openrouter') { body.provider = { data_collection: 'deny' }; body.usage = { include: true }; }   // no provider that keeps prompts; and its own cost figure back in usage.cost
+      if (this.provider === 'openrouter') { body.provider = { data_collection: 'deny' }; body.usage = { include: true }; }   // only providers that do not train on prompts; and its own cost figure back in usage.cost
       const j = await this.post('chat/completions', body, signal, timeoutMs ? { timeoutMs } : {});
       const content = j?.choices?.[0]?.message?.content;
       if (typeof content !== 'string') throw this.fail('bad-answer');
@@ -260,7 +268,7 @@ export class ProviderClient {
     catch (e) { if (e instanceof ProviderError && this.imageModel) e.model = this.imageModel; throw e; }   // a failure names the picture model, not the text one
   }
 
-  async imageCall({ prompt, size = '1024x1024', aspectRatio = '1:1', signal, timeoutMs = 90000 }) {
+  async imageCall({ prompt, size = '1024x1024', aspectRatio = '1:1', signal, timeoutMs = 120000 }) {
     const started = Date.now();
     const model = this.imageModel;
     if (!model) throw this.fail('no-image');
@@ -272,6 +280,17 @@ export class ProviderClient {
       const img = findImage(j);
       if (!img) throw this.fail('bad-answer');
       ({ b64, mime } = img); usage = j.usage || null;
+    } else if (this.preset.imageStyle === 'openrouter') {
+      // OpenRouter's image route: POST <base>images { model, prompt, n, aspect_ratio, output_format } answers
+      // { data: [{ b64_json, media_type }], usage: { ..., cost } }. The same request serves its Gemini-family and its image-only
+      // models. PNG is asked for (a model that can only answer SVG is refused below: the thread stores raster pictures only), and
+      // the provider is told to use only providers that do not train on the prompt, as for text. An address in the answer is never fetched.
+      const j = await this.post('images', { model, prompt: String(prompt ?? ''), n: 1, aspect_ratio: aspectRatio, output_format: 'png', provider: { data_collection: 'deny' } }, signal, { timeoutMs });
+      const d = j?.data?.[0];
+      if (!d || typeof d.b64_json !== 'string' || !d.b64_json) throw this.fail('bad-answer');
+      mime = typeof d.media_type === 'string' ? d.media_type.toLowerCase() : 'image/png';
+      if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(mime)) throw this.fail('bad-answer');
+      b64 = d.b64_json; usage = j.usage || null;
     } else {
       const body = { model, prompt: String(prompt ?? ''), n: 1, size };
       const j = await this.post('images/generations', body, signal, { timeoutMs });   // OpenAI's image models always answer base64 and reject response_format
@@ -281,10 +300,13 @@ export class ProviderClient {
     }
     const input = Number(usage?.total_input_tokens ?? usage?.prompt_tokens ?? 0) || 0, output = Number(usage?.total_output_tokens ?? usage?.completion_tokens ?? 0) || 0;
     const ip = PRICES_FOR_IMAGES(model);
-    let costUSD = null, estimated = false;
+    let costUSD = null, estimated = false, costUnit = 'usd';
     if (ip) { costUSD = output > 0 ? (input * ip.inPerM + output * ip.outPerM) / 1e6 : ip.perImage; estimated = true; }
+    // OpenRouter's own figure for the call (usage.cost) when it comes back: recorded as reported credits, like its text answers.
+    // Without it the cost stays unknown (null), and the caps count the picture at the fallback rate (fallbackCostUSD).
+    if (this.provider === 'openrouter' && Number.isFinite(usage?.cost)) { costUSD = usage.cost; estimated = false; costUnit = 'credits'; }
     return {
-      b64, mime, via: 'outside', provider: this.provider, model, tokens: { input, output, cacheRead: 0, cacheCreation: 0 }, costUSD, estimated, costUnit: 'usd',
+      b64, mime, via: 'outside', provider: this.provider, model, tokens: { input, output, cacheRead: 0, cacheCreation: 0 }, costUSD, estimated, costUnit,
       modelUsage: { [model]: { inputTokens: input, outputTokens: output, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: costUSD ?? 0 } }, ms: Date.now() - started
     };
   }

@@ -387,7 +387,7 @@ test('a picture call that fails before its answer is read still writes a usage l
 });
 
 // ---------- decision 81 A: a key per provider, a provider and model per job ----------
-const INFO = { keys: { google: { saved: true, end: 'AB12' } }, canProtect: true, priced: { text: ['gemini-3.5-flash-lite', 'gpt-5-nano'], image: ['gemini-nano-banana-2.1'] }, providers: { google: { needsKey: true, imageModel: 'gemini-nano-banana-2.1' }, openai: { needsKey: true, imageModel: 'gpt-image-2' }, openrouter: { needsKey: true, imageModel: null }, ollama: { needsKey: false, local: true, imageModel: null } } };
+const INFO = { keys: { google: { saved: true, end: 'AB12' } }, canProtect: true, priced: { text: ['gemini-3.5-flash-lite', 'gpt-5-nano'], image: ['gemini-nano-banana-2.1'] }, providers: { google: { needsKey: true, images: true, imageModel: 'gemini-nano-banana-2.1' }, openai: { needsKey: true, images: true, imageModel: 'gpt-image-2' }, openrouter: { needsKey: true, images: true, imageModel: null }, ollama: { needsKey: false, local: true, images: false, imageModel: null } } };
 const PNUMS = { permissionTimeoutSec: '300', retireAt: '60', idleHandoffMin: '60', idleFloorPct: '25', workerRetireAt: '60', workerHandoffFloorPct: '35' };
 const PSET = { routePermissions: true, permissionTimeoutSec: 300, retireAt: 60, idleHandoffMin: 60, idleFloorPct: 25, workerRetireAt: 60, workerHandoffFloorPct: 35 };
 const panel = (settings = {}, info = INFO, mutate = null) => { const o = outsideDraft({ ...PSET, ...settings }, info); mutate?.(o); return { o, d: { route: true, nums: PNUMS, errors: {}, outside: o } }; };
@@ -426,7 +426,7 @@ test('each job gets its own provider and model; a picture job offers only provid
   assert.ok(html.includes('class="on" data-ps-seg="job-draft" data-v="google"'));
   assert.ok(html.includes('class="on" data-ps-seg="job-image" data-v="google"'));
   const picture = html.slice(html.indexOf('data-ps-job="image"'));
-  assert.ok(picture.includes('data-ps-seg="job-image" data-v="openai"') && !picture.includes('data-ps-seg="job-image" data-v="openrouter"') && !picture.includes('data-ps-seg="job-image" data-v="ollama"'), 'only Google and OpenAI for pictures');
+  assert.ok(picture.includes('data-ps-seg="job-image" data-v="openai"') && picture.includes('data-ps-seg="job-image" data-v="openrouter"') && !picture.includes('data-ps-seg="job-image" data-v="ollama"'), 'Google, OpenAI and OpenRouter for pictures; Ollama makes none');
   assert.match(picture, /gemini-nano-banana-2\.1 \(default\)/, 'an empty picture model shows the provider\'s own as the default');
   // unchanged: nothing is sent; changed: only the routes, with the picture model empty kept as null
   assert.deepEqual(outsideChanges({ ...PSET, ...settings }, d.outside).body, {}, 'unchanged: nothing is sent');
@@ -641,7 +641,7 @@ test('LOW: a key typed but not saved keeps the panel open with a plain line; an 
   assert.match(ch.errors['key-openai'], /typed a OpenAI key but did not press Save/);
   assert.match(hubPanel({ ...typed.d, errors: ch.errors }), /did not press Save/);
   assert.ok(!JSON.stringify(ch).includes(SK('fake-typed')), 'the error does not repeat the key');
-  assert.match(jobNotes('ask', panel({}, { ...INFO, keys: { openrouter: { saved: true, end: 'ZZ99' } } }, o => { o.routes.ask = { provider: 'openrouter', model: 'meta/llama-x:free' }; o.terms.openrouter = 'paid'; }).o).join(' '), /free models can keep what is sent/);
+  assert.match(jobNotes('ask', panel({}, { ...INFO, keys: { openrouter: { saved: true, end: 'ZZ99' } } }, o => { o.routes.ask = { provider: 'openrouter', model: 'meta/llama-x:free' }; o.terms.openrouter = 'paid'; }).o).join(' '), /free models can train on what is sent/);
   const html = hubPanel(panel({}, { ...INFO, keys: {} }, o => { o.routes.ask = { provider: 'google', model: 'gemini-3.5-flash-lite' }; }).d);
   const box = name => html.slice(html.indexOf(`data-ps-keybox="${name}"`), html.indexOf('ps-key-plan', html.indexOf(`data-ps-keybox="${name}"`)));
   assert.match(box('google'), /ps-keystat warn/, 'a job uses Google: its empty box is amber');

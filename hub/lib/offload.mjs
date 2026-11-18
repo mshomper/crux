@@ -141,7 +141,7 @@ export class Offload {
     return {
       keys: this.keys.view(), canProtect: this.keys.canProtect,
       priced: { text: Object.keys(PRICES), image: Object.keys(IMAGE_PRICES) },
-      providers: Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, { needsKey: p.needsKey, local: p.local, imageModel: p.imageModel }]))
+      providers: Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, { needsKey: p.needsKey, local: p.local, images: !!p.images, imageModel: p.imageModel }]))
     };
   }
 
@@ -157,17 +157,17 @@ export class Offload {
       if (e.type !== 'usage' || e.via !== 'outside' || !TOOL_PURPOSES.includes(e.purpose)) continue;
       const age = now - Date.parse(e.ts);
       if (age <= 3600e3) calls++;
-      if (age <= 86400e3) usd += e.costUSD == null || e.costKnown === false ? fallbackCostUSD(e.purpose, e.tokens) : Number(e.costUSD) || 0;
+      if (age <= 86400e3) usd += e.costUSD == null || e.costKnown === false ? fallbackCostUSD(e.purpose, e.tokens, e.provider) : Number(e.costUSD) || 0;
     }
     return calls >= callsPerHour || usd >= usdPerDay ? new ProviderError('budget') : null;
   }
 
   // Checks the allowance and holds a place for one call until it ends. { over } when refused, else { release }, to be called
   // (in a finally) when the call is done: its usage line, if any, then stands in for the reserved place.
-  reserve(project, purpose) {
+  reserve(project, purpose, provider = null) {
     const over = this.overBudget(project);
     if (over) return { over };
-    const key = projectKey(project.dir), usd = purpose === 'make_image' ? fallbackCostUSD('make_image') : 0;
+    const key = projectKey(project.dir), usd = purpose === 'make_image' ? fallbackCostUSD('make_image', null, provider) : 0;
     const f = this.inflight.get(key) || { calls: 0, usd: 0 };
     this.inflight.set(key, { calls: f.calls + 1, usd: f.usd + usd });
     let done = false;
@@ -242,7 +242,7 @@ export function wrapOutside(lead, res, text) {
 // toward the caps. Null when there is nothing to charge or the call already wrote its own line.
 export function unreadCharge(e, purpose) {
   if (!(e instanceof ProviderError) || e.modelUsage || e.logged || !['bad-answer', 'timeout'].includes(e.kind) || !e.provider || !e.model) return null;
-  const usd = fallbackCostUSD(purpose);
+  const usd = fallbackCostUSD(purpose, null, e.provider);
   return { via: 'outside', provider: e.provider, model: e.model, tokens: null, costUSD: usd, estimated: true, costUnit: 'usd', ms: null,
     modelUsage: { [e.model]: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: usd } } };
 }
@@ -301,7 +301,7 @@ export async function makeImage(offload, project, agent, { prompt, aspect_ratio 
   if (offload.plan(project.dir, 'image').mode !== 'any') return `Refused (needs-any): ${ERROR_MESSAGES['needs-any']} Carry on yourself.`;
   if (!ASPECT_RATIOS.includes(aspect_ratio)) return `Refused (refused): Aspect ratio must be one of ${ASPECT_RATIOS.join(', ')}.`;
   if (looksSecret(pr)) return `Refused (secret): ${ERROR_MESSAGES.secret} Take it out and ask again.`;
-  const held = offload.reserve(project, 'make_image');
+  const held = offload.reserve(project, 'make_image', offload.plan(project.dir, 'image').provider);
   if (held.over) return `Refused (budget): ${held.over.message} Carry on yourself.`;
   const logIt = usageLogger(offload, project, agent, 'make_image');
   try {
@@ -313,7 +313,7 @@ export async function makeImage(offload, project, agent, { prompt, aspect_ratio 
     try { id = save(buf, `${pr.slice(0, 120)} (${res.provider} ${res.model}, ${aspect_ratio})`); }
     catch { logIt(res); throw own(); }   // not a picture the hub can store
     logIt(res);
-    const cost = res.costUSD == null ? 'cost unknown' : `about $${res.costUSD.toFixed(4)}`;
+    const cost = res.costUSD == null ? 'cost unknown' : res.costUnit === 'credits' ? `${res.costUSD.toFixed(4)} credits as the provider reports` : `about $${res.costUSD.toFixed(4)}`;
     const took = Number.isFinite(res.ms) ? `, ${(res.ms / 1000).toFixed(1)} s` : '';
     return `Made a picture with ${res.provider} ${res.model} (${aspect_ratio}, ${cost}${took}) and posted it to this thread as visual ${id}. List it as "${id}" under visuals in post_summary, or in a decision's images.`;
   } catch (e) {
