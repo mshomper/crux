@@ -226,6 +226,8 @@ export class SettingsCards {
     this.el.addEventListener('pointerdown', e => { this.downOutside = e.target === this.el; });
     this.el.addEventListener('click', e => this.click(e));
     this.el.addEventListener('input', e => this.input(e));
+    // Leaving the Ollama address box redraws the panel, so a job that uses a refused address gets its amber mark (typing only updates the line under the box)
+    this.el.addEventListener('change', e => { if (this.kind === 'hub' && e.target.matches?.('[data-ps-ollama]')) this.render(); });
     this.el.addEventListener('keydown', e => this.key(e));
     this.el.addEventListener('toggle', e => { if (e.target.matches?.('.ps-always') && this.d) this.d.alwaysOpen = e.target.open; }, true);
     this.el.addEventListener('close', () => { this.kind = null; this.d = null; this.opener?.focus?.({ preventScroll: true }); });

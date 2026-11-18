@@ -6,7 +6,9 @@
 // draft (d.typed) until Save sends it in one same-origin request and drops it; it is never echoed back, and closing the panel
 // drops the draft. Keys are saved when you press Save; the routes and plans are saved with Done, like the other settings.
 // Nothing is shown as chosen until it is saved: an unset job reads "Not set".
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+import { ollamaAddress, showAddress, ADDRESS_HELP } from './ollama-address.js';
+
+const esc = s =>String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ic = (id, cls = '') => `<svg class="icon ${cls}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
 const help = tip => `<span class="ps-help" title="${esc(tip)}" aria-label="${esc(tip)}" role="img">${ic('help')}</span>`;
 
@@ -34,7 +36,9 @@ export function outsideDraft(settings = {}, info = null) {
   const terms = {};
   for (const p of KEYED) terms[p] = settings.outsideTerms?.[p] || 'unknown';
   // errors: the same object as the panel's own (project-settings.js keeps the two in step), so a key's line can be cleared here
-  return { routes, terms, info: info || null, typed: {}, replacing: {}, busy: {}, keyErr: {}, warnOpen: {}, touched: false, errors: {} };
+  // Ollama's address (decision 82 A): one box for the hub, shown without the /v1/ the hub adds; empty means this PC.
+  const ollama = showAddress(JOBS.map(j => settings.outsideRoutes?.[j.k]).find(r => r?.provider === 'ollama' && r.baseUrl)?.baseUrl || '');
+  return { routes, terms, ollama, info: info || null, typed: {}, replacing: {}, busy: {}, keyErr: {}, warnOpen: {}, touched: false, errors: {} };
 }
 
 // The amber-mark notes for one job: why it will refuse, or why its dollars are only an estimate. [] when nothing is wrong.
@@ -44,6 +48,7 @@ export function jobNotes(job, d) {
   const info = d.info || {}, P = NAME[r.provider], notes = [];
   if (KEYED.includes(r.provider) && !info.keys?.[r.provider]?.saved) notes.push(`No ${P} key is saved yet, so this job refuses until you add one in the key box above.`);
   if (KEYED.includes(r.provider) && (d.terms?.[r.provider] || 'unknown') !== 'paid') notes.push(`Your plan with ${P} is not set to Paid, so projects set to Any send nothing to it. Set it to Paid in the ${P} box above if it is.`);
+  if (r.provider === 'ollama' && String(d.ollama || '').trim() && !ollamaAddress(d.ollama).ok) notes.push(`The Ollama address is refused: ${ollamaAddress(d.ollama).why} This job refuses until it is fixed in the Ollama box above.`);
   if (r.provider === 'openrouter' && /:free$/i.test((r.model || '').trim())) notes.push('OpenRouter\'s free models can keep what is sent, so projects set to Any refuse this model. Pick a paid one.');
   if (r.provider !== 'ollama') {
     const model = (r.model || '').trim() || (job === 'image' ? pictureModel(r.provider, info) : '');
@@ -77,6 +82,24 @@ function keyBox(p, d) {
   </div>`;
 }
 
+// What the Ollama address box says under it: this PC, a Tailscale machine (counted as Local), or why it is refused.
+export function ollamaStatus(text) {
+  if (!String(text || '').trim()) return { cls: '', text: 'Using Ollama on this PC.' };
+  const a = ollamaAddress(text);
+  if (!a.ok) return { cls: 'warn', text: `Refused: ${a.why}` };
+  return a.kind === 'loopback' ? { cls: '', text: 'Using Ollama on this PC.' } : { cls: 'ok', text: `Your Tailscale machine ${a.host}. Jobs there count as Local.` };
+}
+
+function ollamaBox(d) {
+  const st = ollamaStatus(d.ollama), err = d.errors?.['ollama-address'];
+  return `<div class="ps-keybox" data-ps-keybox="ollama">
+    <div class="ps-key-top"><span class="ps-key-name">Ollama</span>${help(ADDRESS_HELP)}<span class="ps-keystat">No key needed</span></div>
+    <div class="ps-keyin"><input class="ac-field ps-keyfield" type="text" name="crux-ollama-address" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url" data-ps-ollama placeholder="This PC" aria-label="Ollama address" value="${esc(d.ollama || '')}"></div>
+    <p class="ps-keyline ps-ollama-status ${st.cls}">${st.cls === 'warn' ? ic('warn') : st.cls === 'ok' ? ic('check') : ''}<span>${esc(st.text)}</span></p>
+    ${err ? `<p class="ps-dflt warn" role="alert">${ic('warn')}${esc(err)}</p>` : ''}
+  </div>`;
+}
+
 function jobRow(j, d) {
   const r = d.routes[j.k], notes = jobNotes(j.k, d), open = !!d.warnOpen[j.k];
   const choices = [['', 'Not set'], ...PROVIDERS.filter(([p]) => j.k !== 'image' || canPictures(p, d.info))];
@@ -97,7 +120,7 @@ function jobRow(j, d) {
 export function outsideSections(d) {
   const any = JOBS.some(j => d.routes[j.k].provider);
   return `<section class="ps-sec"><h3 class="ps-sec-head">Outside provider keys ${help('One key box per provider. A pasted key is protected for your Windows user on this computer and never shown again, only its last four characters. Saved when you press Save, not with Done. Ollama runs on this computer and needs none.')}</h3>
-      <div class="ps-keys">${KEYED.map(p => keyBox(p, d)).join('')}</div></section>
+      <div class="ps-keys">${KEYED.map(p => keyBox(p, d)).join('')}${ollamaBox(d)}</div></section>
     <section class="ps-sec ps-last"><h3 class="ps-sec-head">Who answers which job ${help('Pick a provider and model for each kind of job. Agents never choose; they just ask for a draft or a picture. Each project still has its own Outside models switch and spending allowance.')}</h3>
       ${any ? '' : `<p class="ps-keyline">${ic('warn')}Nothing is set up yet. Agents get no outside tools until a provider is chosen for a job.</p>`}
       <div class="ps-jobs">${JOBS.map(j => jobRow(j, d)).join('')}</div></section>`;
@@ -109,6 +132,9 @@ export function outsideChanges(settings = {}, d) {
   if (!d?.routes) return { body, errors };
   // A key typed in a box but not saved with its Save button: stay open and say so, rather than dropping it without a word.
   for (const p of KEYED) if (String(d.typed?.[p] || '').trim()) errors[`key-${p}`] = `You typed a ${NAME[p]} key but did not press Save. Press Save to keep it, or clear the box.`;
+  // Ollama's address: this PC when empty; else it must pass the same rule the hub applies (the hub checks again at save and at every call)
+  const typedAddress = String(d.ollama || '').trim(), addr = typedAddress ? ollamaAddress(typedAddress) : null;
+  if (addr && !addr.ok) errors['ollama-address'] = addr.why;
   const routes = {};
   for (const j of JOBS) {
     const r = d.routes[j.k];
@@ -117,9 +143,9 @@ export function outsideChanges(settings = {}, d) {
     if (looksLikeKey(model)) { errors[`route-${j.k}`] = 'That looks like a key, not a model name. Keys go in the key box above, and nothing is saved here.'; continue; }
     if (j.k !== 'image' && !model) { errors[`route-${j.k}`] = 'Needs a model name'; continue; }
     const old = settings.outsideRoutes?.[j.k];
-    routes[j.k] = { provider: r.provider, model: model || null, ...(old?.provider === r.provider && old.baseUrl ? { baseUrl: old.baseUrl } : {}), ...(old?.provider === r.provider && old.minFreeMB != null ? { minFreeMB: old.minFreeMB } : {}) };
+    routes[j.k] = { provider: r.provider, model: model || null, ...(r.provider === 'ollama' && addr?.ok && addr.kind === 'tailscale' ? { baseUrl: addr.base } : {}), ...(old?.provider === r.provider && old.minFreeMB != null ? { minFreeMB: old.minFreeMB } : {}) };
   }
-  const key = o => JOBS.map(j => `${o?.[j.k]?.provider || ''}/${o?.[j.k]?.model || ''}`).join('|');
+  const key = o => JOBS.map(j => `${o?.[j.k]?.provider || ''}/${o?.[j.k]?.model || ''}/${o?.[j.k]?.baseUrl || ''}`).join('|');
   if (!Object.keys(errors).length && key(routes) !== key(settings.outsideRoutes)) body.outsideRoutes = routes;
   if (KEYED.some(p => d.terms[p] !== (settings.outsideTerms?.[p] || 'unknown'))) body.outsideTerms = { ...d.terms };
   return { body, errors };
@@ -130,6 +156,12 @@ export function outsideInput(t, d) {
   if (t.matches?.('[data-ps-keyin]')) {
     const p = t.dataset.psKeyin; d.typed[p] = t.value; delete d.keyErr[p]; delete d.errors?.[`key-${p}`];   // typing clears "typed a key but did not press Save"
     const btn = t.closest('.ps-keyin')?.querySelector('[data-ps-keysave]'); if (btn && !d.busy[p]) btn.disabled = !t.value.trim();
+    return true;
+  }
+  if (t.matches?.('[data-ps-ollama]')) {   // the address: judged as you type, in place (the box keeps its focus)
+    d.ollama = t.value; d.touched = true; delete d.errors?.['ollama-address'];
+    const st = ollamaStatus(t.value), line = t.closest?.('.ps-keybox')?.querySelector?.('.ps-ollama-status');
+    if (line) { line.className = `ps-keyline ps-ollama-status ${st.cls}`; line.innerHTML = `${st.cls === 'warn' ? ic('warn') : st.cls === 'ok' ? ic('check') : ''}<span>${esc(st.text)}</span>`; }
     return true;
   }
   if (t.matches?.('[data-ps-jobmodel]')) { const j = t.dataset.psJobmodel; d.routes[j].model = t.value; d.touched = true; if (d.errors) delete d.errors[`route-${j}`]; return true; }

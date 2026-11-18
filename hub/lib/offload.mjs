@@ -118,7 +118,8 @@ export class Offload {
     const r = this.route(job), meta = { provider: plan.provider, model: plan.model };
     // Ollama can pass a model tag on to its cloud, which sends text off this machine. The '-cloud' / ':cloud' ending is a
     // heuristic (unverified against Ollama's docs), so 'local' refuses any model tag that looks like one.
-    if (plan.mode === 'local' && /[-:]cloud$/i.test(plan.model)) throw new ProviderError('refused', meta);
+    // Refused for every Ollama address (this PC or a second machine) and in every mode: a model that ends in cloud is not local.
+    if (plan.provider === 'ollama' && /[-:]cloud$/i.test(plan.model)) throw new ProviderError('refused', meta);
     if (plan.mode === 'any' && !PRESETS[plan.provider].local) {
       if (this.terms(plan.provider) !== 'paid') throw new ProviderError('terms', meta);   // per provider: this job's own
       if (plan.provider === 'openrouter' && /:free$/i.test(plan.model)) throw new ProviderError('terms', meta);

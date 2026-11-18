@@ -5,6 +5,7 @@
 //   node tools/offload-live-check.mjs --provider google --model gemini-3.5-flash-lite
 //   node tools/offload-live-check.mjs --provider openai --model gpt-5-nano
 //   node tools/offload-live-check.mjs --provider ollama --model gemma3:4b      (no key; the model must be pulled already)
+//   node tools/offload-live-check.mjs --provider ollama --model gemma3:12b --address http://100.101.102.103:11434   (your second PC)
 //
 // Keys are saved in the hub's data folder (CRUX_HUB_DATA, else ~/.crux-hub) in provider-keys.json, protected for this
 // Windows user. Run it from the hub folder. Add --no-save to use the key for this one call without saving it.
@@ -15,6 +16,7 @@ const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i > 0 &
 const provider = arg('provider', 'google');
 const model = arg('model', provider === 'openai' ? 'gpt-5-nano' : provider === 'ollama' ? 'gemma3:4b' : 'gemini-3.5-flash-lite');
 const noSave = process.argv.includes('--no-save');
+const address = arg('address', null);
 
 // Reads a line without echoing it. Falls back to a plain line when stdin is not a terminal (a pipe).
 function hidden(promptText) {
@@ -47,11 +49,12 @@ if (PRESETS[provider].needsKey) {
   }
 }
 try {
-  const client = new ProviderClient({ provider, model, apiKey });   // each preset keeps its own timeout (Ollama 120 s)
+  // --address: Ollama on one of your Tailscale machines (for example http://100.101.102.103:11434); the same rule as the hub's box
+  const client = new ProviderClient({ provider, model, apiKey, ...(address ? { baseUrl: address } : {}) });   // each preset keeps its own timeout (Ollama 120 s)
   const r = await client.chat({ system: 'Answer in one short sentence.', user: 'Say that the outside model call works.', maxTokens: 60 });
   console.log(`${r.provider}  ${r.model}  tokens ${r.tokens.input}+${r.tokens.output}  ${r.costUSD == null ? 'dollars unknown (model not in the price table)' : r.costUnit === 'credits' ? `${r.costUSD.toFixed(6)} credits (as reported)` : `$${r.costUSD.toFixed(6)}`}  ${r.ms} ms  ok`);
 } catch (e) {
   const kind = e instanceof ProviderError ? e.kind : 'network';
-  console.log(`${provider}  ${model}  error: ${kind}${e?.status ? ` (${e.status})` : ''}${e?.retryAfterSec != null ? ` retry after ${e.retryAfterSec} s` : ''}`);
+  console.log(`${provider}  ${model}  error: ${kind}${e?.status ? ` (${e.status})` : ''}${e?.retryAfterSec != null ? ` retry after ${e.retryAfterSec} s` : ''}${['unreachable', 'address'].includes(kind) ? ` - ${e.message}` : ''}`);
   process.exitCode = 1;
 }

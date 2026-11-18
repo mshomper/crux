@@ -271,7 +271,7 @@ test('local allows only the Ollama provider on this machine; the keyless call fr
   const free = mock.requests.find(q => q.path === '/api/generate');
   assert.deepEqual(free.body, { model: 'gemma3:4b', keep_alive: 0 }, 'the native route frees the GPU');
   // an address that is not on this machine is refused by the client itself
-  assert.throws(() => new ProviderClient({ provider: 'ollama', model: 'm', baseUrl: 'https://example.com/v1' }), e => e.kind === 'refused');
+  assert.throws(() => new ProviderClient({ provider: 'ollama', model: 'm', baseUrl: 'https://example.com/v1' }), e => e.kind === 'address');   // decision 82 A: this PC or a Tailscale machine, nothing else
   // and a failing free-up never fails the job
   const flaky = new ProviderClient({ provider: 'ollama', model: 'm', baseUrl: MOCK, vramReader: FREE_VRAM, fetchFn: async (u, o) => { if (String(u).endsWith('/api/generate')) throw new Error('down'); return fetch(u, o); } });
   assert.equal((await flaky.chat({ system: 's', user: 'u' })).provider, 'ollama');

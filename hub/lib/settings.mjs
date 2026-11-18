@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { PRESETS, looksSecret } from './providers.mjs';
+import { ollamaAddress } from '../public/ollama-address.js';
 
 //   conductorWakes: projects' summaries and cards wake the Conductor (decision 55). The off switch: false in
 //     settings.json (or hub.json) and it wakes only for your messages and its reminders.
@@ -150,9 +151,17 @@ function pickRoute(job, r) {
   const model = typeof r.model === 'string' ? r.model.trim().slice(0, 120) : '';
   if (looksSecret(model)) return null;   // a key pasted into a model box is never kept: it would sit in plain text and go to the page
   if (job === 'image' ? !PRESETS[r.provider].imageModel : !model) return null;
+  // Ollama's address (decision 82 A): this PC, or one of the owner's Tailscale machines; any other address is refused here,
+  // so a route with one is not saved (the hub checks again at every call). Kept as the address the hub calls.
+  let baseUrl = null;
+  if (r.provider === 'ollama' && typeof r.baseUrl === 'string' && r.baseUrl.trim()) {
+    const a = ollamaAddress(r.baseUrl);
+    if (!a.ok) return null;
+    baseUrl = a.base;
+  }
   return {
     provider: r.provider, model: model || null,
-    ...(r.provider === 'ollama' && typeof r.baseUrl === 'string' && r.baseUrl.trim() ? { baseUrl: r.baseUrl.trim().slice(0, 200) } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
     ...(Number.isFinite(Number(r.minFreeMB)) && r.minFreeMB !== null && r.minFreeMB !== '' && Number(r.minFreeMB) >= 0 ? { minFreeMB: Number(r.minFreeMB) } : {})
   };
 }

@@ -401,7 +401,7 @@ test('the Whole hub panel: with nothing saved, no provider shows as chosen and i
   assert.equal(hubChanges(PSET, d).body.outsideRoutes, undefined, 'nothing to save yet');
   assert.match(html, /No key saved/);
   for (const p of ['Google', 'OpenAI', 'OpenRouter']) assert.match(html, new RegExp(`ps-key-name">${p}<`));
-  assert.ok(!/ps-key-name">Ollama</.test(html), 'Ollama needs no key box');
+  assert.ok(!/data-ps-keyin="ollama"/.test(html) && !/data-ps-keysave="ollama"/.test(html), 'Ollama needs no key: its box takes an address, not a key');
 });
 
 test('a key box shows only "saved, ends XXXX", with Replace and Remove; an empty one has a hidden-text field and a disabled Save', () => {
