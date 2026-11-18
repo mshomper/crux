@@ -50,6 +50,12 @@ export function fallbackCostUSD(purpose, tokens = null) {
   return (input * Math.max(...top.map(p => p.input)) + output * Math.max(...top.map(p => p.output))) / 1e6;
 }
 
+// What looks like a key or a password: known key shapes, and the "password: ..." / "password=..." form (a password, secret,
+// token or key given as a value). Plain sentences ("the password is required") do not match. Not a scanner, only a catch for
+// the plain mistake: used on text sent outside (offload.mjs) and on model names saved in settings (settings.mjs).
+const SECRET = /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAIza[0-9A-Za-z_-]{30,}|\bsk-[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{30,}|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}|\b(?:password|passwd|pwd|passphrase|secret|api[_ -]?key|(?:access[_ -]?|auth[_ -]?)?token)\b["']?\s*[:=]\s*["']?[^\s"']{6,}/i;
+export const looksSecret = s => SECRET.test(String(s || ''));
+
 // Aspect ratios the make_image tool accepts. The docs show "1:1" and "16:9"; the rest are the usual ones and Google refuses
 // one the model does not take (a plain 'refused').
 export const ASPECT_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];

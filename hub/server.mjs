@@ -657,7 +657,7 @@ async function handle(req, res) {
       // with that same prompt (no code); where Windows Hello is not available it goes ahead, with a push.
       let need = ctx.device && !ctx.device.off ? stepUpNeed(key, input, hub) : null;
       if (need && ctx.device.local && key === 'POST /api/pair/issue') need = null;
-      if (need && ctx.device.local && need.purpose === 'account') need = null;   // the PC needs no Windows Hello to switch the account; a phone does (decision 78 A)
+      if (need && ctx.device.local && ['account', 'outside-key'].includes(need.purpose)) need = null;   // the PC needs no Windows Hello to switch the account or save an outside provider's key (decisions 48 and 78 A); a phone does
       if (need && ctx.device.local && !guard.pcHasPasskey()) need = { ...need, enroll: true };
       if (need) {
         ctx.stepUp = guard.verifyStepUp({ headers: req.headers, device: ctx.device, stepUp: input.stepUp, need });

@@ -594,3 +594,85 @@ test('make_image reports its time; OpenRouter is asked for its own cost and a re
   assert.match(rec.images[0].file, /^images\/0001-jpeg-by-id\.jpg$/, 'a .jpg id is placed like a .png one');
   assert.ok(existsSync(join(dec, rec.images[0].file)));
 });
+
+// ---------- review round 1 of #146 ----------
+test('HIGH: an old settings file, then a route-only save, then a restart: the migrated "paid" terms are still there and Any still reaches Google', t => {
+  const root = makeTmp('crux-outside-terms-', t), file = join(root, 'settings.json'), dir = join(root, 'proj'), data = join(root, 'data');
+  mkdirSync(dir, { recursive: true }); mkdirSync(data, { recursive: true });
+  writeFileSync(file, JSON.stringify({ outsideProvider: { provider: 'google', model: 'gemini-3.5-flash-lite', dataTerms: 'paid' }, projects: {} }));
+  const s = new HubSettings({ file });
+  s.setProject(dir, { outsideModels: 'any' });
+  s.set({ outsideRoutes: { ask: { provider: 'google', model: 'gemini-3.5-flash-lite' }, draft: { provider: 'google', model: 'gemini-3.5-flash-lite' }, image: { provider: 'google', model: null } } });   // a route-only save, as the panel's Done sends it
+  const saved = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(saved.outsideProvider, undefined);
+  assert.deepEqual(saved.outsideTerms, { google: 'paid' }, 'the terms were written with the routes');
+  const after = new HubSettings({ file });   // the next start
+  const keys = new ProviderKeys({ env: { CRUX_HUB_DATA: data }, protector }); keys.save('google', DUMMY_KEY);
+  const offload = new Offload({ settings: after, keys });
+  assert.equal(offload.terms('google'), 'paid');
+  assert.doesNotThrow(() => offload.client(dir, 'image'));
+  assert.doesNotThrow(() => offload.client(dir, 'draft'));
+});
+
+test('MEDIUM: a key pasted into a model box is dropped, never saved in settings.json, and the panel says so on the job row', t => {
+  const root = makeTmp('crux-outside-model-', t), file = join(root, 'settings.json');
+  const s = new HubSettings({ file });
+  const OR = `sk-or-v1-${'0f1e2d3c'.repeat(4)}`, GG = `AIza${'Xy9Zq'.repeat(7)}`;
+  s.set({ outsideRoutes: { ask: { provider: 'openrouter', model: OR }, draft: { provider: 'google', model: GG }, image: { provider: 'google', model: GG } } });
+  assert.deepEqual(s.get('outsideRoutes'), {}, 'every key-shaped model was dropped');
+  s.set({ outsideRoutes: { ask: { provider: 'openrouter', model: 'meta/llama-x' } } });
+  const text = readFileSync(file, 'utf8');
+  assert.ok(!text.includes(OR) && !text.includes(GG), 'neither key reached settings.json');
+  assert.equal(new HubSettings({ file }).get('outsideRoutes').ask.model, 'meta/llama-x');
+  const { d } = panel({}, INFO, o => { o.routes.ask = { provider: 'openrouter', model: OR }; });
+  const ch = hubChanges(PSET, d);
+  assert.match(ch.errors['route-ask'], /looks like a key, not a model name/);
+  assert.equal(ch.body.outsideRoutes, undefined, 'nothing is sent');
+  assert.match(hubPanel({ ...d, errors: ch.errors }), /looks like a key, not a model name/);
+});
+
+test('LOW: a key typed but not saved keeps the panel open with a plain line; an OpenRouter ":free" model gets a mark; an unused provider\'s empty box is not amber', () => {
+  const typed = panel({}, INFO, o => { o.typed.openai = 'sk-fake-typed-1234-5678'; });
+  const ch = hubChanges(PSET, typed.d);
+  assert.match(ch.errors['key-openai'], /typed a OpenAI key but did not press Save/);
+  assert.match(hubPanel({ ...typed.d, errors: ch.errors }), /did not press Save/);
+  assert.ok(!JSON.stringify(ch).includes('sk-fake-typed'), 'the error does not repeat the key');
+  assert.match(jobNotes('ask', panel({}, { ...INFO, keys: { openrouter: { saved: true, end: 'ZZ99' } } }, o => { o.routes.ask = { provider: 'openrouter', model: 'meta/llama-x:free' }; o.terms.openrouter = 'paid'; }).o).join(' '), /free models can keep what is sent/);
+  const html = hubPanel(panel({}, { ...INFO, keys: {} }, o => { o.routes.ask = { provider: 'google', model: 'gemini-3.5-flash-lite' }; }).d);
+  const box = name => html.slice(html.indexOf(`data-ps-keybox="${name}"`), html.indexOf('ps-key-plan', html.indexOf(`data-ps-keybox="${name}"`)));
+  assert.match(box('google'), /ps-keystat warn/, 'a job uses Google: its empty box is amber');
+  assert.match(box('openai'), /ps-keystat">No key saved/, 'no job uses OpenAI: plain text');
+  assert.ok(!/ps-keystat warn/.test(box('openai')));
+});
+
+test('LOW: a damaged provider-keys.json is never rewritten with only the new key; a missing one is fine', t => {
+  const root = makeTmp('crux-outside-damaged-', t), data = join(root, 'data');
+  mkdirSync(data, { recursive: true });
+  const keys = new ProviderKeys({ env: { CRUX_HUB_DATA: data }, protector });
+  keys.save('google', DUMMY_KEY);   // no file yet: fine
+  keys.save('openai', DUMMY_KEY);
+  const before = readFileSync(keys.file, 'utf8');
+  writeFileSync(keys.file, '{ not json');
+  assert.throws(() => keys.save('openrouter', DUMMY_KEY), /damaged, so nothing was changed/);
+  assert.throws(() => keys.remove('google'), /damaged, so nothing was changed/);
+  assert.equal(readFileSync(keys.file, 'utf8'), '{ not json', 'the file was left as it was');
+  writeFileSync(keys.file, '[1]');
+  assert.throws(() => keys.save('openrouter', DUMMY_KEY), /damaged/);
+  writeFileSync(keys.file, before);
+  keys.save('openrouter', DUMMY_KEY);
+  assert.deepEqual(Object.keys(keys.view()).sort(), ['google', 'openai', 'openrouter'], 'a good file keeps every key');
+  assert.ok(!readFileSync(keys.file, 'utf8').includes(DUMMY_KEY));
+});
+
+test('LOW: month summaries use the long-draft route, not the short-question one', async t => {
+  reset();
+  const w = world(t, { events: oldMonth() });
+  w.keys.save('openai', DUMMY_KEY);
+  w.settings.set({ outsideRoutes: { ask: { provider: 'openai', model: 'gpt-5-nano' }, draft: { provider: 'google', model: 'gemini-3.5-flash-lite' } }, outsideTerms: { google: 'paid', openai: 'paid' } });
+  w.settings.setProject(w.dir, { outsideSummaries: true });
+  await quiet(async () => { w.hub.rotateLogs(); await w.hub.summarising; });
+  const chats = mock.requests.filter(r => r.path.endsWith('/chat/completions'));
+  assert.equal(chats.length, 1);
+  assert.equal(chats[0].body.model, 'gemini-3.5-flash-lite', 'the draft route answered');
+  assert.equal(w.claude.calls, 0);
+});

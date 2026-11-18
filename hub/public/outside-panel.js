@@ -22,7 +22,9 @@ export const JOBS = [
 ];
 const DEFAULT_PICTURE_MODELS = { google: 'gemini-nano-banana-2.1', openai: 'gpt-image-2' };
 
-const canPictures = (p, info) => (info?.providers?.[p] ? !!info.providers[p].imageModel : p in DEFAULT_PICTURE_MODELS);
+// Mirrors looksSecret in lib/providers.mjs for the shapes a key pasted into a model box would have (the hub refuses them too).
+const looksLikeKey = s => /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAIza[0-9A-Za-z_-]{30,}|\bsk-[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{30,}|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}/.test(String(s || ''));
+const canPictures =(p, info) => (info?.providers?.[p] ? !!info.providers[p].imageModel : p in DEFAULT_PICTURE_MODELS);
 export const pictureModel = (p, info) => info?.providers?.[p]?.imageModel || DEFAULT_PICTURE_MODELS[p] || '';
 
 // The draft the panel works on. settings: the hub settings the page holds; info: what /api/state sent (keys, price table).
@@ -41,6 +43,7 @@ export function jobNotes(job, d) {
   const info = d.info || {}, P = NAME[r.provider], notes = [];
   if (KEYED.includes(r.provider) && !info.keys?.[r.provider]?.saved) notes.push(`No ${P} key is saved yet, so this job refuses until you add one in the key box above.`);
   if (KEYED.includes(r.provider) && (d.terms?.[r.provider] || 'unknown') !== 'paid') notes.push(`Your plan with ${P} is not set to Paid, so projects set to Any send nothing to it. Set it to Paid in the ${P} box above if it is.`);
+  if (r.provider === 'openrouter' && /:free$/i.test((r.model || '').trim())) notes.push('OpenRouter\'s free models can keep what is sent, so projects set to Any refuse this model. Pick a paid one.');
   if (r.provider !== 'ollama') {
     const model = (r.model || '').trim() || (job === 'image' ? pictureModel(r.provider, info) : '');
     const table = job === 'image' ? info.priced?.image : info.priced?.text;
@@ -56,7 +59,9 @@ const segN = (cur, name, choices) => `<div class="ps-seg" role="radiogroup" aria
 
 function keyBox(p, d) {
   const k = d.info?.keys?.[p], P = NAME[p], saved = !!k?.saved, replacing = !!d.replacing[p] || !saved, busy = !!d.busy[p], can = d.info?.canProtect !== false;
-  const status = saved ? `<span class="ps-keystat ok">${ic('check')}Key saved, ends ${esc(k.end || '????')}</span>` : `<span class="ps-keystat warn">${ic('warn')}No key saved</span>`;
+  // An empty box is amber only when a job uses that provider; otherwise it is just plain text (nothing is wrong).
+  const used = JOBS.some(j => d.routes[j.k].provider === p);
+  const status = saved ? `<span class="ps-keystat ok">${ic('check')}Key saved, ends ${esc(k.end || '????')}</span>` : used ? `<span class="ps-keystat warn">${ic('warn')}No key saved</span>` : '<span class="ps-keystat">No key saved</span>';
   const entry = !can ? `<p class="ps-dflt warn">${ic('warn')}This computer cannot protect a saved key (Windows only), so keys cannot be saved here.</p>`
     : replacing ? `<div class="ps-keyin"><input class="ac-field ps-keyfield" type="password" name="crux-outside-key-${p}" autocomplete="off" autocapitalize="off" spellcheck="false" data-ps-keyin="${p}" placeholder="${saved ? `Paste a new ${P} key to replace it` : `Paste your ${P} key`}" aria-label="${esc(P)} key" value="${esc(d.typed[p] || '')}">
         <button type="button" class="btn primary" data-ps-keysave="${p}" ${(d.typed[p] || '').trim() && !busy ? '' : 'disabled'}>${ic('check')}${busy ? 'Saving...' : 'Save'}</button>
@@ -66,7 +71,7 @@ function keyBox(p, d) {
   return `<div class="ps-keybox" data-ps-keybox="${p}">
     <div class="ps-key-top"><span class="ps-key-name">${esc(P)}</span>${status}</div>
     ${entry}
-    ${d.keyErr[p] ? `<p class="ps-dflt warn" role="alert">${ic('warn')}${esc(d.keyErr[p])}</p>` : ''}
+    ${d.keyErr[p] || d.errors?.[`key-${p}`] ? `<p class="ps-dflt warn" role="alert">${ic('warn')}${esc(d.keyErr[p] || d.errors[`key-${p}`])}</p>` : ''}
     <div class="ps-key-plan"><span class="ps-num-label"><span>Your plan with ${esc(P)}</span></span>${help(TERMS_TIP)}${segN(d.terms[p], `terms-${p}`, TERMS)}</div>
   </div>`;
 }
@@ -101,11 +106,14 @@ export function outsideSections(d) {
 export function outsideChanges(settings = {}, d) {
   const body = {}, errors = {};
   if (!d?.routes) return { body, errors };
+  // A key typed in a box but not saved with its Save button: stay open and say so, rather than dropping it without a word.
+  for (const p of KEYED) if (String(d.typed?.[p] || '').trim()) errors[`key-${p}`] = `You typed a ${NAME[p]} key but did not press Save. Press Save to keep it, or clear the box.`;
   const routes = {};
   for (const j of JOBS) {
     const r = d.routes[j.k];
     if (!r.provider) continue;
     const model = (r.model || '').trim();
+    if (looksLikeKey(model)) { errors[`route-${j.k}`] = 'That looks like a key, not a model name. Keys go in the key box above, and nothing is saved here.'; continue; }
     if (j.k !== 'image' && !model) { errors[`route-${j.k}`] = 'Needs a model name'; continue; }
     const old = settings.outsideRoutes?.[j.k];
     routes[j.k] = { provider: r.provider, model: model || null, ...(old?.provider === r.provider && old.baseUrl ? { baseUrl: old.baseUrl } : {}), ...(old?.provider === r.provider && old.minFreeMB != null ? { minFreeMB: old.minFreeMB } : {}) };

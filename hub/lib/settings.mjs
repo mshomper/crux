@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { PRESETS } from './providers.mjs';
+import { PRESETS, looksSecret } from './providers.mjs';
 
 //   conductorWakes: projects' summaries and cards wake the Conductor (decision 55). The off switch: false in
 //     settings.json (or hub.json) and it wakes only for your messages and its reminders.
@@ -130,7 +130,12 @@ export class HubSettings {
     mkdirSync(join(this.file, '..'), { recursive: true });
     let saved = {};
     try { saved = JSON.parse(readFileSync(this.file, 'utf8')); } catch { }
-    if ('outsideRoutes' in c) delete saved.outsideProvider;   // the older single setting is replaced by the routes, not kept beside them
+    if ('outsideRoutes' in c) {
+      // The older single setting is replaced by the routes, not kept beside them. Its plan terms were read from it at load, so
+      // they are written now with the routes (this.values already holds them): dropping it must not lose "paid".
+      delete saved.outsideProvider;
+      if (!('outsideTerms' in c) && this.values.outsideTerms) saved.outsideTerms = this.values.outsideTerms;
+    }
     writeFileSync(this.file, JSON.stringify({ ...saved, ...c, timeoutRaised: TIMEOUT_RAISED }, null, 2));
   }
 }
@@ -143,6 +148,7 @@ export const projectKey = dir => String(dir).replace(/\\/g, '/').replace(/\/+$/,
 function pickRoute(job, r) {
   if (!r || typeof r !== 'object' || !OUTSIDE_PRESETS.includes(r.provider)) return null;
   const model = typeof r.model === 'string' ? r.model.trim().slice(0, 120) : '';
+  if (looksSecret(model)) return null;   // a key pasted into a model box is never kept: it would sit in plain text and go to the page
   if (job === 'image' ? !PRESETS[r.provider].imageModel : !model) return null;
   return {
     provider: r.provider, model: model || null,
