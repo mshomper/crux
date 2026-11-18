@@ -16,7 +16,7 @@ export const PROVIDERS = [['google', 'Google'], ['openai', 'OpenAI'], ['openrout
 export const KEYED = ['google', 'openai', 'openrouter'];
 export const NAME = Object.fromEntries(PROVIDERS);
 export const TERMS = [['unknown', 'Not sure'], ['free', 'Free plan'], ['paid', 'Paid plan']];
-export const TERMS_TIP = 'Paid plan: the provider does not train on or keep what the hub sends. Not sure or Free plan: projects set to Any send nothing to it. Google\'s picture models are paid only.';
+export const TERMS_TIP = 'Paid plan: the provider does not train on what the hub sends. Not sure or Free plan: projects set to Any send nothing to it. Google\'s picture models are paid only.';
 export const JOBS = [
   { k: 'ask', label: 'Short questions', tip: 'Quick one-line answers an agent asks for, such as a label or a rewording (the ask_outside_model tool).' },
   { k: 'draft', label: 'Long drafts', tip: 'A report, a document section or a summary written from text the agent passes in (the draft_with_outside_model tool).' },
@@ -51,7 +51,7 @@ export function jobNotes(job, d) {
   if (KEYED.includes(r.provider) && !info.keys?.[r.provider]?.saved) notes.push(`No ${P} key is saved yet, so this job refuses until you add one in the key box above.`);
   if (KEYED.includes(r.provider) && (d.terms?.[r.provider] || 'unknown') !== 'paid') notes.push(`Your plan with ${P} is not set to Paid, so projects set to Any send nothing to it. Set it to Paid in the ${P} box above if it is.`);
   if (r.provider === 'ollama' && String(d.ollama || '').trim() && !ollamaAddress(d.ollama).ok) notes.push(`The Ollama address is refused: ${ollamaAddress(d.ollama).why} This job refuses until it is fixed in the Ollama box above.`);
-  if (r.provider === 'openrouter' && /:free$/i.test((r.model || '').trim())) notes.push('OpenRouter\'s free models can keep what is sent, so projects set to Any refuse this model. Pick a paid one.');
+  if (r.provider === 'openrouter' && /:free$/i.test((r.model || '').trim())) notes.push('OpenRouter\'s free models can train on what is sent, so projects set to Any refuse this model. Pick a paid one.');
   if (r.provider !== 'ollama') {
     const model = (r.model || '').trim() || (job === 'image' ? pictureModel(r.provider, info) : '');
     const table = job === 'image' ? info.priced?.image : info.priced?.text;
@@ -187,7 +187,7 @@ export function outsideClick(e, d, host) {
     const name = seg.dataset.psSeg, v = seg.dataset.v;
     if (name.startsWith('job-')) {
       const j = name.slice(4), r = d.routes[j];
-      if (r && r.provider !== v && (v === '' || PROVIDERS.some(([p]) => p === v))) { r.provider = v; if (!v) r.model = ''; d.touched = true; }
+      if (r && r.provider !== v && (v === '' || PROVIDERS.some(([p]) => p === v))) { r.provider = v; r.model = ''; d.touched = true; }
       return true;
     }
     if (name.startsWith('terms-')) { const p = name.slice(6); if (KEYED.includes(p) && TERMS.some(([x]) => x === v)) { d.terms[p] = v; d.touched = true; } return true; }

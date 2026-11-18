@@ -11,7 +11,7 @@ import { makeTmp } from './helpers/tmp.mjs';
 import { Hub } from '../lib/hub.mjs';
 import { Memory } from '../lib/memory.mjs';
 import { HubSettings } from '../lib/settings.mjs';
-import { PRESETS, ProviderClient } from '../lib/providers.mjs';
+import { PRESETS, ProviderClient, fallbackCostUSD } from '../lib/providers.mjs';
 import { ProviderKeys, Offload } from '../lib/offload.mjs';
 import { cruxTools, cruxToolNames } from '../lib/tools.mjs';
 import { hubPanel, hubChanges } from '../public/project-settings.js';
@@ -108,6 +108,16 @@ test('no default picture model: the route needs one typed, a :free model and an 
   assert.equal(mock.requests.length, 0);
 });
 
+test('review fixes: an unknown-cost OpenRouter picture counts 20 cents (others 5+), 404 names the no-training rule, Ollama 402 is not "no credit", picture wait is 120 s', () => {
+  assert.equal(fallbackCostUSD('make_image', null, 'openrouter'), 0.20);
+  assert.ok(fallbackCostUSD('make_image', null, 'google') < 0.20);
+  const st = (provider, status) => new ProviderClient({ provider, model: 'm', apiKey: KEY }).statusError({ status, headers: new Map() });
+  assert.match(st('openrouter', 404).message, /no-training rule, or the name is wrong/);
+  assert.equal(st('ollama', 402).kind, 'refused');
+  assert.equal(st('openrouter', 402).kind, 'no-credit');
+  assert.match(String(new ProviderClient({ provider: 'openrouter', model: 'm' }).imageCall), /timeoutMs = 120000/);
+});
+
 test('plain failures: a 402 says the account has no credit (and not the provider\'s words), an SVG-only or empty or address-only answer is refused, the picture is not stored', async t => {
   const w = world(t);
   reset('402');
@@ -140,7 +150,7 @@ test('the panel offers OpenRouter for pictures, asks for its model (no default),
   assert.deepEqual(outsideChanges(PSET, typed.o).body.outsideRoutes, { image: { provider: 'openrouter', model: MODEL } });
   assert.deepEqual(outsideChanges(PSET, draft(x => { x.routes.image = { provider: 'google', model: '' }; }).o).errors, {}, 'Google keeps its own default');
   assert.match(jobNotes('image', typed.o).join(' '), /OpenRouter's own cost figure is used when it comes back/);
-  assert.match(jobNotes('image', draft(x => { x.routes.image = { provider: 'openrouter', model: 'a/b:free' }; x.terms.openrouter = 'paid'; }).o).join(' '), /free models can keep what is sent/);
+  assert.match(jobNotes('image', draft(x => { x.routes.image = { provider: 'openrouter', model: 'a/b:free' }; x.terms.openrouter = 'paid'; }).o).join(' '), /free models can train on what is sent/);
 });
 
 test('the hub tells the panel which providers can make pictures', t => {

@@ -641,7 +641,7 @@ test('LOW: a key typed but not saved keeps the panel open with a plain line; an 
   assert.match(ch.errors['key-openai'], /typed a OpenAI key but did not press Save/);
   assert.match(hubPanel({ ...typed.d, errors: ch.errors }), /did not press Save/);
   assert.ok(!JSON.stringify(ch).includes(SK('fake-typed')), 'the error does not repeat the key');
-  assert.match(jobNotes('ask', panel({}, { ...INFO, keys: { openrouter: { saved: true, end: 'ZZ99' } } }, o => { o.routes.ask = { provider: 'openrouter', model: 'meta/llama-x:free' }; o.terms.openrouter = 'paid'; }).o).join(' '), /free models can keep what is sent/);
+  assert.match(jobNotes('ask', panel({}, { ...INFO, keys: { openrouter: { saved: true, end: 'ZZ99' } } }, o => { o.routes.ask = { provider: 'openrouter', model: 'meta/llama-x:free' }; o.terms.openrouter = 'paid'; }).o).join(' '), /free models can train on what is sent/);
   const html = hubPanel(panel({}, { ...INFO, keys: {} }, o => { o.routes.ask = { provider: 'google', model: 'gemini-3.5-flash-lite' }; }).d);
   const box = name => html.slice(html.indexOf(`data-ps-keybox="${name}"`), html.indexOf('ps-key-plan', html.indexOf(`data-ps-keybox="${name}"`)));
   assert.match(box('google'), /ps-keystat warn/, 'a job uses Google: its empty box is amber');
