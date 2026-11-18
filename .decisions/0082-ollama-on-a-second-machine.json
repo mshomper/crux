@@ -7,13 +7,16 @@
  "lenses": [
   "architecture"
  ],
- "status": "open",
+ "status": "decided",
  "lead": "Should the hub be allowed to send jobs to Ollama on your second PC over your private Tailscale network, and treat it like a model on this PC? I recommend it: it's your own machine on a private network, so small text jobs stay free and in your hands while your main GPU stays free for training.",
  "for_you": [
   "The Whole hub panel gets an address box for Ollama: this PC (as now) or one of your own machines on Tailscale",
   "Projects set to Local can use the second PC, the same as a model on this PC; nothing goes to a cloud provider",
   "The hub's check for free GPU memory only works on this PC, so it is skipped for the second box (nothing trains there)",
-  { "text": "On the second PC: install Ollama, pull one model, and let it answer on its Tailscale address (about five steps; the worker writes them out)", "kind": "setup" }
+  {
+   "text": "On the second PC: install Ollama, pull one model, and let it answer on its Tailscale address (about five steps; the worker writes them out)",
+   "kind": "setup"
+  }
  ],
  "context": "Matt (2026-11-17) wants local text jobs on his second PC: Ryzen 5 5600T, 32 GB RAM, AMD RX 9070 with 16 GB. Recent Ollama supports RDNA4 Radeon cards on Windows (newer cards may need the latest driver or the slower Vulkan mode; check at setup). 16 GB runs open models of about 12-20B parameters (gpt-oss-20b, Gemma, Qwen-class) for labels, rewording, transcript tidying and plain drafts. Today (decision 80) the Ollama preset accepts only this PC's loopback address, and the Local mode is defined as models on this PC; the expedition report noted a second box on Tailscale as not supported. The hub already reaches Matt's phone over Tailscale (decision 18, M002). Matt also set (R015) that outside providers are for cheap grunt work only, with local Ollama the free route. The main PC's RTX 4070 Ti Super (16 GB) is shared with training, so moving local jobs off it helps.",
  "depends_on": [
@@ -71,9 +74,9 @@
  "recommendation": "A: allow Ollama on your own Tailscale machines and treat it as local, so the second PC takes small text jobs for free.",
  "confidence": "medium",
  "change_mind": "If the RX 9070 won't run Ollama well at setup, park this and keep this PC only.",
- "chosen": null,
- "reason": null,
- "decided_on": null,
+ "chosen": "A",
+ "reason": "",
+ "decided_on": "2026-11-18",
  "superseded_by": null,
  "challenge": null,
  "settles": [

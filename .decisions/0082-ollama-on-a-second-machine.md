@@ -1,7 +1,7 @@
 # 0082 May the hub call a local model running on your second PC over Tailscale?
 
-- Status: open
-- Date: 2026-11-17
+- Status: decided
+- Date: 2026-11-17, decided 2026-11-18
 - Lenses: architecture
 - Builds on: 0018, 0080, 0081
 - Settles: local model address = the hub's Ollama route may use this PC or the human's own machines on the private Tailscale network (100.x or *.ts.net), counted as local; no other address
@@ -17,13 +17,17 @@ For you:
 - The hub's check for free GPU memory only works on this PC, so it is skipped for the second box (nothing trains there)
 - Setup: On the second PC: install Ollama, pull one model, and let it answer on its Tailscale address (about five steps; the worker writes them out)
 
+## Decision
+
+**A: Allow your Tailscale machines, count as local.** The Ollama address may be this PC or an address on your Tailscale network (a 100.x address or a name ending .ts.net); nothing else. Jobs sent there count as Local. The free-memory guard and model unload run only for this PC.
+
 ## Context
 
 Matt (2026-11-17) wants local text jobs on his second PC: Ryzen 5 5600T, 32 GB RAM, AMD RX 9070 with 16 GB. Recent Ollama supports RDNA4 Radeon cards on Windows (newer cards may need the latest driver or the slower Vulkan mode; check at setup). 16 GB runs open models of about 12-20B parameters (gpt-oss-20b, Gemma, Qwen-class) for labels, rewording, transcript tidying and plain drafts. Today (decision 80) the Ollama preset accepts only this PC's loopback address, and the Local mode is defined as models on this PC; the expedition report noted a second box on Tailscale as not supported. The hub already reaches Matt's phone over Tailscale (decision 18, M002). Matt also set (R015) that outside providers are for cheap grunt work only, with local Ollama the free route. The main PC's RTX 4070 Ti Super (16 GB) is shared with training, so moving local jobs off it helps.
 
 ## Options
 
-### A: Allow your Tailscale machines, count as local (recommended)
+### A: Allow your Tailscale machines, count as local (chosen) (recommended)
 
 The Ollama address may be this PC or an address on your Tailscale network (a 100.x address or a name ending .ts.net); nothing else. Jobs sent there count as Local. The free-memory guard and model unload run only for this PC.
 - Pro: Free small text jobs without using the main GPU
