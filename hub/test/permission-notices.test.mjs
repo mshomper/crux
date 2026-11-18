@@ -311,7 +311,8 @@ test('the hub starts the checker in the folder the worker\'s tool call runs in (
 test('R1 HIGH 1. a ( ) or @( ) argument in PowerShell is never a statement of its own', () => {
   for (const c of ['git push origin @("main")', 'git push @("--force","origin","main")', 'git push origin ("main")', 'git @("branch","-D","main")',
     'git push origin @( "main" )', 'Write-Output (git push origin main)', 'Write-Output (Set-Content C:\\x.txt 1)', "git push origin ('ma' + 'in')"]) matt(wt, c, ps);
-  assert.equal(notMatt(proj, "Get-ChildItem (Join-Path $env:TEMP 'x')", ps), 'unsure', 'an argument in brackets is not readable');
+  assert.equal(notMatt(proj, 'Get-ChildItem (Join-Path $env:TEMP $x)', ps), 'unsure', 'an argument in brackets is not readable');
+  allow(proj, "Get-ChildItem (Join-Path $env:TEMP 'x')", ps);   // M063: two plain words joined are $env:TEMP\x, read as that
   // statements that start with ( or @( read as before
   allow(proj, "@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*x*' }).Count", ps);
   allow(proj, '$n = @(Get-Process node -ErrorAction SilentlyContinue).Count; $n', ps);

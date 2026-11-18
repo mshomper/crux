@@ -190,7 +190,21 @@ const INTERP = /^(node|nodejs|tsx|ts-node|ts-node-esm|python[\d.]*|py|pypy[\d.]*
 // extension), 'module' (python -m), 'direct' (a path used as the command word). inline: code written in the command.
 // nested: { cmd, shell } command text to read in turn (bash -c "...", $(...)). runners: npm-style script names.
 // unread: { head, why } for anything the hub cannot read in full.
+// PowerShell: (Join-Path $env:TEMP 'name') with a plain literal name is the folder $env:TEMP\name (the same text the hub already
+// reads as the temp folder), so a script or a made folder named that way is looked for where it really is, not "built at run time".
+// Only two words joined: a name with a variable, a space, "..", a drive or a leading slash is left as written. Used by the script
+// look-up here and by the rules (permission-rules.mjs) when they match a folder against the ones the worker made.
+export function resolveJoinTemp(cmd) {
+  const lit = String.raw`(?:'([^'$\`\s]+)'|"([^"$\`\s]+)")`;
+  const re = new RegExp(String.raw`\(\s*Join-Path\s+(?:-Path\s+)?(\$\{?env:(?:TEMP|TMP)\}?)\s+(?:-ChildPath\s+)?${lit}\s*\)`, 'gi');
+  return String(cmd ?? '').replace(re, (m, base, a, b) => {
+    const name = a ?? b;
+    return /(^|[\\/])\.\.([\\/]|$)|^[\\/]|:/.test(name) ? m : `${base}\\${name}`;
+  });
+}
+
 export function parseCommand(cmd, { shell = 'bash', cwd = '' } = {}) {
+  if (shell === 'powershell') cmd = resolveJoinTemp(cmd);
   const out = { files: [], inline: [], nested: [], runners: [], unread: [], mutates: false };
   const lx = lex(cmd, shell);
   for (const why of lx.why) out.unread.push({ head: '(command)', why });

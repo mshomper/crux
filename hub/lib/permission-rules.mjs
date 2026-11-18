@@ -22,6 +22,7 @@ import { execFileSync } from 'node:child_process';
 import { gitReadRuns, gitNoIndex, GIT_SAFE_CONFIG } from './permissions.mjs';
 import { settleLists } from './permission-lists.mjs';
 import { inlineRewrite } from './permission-rewrites.mjs';
+import { resolveJoinTemp } from './permission-scripts.mjs';
 
 const norm = p => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
@@ -784,6 +785,7 @@ class Check {
         cmd = cmd.replace(new RegExp(String.raw`\$\(\s*${GTP}\s*\)`, 'gi'), () => '${env:TEMP}\\')
           .replace(new RegExp(String.raw`\(\s*${GTP}\s*\)`, 'gi'), () => '$env:TEMP')
           .replace(new RegExp(GTP, 'gi'), () => '$env:TEMP');
+        cmd = resolveJoinTemp(cmd);   // (Join-Path $env:TEMP 'name') is $env:TEMP\name: matched against the folders the worker made
       }
       // Variables the command sets itself ($s = ...) are its own, not the environment's.
       this.localVars ||= new Set();
@@ -2903,6 +2905,9 @@ class Check {
   hubData(cwd, need) {
     for (const k of ['crux_hub_data', 'crux_home']) {
       const v = this.env().get(k);
+      // The folder handed to a test hub the worker starts, in the temp folder and not there yet: the hub makes it for this worker,
+      // so it is the worker's own to delete later (R005), as if it had made it with mkdir. Not one that already exists.
+      if (typeof v === 'string' && this.where(v, cwd) === 'tmp') this.noteTemp(v, cwd, true);
       if (v != null && !['inside', 'tmp'].includes(this.where(v, cwd))) this.stop(`Starts a hub on the live hub's data or profile folder (${k.toUpperCase()}=${v})`);
       else if (need && (v == null || this.where(v, cwd) !== 'tmp')) {
         this.unsure(v == null ? `Starts a test hub with no ${k === 'crux_home' ? 'profile' : 'data'} folder of its own (${k.toUpperCase()}), so it would share the live hub's settings` : `Starts a test hub whose ${k.toUpperCase()} is not in the temp folder`, true);

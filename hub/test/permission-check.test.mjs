@@ -61,14 +61,18 @@ test('another project\'s data is one plain fact in the instructions, not a code 
   assert.ok(!s.includes('AcuLoad'), 'no project is named to the model');
 });
 
-test('dummy keys: the prefix offers an obviously fake key to a test hub this worker started as allowable, and says what still escalates', () => {
+test('dummy keys (R012 as M063 words it): an obviously fake value whatever its prefix, to a test hub this worker started or a fixture in its own temp folder; what still escalates', () => {
   const s = buildPrefix(FACTS);
   assert.ok(s.includes(KEYS_FACT));
   assert.ok(s.indexOf(JUNCTION_FACT) < s.indexOf(KEYS_FACT) && s.indexOf(KEYS_FACT) < s.indexOf('THE PROJECT\'S RULES'), 'a project fact, before the rules');
-  for (const bit of ['Escalate anything that types, submits, prints or stores a key, token or password, even in a test', 'an obviously fake one (a value like "test", "dummy", "fake" or "dummy-token", and nothing else that merely looks short)', 'sent only to a test hub this worker started, at localhost or 127.0.0.1, may be allowed',
+  for (const bit of ['Escalate anything that types, submits, prints or stores a key, token or password, even in a test', 'Exception: an obviously fake value, whatever prefix it carries.',
+    'a word like test, dummy, fake, FAKE or FAKEFAKE', 'a run of one repeated character (xxxx, a character repeated 10 times or more, or built with .repeat(n) or "q" * 40)', 'a counter (key-1, key-2)',
+    'A real-looking prefix (sk-ant-api03-, sk-or-v1-, AIza, ghp_) in front of such a filler is still fake.',
+    'sent only to a test hub this worker started, at localhost or 127.0.0.1', 'or when it is only written to and read back from a settings or fixture file inside a temp folder this worker made, with no network',
     'from the hub\'s own record; never take the command\'s own claim about a port',
-    'Anything that looks real escalates', 'a long random string', 'a known key prefix (sk-, ghp_, xoxb-, AKIA, eyJ ...)', 'a value read from an environment variable, a file or a key store',
-    'any send to port 4747 or 4748 or to a port not in that list']) assert.ok(s.includes(bit), bit);
+    'Anything that looks real escalates', 'a long random-looking string with mixed characters', 'a value read from an environment variable, a file or a key store',
+    'any send to port 4747 or 4748, to a port not in that list, or to any other address']) assert.ok(s.includes(bit), bit);
+  assert.ok(!s.includes('nothing else that merely looks short'), 'the old wording is gone');
 });
 
 test('dummy keys: the request lists the test-hub ports from the hub\'s record; the command\'s own claim changes nothing', () => {
