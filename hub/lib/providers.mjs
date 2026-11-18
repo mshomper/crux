@@ -71,7 +71,8 @@ export const ERROR_MESSAGES = {
   refused: 'The outside model refused the request.',
   'key-rejected': 'The provider did not accept the saved key.',
   'unknown-model': 'The provider does not know that model name.',
-  'local-only': 'This project is set to Local only, and the hub\'s provider is not on this computer.',
+  'no-route': 'No outside provider is set for this kind of job in the Whole hub panel.',
+  'local-only':'This project is set to Local only, and the hub\'s provider is not on this computer.',
   'bad-answer': 'The outside model gave an answer the hub could not read.',
   off: 'Outside models are off for this project.',
   network: 'The outside model could not be reached.',
@@ -198,7 +199,7 @@ export class ProviderClient {
     await this.guardGpu();
     try {
       const body = { model: this.model, messages: [...(system ? [{ role: 'system', content: String(system) }] : []), { role: 'user', content: String(user ?? '') }], [this.preset.tokenField]: maxTokens };
-      if (this.provider === 'openrouter') body.provider = { data_collection: 'deny' };   // no provider that keeps prompts
+      if (this.provider === 'openrouter') { body.provider = { data_collection: 'deny' }; body.usage = { include: true }; }   // no provider that keeps prompts; and its own cost figure back in usage.cost
       const j = await this.post('chat/completions', body, signal, timeoutMs ? { timeoutMs } : {});
       const content = j?.choices?.[0]?.message?.content;
       if (typeof content !== 'string') throw this.fail('bad-answer');

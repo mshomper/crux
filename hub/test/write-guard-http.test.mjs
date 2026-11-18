@@ -105,8 +105,10 @@ test('every POST route refuses a request with no device cookie (one request per 
   // 41 with the Expedition module's launch, Stop and draft dismissal (phase 5): /api/expedition, /stop and /dismiss.
   // 43 with the Account card (decision 78 A): /api/account and /api/account/signin.
   // 46 with the profile in the Account card (decision 79 A): /api/profile/create, /import and /prompt.
-  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 46, `46 routes need a paired device: ${routes.join(' ')}`);
-  for (const r of ['/api/account', '/api/account/signin', '/api/profile/create', '/api/profile/import', '/api/profile/prompt']) assert.ok(routes.includes(r), `${r} is among the routes checked`);
+  // 47 with the outside providers' keys (decision 81 A): /api/outside/key.
+  assert.equal(routes.filter(r => !OPEN.includes(r)).length, 47, `47 routes need a paired device: ${routes.join(' ')}`);
+  assert.ok(routes.includes('/api/outside/key'), '/api/outside/key is among the routes checked');
+  for (const r of ['/api/account','/api/account/signin', '/api/profile/create', '/api/profile/import', '/api/profile/prompt']) assert.ok(routes.includes(r), `${r} is among the routes checked`);
   for (const r of ['/api/voice/switch', '/api/voice/setup', '/api/voice/listen', '/api/voice/say', '/api/lists/add', '/api/lists/access', '/api/lists/remove', '/api/expedition', '/api/expedition/stop', '/api/expedition/dismiss']) assert.ok(routes.includes(r), `${r} is among the routes checked`);
   for (const path of routes.filter(r => !OPEN.includes(r))) {
     const r = await call('POST', path, { body: {} });

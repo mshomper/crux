@@ -262,7 +262,8 @@ test('local allows only the Ollama provider on this machine; the keyless call fr
   await assert.rejects(() => w.offload.chat(w.dir, { system: 's', user: 'u' }), e => e.kind === 'off');
   assert.equal(mock.requests.length, 0);
   w.settings.set({ outsideProvider: { provider: 'ollama', model: 'gemma3:4b', baseUrl: ROOT + '/v1' } });
-  assert.equal(w.settings.get('outsideProvider').dataTerms, 'unknown', 'dataTerms defaults to unknown');
+  assert.equal(w.settings.get('outsideTerms').ollama, 'unknown', 'the plan terms default to unknown');
+  assert.deepEqual(Object.keys(w.settings.get('outsideRoutes')).sort(), ['ask', 'draft'], 'a provider with no picture model gets no picture route');
   const r = await w.offload.chat(w.dir, { system: 's', user: 'Thread: big' });
   assert.equal(r.provider, 'ollama'); assert.equal(r.costUSD, 0);
   assert.equal(mock.requests[0].headers.authorization, undefined, 'no key for a local model');

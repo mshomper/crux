@@ -9,6 +9,8 @@
 //                           click outside close without changing anything. Saved as same-origin JSON (C001).
 // Plain functions return HTML strings, so they can be tested without a browser.
 
+import { outsideSections, outsideChanges, outsideDraft, outsideClick, outsideInput, outsideSaveKey } from './outside-panel.js';
+
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ic = (id, cls = '') => `<svg class="icon ${cls}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
 const help = tip => `<span class="ps-help" title="${esc(tip)}" aria-label="${esc(tip)}" role="img">${ic('help')}</span>`;
@@ -135,18 +137,7 @@ const OUTSIDE_TIP = {
   local: 'Local only: agents may have a draft written by a model on this computer. Pictures stay off.',
   any: 'Any: agents may ask the provider chosen in the hub menu for short answers, drafts from text they pass in, and pictures, within a small hourly and daily allowance. Text and picture prompts leave this computer. Needs your OK on a phone.'
 };
-// The hub-wide provider (Whole hub panel): which service answers, and what you know of its terms for your key.
-export const PROVIDERS = [['google', 'Google'], ['openai', 'OpenAI'], ['openrouter', 'OpenRouter'], ['ollama', 'Ollama']];
-export const TERMS = [['unknown', 'Not sure'], ['free', 'Free plan'], ['paid', 'Paid plan']];
-const TERMS_TIP = 'Paid plan: the provider does not train on or keep what the hub sends. Not sure or Free plan: projects set to Any send nothing. Google\'s picture models are paid only.';
-
-// Under the provider: whether a key is saved on this computer (never more than its last four characters). Ollama needs none.
-export function keyLine(provider, keys = {}) {
-  if (provider === 'ollama') return '<p class="ps-keyline">No key needed: it runs on this computer.</p>';
-  const k = keys?.[provider];
-  return k?.saved ? `<p class="ps-keyline ok">${ic('check')}Key saved${k.end ? `, ends ${esc(k.end)}` : ''}</p>`
-    : `<p class="ps-keyline warn">${ic('warn')}No key yet. Run the live-check tool in the hub folder to save one.</p>`;
-}
+// The hub-wide keys and the provider and model for each kind of job (decision 81 A) are in outside-panel.js.
 
 const head = (iconId, title) => `<header class="ps-head">${ic(iconId)}<h2 id="ps-title">${esc(title)}</h2>
   <button type="button" class="ps-x" data-ps-close aria-label="Close without changing anything" title="Close without changing anything">${ic('x')}</button></header>`;
@@ -187,13 +178,9 @@ export function hubPanel(d) {
       <div class="ps-nums">${NUMBERS.map(f => numRow(f, d.nums[f.k], null, d.errors?.[f.k], 'h')).join('')}</div></section>
     <section class="ps-sec"><h3 class="ps-sec-head">When the orchestrator may hand a worker on</h3>
       <div class="ps-nums">${[WORKER_FLOOR, WORKER_MARK].map(f => numRow(f, d.nums[f.k], null, d.errors?.[f.k], 'h')).join('')}</div></section>
-    <section class="ps-sec ps-last"><h3 class="ps-sec-head">Outside provider ${help('Which service answers when a project that has Outside models turned on hands off a job. One for the whole hub. The key is saved on this computer by the live-check tool, never typed here. Each project\'s own switch is on its settings card.')}</h3>
-      <div class="ps-conn" data-ps-provider>${segN(d.provider, 'provider', PROVIDERS)}${keyLine(d.provider, d.keys)}</div>
-      <div class="ps-row"><span class="ps-num-l"><label class="ps-num-label" for="ps-h-model"><span>Model for text</span></label>${help('The model that writes answers and drafts, exactly as the provider names it, for example gemini-3.5-flash-lite. Pictures use the provider\'s picture model, chosen by the hub.')}</span>
-        <input id="ps-h-model" class="ps-model" type="text" autocomplete="off" spellcheck="false" maxlength="120" data-ps-model value="${esc(d.model)}">${d.errors?.model ? `<span class="ps-dflt warn" style="grid-column:1/-1">${ic('warn')}${esc(d.errors.model)}</span>` : ''}</div>
-      <div class="ps-row"><span class="ps-num-l"><span class="ps-num-label"><span>Your plan with them</span></span>${help(TERMS_TIP)}</span>${segN(d.terms, 'terms', TERMS)}</div></section>
+    ${d.outside ? outsideSections({ ...d.outside, errors: d.errors }) : ''}
   </div>
-  ${foot('Saved on this computer when you press Done. Numbers a project set for itself stay as they are.')}`;
+  ${foot('Saved on this computer when you press Done, except keys, which are saved when you press Save in their box. Numbers a project set for itself stay as they are.')}`;
 }
 
 // What Done sends for a project: only what changed. Returns { body, errors }.
@@ -221,15 +208,8 @@ export function hubChanges(settings, d) {
     if (r.value !== settings[f.k]) body[f.k] = r.value;
   }
   if (d.route !== (settings.routePermissions !== false)) body.routePermissions = d.route;
-  // The outside provider travels as one object; sent when it differs from what is saved (or, with nothing saved, once touched).
-  if (d.provider) {
-    const model = String(d.model ?? '').trim();
-    const cur = settings.outsideProvider;
-    if (!model) errors.model = 'Needs a model name';
-    else if (cur ? (cur.provider !== d.provider || cur.model !== model || (cur.dataTerms || 'unknown') !== d.terms) : d.touched) {
-      body.outsideProvider = { provider: d.provider, model, dataTerms: d.terms, ...(cur?.provider === d.provider && cur.baseUrl ? { baseUrl: cur.baseUrl } : {}) };
-    }
-  }
+  const o = outsideChanges(settings, d.outside);   // routes per job and plans per provider: only what differs from what is saved
+  Object.assign(body, o.body); Object.assign(errors, o.errors);
   return { body, errors };
 }
 
@@ -264,9 +244,8 @@ export class SettingsCards {
   openHub() {
     const s = this.host.hubSettings();
     this.kind = 'hub';
-    const op = s.outsideProvider;
-    this.d = { route: s.routePermissions !== false, nums: Object.fromEntries(HUB_FIELDS.map(f => [f.k, String(s[f.k] ?? '')])), errors: {},
-      provider: op?.provider || 'google', model: op?.model || 'gemini-3.5-flash-lite', terms: op?.dataTerms || 'unknown', touched: false, keys: s.outsideKeys || {} };
+    // Nothing is shown as chosen unless it is saved: an unset job reads "Not set" (outside-panel.js).
+    this.d = { route: s.routePermissions !== false, nums: Object.fromEntries(HUB_FIELDS.map(f => [f.k, String(s[f.k] ?? '')])), errors: {}, outside: outsideDraft(s, s.outsideInfo) };
     this.show();
   }
   show() {
@@ -301,6 +280,14 @@ export class SettingsCards {
     if (e.target.closest('[data-ps-done]')) return this.done();
     if (e.target.closest('[data-ps-lists]')) return void this.host.openLists?.(this.p);   // plan v3 A10 (lists-card.js): opens over this card
 
+    if (this.kind === 'hub' && this.d.outside) {   // key boxes, plans, and a provider and model per job
+      const oc = outsideClick(e, this.d.outside, this.host);
+      if (oc !== null) {
+        this.render();
+        if (oc.then) oc.then(() => { if (this.d) this.render(); });
+        return;
+      }
+    }
     const lv = e.target.closest('[data-ps-level]');
     if (lv && this.d.level !== lv.dataset.psLevel) { this.d.level = lv.dataset.psLevel; this.render(); this.el.querySelector('.ps-lv.on')?.focus({ preventScroll: true }); return; }
     const sg = e.target.closest('[data-ps-seg]');
@@ -308,15 +295,13 @@ export class SettingsCards {
       const name = sg.dataset.psSeg;
       if (name === 'check') this.d.check = CHECK_CHOICES.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'off';
       else if (name === 'outside') this.d.outside = OUTSIDE_CHOICES.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'off';
-      else if (name === 'provider') { this.d.provider = PROVIDERS.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'google'; this.d.touched = true; }
-      else if (name === 'terms') { this.d.terms = TERMS.some(([v]) => v === sg.dataset.v) ? sg.dataset.v : 'unknown'; this.d.touched = true; }
       else this.d[name === 'route' ? 'route' : name === 'paused' ? 'paused' : 'connectors'] = sg.dataset.v === '1';
       this.render(); this.el.querySelector(`[data-ps-seg="${sg.dataset.psSeg}"].on`)?.focus(); return; }
     const rs = e.target.closest('[data-ps-reset]');
     if (rs) { this.d.nums[rs.dataset.psReset] = ''; delete this.d.errors[rs.dataset.psReset]; this.render(); this.el.querySelector(`[data-ps-num="${rs.dataset.psReset}"]`)?.focus(); }
   }
   input(e) {
-    if (e.target.matches?.('[data-ps-model]')) { this.d.model = e.target.value; this.d.touched = true; delete this.d.errors.model; return; }
+    if (this.kind === 'hub' && this.d.outside && outsideInput(e.target, this.d.outside)) return;
     const k = e.target.dataset?.psNum;
     if (!k) return;
     this.d.nums[k] = e.target.value;
@@ -330,6 +315,12 @@ export class SettingsCards {
       const i = LEVEL_ORDER.indexOf(lv.dataset.psLevel);
       const next = e.key === ' ' || e.key === 'Enter' ? LEVEL_ORDER[i] : LEVEL_ORDER[(i + (/Down|Right/.test(e.key) ? 1 : LEVEL_ORDER.length - 1)) % LEVEL_ORDER.length];
       this.d.level = next; this.render(); this.el.querySelector('.ps-lv.on')?.focus();
+      return;
+    }
+    if (e.key === 'Enter' && e.target.matches?.('[data-ps-keyin]') && this.d?.outside) {   // Enter in a key box saves that key, not the panel
+      e.preventDefault();
+      const p = e.target.dataset.psKeyin, oc = outsideSaveKey(p, this.d.outside, this.host);
+      this.render(); if (oc?.then) oc.then(() => { if (this.d) this.render(); });
       return;
     }
     if (e.key === 'Enter' && e.target.matches?.('[data-ps-num]')) { e.preventDefault(); this.done(); }
