@@ -33,7 +33,8 @@ export function outsideDraft(settings = {}, info = null) {
   for (const j of JOBS) { const r = settings.outsideRoutes?.[j.k]; routes[j.k] = { provider: r?.provider || '', model: r?.model || '' }; }
   const terms = {};
   for (const p of KEYED) terms[p] = settings.outsideTerms?.[p] || 'unknown';
-  return { routes, terms, info: info || null, typed: {}, replacing: {}, busy: {}, keyErr: {}, warnOpen: {}, touched: false };
+  // errors: the same object as the panel's own (project-settings.js keeps the two in step), so a key's line can be cleared here
+  return { routes, terms, info: info || null, typed: {}, replacing: {}, busy: {}, keyErr: {}, warnOpen: {}, touched: false, errors: {} };
 }
 
 // The amber-mark notes for one job: why it will refuse, or why its dollars are only an estimate. [] when nothing is wrong.
@@ -127,7 +128,7 @@ export function outsideChanges(settings = {}, d) {
 // Typing in a model box or a key box: kept in the draft; nothing is redrawn (the box keeps its focus). Returns true if handled.
 export function outsideInput(t, d) {
   if (t.matches?.('[data-ps-keyin]')) {
-    const p = t.dataset.psKeyin; d.typed[p] = t.value; delete d.keyErr[p];
+    const p = t.dataset.psKeyin; d.typed[p] = t.value; delete d.keyErr[p]; delete d.errors?.[`key-${p}`];   // typing clears "typed a key but did not press Save"
     const btn = t.closest('.ps-keyin')?.querySelector('[data-ps-keysave]'); if (btn && !d.busy[p]) btn.disabled = !t.value.trim();
     return true;
   }
@@ -168,7 +169,7 @@ export function outsideSaveKey(p, d, host) {
 
 async function outsideKeyCall(p, extra, d, host) {
   if (!KEYED.includes(p) || d.busy[p]) return true;
-  d.busy[p] = true; delete d.keyErr[p];
+  d.busy[p] = true; delete d.keyErr[p]; delete d.errors?.[`key-${p}`];   // a save or remove answers the "did not press Save" line
   try {
     const res = await host.api('/api/outside/key', { provider: p, ...extra });
     d.info = res.outsideInfo || d.info;

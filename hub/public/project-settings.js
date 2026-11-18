@@ -246,6 +246,7 @@ export class SettingsCards {
     this.kind = 'hub';
     // Nothing is shown as chosen unless it is saved: an unset job reads "Not set" (outside-panel.js).
     this.d = { route: s.routePermissions !== false, nums: Object.fromEntries(HUB_FIELDS.map(f => [f.k, String(s[f.k] ?? '')])), errors: {}, outside: outsideDraft(s, s.outsideInfo) };
+    this.d.outside.errors = this.d.errors;
     this.show();
   }
   show() {
@@ -328,7 +329,7 @@ export class SettingsCards {
   async done() {
     const { body, errors } = this.kind === 'hub' ? hubChanges(this.host.hubSettings(), this.d) : projectChanges(this.p, this.d);
     if (Object.keys(errors).length) {
-      this.d.errors = errors; this.render();
+      this.d.errors = errors; if (this.d.outside) this.d.outside.errors = errors; this.render();   // the outside panel clears its own key lines from the same object
       this.el.querySelector('.ps-num.bad input')?.focus();
       return;
     }
