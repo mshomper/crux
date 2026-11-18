@@ -24,7 +24,8 @@ const DEFAULT_PICTURE_MODELS = { google: 'gemini-nano-banana-2.1', openai: 'gpt-
 
 // Mirrors looksSecret in lib/providers.mjs for the shapes a key pasted into a model box would have (the hub refuses them too).
 const looksLikeKey = s => /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAIza[0-9A-Za-z_-]{30,}|\bsk-[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{30,}|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}/.test(String(s || ''));
-const canPictures =(p, info) => (info?.providers?.[p] ? !!info.providers[p].imageModel : p in DEFAULT_PICTURE_MODELS);
+// Which providers can make pictures (the hub says; without its answer, the two with a default picture model and OpenRouter).
+const canPictures = (p, info) => (info?.providers?.[p] ? !!info.providers[p].images : p in DEFAULT_PICTURE_MODELS || p === 'openrouter');
 export const pictureModel = (p, info) => info?.providers?.[p]?.imageModel || DEFAULT_PICTURE_MODELS[p] || '';
 
 // The draft the panel works on. settings: the hub settings the page holds; info: what /api/state sent (keys, price table).
@@ -81,7 +82,7 @@ function jobRow(j, d) {
   const r = d.routes[j.k], notes = jobNotes(j.k, d), open = !!d.warnOpen[j.k];
   const choices = [['', 'Not set'], ...PROVIDERS.filter(([p]) => j.k !== 'image' || canPictures(p, d.info))];
   const model = r.provider ? `<input class="ps-model" type="text" autocomplete="off" spellcheck="false" maxlength="120" data-ps-jobmodel="${j.k}" value="${esc(r.model)}"
-      placeholder="${esc(j.k === 'image' ? `${pictureModel(r.provider, d.info) || 'model'} (default)` : 'Model name, as the provider writes it')}" aria-label="${esc(j.label)} model">` : '';
+      placeholder="${esc(j.k === 'image' ? (pictureModel(r.provider, d.info) ? `${pictureModel(r.provider, d.info)} (default)` : 'Picture model, as the provider writes it (no default)') : 'Model name, as the provider writes it')}" aria-label="${esc(j.label)} model">` : '';
   const err = d.errors?.[`route-${j.k}`];
   return `<div class="ps-job" data-ps-job="${j.k}">
     <div class="ps-job-top"><span class="ps-num-label"><span>${esc(j.label)}</span></span>${help(j.tip)}
@@ -115,7 +116,8 @@ export function outsideChanges(settings = {}, d) {
     if (!r.provider) continue;
     const model = (r.model || '').trim();
     if (looksLikeKey(model)) { errors[`route-${j.k}`] = 'That looks like a key, not a model name. Keys go in the key box above, and nothing is saved here.'; continue; }
-    if (j.k !== 'image' && !model) { errors[`route-${j.k}`] = 'Needs a model name'; continue; }
+    // a text job always needs its model; a picture job too unless the provider has a picture model of its own (OpenRouter has none)
+    if (!model && (j.k !== 'image' || !pictureModel(r.provider, d.info))) { errors[`route-${j.k}`] = 'Needs a model name'; continue; }
     const old = settings.outsideRoutes?.[j.k];
     routes[j.k] = { provider: r.provider, model: model || null, ...(old?.provider === r.provider && old.baseUrl ? { baseUrl: old.baseUrl } : {}), ...(old?.provider === r.provider && old.minFreeMB != null ? { minFreeMB: old.minFreeMB } : {}) };
   }

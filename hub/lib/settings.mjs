@@ -149,7 +149,9 @@ function pickRoute(job, r) {
   if (!r || typeof r !== 'object' || !OUTSIDE_PRESETS.includes(r.provider)) return null;
   const model = typeof r.model === 'string' ? r.model.trim().slice(0, 120) : '';
   if (looksSecret(model)) return null;   // a key pasted into a model box is never kept: it would sit in plain text and go to the page
-  if (job === 'image' ? !PRESETS[r.provider].imageModel : !model) return null;
+  // A picture route needs a provider that makes pictures, and a model: the provider's own default when it has one, else the one
+  // typed (OpenRouter has no default picture model). A text route always needs its model.
+  if (job === 'image' ? !PRESETS[r.provider].images || (!model && !PRESETS[r.provider].imageModel) : !model) return null;
   return {
     provider: r.provider, model: model || null,
     ...(r.provider === 'ollama' && typeof r.baseUrl === 'string' && r.baseUrl.trim() ? { baseUrl: r.baseUrl.trim().slice(0, 200) } : {}),

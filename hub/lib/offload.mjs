@@ -139,7 +139,7 @@ export class Offload {
     return {
       keys: this.keys.view(), canProtect: this.keys.canProtect,
       priced: { text: Object.keys(PRICES), image: Object.keys(IMAGE_PRICES) },
-      providers: Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, { needsKey: p.needsKey, local: p.local, imageModel: p.imageModel }]))
+      providers: Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, { needsKey: p.needsKey, local: p.local, images: !!p.images, imageModel: p.imageModel }]))
     };
   }
 
@@ -311,7 +311,7 @@ export async function makeImage(offload, project, agent, { prompt, aspect_ratio 
     try { id = save(buf, `${pr.slice(0, 120)} (${res.provider} ${res.model}, ${aspect_ratio})`); }
     catch { logIt(res); throw own(); }   // not a picture the hub can store
     logIt(res);
-    const cost = res.costUSD == null ? 'cost unknown' : `about $${res.costUSD.toFixed(4)}`;
+    const cost = res.costUSD == null ? 'cost unknown' : res.costUnit === 'credits' ? `${res.costUSD.toFixed(4)} credits as the provider reports` : `about $${res.costUSD.toFixed(4)}`;
     const took = Number.isFinite(res.ms) ? `, ${(res.ms / 1000).toFixed(1)} s` : '';
     return `Made a picture with ${res.provider} ${res.model} (${aspect_ratio}, ${cost}${took}) and posted it to this thread as visual ${id}. List it as "${id}" under visuals in post_summary, or in a decision's images.`;
   } catch (e) {
