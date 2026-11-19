@@ -77,6 +77,8 @@ export const runJsonProblem = text => runChecks(text).problem;
 
 export const ID_PATTERN =/^\d{8}-[a-z0-9]+(-[a-z0-9]+)*$/;
 const pad2 = n => String(n).padStart(2, '0');
+const SLUG_MAX = 30;   // the id appears twice in the deepest paths (worktree folder and docs/expeditions/<id>), so it stays short
+const TITLE_FILLER = new Set('which what how the of a an is are for should we do does to in on and or be can could would'.split(' '));
 const sha = data => createHash('sha256').update(data).digest('hex');
 const text = (v, what) => { const s = String(v ?? '').trim(); if (!s) throw new Error(`${what} is needed.`); return s; };
 
@@ -135,10 +137,24 @@ export class Expedition {
     this.cache = null;
   }
 
-  // YYYYMMDD-slug from the question's words; a second one on the same day with the same slug gets -2, -3.
+  // The short title (4 to 5 words, written by the orchestrator) or, when it is missing or too long, the first 5 meaningful
+  // words of the question (filler like which/what/the/of dropped). Always plain words, never empty.
+  static shortTitle(title, question = '') {
+    const words = s => String(s ?? '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    const t = words(title);
+    if (t.length >= 2 && t.length <= 6 && t.join(' ').length <= 48) return t.join(' ');
+    const q = words(question).filter(w => !TITLE_FILLER.has(w.toLowerCase().replace(/[^a-z']/g, '')));
+    const pick = (q.length ? q : words(question)).slice(0, 5).join(' ').replace(/[?!.,;:]+$/, '');
+    return pick || 'Expedition';
+  }
+
+  // YYYYMMDD-slug from the short title (about 30 characters, cut at a word boundary; a title that is one long word is cut
+  // hard); a second one on the same day with the same slug gets -2, -3. Older, longer ids stay as they are.
   static makeId(source, { date = new Date(), taken = [] } = {}) {
     const day = `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
-    const slug = String(source ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '') || 'expedition';
+    let slug = String(source ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    if (slug.length > SLUG_MAX) { const cut = slug.slice(0, SLUG_MAX + 1).lastIndexOf('-'); slug = slug.slice(0, cut > 0 ? cut : SLUG_MAX); }
+    slug = slug.replace(/-+$/, '') || 'expedition';
     let id = `${day}-${slug}`, n = 2;
     while (taken.includes(id)) id = `${day}-${slug}-${n++}`;
     return id;
@@ -265,14 +281,14 @@ export class Expedition {
   // at expedition_stopped); never written to his settings.
   // Phase 5: question (the one line the sidebar and the card name it by) and origin ({ expedition, parked } when it was
   // launched from a proposed next expedition, so that proposal leaves the list).
-  start({ envelope = {}, roles = {}, planStart = null, preApprovals = null, question = '', origin = null } = {}) {
+  start({ envelope = {}, roles = {}, planStart = null, preApprovals = null, question = '', title = '', origin = null } = {}) {
     this.need('new');
     const merged = Object.fromEntries(Object.entries(defaultRoles()).map(([r, d]) => [r, { ...d, ...(roles[r] || {}) }]));
     const problem = Expedition.rolesProblem(merged);
     if (problem) throw new Error(problem);
     const pre = normalizeOverlay(preApprovals, { strict: true });
     const q = String(question ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
-    return this.record('expedition_started', { briefHash: this.briefHash(), envelope: { ...DEFAULT_ENVELOPE, ...envelope }, roles: merged, planStart, branch: this.branch, preApprovals: pre, ...(q ? { question: q } : {}), ...(origin ? { origin } : {}) });
+    return this.record('expedition_started', { briefHash: this.briefHash(), envelope: { ...DEFAULT_ENVELOPE, ...envelope }, roles: merged, planStart, branch: this.branch, preApprovals: pre, ...(q ? { question: q } : {}), ...(title ? { title: String(title).slice(0, 60) } : {}), ...(origin ? { origin } : {}) });
   }
 
   // The plan gate closes: the Advisor's verdict, the amendments to the test, and the hash that freezes it (spec 4.5).

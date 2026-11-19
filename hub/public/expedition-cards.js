@@ -15,11 +15,11 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // What the panel opens with for a draft: the same fields the backend stored.
 export const draftSeed = ev => ({
-  question: ev.question || '', test: ev.test, envelope: ev.envelope, roles: ev.roles, gatherers: ev.gatherers, preApprovals: ev.preApprovals, draft: ev.id
+  question: ev.question || '', title: ev.title || '', test: ev.test, envelope: ev.envelope, roles: ev.roles, gatherers: ev.gatherers, preApprovals: ev.preApprovals, draft: ev.id
 });
 // What Launch on the card sends (the draft exactly as the orchestrator wrote it).
 export const draftBody = (project, ev) => ({
-  project, brief: ev.brief, question: ev.question || undefined, test: ev.test, envelope: ev.envelope, roles: ev.roles, gatherers: ev.gatherers, preApprovals: ev.preApprovals, draft: ev.id
+  project, brief: ev.brief, question: ev.question || undefined, shortTitle: ev.title || undefined, test: ev.test, envelope: ev.envelope, roles: ev.roles, gatherers: ev.gatherers, preApprovals: ev.preApprovals, draft: ev.id
 });
 // A proposed next expedition opens the panel with its short brief, so you can change it first (Launch there sends proposal).
 export const proposalSeed = pr => ({ question: pr.question || pr.text || '', reason: pr.reason || '', success: [], proposal: { expedition: pr.expedition, parked: pr.id }, brief: pr.brief });
@@ -46,6 +46,7 @@ export function draftCard(ev, closed = null, st = null) {
   return `<article class="card xcard xdraft ${state}" data-xdraft="${esc(ev.id)}">
     <div class="card-head"><span class="xc-kk">Expedition draft</span><span class="xc-tag ${state}">${tag}</span>
       ${state === 'open' ? `<button type="button" class="btn ghost icon-only xc-x" data-xdraft-dismiss="${esc(ev.id)}" aria-label="Dismiss this draft" title="Dismiss this draft: nothing starts">${ic('x')}</button>` : ''}</div>
+    ${ev.title ? `<h3 class="xc-answer" title="The expedition's name: its folder and branch come from it">${esc(ev.title)}</h3>` : ''}
     <p class="xc-q">${esc(lines)}</p>
     ${tiles}${team}
     <p class="xc-fixed">${ic('branch')}<span>Ends at one branch and a draft PR. It never merges.</span></p>

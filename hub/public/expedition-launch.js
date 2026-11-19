@@ -72,6 +72,7 @@ export function startDraft(state = null, seed = {}) {
   const success = seed.success || testItems(seed.test);
   return {
     question: String(seed.question || ''),
+    title: String(seed.title || ''),   // the orchestrator's short name, kept through Edit; none: the hub shortens the question
     reason: String(seed.reason || ''),   // a proposal's why, shown quietly under the box; never sent
     success,   // optional: none written means the team writes the test itself while it plans
     more: success.length > 0 || !!(seed.preApprovals?.sites?.length || seed.preApprovals?.packages?.length),   // the fold opens when it holds something
@@ -180,6 +181,7 @@ export function launchBody(project, d, st = null) {
     project,
     brief: briefText(d),
     question: d.question.trim(),
+    ...(d.title ? { shortTitle: d.title } : {}),
     ...(Object.keys(testFiles(d.success)).length ? { test: testFiles(d.success) } : {}),   // none written: only the question goes; the team writes the test while it plans
     envelope: { hours: d.hours, percent: d.percent, ...(dollars != null ? { dollars } : {}) },
     gatherers: d.gatherers,

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { recordAgents, stubHub, StubExpedition } from './helpers/expedition-stub.mjs';
 import { cruxTools, cruxToolNames } from '../lib/tools.mjs';
 import { classify } from '../lib/permission-rules.mjs';
-import { runChecks } from '../lib/expedition.mjs';
+import { runChecks, Expedition } from '../lib/expedition.mjs';
 import { stepUpNeed } from '../lib/guard.mjs';
 
 const sent = recordAgents();
@@ -151,7 +151,7 @@ test('hub.state() carries expedition per project: whether a launch would work, w
   const v = env.view();
   assert.equal(v.launch.ok, false);
   assert.match(v.launch.reason, /still planning: one expedition runs per project at a time/);
-  assert.deepEqual([v.current.id, v.current.name, v.current.phase, v.current.stopReason, v.current.lead, v.current.liveAgents, v.current.steps, v.current.branch, v.current.pr], [r.id, Q, 'planning', null, r.lead, 1, [], `expedition/${r.id}`, null]);
+  assert.deepEqual([v.current.id, v.current.name, v.current.phase, v.current.stopReason, v.current.lead, v.current.liveAgents, v.current.steps, v.current.branch, v.current.pr], [r.id, Expedition.shortTitle('', Q), 'planning', null, r.lead, 1, [], `expedition/${r.id}`, null]);
   assert.equal(v.current.envelope.hours, 6);
   assert.equal(v.current.roles.builder.type, 'expedition-builder');
   const ask = world({ level: 'standard' });
@@ -181,10 +181,11 @@ test('draft_expedition: one card in the orchestrator\'s thread; Launch closes it
   assert.ok(rt.draft_expedition && cruxToolNames(env.orch).includes('mcp__crux__draft_expedition'));
   const said = await call('draft_expedition', { question: Q });
   assert.match(said, /^Drafted: the card is in your thread with Launch and Edit\. Tell the user it is there, and stop/);
-  const withTest = await call('draft_expedition', { question: 'Is B smaller?', brief: 'Size only.', test_files: [{ name: 'CHECKLIST.md', content: '1. a table (read)\n' }], hours: 2, percent: 3, gatherers: 2, sites: [{ host: 'docs.example-lib.org' }], packages: [{ eco: 'npm', name: 'zod', baseMajor: 3 }] });
+  const withTest = await call('draft_expedition', { question: 'Is B smaller?', short_title: 'Is B smaller', brief: 'Size only.', test_files: [{ name: 'CHECKLIST.md', content: '1. a table (read)\n' }], hours: 2, percent: 3, gatherers: 2, sites: [{ host: 'docs.example-lib.org' }], packages: [{ eco: 'npm', name: 'zod', baseMajor: 3 }] });
   assert.match(withTest, /^Drafted/);
   const drafts = env.view().drafts;
   assert.equal(drafts.length, 2);
+  assert.deepEqual([drafts[0].title, drafts[1].title], [Expedition.shortTitle('', Q), 'Is B smaller'], 'the card carries the short title, or the question shortened');
   assert.deepEqual([drafts[0].question, drafts[0].brief, drafts[0].test, drafts[0].from], [Q, Q, {}, env.orch.name]);
   assert.deepEqual([drafts[1].brief, drafts[1].test, drafts[1].envelope, drafts[1].gatherers, drafts[1].preApprovals.packages[0].baseMajor], ['Size only.', { 'CHECKLIST.md': '1. a table (read)\n' }, { hours: 2, percent: 3 }, 2, 3], 'Edit can read the test back as the same files');
   const ev = env.p.log.ofType('expedition_draft');
