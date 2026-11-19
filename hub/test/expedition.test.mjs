@@ -68,8 +68,14 @@ test('the Verifier refuses to run on the Builder\'s model', () => {
 // ---------- ids and the layout ----------
 test('ids are YYYYMMDD-slug, kept apart on a clash, and files stay inside the layout', () => {
   const d = new Date(2026, 10, 16);
-  assert.equal(Expedition.makeId('Which of two JSON libraries is faster for X?', { date: d }), '20261116-which-of-two-json-libraries-is-faster-fo', 'the slug is cut at 40 characters');
+  assert.equal(Expedition.makeId('JSON library speed comparison', { date: d }), '20261116-json-library-speed-comparison', 'a 4-word title fits whole');
+  assert.equal(Expedition.makeId('Compare lattice meshing speed across engines', { date: d }), '20261116-compare-lattice-meshing-speed', 'the slug is cut at a word boundary, 30 characters at most');
+  assert.equal(Expedition.makeId('Supercalifragilisticexpialidocious-and-more', { date: d }), '20261116-supercalifragilisticexpialidoc', 'one long word is cut hard');
   assert.equal(Expedition.makeId('!!!', { date: d }), '20261116-expedition');
+  assert.equal(Expedition.shortTitle('JSON library speed comparison', 'anything'), 'JSON library speed comparison');
+  assert.equal(Expedition.shortTitle('', 'Which of two JSON libraries is faster for X?'), 'two JSON libraries faster X', 'no title: the first meaningful words of the question');
+  assert.equal(Expedition.shortTitle('one two three four five six seven eight nine ten', 'How should we cache the mesh?'), 'cache mesh', 'too long: falls back to the question');
+  assert.equal(Expedition.shortTitle(undefined, ''), 'Expedition');
   assert.equal(Expedition.makeId('JSON bench', { date: d, taken: ['20261116-json-bench'] }), '20261116-json-bench-2');
   assert.equal(Expedition.makeId('JSON bench', { date: d, taken: ['20261116-json-bench', '20261116-json-bench-2'] }), '20261116-json-bench-3');
   const { env } = fresh();

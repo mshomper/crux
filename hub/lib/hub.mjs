@@ -598,16 +598,16 @@ export class Hub {
   // before anything is written, kept in the start event, never added to the user's own lists.
   launchExpedition(p, input = {}, by = 'you') {
     const plan = this.prepareLaunch(p, input);   // every refusal is here, before anything is written
-    const { text, question, test, envelope, merged, limit, preApprovals, origin } = plan;
+    const { text, question, title, test, envelope, merged, limit, preApprovals, origin } = plan;
     const dir = join(p.dir, '.crux', 'expeditions');
     const taken = [...Expedition.all(p).map(x => x.id), ...(existsSync(dir) ? readdirSync(dir) : [])];
-    const id = Expedition.makeId(question || text.split('\n')[0], { taken });
+    const id = Expedition.makeId(title, { taken });   // from the short title: the folder, branch and worktree names stay short
     const ex = new Expedition(p, id).init();
     ex.write('BRIEF.md', `${text}\n`);
     for (const [name, body] of Object.entries(test)) ex.write(`test/${name}`, body);
     // planStart: the 7-day meter's reading at launch, as a record (it can be minutes old; null under an API key or before the
     // meters load). Spend measure 2 counts from the first fresh reading after the launch, which the watchdog logs itself.
-    ex.start({ envelope: { ...envelope, gatherers: limit }, roles: merged, planStart: this.expeditionWatch.planStart(), preApprovals, question: question || text.split('\n')[0], ...(origin ? { origin } : {}) });
+    ex.start({ envelope: { ...envelope, gatherers: limit }, roles: merged, planStart: this.expeditionWatch.planStart(), preApprovals, question: question || text.split('\n')[0], title, ...(origin ? { origin } : {}) });
     if (input.draft) p.log.append('expedition_draft_closed', { draft: String(input.draft), status: 'launched', expedition: id });
     const e = ex.state().started.envelope;
     const task = [
@@ -740,7 +740,8 @@ export class Hub {
       if (p.log.events.some(x => x.type === 'expedition_started' && x.origin?.parked === e.id)) throw new Error('That proposed expedition was already launched.');
       origin = { expedition: from, parked: e.id };
     }
-    return { text, question: String(question || '').trim(), test: files, envelope: env, merged, limit, preApprovals: pre, origin };
+    const title = Expedition.shortTitle(input.shortTitle, question || text.split('\n')[0]);
+    return { text, question: String(question || '').trim(), title, test: files, envelope: env, merged, limit, preApprovals: pre, origin };
   }
 
   // Package pre-approvals from the launch panel (M049 8): the baseline version can come as numbers, numeric strings, or the
@@ -751,12 +752,12 @@ export class Hub {
   // launch does, so a draft that could never launch is refused to the orchestrator, in plain words, and nothing is logged.
   draftExpedition(p, agent, args = {}) {
     const input = {
-      brief: args.brief, question: args.question, test: Array.isArray(args.test_files) ? Object.fromEntries(args.test_files.map(f => [String(f?.name ?? ''), f?.content])) : (args.test || {}),
+      brief: args.brief, question: args.question, shortTitle: args.short_title, test: Array.isArray(args.test_files) ? Object.fromEntries(args.test_files.map(f => [String(f?.name ?? ''), f?.content])) : (args.test || {}),
       envelope: { ...(args.hours ? { hours: args.hours } : {}), ...(args.percent ? { percent: args.percent } : {}) }, gatherers: args.gatherers,
       preApprovals: args.sites || args.packages ? { sites: args.sites || [], packages: args.packages || [] } : null, roles: args.roles || {}
     };
     const plan = this.prepareLaunch(p, input, { draft: true });
-    const ev = p.log.append('expedition_draft', { thread: 'orchestrator', from: agent.name, question: plan.question || plan.text.split('\n')[0].slice(0, 200), brief: plan.text, test: plan.test, envelope: input.envelope, roles: input.roles, gatherers: plan.limit, preApprovals: plan.preApprovals });
+    const ev = p.log.append('expedition_draft', { thread: 'orchestrator', from: agent.name, title: plan.title, question: plan.question || plan.text.split('\n')[0].slice(0, 200), brief: plan.text, test: plan.test, envelope: input.envelope, roles: input.roles, gatherers: plan.limit, preApprovals: plan.preApprovals });
     return { id: ev.id, blocked: this.launchBlock(p) };
   }
 
@@ -778,13 +779,13 @@ export class Hub {
     const prOf = ex => { const s = ex.stepEvent('pr'); return s?.ok ? { url: s.url || null, number: s.number ?? null, draft: s.draft !== false } : null; };
     const brief = x => {
       const ex = this.expeditionOf(p, x.id), s = ex.state();
-      return { ex, s, id: x.id, question: s.started?.question || x.id, phase: x.phase, stopReason: s.stopped?.reason || null };
+      return { ex, s, id: x.id, question: s.started?.question || x.id, title: s.started?.title || null, phase: x.phase, stopReason: s.stopped?.reason || null };
     };
     const open = all.filter(x => x.phase !== 'ended' || live(x.id) > 0).at(-1);
     let current = null;
     if (open) {
-      const { ex, s, id, question, phase, stopReason } = brief(open);
-      current = { id, name: question, question, phase, stopReason, startedAt: s.started?.ts || null, envelope: s.started?.envelope || null, roles: s.started?.roles || null, lead: this.expeditionLead(p, id)?.name || null, liveAgents: live(id), steps: [...s.steps], branch: ex.branch, pr: prOf(ex), answer: s.finished?.answer || null };
+      const { ex, s, id, question, title, phase, stopReason } = brief(open);
+      current = { id, name: title || question, title, question, phase, stopReason, startedAt: s.started?.ts || null, envelope: s.started?.envelope || null, roles: s.started?.roles || null, lead: this.expeditionLead(p, id)?.name || null, liveAgents: live(id), steps: [...s.steps], branch: ex.branch, pr: prOf(ex), answer: s.finished?.answer || null };
     }
     const launchedFrom = new Set(evs.filter(e => e.type === 'expedition_started' && e.origin).map(e => e.origin.parked));
     const ended = all.filter(x => x.phase === 'ended').reverse();
@@ -794,7 +795,7 @@ export class Hub {
     });
     const proposals = ended.slice(0, 5).flatMap(x => proposalsOf(evs, x.id, this.expeditionOf(p, x.id).state().started?.question || '')).filter(q => !launchedFrom.has(q.id));
     const closed = new Set(evs.filter(e => e.type === 'expedition_draft_closed').map(e => e.draft));
-    const drafts = evs.filter(e => e.type === 'expedition_draft' && !closed.has(e.id)).map(({ id, ts, from, question, brief: b, test, envelope, roles, gatherers, preApprovals }) => ({ id, ts, from, question, brief: b, test, envelope, roles, gatherers, preApprovals }));
+    const drafts = evs.filter(e => e.type === 'expedition_draft' && !closed.has(e.id)).map(({ id, ts, from, title, question, brief: b, test, envelope, roles, gatherers, preApprovals }) => ({ id, ts, from, title, question, brief: b, test, envelope, roles, gatherers, preApprovals }));
     return {
       defaults: { envelope: { hours: env.hours, percent: env.percent }, dollarsPerPercent: cap.dollarsPerPercent, dollars: cap.dollars, meterGuard: cap.meterGuard, gatherers: Math.min(GATHERER_LIMIT, Math.max(1, Math.round(cfgG) || 3)), gathererLimit: GATHERER_LIMIT, roles: this.expeditionRoleDefaults(p) },
       budgetNote: cap.note, launch: (() => { const reason = this.launchBlock(p); return { ok: !reason, reason }; })(),

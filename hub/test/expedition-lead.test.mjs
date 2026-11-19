@@ -161,8 +161,9 @@ test('launchExpedition refuses an empty brief, a second expedition, a project at
   assert.throws(() => hub.launchExpedition(p, { brief: 'q' }), /project is at Ask.*Auto or Trusted/);
   hub.setPermissionMode(p, 'auto', 'you');
   // Success.
-  const r = hub.launchExpedition(p, { question: 'Which of two JSON libraries is faster for X?', brief: 'Compare two JSON libraries.\nSuccess: a table and a runnable benchmark.', test: { 'CHECKLIST.md': '1. a table\n', 'run.json': '{"command":"node bench.mjs"}' }, envelope: { hours: 2, dollars: 5 }, gatherers: 9 }, 'you');
-  assert.match(r.id, /^\d{8}-which-of-two-json-libraries-is-faster-fo$/, 'the slug is the question\'s words, cut at 40 characters');
+  const r = hub.launchExpedition(p, { question: 'Which of two JSON libraries is faster for X?', shortTitle: 'JSON library speed comparison', brief: 'Compare two JSON libraries.\nSuccess: a table and a runnable benchmark.', test: { 'CHECKLIST.md': '1. a table\n', 'run.json': '{"command":"node bench.mjs"}' }, envelope: { hours: 2, dollars: 5 }, gatherers: 9 }, 'you');
+  assert.match(r.id, /^\d{8}-json-library-speed-comparison$/, 'the slug comes from the short title');
+  assert.equal(r.expedition.title, 'JSON library speed comparison');
   const ex = new Expedition(p, r.id);
   assert.equal(ex.state().phase, 'planning');
   assert.match(ex.read('BRIEF.md'), /Compare two JSON libraries/);
@@ -182,7 +183,7 @@ test('launchExpedition refuses an empty brief, a second expedition, a project at
   ex.stop({ reason: 'passed' });
   assert.throws(() => hub.launchExpedition(p, { brief: 'another' }), /still writing up/);
   for (const s of ['report', 'commit', 'push', 'pr', 'card', 'summary']) ex.step(s);
-  const second = hub.launchExpedition(p, { question: 'Which of two JSON libraries is faster for X?', brief: 'again', test: { 'CHECKLIST.md': '1. a table\n' } });
+  const second = hub.launchExpedition(p, { question: 'Which of two JSON libraries is faster for X?', shortTitle: 'JSON library speed comparison', brief: 'again', test: { 'CHECKLIST.md': '1. a table\n' } });
   assert.match(second.id, /-2$/, 'a second one on the same day with the same slug gets -2');
 });
 
